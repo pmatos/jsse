@@ -11,6 +11,7 @@ pub(crate) mod zoned_date_time;
 use super::*;
 
 /// Which default date/time components to use when constructing DTF from toLocaleString.
+#[allow(dead_code)]
 pub(crate) enum TemporalDefaults {
     /// date + time (Instant, PlainDateTime, ZonedDateTime)
     All,
@@ -25,6 +26,7 @@ pub(crate) enum TemporalDefaults {
 }
 
 /// Check if options object has any explicit date/time formatting properties.
+#[allow(dead_code)]
 fn has_datetime_options(interp: &mut Interpreter, options: &JsValue) -> bool {
     if matches!(options, JsValue::Undefined | JsValue::Null) {
         return false;
@@ -45,10 +47,10 @@ fn has_datetime_options(interp: &mut Interpreter, options: &JsValue) -> bool {
             "timeZoneName",
             "era",
         ] {
-            if let Completion::Normal(v) = interp.get_object_property(o.id, key, options) {
-                if !matches!(v, JsValue::Undefined) {
-                    return true;
-                }
+            if let Completion::Normal(v) = interp.get_object_property(o.id, key, options)
+                && !matches!(v, JsValue::Undefined)
+            {
+                return true;
             }
         }
     }
@@ -57,6 +59,7 @@ fn has_datetime_options(interp: &mut Interpreter, options: &JsValue) -> bool {
 
 /// Construct a DateTimeFormat with Temporal-type-appropriate defaults.
 /// If user didn't specify any date/time options, add defaults based on the Temporal type.
+#[allow(dead_code)]
 pub(crate) fn temporal_construct_dtf(
     interp: &mut Interpreter,
     dtf_ctor: &JsValue,
@@ -75,17 +78,17 @@ pub(crate) fn temporal_construct_dtf(
     }
 
     // Copy any existing properties from user options (e.g. timeZone)
-    if let JsValue::Object(o) = options {
-        if let Some(obj) = interp.get_object(o.id) {
-            let keys: Vec<String> = obj.borrow().property_order.clone();
-            for key in keys {
-                if let Completion::Normal(v) = interp.get_object_property(o.id, &key, options) {
-                    if !matches!(v, JsValue::Undefined) {
-                        opts_obj
-                            .borrow_mut()
-                            .insert_property(key, PropertyDescriptor::data(v, true, true, true));
-                    }
-                }
+    if let JsValue::Object(o) = options
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let keys: Vec<String> = obj.borrow().property_order.clone();
+        for key in keys {
+            if let Completion::Normal(v) = interp.get_object_property(o.id, &key, options)
+                && !matches!(v, JsValue::Undefined)
+            {
+                opts_obj
+                    .borrow_mut()
+                    .insert_property(key, PropertyDescriptor::data(v, true, true, true));
             }
         }
     }
@@ -179,6 +182,7 @@ pub(crate) fn temporal_construct_dtf(
 /// In toLocaleString, each style must overlap with the type's data model:
 /// - dateStyle requires date data (PlainDate, PlainDateTime, PlainYearMonth, PlainMonthDay)
 /// - timeStyle requires time data (PlainTime, PlainDateTime)
+///
 /// Returns Err with TypeError if conflict detected.
 pub(crate) fn check_locale_string_style_conflict(
     interp: &mut Interpreter,
@@ -268,7 +272,11 @@ pub(crate) fn temporal_format_with_dtf(
             Completion::Throw(e) => return Completion::Throw(e),
             _ => JsValue::Undefined,
         };
-        match interp.call_function(&format_val, dtf_instance, &[temporal_this.clone()]) {
+        match interp.call_function(
+            &format_val,
+            dtf_instance,
+            std::slice::from_ref(temporal_this),
+        ) {
             Completion::Normal(v) => Completion::Normal(v),
             Completion::Throw(e) => Completion::Throw(e),
             _ => Completion::Normal(JsValue::Undefined),
@@ -413,10 +421,8 @@ pub(crate) fn validate_calendar(cal: &str) -> Option<String> {
     None
 }
 
-use icu::calendar::types::MonthCode as IcuMonthCode;
 use icu::calendar::{AnyCalendar, AnyCalendarKind, Date as IcuDate};
 use icu_calendar::types::DateFields as IcuDateFields;
-use tinystr::TinyAsciiStr;
 
 fn calendar_id_to_icu_kind(cal: &str) -> Option<AnyCalendarKind> {
     match cal {
@@ -470,7 +476,7 @@ pub(crate) fn iso_to_calendar_fields(
         let ext = yi.extended_year();
         // Japanese calendar: dates before 1873-01-01 use ce/bce instead of meiji etc.
         if calendar_id == "japanese"
-            && (iso_year < 1873 || (iso_year == 1873 && iso_month == 1 && iso_day == 1 && false))
+            && iso_year < 1873
             && !matches!(e.era.to_string().as_str(), "ce" | "bce")
         {
             if ext >= 1 {
@@ -547,10 +553,10 @@ fn validate_calendar_date_round_trip(
         if cf.day != requested_day {
             return false;
         }
-        if let Some(mc) = requested_month_code {
-            if cf.month_code != mc {
-                return false;
-            }
+        if let Some(mc) = requested_month_code
+            && cf.month_code != mc
+        {
+            return false;
         }
         true
     } else {
@@ -614,7 +620,7 @@ fn is_valid_month_code_for_calendar(month_code: &str, calendar_id: &str) -> bool
     }
     if month_code.len() == 4 && month_code.starts_with('M') && month_code.ends_with('L') {
         if let Ok(num) = month_code[1..3].parse::<u8>() {
-            if num < 1 || num > 12 {
+            if !(1..=12).contains(&num) {
                 return false;
             }
             if calendar_id == "hebrew" {
@@ -638,18 +644,18 @@ pub(crate) fn calendar_fields_to_iso_overflow(
     calendar_id: &str,
     overflow: &str,
 ) -> Option<(i32, u8, u8)> {
-    if let Some(mc) = month_code {
-        if !is_valid_month_code_for_calendar(mc, calendar_id) {
-            return None;
-        }
+    if let Some(mc) = month_code
+        && !is_valid_month_code_for_calendar(mc, calendar_id)
+    {
+        return None;
     }
     if let Some((iy, im, id)) =
         calendar_fields_to_iso(era, year, month_code, month_ordinal, day, calendar_id)
     {
-        if overflow == "reject" {
-            if !validate_calendar_date_round_trip(iy, im, id, calendar_id, day, month_code) {
-                return None;
-            }
+        if overflow == "reject"
+            && !validate_calendar_date_round_trip(iy, im, id, calendar_id, day, month_code)
+        {
+            return None;
         }
         return Some((iy, im, id));
     }
@@ -681,78 +687,78 @@ pub(crate) fn calendar_fields_to_iso_overflow(
         }
         Err(_) => {
             // Month code doesn't exist (e.g. M06L in non-leap year) — fall back
-            if let Some(mc) = month_code {
-                if mc.ends_with('L') {
-                    let fallback_mc = if calendar_id == "hebrew" && mc == "M05L" {
-                        "M06".to_string()
-                    } else {
-                        mc[..mc.len() - 1].to_string()
-                    };
-                    let kind2 = calendar_id_to_icu_kind(calendar_id)?;
-                    let cal2 = AnyCalendar::new(kind2);
-                    let mut f2 = IcuDateFields::default();
-                    if let Some(e) = era {
-                        f2.era = Some(e.as_bytes());
-                        f2.era_year = Some(year);
-                    } else {
-                        f2.extended_year = Some(year);
-                    }
-                    f2.month_code = Some(fallback_mc.as_bytes());
-                    f2.day = Some(1);
-                    if let Ok(temp) = IcuDate::try_from_fields(f2, Default::default(), cal2) {
-                        let max_day = temp.days_in_month();
-                        let clamped = day.min(max_day).max(1);
-                        return calendar_fields_to_iso(
-                            era,
-                            year,
-                            Some(&fallback_mc),
-                            month_ordinal,
-                            clamped,
-                            calendar_id,
-                        );
-                    }
+            if let Some(mc) = month_code
+                && mc.ends_with('L')
+            {
+                let fallback_mc = if calendar_id == "hebrew" && mc == "M05L" {
+                    "M06".to_string()
+                } else {
+                    mc[..mc.len() - 1].to_string()
+                };
+                let kind2 = calendar_id_to_icu_kind(calendar_id)?;
+                let cal2 = AnyCalendar::new(kind2);
+                let mut f2 = IcuDateFields::default();
+                if let Some(e) = era {
+                    f2.era = Some(e.as_bytes());
+                    f2.era_year = Some(year);
+                } else {
+                    f2.extended_year = Some(year);
+                }
+                f2.month_code = Some(fallback_mc.as_bytes());
+                f2.day = Some(1);
+                if let Ok(temp) = IcuDate::try_from_fields(f2, Default::default(), cal2) {
+                    let max_day = temp.days_in_month();
+                    let clamped = day.min(max_day).max(1);
+                    return calendar_fields_to_iso(
+                        era,
+                        year,
+                        Some(&fallback_mc),
+                        month_ordinal,
+                        clamped,
+                        calendar_id,
+                    );
                 }
             }
             // Ordinal month out of range: clamp to last month
-            if let Some(mo) = month_ordinal {
-                if month_code.is_none() {
-                    let kind3 = calendar_id_to_icu_kind(calendar_id)?;
-                    let cal3 = AnyCalendar::new(kind3);
-                    let mut f3 = IcuDateFields::default();
+            if let Some(mo) = month_ordinal
+                && month_code.is_none()
+            {
+                let kind3 = calendar_id_to_icu_kind(calendar_id)?;
+                let cal3 = AnyCalendar::new(kind3);
+                let mut f3 = IcuDateFields::default();
+                if let Some(e) = era {
+                    f3.era = Some(e.as_bytes());
+                    f3.era_year = Some(year);
+                } else {
+                    f3.extended_year = Some(year);
+                }
+                f3.ordinal_month = Some(1);
+                f3.day = Some(1);
+                if let Ok(temp) = IcuDate::try_from_fields(f3, Default::default(), cal3) {
+                    let miy = temp.months_in_year();
+                    let clamped_mo = mo.min(miy);
+                    let kind4 = calendar_id_to_icu_kind(calendar_id)?;
+                    let cal4 = AnyCalendar::new(kind4);
+                    let mut f4 = IcuDateFields::default();
                     if let Some(e) = era {
-                        f3.era = Some(e.as_bytes());
-                        f3.era_year = Some(year);
+                        f4.era = Some(e.as_bytes());
+                        f4.era_year = Some(year);
                     } else {
-                        f3.extended_year = Some(year);
+                        f4.extended_year = Some(year);
                     }
-                    f3.ordinal_month = Some(1);
-                    f3.day = Some(1);
-                    if let Ok(temp) = IcuDate::try_from_fields(f3, Default::default(), cal3) {
-                        let miy = temp.months_in_year();
-                        let clamped_mo = mo.min(miy);
-                        let kind4 = calendar_id_to_icu_kind(calendar_id)?;
-                        let cal4 = AnyCalendar::new(kind4);
-                        let mut f4 = IcuDateFields::default();
-                        if let Some(e) = era {
-                            f4.era = Some(e.as_bytes());
-                            f4.era_year = Some(year);
-                        } else {
-                            f4.extended_year = Some(year);
-                        }
-                        f4.ordinal_month = Some(clamped_mo);
-                        f4.day = Some(1);
-                        if let Ok(temp2) = IcuDate::try_from_fields(f4, Default::default(), cal4) {
-                            let max_day = temp2.days_in_month();
-                            let clamped_d = day.min(max_day).max(1);
-                            return calendar_fields_to_iso(
-                                era,
-                                year,
-                                None,
-                                Some(clamped_mo),
-                                clamped_d,
-                                calendar_id,
-                            );
-                        }
+                    f4.ordinal_month = Some(clamped_mo);
+                    f4.day = Some(1);
+                    if let Ok(temp2) = IcuDate::try_from_fields(f4, Default::default(), cal4) {
+                        let max_day = temp2.days_in_month();
+                        let clamped_d = day.min(max_day).max(1);
+                        return calendar_fields_to_iso(
+                            era,
+                            year,
+                            None,
+                            Some(clamped_mo),
+                            clamped_d,
+                            calendar_id,
+                        );
                     }
                 }
             }
@@ -962,12 +968,10 @@ pub(crate) fn add_calendar_date(
         fields.day = Some(d);
         cal_date = match IcuDate::try_from_fields(fields, Default::default(), new_cal) {
             Ok(result) => {
-                if overflow == "reject" {
-                    if result.day_of_month().0 != d
-                        || result.month().standard_code.0.to_string() != mc_str
-                    {
-                        return None;
-                    }
+                if overflow == "reject"
+                    && (result.day_of_month().0 != d || result.month().standard_code.0 != mc_str)
+                {
+                    return None;
                 }
                 result
             }
@@ -2861,6 +2865,7 @@ fn normalize_iana_timezone(s: &str) -> String {
 }
 
 /// Normalize a timezone ID for comparison: canonical offset form or case-insensitive IANA
+#[allow(dead_code)]
 pub(crate) fn normalize_tz_id(s: &str) -> String {
     // Try parsing as offset to get canonical form
     if let Some(canonical) = parse_utc_offset_timezone(s) {
@@ -3318,20 +3323,20 @@ pub(crate) fn parse_temporal_year_month_string(
     if let Some((year, new_pos)) = parse_iso_year(bytes, 0) {
         let has_sep = new_pos < bytes.len() && bytes[new_pos] == b'-';
         let month_start = if has_sep { new_pos + 1 } else { new_pos };
-        if let Some((month, np)) = parse_two_digit(bytes, month_start) {
-            if (1..=12).contains(&month) {
-                // Check it's not followed by more digits (which would make it a date)
-                let next_is_digit = np < bytes.len() && bytes[np].is_ascii_digit();
-                let next_is_dash = np < bytes.len() && bytes[np] == b'-';
-                let next_is_t = np < bytes.len()
-                    && (bytes[np] == b'T' || bytes[np] == b't' || bytes[np] == b' ');
-                if !next_is_digit && !(has_sep && next_is_dash) && !next_is_t {
-                    let mut pos = np;
-                    let mut calendar = None;
-                    pos = parse_annotations_extract_calendar(bytes, pos, &mut calendar)?;
-                    if pos == bytes.len() {
-                        return Some((year, month, None, calendar, false, false));
-                    }
+        if let Some((month, np)) = parse_two_digit(bytes, month_start)
+            && (1..=12).contains(&month)
+        {
+            // Check it's not followed by more digits (which would make it a date)
+            let next_is_digit = np < bytes.len() && bytes[np].is_ascii_digit();
+            let next_is_dash = np < bytes.len() && bytes[np] == b'-';
+            let next_is_t =
+                np < bytes.len() && (bytes[np] == b'T' || bytes[np] == b't' || bytes[np] == b' ');
+            if !(next_is_digit || next_is_t || has_sep && next_is_dash) {
+                let mut pos = np;
+                let mut calendar = None;
+                pos = parse_annotations_extract_calendar(bytes, pos, &mut calendar)?;
+                if pos == bytes.len() {
+                    return Some((year, month, None, calendar, false, false));
                 }
             }
         }

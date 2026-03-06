@@ -132,6 +132,7 @@ pub(crate) fn js_string_to_regex_input(code_units: &[u16]) -> String {
     js_string_to_regex_input_mode(code_units, true)
 }
 
+#[allow(dead_code)]
 fn js_string_to_regex_input_non_unicode(code_units: &[u16]) -> String {
     js_string_to_regex_input_mode(code_units, false)
 }
@@ -1578,6 +1579,7 @@ fn expand_quantified_dup_groups(
                     result.push(')');
                     // Copy any quantifier that follows
                     i = close + 1;
+                    #[allow(clippy::never_loop)]
                     while i < len {
                         match chars[i] {
                             '{' => {
@@ -3664,7 +3666,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
             } else if _unicode {
                 // In unicode mode, only specific escape sequences are valid.
                 // Backreferences \1-\9 are only valid if the referenced group exists.
-                if after_escape >= '1' && after_escape <= '9' {
+                if ('1'..='9').contains(&after_escape) {
                     // Parse the full decimal escape number
                     let mut num = (after_escape as u32) - ('0' as u32);
                     while i < len && chars[i].is_ascii_digit() {
@@ -4372,7 +4374,7 @@ fn strip_renamed_qi_captures(caps: &mut RegexCaptures) {
         .filter(|(_, name_opt)| {
             name_opt
                 .as_ref()
-                .map_or(false, |n| n.starts_with("__jsse_qi"))
+                .is_some_and(|n| n.starts_with("__jsse_qi"))
         })
         .map(|(i, _)| i)
         .collect();
@@ -7313,9 +7315,9 @@ impl Interpreter {
                 let mut is_first = true;
                 while idx < code_units.len() {
                     let cu = code_units[idx];
-                    let cp = if cu >= 0xD800 && cu <= 0xDBFF && idx + 1 < code_units.len() {
+                    let cp = if (0xD800..=0xDBFF).contains(&cu) && idx + 1 < code_units.len() {
                         let lo = code_units[idx + 1];
-                        if lo >= 0xDC00 && lo <= 0xDFFF {
+                        if (0xDC00..=0xDFFF).contains(&lo) {
                             let cp = ((cu as u32 - 0xD800) << 10) + (lo as u32 - 0xDC00) + 0x10000;
                             idx += 2;
                             Some(cp)
@@ -7325,7 +7327,7 @@ impl Interpreter {
                         }
                     } else {
                         idx += 1;
-                        if cu >= 0xD800 && cu <= 0xDFFF {
+                        if (0xD800..=0xDFFF).contains(&cu) {
                             None
                         } else {
                             Some(cu as u32)

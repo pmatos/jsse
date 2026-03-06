@@ -90,10 +90,9 @@ fn date_to_locale_string(
             }
         }
     }
-    if need_defaults {
-        if has_prop(&options_obj, "dateStyle") || has_prop(&options_obj, "timeStyle") {
-            need_defaults = false;
-        }
+    if need_defaults && (has_prop(&options_obj, "dateStyle") || has_prop(&options_obj, "timeStyle"))
+    {
+        need_defaults = false;
     }
 
     if need_defaults {

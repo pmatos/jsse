@@ -221,8 +221,8 @@ fn strip_unicode_extensions(locale_str: &str) -> String {
         let after_u = &locale_str[idx + 3..];
         let tokens: Vec<&str> = after_u.split('-').collect();
         let mut end_of_u = tokens.len();
-        for i in 0..tokens.len() {
-            if tokens[i].len() == 1 && tokens[i] != "u" {
+        for (i, token) in tokens.iter().enumerate() {
+            if token.len() == 1 && *token != "u" {
                 end_of_u = i;
                 break;
             }
@@ -912,6 +912,7 @@ pub(crate) fn apply_arabic_separators(s: &str, ns: &str) -> String {
     result
 }
 
+#[allow(dead_code)]
 fn js_rounding_increment_to_fd(inc: u32) -> RoundingIncrement {
     match inc {
         2 => RoundingIncrement::MultiplesOf2,
@@ -995,6 +996,7 @@ fn currency_position_after(locale: &str) -> bool {
     )
 }
 
+#[allow(dead_code)]
 fn locale_uses_narrow_currency(locale: &str, cur_code: &str) -> bool {
     if cur_code == "USD" {
         let lang = locale
@@ -1004,11 +1006,7 @@ fn locale_uses_narrow_currency(locale: &str, cur_code: &str) -> bool {
             .split('_')
             .next()
             .unwrap_or(locale);
-        match lang {
-            "en" => false,
-            "de" | "fr" | "es" | "pt" | "nl" | "it" => false,
-            _ => true,
-        }
+        !matches!(lang, "en" | "de" | "fr" | "es" | "pt" | "nl" | "it")
     } else {
         false
     }
@@ -1129,16 +1127,14 @@ fn wrap_style(
                     .trim_start_matches('-')
                     .trim_start_matches('\u{2212}');
                 format!("({}{})", sym, abs_str)
+            } else if is_neg {
+                let c = num_str.chars().next().unwrap();
+                let rest = &num_str[c.len_utf8()..];
+                format!("-{}{}", sym, rest)
+            } else if has_plus {
+                format!("+{}{}", sym, &num_str[1..])
             } else {
-                if is_neg {
-                    let c = num_str.chars().next().unwrap();
-                    let rest = &num_str[c.len_utf8()..];
-                    format!("-{}{}", sym, rest)
-                } else if has_plus {
-                    format!("+{}{}", sym, &num_str[1..])
-                } else {
-                    format!("{}{}", sym, num_str)
-                }
+                format!("{}{}", sym, num_str)
             }
         }
         "percent" => {
@@ -1368,8 +1364,6 @@ pub(crate) fn format_number_internal(
                 let hi = q.ceil();
                 if (q - lo).abs() < (hi - q).abs() {
                     lo * ri
-                } else if (hi - q).abs() < (q - lo).abs() {
-                    hi * ri
                 } else {
                     hi * ri // tie goes to ceil (positive infinity)
                 }
@@ -1402,7 +1396,7 @@ pub(crate) fn format_number_internal(
                     hi * ri
                 } else {
                     let lo_v = (lo * ri).round() as i64;
-                    let hi_v = (hi * ri).round() as i64;
+                    let _hi_v = (hi * ri).round() as i64;
                     if lo_v % 2 == 0 { lo * ri } else { hi * ri }
                 }
             }
@@ -1415,9 +1409,7 @@ pub(crate) fn format_number_internal(
                 let dh = (hi - q).abs();
                 if dl < dh {
                     lo * ri
-                } else if dh < dl {
-                    hi * ri
-                } else if scaled >= 0.0 {
+                } else if dh < dl || scaled >= 0.0 {
                     hi * ri
                 } else {
                     lo * ri
@@ -1435,7 +1427,7 @@ pub(crate) fn format_number_internal(
         // Format with sig digits
         let min_sd = minimum_significant_digits.unwrap();
         let max_sd = maximum_significant_digits.unwrap_or(min_sd);
-        let mut dec_sd = format_with_significant_digits(work_value, min_sd, max_sd, rounding_mode);
+        let dec_sd = format_with_significant_digits(work_value, min_sd, max_sd, rounding_mode);
 
         // Format with fraction digits
         let mut dec_fd = match Decimal::try_from_f64(work_value, FloatPrecision::RoundTrip) {
@@ -1995,11 +1987,7 @@ fn format_mantissa_sig_digits(value: f64, min_sd: u32, max_sd: u32) -> String {
     } else {
         integer_part.len()
     };
-    let min_frac = if min_sd as usize > int_sig {
-        min_sd as usize - int_sig
-    } else {
-        0
-    };
+    let min_frac = (min_sd as usize).saturating_sub(int_sig);
     let trimmed = frac_part.trim_end_matches('0');
     let frac_len = trimmed.len().max(min_frac);
     if frac_len == 0 {
@@ -2081,7 +2069,7 @@ fn compact_suffix_and_divisor(
     match lang {
         "ja" | "zh" => {
             if abs_val >= 1e8 {
-                let suffix = if lang == "ja" { "\u{5104}" } else { "\u{5104}" }; // 億
+                let suffix = "\u{5104}"; // 億
                 (1e8, suffix.to_string())
             } else if abs_val >= 1e4 {
                 let suffix = if lang == "ja" { "\u{4E07}" } else { "\u{842C}" }; // 万 / 萬
@@ -2178,7 +2166,7 @@ fn format_compact(
     compact_display: &str,
     sign_display: &str,
     locale_str: &str,
-    use_grouping: &str,
+    _use_grouping: &str,
     min_int_digits: u32,
     min_frac_digits: u32,
     _max_frac_digits: u32,
@@ -2226,26 +2214,22 @@ fn format_compact(
         } else {
             format_with_significant_digits(scaled, 1, 2, "halfExpand")
         }
-    } else {
-        if abs_scaled >= 10.0 || abs_scaled == 0.0 {
-            let mut d = match Decimal::try_from_f64(scaled, FloatPrecision::RoundTrip) {
+    } else if abs_scaled >= 10.0 || abs_scaled == 0.0 {
+        let mut d = match Decimal::try_from_f64(scaled, FloatPrecision::RoundTrip) {
+            Ok(d) => d,
+            Err(_) => match Decimal::try_from_str(&format!("{}", scaled)) {
                 Ok(d) => d,
-                Err(_) => match Decimal::try_from_str(&format!("{}", scaled)) {
-                    Ok(d) => d,
-                    Err(_) => Decimal::from(scaled as i64),
-                },
-            };
-            d.round_with_mode(
-                0,
-                SignedRoundingMode::Unsigned(UnsignedRoundingMode::HalfExpand),
-            );
-            d.absolute.trim_end();
-            d
-        } else if abs_scaled >= 1.0 {
-            format_with_significant_digits(scaled, 1, 2, "halfExpand")
-        } else {
-            format_with_significant_digits(scaled, 1, 2, "halfExpand")
-        }
+                Err(_) => Decimal::from(scaled as i64),
+            },
+        };
+        d.round_with_mode(
+            0,
+            SignedRoundingMode::Unsigned(UnsignedRoundingMode::HalfExpand),
+        );
+        d.absolute.trim_end();
+        d
+    } else {
+        format_with_significant_digits(scaled, 1, 2, "halfExpand")
     };
 
     if min_int_digits > 1 {
@@ -2620,8 +2604,8 @@ pub(crate) fn format_to_parts_internal(
                 if without_sym.ends_with('\u{00A0}') {
                     work_str = without_sym[..without_sym.len() - '\u{00A0}'.len_utf8()].to_string();
                     currency_suffix = Some(("\u{00A0}".to_string(), sym));
-                } else if without_sym.ends_with(' ') {
-                    work_str = without_sym[..without_sym.len() - 1].to_string();
+                } else if let Some(stripped) = without_sym.strip_suffix(' ') {
+                    work_str = stripped.to_string();
                     currency_suffix = Some((" ".to_string(), sym));
                 } else {
                     work_str = without_sym.to_string();
@@ -2705,10 +2689,10 @@ pub(crate) fn format_to_parts_internal(
                     let sign_char = chars.next().unwrap();
                     sign_str.push(sign_char);
                     // Consume trailing bidi mark
-                    if let Some(&trail) = chars.peek() {
-                        if trail == '\u{061C}' || trail == '\u{200E}' || trail == '\u{200F}' {
-                            sign_str.push(chars.next().unwrap());
-                        }
+                    if let Some(&trail) = chars.peek()
+                        && (trail == '\u{061C}' || trail == '\u{200E}' || trail == '\u{200F}')
+                    {
+                        sign_str.push(chars.next().unwrap());
                     }
                     if sign_char == '-' || sign_char == '\u{2212}' {
                         parts.push(("minusSign".to_string(), sign_str));
@@ -2746,10 +2730,10 @@ pub(crate) fn format_to_parts_internal(
                     sign_str.push(bidi);
                     sign_str.push(sign_char);
                     // Consume trailing bidi mark if present
-                    if let Some(&trail) = chars.peek() {
-                        if trail == '\u{061C}' || trail == '\u{200E}' || trail == '\u{200F}' {
-                            sign_str.push(chars.next().unwrap());
-                        }
+                    if let Some(&trail) = chars.peek()
+                        && (trail == '\u{061C}' || trail == '\u{200E}' || trail == '\u{200F}')
+                    {
+                        sign_str.push(chars.next().unwrap());
                     }
                     if sign_char == '-' || sign_char == '\u{2212}' {
                         parts.push(("minusSign".to_string(), sign_str));
@@ -2844,19 +2828,19 @@ pub(crate) fn format_to_parts_internal(
             }
             if !exp_str.is_empty() {
                 // Check for sign in exponent
-                if exp_str.starts_with('-') {
+                if let Some(stripped) = exp_str.strip_prefix('-') {
                     parts.push(("exponentMinusSign".to_string(), "-".to_string()));
-                    parts.push(("exponentInteger".to_string(), exp_str[1..].to_string()));
-                } else if exp_str.starts_with('+') {
-                    parts.push(("exponentInteger".to_string(), exp_str[1..].to_string()));
+                    parts.push(("exponentInteger".to_string(), stripped.to_string()));
+                } else if let Some(stripped) = exp_str.strip_prefix('+') {
+                    parts.push(("exponentInteger".to_string(), stripped.to_string()));
                 } else {
                     parts.push(("exponentInteger".to_string(), exp_str));
                 }
             }
         } else if c.is_ascii_digit()
             || c.is_numeric()
-            || (c >= '\u{0660}' && c <= '\u{0669}')
-            || (c >= '\u{06F0}' && c <= '\u{06F9}')
+            || ('\u{0660}'..='\u{0669}').contains(&c)
+            || ('\u{06F0}'..='\u{06F9}').contains(&c)
         {
             current.push(chars.next().unwrap());
         } else {
@@ -2936,6 +2920,7 @@ pub(crate) fn format_to_parts_internal(
     parts
 }
 
+#[allow(dead_code)]
 fn classify_number_chunk(s: &str) -> (String, String) {
     if s.contains('.') {
         ("fraction".to_string(), s.to_string())
@@ -3206,8 +3191,8 @@ impl Interpreter {
             "formatRange".to_string(),
             2,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let has_nf = {
                             let b = obj.borrow();
                             matches!(b.intl_data, Some(IntlData::NumberFormat { .. }))
@@ -3330,7 +3315,6 @@ impl Interpreter {
                             )));
                         }
                     }
-                }
                 Completion::Throw(interp.create_type_error(
                     "Intl.NumberFormat.prototype.formatRange called on incompatible receiver",
                 ))
@@ -3345,8 +3329,8 @@ impl Interpreter {
             "formatRangeToParts".to_string(),
             2,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id) {
                         let has_nf = {
                             let b = obj.borrow();
                             matches!(b.intl_data, Some(IntlData::NumberFormat { .. }))
@@ -3502,7 +3486,6 @@ impl Interpreter {
                             return Completion::Normal(interp.create_array(result_parts));
                         }
                     }
-                }
                 Completion::Throw(interp.create_type_error(
                     "Intl.NumberFormat.prototype.formatRangeToParts called on incompatible receiver",
                 ))
@@ -3517,164 +3500,153 @@ impl Interpreter {
             "resolvedOptions".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        let data = {
-                            let b = obj.borrow();
-                            b.intl_data.clone()
-                        };
-                        if let Some(IntlData::NumberFormat {
-                            locale,
-                            numbering_system,
-                            style,
-                            currency,
-                            currency_display,
-                            currency_sign,
-                            unit,
-                            unit_display,
-                            notation,
-                            compact_display,
-                            sign_display,
-                            use_grouping,
-                            minimum_integer_digits,
-                            minimum_fraction_digits,
-                            maximum_fraction_digits,
-                            minimum_significant_digits,
-                            maximum_significant_digits,
-                            rounding_mode,
-                            rounding_increment,
-                            rounding_priority,
-                            trailing_zero_display,
-                        }) = data
-                        {
-                            let result = interp.create_object();
-                            if let Some(ref op) = interp.realm().object_prototype {
-                                result.borrow_mut().prototype = Some(op.clone());
-                            }
-
-                            let mut props: Vec<(&str, JsValue)> = vec![
-                                ("locale", JsValue::String(JsString::from_str(&locale))),
-                                (
-                                    "numberingSystem",
-                                    JsValue::String(JsString::from_str(&numbering_system)),
-                                ),
-                                ("style", JsValue::String(JsString::from_str(&style))),
-                            ];
-
-                            if style == "currency" {
-                                if let Some(ref c) = currency {
-                                    props
-                                        .push(("currency", JsValue::String(JsString::from_str(c))));
-                                }
-                                if let Some(ref cd) = currency_display {
-                                    props.push((
-                                        "currencyDisplay",
-                                        JsValue::String(JsString::from_str(cd)),
-                                    ));
-                                }
-                                if let Some(ref cs) = currency_sign {
-                                    props.push((
-                                        "currencySign",
-                                        JsValue::String(JsString::from_str(cs)),
-                                    ));
-                                }
-                            }
-
-                            if style == "unit" {
-                                if let Some(ref u) = unit {
-                                    props.push(("unit", JsValue::String(JsString::from_str(u))));
-                                }
-                                if let Some(ref ud) = unit_display {
-                                    props.push((
-                                        "unitDisplay",
-                                        JsValue::String(JsString::from_str(ud)),
-                                    ));
-                                }
-                            }
-
-                            props.push((
-                                "minimumIntegerDigits",
-                                JsValue::Number(minimum_integer_digits as f64),
-                            ));
-                            props.push((
-                                "minimumFractionDigits",
-                                JsValue::Number(minimum_fraction_digits as f64),
-                            ));
-                            props.push((
-                                "maximumFractionDigits",
-                                JsValue::Number(maximum_fraction_digits as f64),
-                            ));
-
-                            if let Some(min_sd) = minimum_significant_digits {
-                                props.push((
-                                    "minimumSignificantDigits",
-                                    JsValue::Number(min_sd as f64),
-                                ));
-                            }
-                            if let Some(max_sd) = maximum_significant_digits {
-                                props.push((
-                                    "maximumSignificantDigits",
-                                    JsValue::Number(max_sd as f64),
-                                ));
-                            }
-
-                            // useGrouping: spec says return a string or boolean
-                            let ug_val = match use_grouping.as_str() {
-                                "true" => JsValue::String(JsString::from_str("auto")),
-                                "false" => JsValue::Boolean(false),
-                                "auto" | "always" | "min2" => {
-                                    JsValue::String(JsString::from_str(&use_grouping))
-                                }
-                                _ => JsValue::String(JsString::from_str(&use_grouping)),
-                            };
-                            props.push(("useGrouping", ug_val));
-
-                            props
-                                .push(("notation", JsValue::String(JsString::from_str(&notation))));
-
-                            if notation == "compact" {
-                                if let Some(ref cd) = compact_display {
-                                    props.push((
-                                        "compactDisplay",
-                                        JsValue::String(JsString::from_str(cd)),
-                                    ));
-                                }
-                            }
-
-                            props.push((
-                                "signDisplay",
-                                JsValue::String(JsString::from_str(&sign_display)),
-                            ));
-
-                            props.push((
-                                "roundingIncrement",
-                                JsValue::Number(rounding_increment as f64),
-                            ));
-                            props.push((
-                                "roundingMode",
-                                JsValue::String(JsString::from_str(&rounding_mode)),
-                            ));
-                            props.push((
-                                "roundingPriority",
-                                JsValue::String(JsString::from_str(&rounding_priority)),
-                            ));
-                            props.push((
-                                "trailingZeroDisplay",
-                                JsValue::String(JsString::from_str(&trailing_zero_display)),
-                            ));
-
-                            for (key, val) in props {
-                                result.borrow_mut().insert_property(
-                                    key.to_string(),
-                                    PropertyDescriptor::data(val, true, true, true),
-                                );
-                            }
-
-                            let result_id = result.borrow().id.unwrap();
-                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
-                                id: result_id,
-                            }));
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let data = {
+                        let b = obj.borrow();
+                        b.intl_data.clone()
+                    };
+                    if let Some(IntlData::NumberFormat {
+                        locale,
+                        numbering_system,
+                        style,
+                        currency,
+                        currency_display,
+                        currency_sign,
+                        unit,
+                        unit_display,
+                        notation,
+                        compact_display,
+                        sign_display,
+                        use_grouping,
+                        minimum_integer_digits,
+                        minimum_fraction_digits,
+                        maximum_fraction_digits,
+                        minimum_significant_digits,
+                        maximum_significant_digits,
+                        rounding_mode,
+                        rounding_increment,
+                        rounding_priority,
+                        trailing_zero_display,
+                    }) = data
+                    {
+                        let result = interp.create_object();
+                        if let Some(ref op) = interp.realm().object_prototype {
+                            result.borrow_mut().prototype = Some(op.clone());
                         }
+
+                        let mut props: Vec<(&str, JsValue)> = vec![
+                            ("locale", JsValue::String(JsString::from_str(&locale))),
+                            (
+                                "numberingSystem",
+                                JsValue::String(JsString::from_str(&numbering_system)),
+                            ),
+                            ("style", JsValue::String(JsString::from_str(&style))),
+                        ];
+
+                        if style == "currency" {
+                            if let Some(ref c) = currency {
+                                props.push(("currency", JsValue::String(JsString::from_str(c))));
+                            }
+                            if let Some(ref cd) = currency_display {
+                                props.push((
+                                    "currencyDisplay",
+                                    JsValue::String(JsString::from_str(cd)),
+                                ));
+                            }
+                            if let Some(ref cs) = currency_sign {
+                                props.push((
+                                    "currencySign",
+                                    JsValue::String(JsString::from_str(cs)),
+                                ));
+                            }
+                        }
+
+                        if style == "unit" {
+                            if let Some(ref u) = unit {
+                                props.push(("unit", JsValue::String(JsString::from_str(u))));
+                            }
+                            if let Some(ref ud) = unit_display {
+                                props
+                                    .push(("unitDisplay", JsValue::String(JsString::from_str(ud))));
+                            }
+                        }
+
+                        props.push((
+                            "minimumIntegerDigits",
+                            JsValue::Number(minimum_integer_digits as f64),
+                        ));
+                        props.push((
+                            "minimumFractionDigits",
+                            JsValue::Number(minimum_fraction_digits as f64),
+                        ));
+                        props.push((
+                            "maximumFractionDigits",
+                            JsValue::Number(maximum_fraction_digits as f64),
+                        ));
+
+                        if let Some(min_sd) = minimum_significant_digits {
+                            props
+                                .push(("minimumSignificantDigits", JsValue::Number(min_sd as f64)));
+                        }
+                        if let Some(max_sd) = maximum_significant_digits {
+                            props
+                                .push(("maximumSignificantDigits", JsValue::Number(max_sd as f64)));
+                        }
+
+                        // useGrouping: spec says return a string or boolean
+                        let ug_val = match use_grouping.as_str() {
+                            "true" => JsValue::String(JsString::from_str("auto")),
+                            "false" => JsValue::Boolean(false),
+                            "auto" | "always" | "min2" => {
+                                JsValue::String(JsString::from_str(&use_grouping))
+                            }
+                            _ => JsValue::String(JsString::from_str(&use_grouping)),
+                        };
+                        props.push(("useGrouping", ug_val));
+
+                        props.push(("notation", JsValue::String(JsString::from_str(&notation))));
+
+                        if notation == "compact"
+                            && let Some(ref cd) = compact_display
+                        {
+                            props.push(("compactDisplay", JsValue::String(JsString::from_str(cd))));
+                        }
+
+                        props.push((
+                            "signDisplay",
+                            JsValue::String(JsString::from_str(&sign_display)),
+                        ));
+
+                        props.push((
+                            "roundingIncrement",
+                            JsValue::Number(rounding_increment as f64),
+                        ));
+                        props.push((
+                            "roundingMode",
+                            JsValue::String(JsString::from_str(&rounding_mode)),
+                        ));
+                        props.push((
+                            "roundingPriority",
+                            JsValue::String(JsString::from_str(&rounding_priority)),
+                        ));
+                        props.push((
+                            "trailingZeroDisplay",
+                            JsValue::String(JsString::from_str(&trailing_zero_display)),
+                        ));
+
+                        for (key, val) in props {
+                            result.borrow_mut().insert_property(
+                                key.to_string(),
+                                PropertyDescriptor::data(val, true, true, true),
+                            );
+                        }
+
+                        let result_id = result.borrow().id.unwrap();
+                        return Completion::Normal(JsValue::Object(crate::types::JsObject {
+                            id: result_id,
+                        }));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -3786,14 +3758,13 @@ impl Interpreter {
                 };
 
                 // Validate currency code
-                if let Some(ref c) = currency_opt {
-                    if !is_well_formed_currency_code(c) {
+                if let Some(ref c) = currency_opt
+                    && !is_well_formed_currency_code(c) {
                         return Completion::Throw(interp.create_range_error(&format!(
                             "Invalid currency code: {}",
                             c
                         )));
                     }
-                }
 
                 if style == "currency" && currency_opt.is_none() {
                     return Completion::Throw(
@@ -3861,14 +3832,13 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                if let Some(ref u) = unit_opt {
-                    if !is_well_formed_unit_identifier(u) {
+                if let Some(ref u) = unit_opt
+                    && !is_well_formed_unit_identifier(u) {
                         return Completion::Throw(interp.create_range_error(&format!(
                             "Invalid unit identifier: {}",
                             u
                         )));
                     }
-                }
 
                 if style == "unit" && unit_opt.is_none() {
                     return Completion::Throw(
@@ -4067,7 +4037,7 @@ impl Interpreter {
                         let min_sd = if let Some(ref v) = raw_min_sd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 1.0 || n > 21.0 {
+                                    if n.is_nan() || !(1.0..=21.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "minimumSignificantDigits is out of range",
                                         ));
@@ -4082,7 +4052,7 @@ impl Interpreter {
                         let max_sd = if let Some(ref v) = raw_max_sd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 1.0 || n > 21.0 {
+                                    if n.is_nan() || !(1.0..=21.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "maximumSignificantDigits is out of range",
                                         ));
@@ -4105,7 +4075,7 @@ impl Interpreter {
                         let explicit_min_fd = if let Some(ref v) = raw_min_fd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 0.0 || n > 100.0 {
+                                    if n.is_nan() || !(0.0..=100.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "minimumFractionDigits is out of range",
                                         ));
@@ -4120,7 +4090,7 @@ impl Interpreter {
                         let explicit_max_fd = if let Some(ref v) = raw_max_fd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 0.0 || n > 100.0 {
+                                    if n.is_nan() || !(0.0..=100.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "maximumFractionDigits is out of range",
                                         ));
@@ -4151,7 +4121,7 @@ impl Interpreter {
                         let min_sd = if let Some(ref v) = raw_min_sd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 1.0 || n > 21.0 {
+                                    if n.is_nan() || !(1.0..=21.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "minimumSignificantDigits is out of range",
                                         ));
@@ -4166,7 +4136,7 @@ impl Interpreter {
                         let max_sd = if let Some(ref v) = raw_max_sd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 1.0 || n > 21.0 {
+                                    if n.is_nan() || !(1.0..=21.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "maximumSignificantDigits is out of range",
                                         ));
@@ -4181,7 +4151,7 @@ impl Interpreter {
                         let min_fd = if let Some(ref v) = raw_min_fd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 0.0 || n > 100.0 {
+                                    if n.is_nan() || !(0.0..=100.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "minimumFractionDigits is out of range",
                                         ));
@@ -4196,7 +4166,7 @@ impl Interpreter {
                         let max_fd = if let Some(ref v) = raw_max_fd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 0.0 || n > 100.0 {
+                                    if n.is_nan() || !(0.0..=100.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "maximumFractionDigits is out of range",
                                         ));
@@ -4234,10 +4204,8 @@ impl Interpreter {
                         Ok(n) => n,
                         Err(e) => return Completion::Throw(e),
                     };
-                    if num.is_nan() || num < 1.0 || num > 5000.0 {
-                        return Completion::Throw(interp.create_range_error(&format!(
-                            "roundingIncrement value is out of range"
-                        )));
+                    if num.is_nan() || !(1.0..=5000.0).contains(&num) {
+                        return Completion::Throw(interp.create_range_error("roundingIncrement value is out of range"));
                     }
                     let vi = num.floor() as u32;
                     let valid = [
@@ -4426,33 +4394,33 @@ impl Interpreter {
         ));
 
         // Set NumberFormat.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &nf_ctor {
-            if let Some(obj) = self.get_object(ctor_ref.id) {
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
-                );
+        if let JsValue::Object(ctor_ref) = &nf_ctor
+            && let Some(obj) = self.get_object(ctor_ref.id)
+        {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val.clone(), false, false, false),
+            );
 
-                // supportedLocalesOf static method
-                let slof = self.create_function(JsFunction::native(
-                    "supportedLocalesOf".to_string(),
-                    1,
-                    |interp, _this, args| {
-                        let locales = args.first().unwrap_or(&JsValue::Undefined);
-                        let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                        let requested = match interp.intl_canonicalize_locale_list(locales) {
-                            Ok(list) => list,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match interp.intl_supported_locales(&requested, &options) {
-                            Ok(v) => Completion::Normal(v),
-                            Err(e) => Completion::Throw(e),
-                        }
-                    },
-                ));
-                obj.borrow_mut()
-                    .insert_builtin("supportedLocalesOf".to_string(), slof);
-            }
+            // supportedLocalesOf static method
+            let slof = self.create_function(JsFunction::native(
+                "supportedLocalesOf".to_string(),
+                1,
+                |interp, _this, args| {
+                    let locales = args.first().unwrap_or(&JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let requested = match interp.intl_canonicalize_locale_list(locales) {
+                        Ok(list) => list,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    match interp.intl_supported_locales(&requested, &options) {
+                        Ok(v) => Completion::Normal(v),
+                        Err(e) => Completion::Throw(e),
+                    }
+                },
+            ));
+            obj.borrow_mut()
+                .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype

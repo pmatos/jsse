@@ -28,10 +28,10 @@ fn get_sab_info(interp: &Interpreter, ta_val: &JsValue) -> Option<(Arc<SharedBuf
             && let Some(buf_obj) = interp.get_object(buf_id)
         {
             let buf_ref = buf_obj.borrow();
-            if buf_ref.arraybuffer_is_shared {
-                if let Some(ref inner) = buf_ref.sab_shared {
-                    return Some((inner.clone(), byte_offset));
-                }
+            if buf_ref.arraybuffer_is_shared
+                && let Some(ref inner) = buf_ref.sab_shared
+            {
+                return Some((inner.clone(), byte_offset));
             }
         }
     }
@@ -311,7 +311,7 @@ impl Interpreter {
                 let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let value = args.get(2).cloned().unwrap_or(JsValue::Undefined);
-                let (kind, _buffer, byte_offset, element_size, is_bigint) =
+                let (_kind, _buffer, byte_offset, element_size, is_bigint) =
                     match validate_integer_typed_array(interp, &ta_val, true) {
                         Ok(info) => info,
                         Err(e) => return Completion::Throw(e),

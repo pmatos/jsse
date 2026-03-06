@@ -109,7 +109,7 @@ fn is_valid_unicode_type(s: &str) -> bool {
     }
     for part in s.split('-') {
         let len = part.len();
-        if len < 3 || len > 8 {
+        if !(3..=8).contains(&len) {
             return false;
         }
         if !part.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -198,7 +198,7 @@ fn normalize_offset_timezone(tz: &str) -> Option<String> {
 /// Uses chrono_tz for DST-aware offset computation for IANA timezones.
 fn tz_offset_ms(tz: &str, epoch_ms: f64) -> f64 {
     if let Some((h, m)) = parse_offset_timezone(tz) {
-        let total_min = h * 60 + if h < 0 { -(m as i32) } else { m as i32 };
+        let total_min = h * 60 + if h < 0 { -m } else { m };
         return total_min as f64 * 60_000.0;
     }
 
@@ -206,7 +206,7 @@ fn tz_offset_ms(tz: &str, epoch_ms: f64) -> f64 {
     use chrono_tz::Tz;
 
     let canonical = canonicalize_timezone(tz);
-    let tz_str = if canonical.eq_ignore_ascii_case(tz) && canonical != tz.to_string() {
+    let tz_str = if canonical.eq_ignore_ascii_case(tz) && canonical != tz {
         canonical
     } else {
         tz.to_string()
@@ -239,7 +239,7 @@ fn is_valid_timezone(tz: &str) -> bool {
     }
     // Use canonicalize_timezone to check if it matches a known TZ
     let canonical = canonicalize_timezone(tz);
-    if canonical.eq_ignore_ascii_case(tz) && canonical != tz.to_string() {
+    if canonical.eq_ignore_ascii_case(tz) && canonical != tz {
         return true;
     }
     if canonical == tz {
@@ -253,7 +253,7 @@ fn is_valid_timezone(tz: &str) -> bool {
         }
     }
     // Accept valid IANA-style patterns we might not have in our list
-    if tz.chars().any(|c| !c.is_ascii()) {
+    if !tz.is_ascii() {
         return false;
     }
     let valid_chars = tz
@@ -1310,7 +1310,7 @@ fn format_2digit(n: u32) -> String {
     }
 }
 
-fn format_date_style(c: &DateComponents, style: &str, tz: &str) -> String {
+fn format_date_style(c: &DateComponents, style: &str, _tz: &str) -> String {
     let ml = c
         .cal_month_name
         .as_deref()
@@ -1490,18 +1490,20 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
     let hc = resolve_hour_cycle(opts);
 
     // For non-Gregorian calendars with dateStyle, convert to calendar fields
-    if opts.date_style.is_some() && opts.calendar != "gregory" && opts.calendar != "iso8601" {
-        if let Some(cf) = crate::interpreter::builtins::temporal::iso_to_calendar_fields(
+    if opts.date_style.is_some()
+        && opts.calendar != "gregory"
+        && opts.calendar != "iso8601"
+        && let Some(cf) = crate::interpreter::builtins::temporal::iso_to_calendar_fields(
             c.year,
             c.month as u8,
             c.day as u8,
             &opts.calendar,
-        ) {
-            c.year = cf.year;
-            c.month = cf.month_ordinal as u32;
-            c.day = cf.day as u32;
-            c.cal_month_name = Some(calendar_month_name_en(&opts.calendar, &cf.month_code));
-        }
+        )
+    {
+        c.year = cf.year;
+        c.month = cf.month_ordinal as u32;
+        c.day = cf.day as u32;
+        c.cal_month_name = Some(calendar_month_name_en(&opts.calendar, &cf.month_code));
     }
 
     // dateStyle/timeStyle shorthand
@@ -1582,7 +1584,7 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
         c.year
     };
     let year_str = opts.year.as_ref().map(|y| match y.as_str() {
-        "2-digit" => format_2digit((display_year.unsigned_abs() % 100) as u32),
+        "2-digit" => format_2digit(display_year.unsigned_abs() % 100),
         _ => display_year.to_string(),
     });
 
@@ -1670,8 +1672,10 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
         let uses_period = hc == "h12" || hc == "h11";
 
         // dayPeriod alone (no hour)
-        if opts.day_period.is_some() && opts.hour.is_none() {
-            let dp_text = day_period_text(c.hour, opts.day_period.as_ref().unwrap());
+        if let Some(ref dp) = opts.day_period
+            && opts.hour.is_none()
+        {
+            let dp_text = day_period_text(c.hour, dp);
             let date_str = if !date_parts.is_empty() {
                 date_parts.join(" ")
             } else {
@@ -1687,14 +1691,13 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
             let h_str = match h.as_str() {
                 "2-digit" => format_2digit(match hc {
                     "h12" => {
-                        let v = if c.hour == 0 {
+                        if c.hour == 0 {
                             12
                         } else if c.hour > 12 {
                             c.hour - 12
                         } else {
                             c.hour
-                        };
-                        v
+                        }
                     }
                     "h11" => c.hour % 12,
                     "h23" => c.hour,
@@ -1764,18 +1767,20 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
                 3 => format!(".{:03}", c.millisecond),
                 _ => String::new(),
             };
-            if !frac.is_empty() {
-                if let Some(last) = time_parts.last_mut() {
-                    last.push_str(&frac);
-                }
+            if !frac.is_empty()
+                && let Some(last) = time_parts.last_mut()
+            {
+                last.push_str(&frac);
             }
         }
 
         // dayPeriod with hour: use day period text instead of AM/PM
-        if opts.day_period.is_some() && opts.hour.is_some() {
-            let dp_text = day_period_text(c.hour, opts.day_period.as_ref().unwrap());
+        if let Some(ref dp) = opts.day_period
+            && opts.hour.is_some()
+        {
+            let dp_text = day_period_text(c.hour, dp);
             let time_str = time_parts.join(":");
-            let mut result_parts = date_parts.clone();
+            let result_parts = date_parts.clone();
             let with_dp = format!("{} {}", time_str, dp_text);
             if !result_parts.is_empty() {
                 let date_str = result_parts.join(" ");
@@ -1797,7 +1802,7 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
         // Append AM/PM for 12-hour formats
         if uses_period && opts.hour.is_some() {
             let time_str = time_parts.join(":");
-            let mut result_parts = date_parts.clone();
+            let result_parts = date_parts.clone();
             if !time_str.is_empty() {
                 let with_period = format!("{} {}", time_str, period);
                 if !result_parts.is_empty() {
@@ -1893,43 +1898,38 @@ fn format_range_with_options(start_ms: f64, end_ms: f64, opts: &DtfOptions) -> S
         };
         let year_fn = |y: i32, opt: &str| -> String {
             if opt == "2-digit" {
-                format_2digit((y.unsigned_abs() % 100) as u32)
+                format_2digit(y.unsigned_abs() % 100)
             } else {
                 y.to_string()
             }
         };
 
-        let d_opt = opts.day.as_ref().unwrap().as_str();
-        let y_opt = opts.year.as_ref().unwrap().as_str();
+        if let (Some(d_val), Some(y_val)) = (&opts.day, &opts.year) {
+            let d_opt = d_val.as_str();
+            let y_opt = y_val.as_str();
 
-        if sc.year == ec.year && sc.month == ec.month {
-            // Same year + same month: "Jan 3 – 5, 2019"
-            return format!(
-                "{} {}{}{}{}",
-                month_fn(sc.month),
-                day_fn(sc.day, d_opt),
-                RANGE_SEP,
-                day_fn(ec.day, d_opt),
-                if opts.year.is_some() {
-                    format!(", {}", year_fn(sc.year, y_opt))
-                } else {
-                    String::new()
-                }
-            );
-        } else if sc.year == ec.year {
-            // Same year, different month: "Jan 3 – Mar 4, 2019"
-            return format!(
-                "{} {}{}{}{}",
-                month_fn(sc.month),
-                day_fn(sc.day, d_opt),
-                RANGE_SEP,
-                format!("{} {}", month_fn(ec.month), day_fn(ec.day, d_opt)),
-                if opts.year.is_some() {
-                    format!(", {}", year_fn(sc.year, y_opt))
-                } else {
-                    String::new()
-                }
-            );
+            if sc.year == ec.year && sc.month == ec.month {
+                // Same year + same month: "Jan 3 – 5, 2019"
+                return format!(
+                    "{} {}{}{}, {}",
+                    month_fn(sc.month),
+                    day_fn(sc.day, d_opt),
+                    RANGE_SEP,
+                    day_fn(ec.day, d_opt),
+                    year_fn(sc.year, y_opt)
+                );
+            } else if sc.year == ec.year {
+                // Same year, different month: "Jan 3 – Mar 4, 2019"
+                return format!(
+                    "{} {}{}{} {}, {}",
+                    month_fn(sc.month),
+                    day_fn(sc.day, d_opt),
+                    RANGE_SEP,
+                    month_fn(ec.month),
+                    day_fn(ec.day, d_opt),
+                    year_fn(sc.year, y_opt)
+                );
+            }
         }
         // Different year: full "Jan 3, 2019 – Mar 4, 2020"
     }
@@ -1951,36 +1951,37 @@ fn format_range_with_options(start_ms: f64, end_ms: f64, opts: &DtfOptions) -> S
         .iter()
         .any(|(t, _)| time_types.contains(&t.as_str()));
 
-    if has_time && start_date == end_date && start_parts != end_parts {
-        if let Some(time_start) = start_parts
+    if has_time
+        && start_date == end_date
+        && start_parts != end_parts
+        && let Some(time_start) = start_parts
             .iter()
             .position(|(t, _)| time_types.contains(&t.as_str()))
-        {
-            let shared_end = if time_start > 0 && start_parts[time_start - 1].0 == "literal" {
-                time_start - 1
-            } else {
-                time_start
-            };
-            let mut result = String::new();
-            for (_, v) in &start_parts[..shared_end] {
-                result.push_str(v);
-            }
-            if shared_end < time_start {
-                result.push_str(&start_parts[shared_end].1);
-            }
-            for (_, v) in &start_parts[time_start..] {
-                result.push_str(v);
-            }
-            result.push_str(RANGE_SEP);
-            let end_time_start = end_parts
-                .iter()
-                .position(|(t, _)| time_types.contains(&t.as_str()))
-                .unwrap_or(0);
-            for (_, v) in &end_parts[end_time_start..] {
-                result.push_str(v);
-            }
-            return result;
+    {
+        let shared_end = if time_start > 0 && start_parts[time_start - 1].0 == "literal" {
+            time_start - 1
+        } else {
+            time_start
+        };
+        let mut result = String::new();
+        for (_, v) in &start_parts[..shared_end] {
+            result.push_str(v);
         }
+        if shared_end < time_start {
+            result.push_str(&start_parts[shared_end].1);
+        }
+        for (_, v) in &start_parts[time_start..] {
+            result.push_str(v);
+        }
+        result.push_str(RANGE_SEP);
+        let end_time_start = end_parts
+            .iter()
+            .position(|(t, _)| time_types.contains(&t.as_str()))
+            .unwrap_or(0);
+        for (_, v) in &end_parts[end_time_start..] {
+            result.push_str(v);
+        }
+        return result;
     }
 
     format!("{}{}{}", start_str, RANGE_SEP, end_str)
@@ -2031,101 +2032,103 @@ fn format_range_to_parts_with_options(
         };
         let year_fn = |y: i32, opt: &str| -> String {
             if opt == "2-digit" {
-                format_2digit((y.unsigned_abs() % 100) as u32)
+                format_2digit(y.unsigned_abs() % 100)
             } else {
                 y.to_string()
             }
         };
 
-        let d_opt = opts.day.as_ref().unwrap().as_str();
-        let y_opt = opts.year.as_ref().unwrap().as_str();
+        if let (Some(d_val), Some(y_val)) = (&opts.day, &opts.year) {
+            let d_opt = d_val.as_str();
+            let y_opt = y_val.as_str();
 
-        let mut all: Vec<(String, String, String)> = Vec::new();
+            let mut all: Vec<(String, String, String)> = Vec::new();
 
-        if sc.year == ec.year && sc.month == ec.month {
-            // "Jan 3 – 5, 2019" -- month shared, days differ, year shared
-            all.push((
-                "month".to_string(),
-                month_fn(sc.month).to_string(),
-                "shared".to_string(),
-            ));
-            all.push(("literal".to_string(), " ".to_string(), "shared".to_string()));
-            all.push((
-                "day".to_string(),
-                day_fn(sc.day, d_opt),
-                "startRange".to_string(),
-            ));
-            all.push((
-                "literal".to_string(),
-                RANGE_SEP.to_string(),
-                "shared".to_string(),
-            ));
-            all.push((
-                "day".to_string(),
-                day_fn(ec.day, d_opt),
-                "endRange".to_string(),
-            ));
-            all.push((
-                "literal".to_string(),
-                ", ".to_string(),
-                "shared".to_string(),
-            ));
-            all.push((
-                "year".to_string(),
-                year_fn(sc.year, y_opt),
-                "shared".to_string(),
-            ));
-            return all;
-        } else if sc.year == ec.year {
-            // "Jan 3 – Mar 4, 2019" -- months/days differ, year shared
-            all.push((
-                "month".to_string(),
-                month_fn(sc.month).to_string(),
-                "startRange".to_string(),
-            ));
-            all.push((
-                "literal".to_string(),
-                " ".to_string(),
-                "startRange".to_string(),
-            ));
-            all.push((
-                "day".to_string(),
-                day_fn(sc.day, d_opt),
-                "startRange".to_string(),
-            ));
-            all.push((
-                "literal".to_string(),
-                RANGE_SEP.to_string(),
-                "shared".to_string(),
-            ));
-            all.push((
-                "month".to_string(),
-                month_fn(ec.month).to_string(),
-                "endRange".to_string(),
-            ));
-            all.push((
-                "literal".to_string(),
-                " ".to_string(),
-                "endRange".to_string(),
-            ));
-            all.push((
-                "day".to_string(),
-                day_fn(ec.day, d_opt),
-                "endRange".to_string(),
-            ));
-            all.push((
-                "literal".to_string(),
-                ", ".to_string(),
-                "shared".to_string(),
-            ));
-            all.push((
-                "year".to_string(),
-                year_fn(sc.year, y_opt),
-                "shared".to_string(),
-            ));
-            return all;
+            if sc.year == ec.year && sc.month == ec.month {
+                // "Jan 3 – 5, 2019" -- month shared, days differ, year shared
+                all.push((
+                    "month".to_string(),
+                    month_fn(sc.month).to_string(),
+                    "shared".to_string(),
+                ));
+                all.push(("literal".to_string(), " ".to_string(), "shared".to_string()));
+                all.push((
+                    "day".to_string(),
+                    day_fn(sc.day, d_opt),
+                    "startRange".to_string(),
+                ));
+                all.push((
+                    "literal".to_string(),
+                    RANGE_SEP.to_string(),
+                    "shared".to_string(),
+                ));
+                all.push((
+                    "day".to_string(),
+                    day_fn(ec.day, d_opt),
+                    "endRange".to_string(),
+                ));
+                all.push((
+                    "literal".to_string(),
+                    ", ".to_string(),
+                    "shared".to_string(),
+                ));
+                all.push((
+                    "year".to_string(),
+                    year_fn(sc.year, y_opt),
+                    "shared".to_string(),
+                ));
+                return all;
+            } else if sc.year == ec.year {
+                // "Jan 3 – Mar 4, 2019" -- months/days differ, year shared
+                all.push((
+                    "month".to_string(),
+                    month_fn(sc.month).to_string(),
+                    "startRange".to_string(),
+                ));
+                all.push((
+                    "literal".to_string(),
+                    " ".to_string(),
+                    "startRange".to_string(),
+                ));
+                all.push((
+                    "day".to_string(),
+                    day_fn(sc.day, d_opt),
+                    "startRange".to_string(),
+                ));
+                all.push((
+                    "literal".to_string(),
+                    RANGE_SEP.to_string(),
+                    "shared".to_string(),
+                ));
+                all.push((
+                    "month".to_string(),
+                    month_fn(ec.month).to_string(),
+                    "endRange".to_string(),
+                ));
+                all.push((
+                    "literal".to_string(),
+                    " ".to_string(),
+                    "endRange".to_string(),
+                ));
+                all.push((
+                    "day".to_string(),
+                    day_fn(ec.day, d_opt),
+                    "endRange".to_string(),
+                ));
+                all.push((
+                    "literal".to_string(),
+                    ", ".to_string(),
+                    "shared".to_string(),
+                ));
+                all.push((
+                    "year".to_string(),
+                    year_fn(sc.year, y_opt),
+                    "shared".to_string(),
+                ));
+                return all;
+            }
+            // Different years: fall through to default (no collapsing)
         }
-        // Different years: fall through to default (no collapsing)
     }
 
     // Check if date fields are the same but time fields differ (same-day range collapsing)
@@ -2970,8 +2973,8 @@ fn format_tz_name(tz: &str, style: &str, epoch_ms: f64) -> String {
     // Handle offset timezones (+03:00, -07:00, etc.)
     if let Some((h, m)) = parse_offset_timezone(tz) {
         return match style {
-            "longOffset" => format_offset_long(h, m as i32),
-            _ => format_offset_short(h, m as i32),
+            "longOffset" => format_offset_long(h, m),
+            _ => format_offset_short(h, m),
         };
     }
 
@@ -2994,7 +2997,7 @@ fn format_tz_name(tz: &str, style: &str, epoch_ms: f64) -> String {
         use chrono_tz::Tz;
 
         let canonical = canonicalize_timezone(tz);
-        let tz_str = if canonical.eq_ignore_ascii_case(tz) && canonical != tz.to_string() {
+        let tz_str = if canonical.eq_ignore_ascii_case(tz) && canonical != tz {
             canonical
         } else {
             tz.to_string()
@@ -3049,6 +3052,7 @@ fn tz_abbr_to_long_name(abbr: &str, offset_secs: i32) -> String {
     match abbr {
         "EST" => "Eastern Standard Time".to_string(),
         "EDT" => "Eastern Daylight Time".to_string(),
+        "CST" if offset_secs == 8 * 3600 => "China Standard Time".to_string(),
         "CST" => "Central Standard Time".to_string(),
         "CDT" => "Central Daylight Time".to_string(),
         "MST" => "Mountain Standard Time".to_string(),
@@ -3061,6 +3065,7 @@ fn tz_abbr_to_long_name(abbr: &str, offset_secs: i32) -> String {
         "HDT" => "Hawaii-Aleutian Daylight Time".to_string(),
         "GMT" | "UTC" => "Coordinated Universal Time".to_string(),
         "BST" => "British Summer Time".to_string(),
+        "IST" if offset_secs == 19800 => "India Standard Time".to_string(),
         "IST" => "Irish Standard Time".to_string(),
         "CET" => "Central European Standard Time".to_string(),
         "CEST" => "Central European Summer Time".to_string(),
@@ -3070,8 +3075,6 @@ fn tz_abbr_to_long_name(abbr: &str, offset_secs: i32) -> String {
         "WEST" => "Western European Summer Time".to_string(),
         "JST" => "Japan Standard Time".to_string(),
         "KST" => "Korean Standard Time".to_string(),
-        "CST" if offset_secs == 8 * 3600 => "China Standard Time".to_string(),
-        "IST" if offset_secs == 19800 => "India Standard Time".to_string(),
         "AEST" => "Australian Eastern Standard Time".to_string(),
         "AEDT" => "Australian Eastern Daylight Time".to_string(),
         "ACST" => "Australian Central Standard Time".to_string(),
@@ -3369,18 +3372,18 @@ fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, 
                 };
                 parts.push(("month".to_string(), s));
             }
-            if opts.day.is_some() {
+            if let Some(ref day_opt) = opts.day {
                 parts.push(("literal".to_string(), " ".to_string()));
-                let d = match opts.day.as_ref().unwrap().as_str() {
+                let d = match day_opt.as_str() {
                     "2-digit" => format_2digit(c.day),
                     _ => c.day.to_string(),
                 };
                 parts.push(("day".to_string(), d));
             }
-            if opts.year.is_some() {
+            if let Some(ref year_opt) = opts.year {
                 parts.push(("literal".to_string(), ", ".to_string()));
-                let y = match opts.year.as_ref().unwrap().as_str() {
-                    "2-digit" => format_2digit((display_year.unsigned_abs() % 100) as u32),
+                let y = match year_opt.as_str() {
+                    "2-digit" => format_2digit(display_year.unsigned_abs() % 100),
                     _ => display_year.to_string(),
                 };
                 parts.push(("year".to_string(), y));
@@ -3419,7 +3422,7 @@ fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, 
             }
             if let Some(ref y) = opts.year {
                 let s = match y.as_str() {
-                    "2-digit" => format_2digit((display_year.unsigned_abs() % 100) as u32),
+                    "2-digit" => format_2digit(display_year.unsigned_abs() % 100),
                     _ => display_year.to_string(),
                 };
                 parts.push(("year".to_string(), s));
@@ -3448,11 +3451,13 @@ fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, 
         let (hour_val, period) = format_hour(c.hour, hc);
 
         // dayPeriod alone (no hour)
-        if opts.day_period.is_some() && opts.hour.is_none() {
-            let dp_text = day_period_text(c.hour, opts.day_period.as_ref().unwrap());
+        if let Some(ref dp) = opts.day_period
+            && opts.hour.is_none()
+        {
+            let dp_text = day_period_text(c.hour, dp);
             parts.push(("dayPeriod".to_string(), dp_text.to_string()));
-            // Skip the rest of time components
-        } else {
+        }
+        if !(opts.day_period.is_some() && opts.hour.is_none()) {
             if let Some(ref h) = opts.hour {
                 let s = match h.as_str() {
                     "2-digit" => {
@@ -3533,11 +3538,17 @@ fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, 
                 }
             }
 
-            if opts.day_period.is_some() && opts.hour.is_some() {
-                let dp_text = day_period_text(c.hour, opts.day_period.as_ref().unwrap());
+            if let Some(ref dp) = opts.day_period
+                && opts.hour.is_some()
+            {
+                let dp_text = day_period_text(c.hour, dp);
                 parts.push(("literal".to_string(), " ".to_string()));
                 parts.push(("dayPeriod".to_string(), dp_text.to_string()));
-            } else if uses_period && opts.hour.is_some() {
+            }
+            if !(opts.day_period.is_some() && opts.hour.is_some())
+                && uses_period
+                && opts.hour.is_some()
+            {
                 parts.push(("literal".to_string(), " ".to_string()));
                 parts.push(("dayPeriod".to_string(), period.to_string()));
             }
@@ -3557,56 +3568,56 @@ fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, 
 }
 
 fn extract_dtf_data(interp: &mut Interpreter, this: &JsValue) -> Result<DtfOptions, JsValue> {
-    if let JsValue::Object(o) = this {
-        if let Some(obj) = interp.get_object(o.id) {
-            let b = obj.borrow();
-            if let Some(IntlData::DateTimeFormat {
-                ref locale,
-                ref calendar,
-                ref numbering_system,
-                ref time_zone,
-                ref hour_cycle,
-                ref hour12,
-                ref weekday,
-                ref era,
-                ref year,
-                ref month,
-                ref day,
-                ref day_period,
-                ref hour,
-                ref minute,
-                ref second,
-                ref fractional_second_digits,
-                ref time_zone_name,
-                ref date_style,
-                ref time_style,
+    if let JsValue::Object(o) = this
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let b = obj.borrow();
+        if let Some(IntlData::DateTimeFormat {
+            ref locale,
+            ref calendar,
+            ref numbering_system,
+            ref time_zone,
+            ref hour_cycle,
+            ref hour12,
+            ref weekday,
+            ref era,
+            ref year,
+            ref month,
+            ref day,
+            ref day_period,
+            ref hour,
+            ref minute,
+            ref second,
+            ref fractional_second_digits,
+            ref time_zone_name,
+            ref date_style,
+            ref time_style,
+            has_explicit_components,
+        }) = b.intl_data
+        {
+            return Ok(DtfOptions {
+                locale: locale.clone(),
+                calendar: calendar.clone(),
+                numbering_system: numbering_system.clone(),
+                time_zone: time_zone.clone(),
+                hour_cycle: hour_cycle.clone(),
+                hour12: *hour12,
+                weekday: weekday.clone(),
+                era: era.clone(),
+                year: year.clone(),
+                month: month.clone(),
+                day: day.clone(),
+                day_period: day_period.clone(),
+                hour: hour.clone(),
+                minute: minute.clone(),
+                second: second.clone(),
+                fractional_second_digits: *fractional_second_digits,
+                time_zone_name: time_zone_name.clone(),
+                date_style: date_style.clone(),
+                time_style: time_style.clone(),
                 has_explicit_components,
-            }) = b.intl_data
-            {
-                return Ok(DtfOptions {
-                    locale: locale.clone(),
-                    calendar: calendar.clone(),
-                    numbering_system: numbering_system.clone(),
-                    time_zone: time_zone.clone(),
-                    hour_cycle: hour_cycle.clone(),
-                    hour12: *hour12,
-                    weekday: weekday.clone(),
-                    era: era.clone(),
-                    year: year.clone(),
-                    month: month.clone(),
-                    day: day.clone(),
-                    day_period: day_period.clone(),
-                    hour: hour.clone(),
-                    minute: minute.clone(),
-                    second: second.clone(),
-                    fractional_second_digits: *fractional_second_digits,
-                    time_zone_name: time_zone_name.clone(),
-                    date_style: date_style.clone(),
-                    time_style: time_style.clone(),
-                    has_explicit_components,
-                    temporal_type: None,
-                });
-            }
+                temporal_type: None,
+            });
         }
     }
     Err(interp.create_type_error("Intl.DateTimeFormat method called on incompatible receiver"))
@@ -3632,12 +3643,12 @@ fn resolve_date_value(interp: &mut Interpreter, date_arg: &JsValue) -> Result<f6
         return Ok(now_ms().floor());
     }
     // Check if it's a Temporal object
-    if let JsValue::Object(o) = date_arg {
-        if let Some(obj) = interp.get_object(o.id) {
-            let temporal = obj.borrow().temporal_data.clone();
-            if let Some(td) = temporal {
-                return temporal_to_epoch_ms(&td);
-            }
+    if let JsValue::Object(o) = date_arg
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let temporal = obj.borrow().temporal_data.clone();
+        if let Some(td) = temporal {
+            return temporal_to_epoch_ms(&td);
         }
     }
     let num = interp.to_number_value(date_arg)?;
@@ -3660,20 +3671,20 @@ enum TemporalType {
 }
 
 fn detect_temporal_type(interp: &Interpreter, val: &JsValue) -> Option<TemporalType> {
-    if let JsValue::Object(o) = val {
-        if let Some(obj) = interp.get_object(o.id) {
-            let td = obj.borrow().temporal_data.clone();
-            return match td {
-                Some(TemporalData::Instant { .. }) => Some(TemporalType::Instant),
-                Some(TemporalData::ZonedDateTime { .. }) => Some(TemporalType::ZonedDateTime),
-                Some(TemporalData::PlainDate { .. }) => Some(TemporalType::PlainDate),
-                Some(TemporalData::PlainTime { .. }) => Some(TemporalType::PlainTime),
-                Some(TemporalData::PlainDateTime { .. }) => Some(TemporalType::PlainDateTime),
-                Some(TemporalData::PlainYearMonth { .. }) => Some(TemporalType::PlainYearMonth),
-                Some(TemporalData::PlainMonthDay { .. }) => Some(TemporalType::PlainMonthDay),
-                _ => None,
-            };
-        }
+    if let JsValue::Object(o) = val
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let td = obj.borrow().temporal_data.clone();
+        return match td {
+            Some(TemporalData::Instant { .. }) => Some(TemporalType::Instant),
+            Some(TemporalData::ZonedDateTime { .. }) => Some(TemporalType::ZonedDateTime),
+            Some(TemporalData::PlainDate { .. }) => Some(TemporalType::PlainDate),
+            Some(TemporalData::PlainTime { .. }) => Some(TemporalType::PlainTime),
+            Some(TemporalData::PlainDateTime { .. }) => Some(TemporalType::PlainDateTime),
+            Some(TemporalData::PlainYearMonth { .. }) => Some(TemporalType::PlainYearMonth),
+            Some(TemporalData::PlainMonthDay { .. }) => Some(TemporalType::PlainMonthDay),
+            _ => None,
+        };
     }
     None
 }
@@ -3993,15 +4004,7 @@ fn temporal_to_epoch_ms(td: &TemporalData) -> Result<f64, JsValue> {
             ..
         } => {
             // Use epoch date 1970-01-01
-            let ms = date_fields_to_epoch_ms(
-                1970,
-                1,
-                1,
-                *hour as u8,
-                *minute as u8,
-                *second as u8,
-                *millisecond as u16,
-            );
+            let ms = date_fields_to_epoch_ms(1970, 1, 1, *hour, *minute, *second, *millisecond);
             Ok(ms)
         }
         TemporalData::PlainDateTime {
@@ -4206,13 +4209,12 @@ impl Interpreter {
                                     "Temporal.ZonedDateTime is not supported in DateTimeFormat format()",
                                 ));
                             }
-                            if let Some(tt) = temporal_type {
-                                if !check_temporal_overlap(&opts, tt) {
+                            if let Some(tt) = temporal_type
+                                && !check_temporal_overlap(&opts, tt) {
                                     return Completion::Throw(interp2.create_type_error(
                                         "Temporal object does not overlap with DateTimeFormat options",
                                     ));
                                 }
-                            }
                             let ms = match resolve_date_value(interp2, &date_arg) {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
@@ -4268,12 +4270,12 @@ impl Interpreter {
                         "Temporal.ZonedDateTime is not supported in DateTimeFormat formatToParts()",
                     ));
                 }
-                if let Some(tt) = temporal_type {
-                    if !check_temporal_overlap(&opts, tt) {
-                        return Completion::Throw(interp.create_type_error(
-                            "Temporal object does not overlap with DateTimeFormat options",
-                        ));
-                    }
+                if let Some(tt) = temporal_type
+                    && !check_temporal_overlap(&opts, tt)
+                {
+                    return Completion::Throw(interp.create_type_error(
+                        "Temporal object does not overlap with DateTimeFormat options",
+                    ));
                 }
                 let ms = match resolve_date_value(interp, &date_arg) {
                     Ok(v) => v,
@@ -4355,15 +4357,15 @@ impl Interpreter {
                 // non-Temporal args before checking SameTemporalType.
                 // Only call ToNumber here (not TimeClip) since the type
                 // mismatch check must happen before HandleDateTimeOthers.
-                if start_tt.is_none() {
-                    if let Err(e) = interp.to_number_value(&start_arg) {
-                        return Completion::Throw(e);
-                    }
+                if start_tt.is_none()
+                    && let Err(e) = interp.to_number_value(&start_arg)
+                {
+                    return Completion::Throw(e);
                 }
-                if end_tt.is_none() {
-                    if let Err(e) = interp.to_number_value(&end_arg) {
-                        return Completion::Throw(e);
-                    }
+                if end_tt.is_none()
+                    && let Err(e) = interp.to_number_value(&end_arg)
+                {
+                    return Completion::Throw(e);
                 }
                 if matches!(start_tt, Some(TemporalType::ZonedDateTime))
                     || matches!(end_tt, Some(TemporalType::ZonedDateTime))
@@ -4388,12 +4390,12 @@ impl Interpreter {
                     }
                     (None, None) => {}
                 }
-                if let Some(tt) = start_tt.or(end_tt) {
-                    if !check_temporal_overlap(&opts, tt) {
-                        return Completion::Throw(interp.create_type_error(
-                            "Temporal object does not overlap with DateTimeFormat options",
-                        ));
-                    }
+                if let Some(tt) = start_tt.or(end_tt)
+                    && !check_temporal_overlap(&opts, tt)
+                {
+                    return Completion::Throw(interp.create_type_error(
+                        "Temporal object does not overlap with DateTimeFormat options",
+                    ));
                 }
                 let start_ms = match resolve_date_value(interp, &start_arg) {
                     Ok(v) => v,
@@ -4448,16 +4450,14 @@ impl Interpreter {
 
                 let start_tt = detect_temporal_type(interp, &start_arg);
                 let end_tt = detect_temporal_type(interp, &end_arg);
-                if start_tt.is_none() {
-                    if let Err(e) = interp.to_number_value(&start_arg) {
+                if start_tt.is_none()
+                    && let Err(e) = interp.to_number_value(&start_arg) {
                         return Completion::Throw(e);
                     }
-                }
-                if end_tt.is_none() {
-                    if let Err(e) = interp.to_number_value(&end_arg) {
+                if end_tt.is_none()
+                    && let Err(e) = interp.to_number_value(&end_arg) {
                         return Completion::Throw(e);
                     }
-                }
                 if matches!(start_tt, Some(TemporalType::ZonedDateTime))
                     || matches!(end_tt, Some(TemporalType::ZonedDateTime))
                 {
@@ -4480,13 +4480,12 @@ impl Interpreter {
                     }
                     (None, None) => {}
                 }
-                if let Some(tt) = start_tt.or(end_tt) {
-                    if !check_temporal_overlap(&opts, tt) {
+                if let Some(tt) = start_tt.or(end_tt)
+                    && !check_temporal_overlap(&opts, tt) {
                         return Completion::Throw(interp.create_type_error(
                             "Temporal object does not overlap with DateTimeFormat options",
                         ));
                     }
-                }
                 let start_ms = match resolve_date_value(interp, &start_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -4575,20 +4574,21 @@ impl Interpreter {
                 }
 
                 // Properties in spec order
-                let mut props: Vec<(&str, JsValue)> = Vec::new();
-                props.push(("locale", JsValue::String(JsString::from_str(&opts.locale))));
-                props.push((
-                    "calendar",
-                    JsValue::String(JsString::from_str(&opts.calendar)),
-                ));
-                props.push((
-                    "numberingSystem",
-                    JsValue::String(JsString::from_str(&opts.numbering_system)),
-                ));
-                props.push((
-                    "timeZone",
-                    JsValue::String(JsString::from_str(&opts.time_zone)),
-                ));
+                let mut props: Vec<(&str, JsValue)> = vec![
+                    ("locale", JsValue::String(JsString::from_str(&opts.locale))),
+                    (
+                        "calendar",
+                        JsValue::String(JsString::from_str(&opts.calendar)),
+                    ),
+                    (
+                        "numberingSystem",
+                        JsValue::String(JsString::from_str(&opts.numbering_system)),
+                    ),
+                    (
+                        "timeZone",
+                        JsValue::String(JsString::from_str(&opts.time_zone)),
+                    ),
+                ];
 
                 // hourCycle and hour12 only present if hour is used
                 let has_hour = opts.hour.is_some() || opts.time_style.is_some();
@@ -4695,13 +4695,13 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                let calendar_opt_provided = calendar_opt.is_some();
-                if let Some(ref cal) = calendar_opt {
-                    if !is_valid_unicode_type(cal) {
-                        return Completion::Throw(
-                            interp.create_range_error(&format!("Invalid calendar value: {}", cal)),
-                        );
-                    }
+                let _calendar_opt_provided = calendar_opt.is_some();
+                if let Some(ref cal) = calendar_opt
+                    && !is_valid_unicode_type(cal)
+                {
+                    return Completion::Throw(
+                        interp.create_range_error(&format!("Invalid calendar value: {}", cal)),
+                    );
                 }
 
                 // Steps 8-10: numberingSystem
@@ -4709,14 +4709,14 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                let ns_opt_provided = ns_opt.is_some();
-                if let Some(ref ns) = ns_opt {
-                    if !is_valid_unicode_type(ns) {
-                        return Completion::Throw(interp.create_range_error(&format!(
-                            "Invalid numberingSystem value: {}",
-                            ns
-                        )));
-                    }
+                let _ns_opt_provided = ns_opt.is_some();
+                if let Some(ref ns) = ns_opt
+                    && !is_valid_unicode_type(ns)
+                {
+                    return Completion::Throw(
+                        interp
+                            .create_range_error(&format!("Invalid numberingSystem value: {}", ns)),
+                    );
                 }
 
                 // Step 12: hour12
@@ -5017,20 +5017,20 @@ impl Interpreter {
                 }
 
                 // ca: keep only if the resolved calendar matches the extension value
-                if let Some(ref ext_ca) = locale_ca {
-                    if ext_ca != &calendar {
-                        locale = strip_unicode_extension_key(&locale, "ca");
-                    }
+                if let Some(ref ext_ca) = locale_ca
+                    && ext_ca != &calendar
+                {
+                    locale = strip_unicode_extension_key(&locale, "ca");
                 }
 
                 // nu: keep only if the resolved numbering system matches the extension value
-                if let Some(ref ext_nu) = locale_nu {
-                    if ext_nu != &numbering_system {
-                        locale = strip_unicode_extension_key(&locale, "nu");
-                    }
+                if let Some(ref ext_nu) = locale_nu
+                    && ext_nu != &numbering_system
+                {
+                    locale = strip_unicode_extension_key(&locale, "nu");
                 }
 
-                let has_era = era.is_some();
+                let _has_era = era.is_some();
                 let proto = match interp.get_prototype_from_new_target_realm(|realm| {
                     realm.intl_date_time_format_prototype.clone()
                 }) {
@@ -5069,33 +5069,33 @@ impl Interpreter {
         ));
 
         // Set DateTimeFormat.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &dtf_ctor {
-            if let Some(obj) = self.get_object(ctor_ref.id) {
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
-                );
+        if let JsValue::Object(ctor_ref) = &dtf_ctor
+            && let Some(obj) = self.get_object(ctor_ref.id)
+        {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val.clone(), false, false, false),
+            );
 
-                // supportedLocalesOf static method
-                let slof = self.create_function(JsFunction::native(
-                    "supportedLocalesOf".to_string(),
-                    1,
-                    |interp, _this, args| {
-                        let locales = args.first().unwrap_or(&JsValue::Undefined);
-                        let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                        let requested = match interp.intl_canonicalize_locale_list(locales) {
-                            Ok(list) => list,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match interp.intl_supported_locales(&requested, &options) {
-                            Ok(v) => Completion::Normal(v),
-                            Err(e) => Completion::Throw(e),
-                        }
-                    },
-                ));
-                obj.borrow_mut()
-                    .insert_builtin("supportedLocalesOf".to_string(), slof);
-            }
+            // supportedLocalesOf static method
+            let slof = self.create_function(JsFunction::native(
+                "supportedLocalesOf".to_string(),
+                1,
+                |interp, _this, args| {
+                    let locales = args.first().unwrap_or(&JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let requested = match interp.intl_canonicalize_locale_list(locales) {
+                        Ok(list) => list,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    match interp.intl_supported_locales(&requested, &options) {
+                        Ok(v) => Completion::Normal(v),
+                        Err(e) => Completion::Throw(e),
+                    }
+                },
+            ));
+            obj.borrow_mut()
+                .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype

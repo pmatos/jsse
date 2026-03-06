@@ -1222,11 +1222,9 @@ impl Interpreter {
                             b.set_data.clone(),
                         )
                     };
-                    if has_set {
-                        if let Some(entries) = set_data {
-                            let count = entries.iter().filter(|e| e.is_some()).count();
-                            return Completion::Normal(JsValue::Number(count as f64));
-                        }
+                    if has_set && let Some(entries) = set_data {
+                        let count = entries.iter().filter(|e| e.is_some()).count();
+                        return Completion::Normal(JsValue::Number(count as f64));
                     }
                 }
                 let err = interp.create_type_error("Set.prototype.size requires a Set");
@@ -2180,7 +2178,7 @@ impl Interpreter {
                         let value = match interp.call_function(
                             &callbackfn,
                             &JsValue::Undefined,
-                            &[key.clone()],
+                            std::slice::from_ref(&key),
                         ) {
                             Completion::Normal(v) => v,
                             other => return other,

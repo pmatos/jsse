@@ -482,7 +482,7 @@ impl Interpreter {
             "toLocaleString".to_string(),
             0,
             |interp, this, args| {
-                let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, &this) {
+                let (h, m, s, ms, us, ns) = match get_plain_time_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -506,7 +506,7 @@ impl Interpreter {
                     Completion::Throw(e) => return Completion::Throw(e),
                     _ => return Completion::Normal(JsValue::Undefined),
                 };
-                super::temporal_format_with_dtf(interp, &dtf_instance, &this)
+                super::temporal_format_with_dtf(interp, &dtf_instance, this)
             },
         ));
         proto

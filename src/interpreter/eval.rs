@@ -29,6 +29,7 @@ fn string_to_bigint_for_comparison(s: &str) -> Option<num_bigint::BigInt> {
 
 enum IdentifierRef {
     WithObject(u64),
+    #[allow(dead_code)]
     Binding,
     Unresolvable,
     SpecificEnv(EnvRef),
@@ -601,12 +602,12 @@ impl Interpreter {
                                 .map(|ns| (ns.deferred, ns.export_names.clone()));
                             let ns_obj_id = obj.borrow().id.unwrap();
                             if let Some((deferred, export_names)) = ns_info {
-                                if deferred && !Self::is_symbol_like_namespace_key(&key, true) {
-                                    if let Err(e) =
+                                if deferred
+                                    && !Self::is_symbol_like_namespace_key(&key, true)
+                                    && let Err(e) =
                                         self.ensure_deferred_namespace_evaluation(ns_obj_id)
-                                    {
-                                        return Completion::Throw(e);
-                                    }
+                                {
+                                    return Completion::Throw(e);
                                 }
                                 if export_names.contains(&key) {
                                     if env.borrow().strict {
@@ -679,12 +680,11 @@ impl Interpreter {
                         if let Some(ref mut map) = obj_mut.parameter_map {
                             map.remove(&key);
                         }
-                        if let Ok(idx) = key.parse::<usize>() {
-                            if let Some(ref mut elems) = obj_mut.array_elements {
-                                if idx < elems.len() {
-                                    elems[idx] = JsValue::Undefined;
-                                }
-                            }
+                        if let Ok(idx) = key.parse::<usize>()
+                            && let Some(ref mut elems) = obj_mut.array_elements
+                            && idx < elems.len()
+                        {
+                            elems[idx] = JsValue::Undefined;
                         }
                     }
                     Completion::Normal(JsValue::Boolean(true))
@@ -919,10 +919,10 @@ impl Interpreter {
                 // §16.2.1.5.2: Return cached import.meta or create new one
                 if let Some(ref path) = self.current_module_path {
                     let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
-                    if let Some(module) = self.module_registry.get(&canon) {
-                        if let Some(ref cached) = module.borrow().cached_import_meta {
-                            return Completion::Normal(cached.clone());
-                        }
+                    if let Some(module) = self.module_registry.get(&canon)
+                        && let Some(ref cached) = module.borrow().cached_import_meta
+                    {
+                        return Completion::Normal(cached.clone());
                     }
                 }
                 let meta = self.create_object();
@@ -1041,15 +1041,15 @@ impl Interpreter {
                                     );
                                     return self.create_rejected_promise(err);
                                 }
-                                if let JsValue::Object(o) = &opts_val {
-                                    if let Some(obj) = self.get_object(o.id) {
-                                        let wv = obj.borrow().get_property("with");
-                                        if !wv.is_undefined() && !matches!(wv, JsValue::Object(_)) {
-                                            let err = self.create_type_error(
-                                                "The 'with' option must be an object",
-                                            );
-                                            return self.create_rejected_promise(err);
-                                        }
+                                if let JsValue::Object(o) = &opts_val
+                                    && let Some(obj) = self.get_object(o.id)
+                                {
+                                    let wv = obj.borrow().get_property("with");
+                                    if !wv.is_undefined() && !matches!(wv, JsValue::Object(_)) {
+                                        let err = self.create_type_error(
+                                            "The 'with' option must be an object",
+                                        );
+                                        return self.create_rejected_promise(err);
                                     }
                                 }
                             }
@@ -1091,15 +1091,15 @@ impl Interpreter {
                                     );
                                     return self.create_rejected_promise(err);
                                 }
-                                if let JsValue::Object(o) = &opts_val {
-                                    if let Some(obj) = self.get_object(o.id) {
-                                        let wv = obj.borrow().get_property("with");
-                                        if !wv.is_undefined() && !matches!(wv, JsValue::Object(_)) {
-                                            let err = self.create_type_error(
-                                                "The 'with' option must be an object",
-                                            );
-                                            return self.create_rejected_promise(err);
-                                        }
+                                if let JsValue::Object(o) = &opts_val
+                                    && let Some(obj) = self.get_object(o.id)
+                                {
+                                    let wv = obj.borrow().get_property("with");
+                                    if !wv.is_undefined() && !matches!(wv, JsValue::Object(_)) {
+                                        let err = self.create_type_error(
+                                            "The 'with' option must be an object",
+                                        );
+                                        return self.create_rejected_promise(err);
                                     }
                                 }
                             }
@@ -1991,6 +1991,7 @@ impl Interpreter {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_js_string(&mut self, val: &JsValue) -> Result<JsString, JsValue> {
         match val {
             JsValue::String(s) => Ok(s.clone()),
@@ -2088,19 +2089,19 @@ impl Interpreter {
             return Ok(strict_equality(left, right));
         }
         // B.3.6.2: IsHTMLDDA == null/undefined
-        if let JsValue::Object(o) = left {
-            if let Some(Some(obj)) = self.objects.get(o.id as usize) {
-                if obj.borrow().is_htmldda && (right.is_null() || right.is_undefined()) {
-                    return Ok(true);
-                }
-            }
+        if let JsValue::Object(o) = left
+            && let Some(Some(obj)) = self.objects.get(o.id as usize)
+            && obj.borrow().is_htmldda
+            && (right.is_null() || right.is_undefined())
+        {
+            return Ok(true);
         }
-        if let JsValue::Object(o) = right {
-            if let Some(Some(obj)) = self.objects.get(o.id as usize) {
-                if obj.borrow().is_htmldda && (left.is_null() || left.is_undefined()) {
-                    return Ok(true);
-                }
-            }
+        if let JsValue::Object(o) = right
+            && let Some(Some(obj)) = self.objects.get(o.id as usize)
+            && obj.borrow().is_htmldda
+            && (left.is_null() || left.is_undefined())
+        {
+            return Ok(true);
         }
         if (left.is_null() && right.is_undefined()) || (left.is_undefined() && right.is_null()) {
             return Ok(true);
@@ -3192,10 +3193,7 @@ impl Interpreter {
                                                 }
                                             };
                                             let setter = setter.clone();
-                                            match self.call_function(&setter, &obj_val, std::slice::from_ref(&final_val)) {
-                                                Completion::Throw(e) => return Completion::Throw(e),
-                                                _ => {}
-                                            }
+                                            if let Completion::Throw(e) = self.call_function(&setter, &obj_val, std::slice::from_ref(&final_val)) { return Completion::Throw(e) }
                                             Completion::Normal(final_val)
                                         } else {
                                             Completion::Throw(self.create_type_error(&format!(
@@ -3415,14 +3413,13 @@ impl Interpreter {
                             // TypedArray [[Set]] §10.4.5.5: canonical numeric index in TA prototype
                             {
                                 let proto_borrow = proto_rc.borrow();
-                                if let Some(ref ta) = proto_borrow.typed_array_info {
-                                    if let Some(index) = canonical_numeric_index_string(&key) {
-                                        if !is_valid_integer_index(ta, index) {
-                                            return Completion::Normal(final_val);
-                                        }
-                                        // Valid index: fall through to data descriptor path below
-                                    }
+                                if let Some(ref ta) = proto_borrow.typed_array_info
+                                    && let Some(index) = canonical_numeric_index_string(&key)
+                                    && !is_valid_integer_index(ta, index)
+                                {
+                                    return Completion::Normal(final_val);
                                 }
+                                // Valid index: fall through to data descriptor path below
                             }
                             if self.has_proxy_in_prototype_chain(proto_id) {
                                 let receiver = obj_val.clone();
@@ -3543,20 +3540,19 @@ impl Interpreter {
                     } else {
                         None
                     };
-                    if let Some(ref d) = desc {
-                        if let Some(ref setter) = d.set {
-                            if !matches!(setter, JsValue::Undefined) {
-                                let setter = setter.clone();
-                                return match self.call_function(
-                                    &setter,
-                                    &obj_val,
-                                    &[final_val.clone()],
-                                ) {
-                                    Completion::Normal(_) => Completion::Normal(final_val),
-                                    other => other,
-                                };
-                            }
-                        }
+                    if let Some(ref d) = desc
+                        && let Some(ref setter) = d.set
+                        && !matches!(setter, JsValue::Undefined)
+                    {
+                        let setter = setter.clone();
+                        return match self.call_function(
+                            &setter,
+                            &obj_val,
+                            std::slice::from_ref(&final_val),
+                        ) {
+                            Completion::Normal(_) => Completion::Normal(final_val),
+                            other => other,
+                        };
                     }
                     // Check for proxy in prototype chain
                     if let Some(obj) = self.get_object(o.id) {
@@ -4120,15 +4116,14 @@ impl Interpreter {
                     // TypedArray [[Set]] §10.4.5.5: canonical numeric index in TA prototype
                     {
                         let proto_borrow = proto_rc.borrow();
-                        if let Some(ref ta) = proto_borrow.typed_array_info {
-                            if let Some(index) = canonical_numeric_index_string(key) {
-                                if !is_valid_integer_index(ta, index) {
-                                    // Not a valid integer index: TypedArray [[Set]] returns true silently
-                                    return Ok(());
-                                }
-                                // Valid index: fall through to data descriptor path below
-                            }
+                        if let Some(ref ta) = proto_borrow.typed_array_info
+                            && let Some(index) = canonical_numeric_index_string(key)
+                            && !is_valid_integer_index(ta, index)
+                        {
+                            // Not a valid integer index: TypedArray [[Set]] returns true silently
+                            return Ok(());
                         }
+                        // Valid index: fall through to data descriptor path below
                     }
                     if self.get_proxy_info(proto_id).is_some() {
                         let receiver = obj_val.clone();
@@ -5631,12 +5626,11 @@ impl Interpreter {
         sent_value: JsValue,
     ) -> Completion {
         let caller_realm = self.current_realm_id;
-        if let JsValue::Object(o) = this {
-            if let Some(obj_rc) = self.get_object(o.id) {
-                if let Some(realm_id) = obj_rc.borrow().generator_realm_id {
-                    self.current_realm_id = realm_id;
-                }
-            }
+        if let JsValue::Object(o) = this
+            && let Some(obj_rc) = self.get_object(o.id)
+            && let Some(realm_id) = obj_rc.borrow().generator_realm_id
+        {
+            self.current_realm_id = realm_id;
         }
         let result = self.generator_next_state_machine_impl(this, sent_value);
         self.current_realm_id = caller_realm;
@@ -7190,12 +7184,11 @@ impl Interpreter {
         sent_value: JsValue,
     ) -> Completion {
         let caller_realm = self.current_realm_id;
-        if let JsValue::Object(o) = this {
-            if let Some(obj_rc) = self.get_object(o.id) {
-                if let Some(realm_id) = obj_rc.borrow().generator_realm_id {
-                    self.current_realm_id = realm_id;
-                }
-            }
+        if let JsValue::Object(o) = this
+            && let Some(obj_rc) = self.get_object(o.id)
+            && let Some(realm_id) = obj_rc.borrow().generator_realm_id
+        {
+            self.current_realm_id = realm_id;
         }
         let result = self.async_generator_next_state_machine_impl(this, sent_value);
         self.current_realm_id = caller_realm;
@@ -7629,7 +7622,7 @@ impl Interpreter {
                 return Completion::Normal(promise);
             }
             if let Completion::Yield(yield_val) = stmt_result {
-                let is_destructuring = self.destructuring_yield;
+                let _is_destructuring = self.destructuring_yield;
                 self.destructuring_yield = false;
                 let awaited_val = match self.await_value(&yield_val) {
                     Completion::Normal(v) => v,
@@ -9012,7 +9005,7 @@ impl Interpreter {
         } else {
             0
         };
-        let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
+        let (_resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
 
         match &execution_state {
             GeneratorExecutionState::SuspendedStart | GeneratorExecutionState::Completed => {
@@ -10584,20 +10577,23 @@ impl Interpreter {
         // so EvalDeclarationInstantiation walks from the parameter scope and detects conflicts.
         // We detect this case: direct eval where caller_env IS the var_env (function scope)
         // and the function has non-simple params (arguments_immutable is set).
-        if direct && !is_global && !strict && Rc::ptr_eq(caller_env, var_env) {
-            if var_env.borrow().arguments_immutable {
-                let all_names: Vec<String> = declared_func_names
-                    .iter()
-                    .chain(declared_var_names.iter())
-                    .cloned()
-                    .collect();
-                for name in &all_names {
-                    if var_env.borrow().bindings.contains_key(&*name) {
-                        return Err(self.create_error(
-                            "SyntaxError",
-                            &format!("Identifier '{}' has already been declared", name),
-                        ));
-                    }
+        if direct
+            && !is_global
+            && !strict
+            && Rc::ptr_eq(caller_env, var_env)
+            && var_env.borrow().arguments_immutable
+        {
+            let all_names: Vec<String> = declared_func_names
+                .iter()
+                .chain(declared_var_names.iter())
+                .cloned()
+                .collect();
+            for name in &all_names {
+                if var_env.borrow().bindings.contains_key(name) {
+                    return Err(self.create_error(
+                        "SyntaxError",
+                        &format!("Identifier '{}' has already been declared", name),
+                    ));
                 }
             }
         }
@@ -11600,10 +11596,10 @@ impl Interpreter {
                         Ok(r) => r,
                         Err(_) => return,
                     };
-                    if let Some(proto_rc) = realm_fallback(&self.realms[nt_realm_id]) {
-                        if let Some(obj_rc) = self.get_object(obj_id) {
-                            obj_rc.borrow_mut().prototype = Some(proto_rc);
-                        }
+                    if let Some(proto_rc) = realm_fallback(&self.realms[nt_realm_id])
+                        && let Some(obj_rc) = self.get_object(obj_id)
+                    {
+                        obj_rc.borrow_mut().prototype = Some(proto_rc);
                     }
                 }
             }
@@ -11819,7 +11815,7 @@ impl Interpreter {
         let JsValue::Object(lhs) = obj else {
             return Completion::Normal(JsValue::Boolean(false));
         };
-        let Some(inst_obj) = self.get_object(lhs.id) else {
+        let Some(_inst_obj) = self.get_object(lhs.id) else {
             return Completion::Normal(JsValue::Boolean(false));
         };
         let ctor_obj_ref = match ctor {
@@ -11833,18 +11829,15 @@ impl Interpreter {
             _ => JsValue::Undefined,
         };
         // Step 5: If P is not Object, throw TypeError
-        let JsValue::Object(proto_ref) = &proto_val else {
+        let JsValue::Object(_proto_ref) = &proto_val else {
             return Completion::Throw(
                 self.create_type_error("Function has non-object prototype in instanceof check"),
             );
         };
         // Step 6: Walk O.[[GetPrototypeOf]]() chain (proxy-aware)
         let mut current_val = obj.clone();
-        loop {
-            let current_id = match &current_val {
-                JsValue::Object(o) => o.id,
-                _ => break,
-            };
+        while let JsValue::Object(ref current_obj) = current_val {
+            let current_id = current_obj.id;
             let next = match self.proxy_get_prototype_of(current_id) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
@@ -11916,37 +11909,35 @@ impl Interpreter {
             if let Some(colon_idx) = rest.rfind(':') {
                 let source = &rest[..colon_idx];
                 let export_name = &rest[colon_idx + 1..];
-                if let Some(mp) = module_path {
-                    if let Ok(resolved) = self.resolve_module_specifier(source, Some(mp)) {
-                        if let Ok(source_mod) = self.load_module(&resolved) {
-                            let source_ref = source_mod.borrow();
-                            let source_env = source_ref.env.clone();
-                            let source_path = source_ref.path.clone();
-                            // Look up what this export resolves to in the source module
-                            if let Some(next_binding) = source_ref.export_bindings.get(export_name)
-                            {
-                                let next_binding = next_binding.clone();
-                                drop(source_ref);
-                                return self.resolve_module_export_value_inner(
-                                    &next_binding,
-                                    &source_env,
-                                    Some(&source_path),
-                                    original_key,
-                                    visited,
-                                );
-                            }
-                            drop(source_ref);
-                            // No binding info — try direct env lookup
-                            if source_env.borrow().is_in_tdz(export_name) {
-                                return Err(self.create_reference_error(&format!(
-                                    "Cannot access '{}' before initialization",
-                                    original_key
-                                )));
-                            }
-                            if let Some(val) = source_env.borrow().get(export_name) {
-                                return Ok(val);
-                            }
-                        }
+                if let Some(mp) = module_path
+                    && let Ok(resolved) = self.resolve_module_specifier(source, Some(mp))
+                    && let Ok(source_mod) = self.load_module(&resolved)
+                {
+                    let source_ref = source_mod.borrow();
+                    let source_env = source_ref.env.clone();
+                    let source_path = source_ref.path.clone();
+                    // Look up what this export resolves to in the source module
+                    if let Some(next_binding) = source_ref.export_bindings.get(export_name) {
+                        let next_binding = next_binding.clone();
+                        drop(source_ref);
+                        return self.resolve_module_export_value_inner(
+                            &next_binding,
+                            &source_env,
+                            Some(&source_path),
+                            original_key,
+                            visited,
+                        );
+                    }
+                    drop(source_ref);
+                    // No binding info — try direct env lookup
+                    if source_env.borrow().is_in_tdz(export_name) {
+                        return Err(self.create_reference_error(&format!(
+                            "Cannot access '{}' before initialization",
+                            original_key
+                        )));
+                    }
+                    if let Some(val) = source_env.borrow().get(export_name) {
+                        return Ok(val);
                     }
                 }
             }
@@ -12064,10 +12055,10 @@ impl Interpreter {
             if let Some(ref err) = module.borrow().error {
                 return Err(err.clone());
             }
-            if let Some(obj) = self.get_object(obj_id) {
-                if let Some(ref mut ns) = obj.borrow_mut().module_namespace {
-                    ns.deferred = false;
-                }
+            if let Some(obj) = self.get_object(obj_id)
+                && let Some(ref mut ns) = obj.borrow_mut().module_namespace
+            {
+                ns.deferred = false;
             }
             return Ok(());
         }
@@ -12088,10 +12079,10 @@ impl Interpreter {
 
         match result {
             Ok(()) => {
-                if let Some(obj) = self.get_object(obj_id) {
-                    if let Some(ref mut ns) = obj.borrow_mut().module_namespace {
-                        ns.deferred = false;
-                    }
+                if let Some(obj) = self.get_object(obj_id)
+                    && let Some(ref mut ns) = obj.borrow_mut().module_namespace
+                {
+                    ns.deferred = false;
                 }
                 Ok(())
             }
@@ -12165,10 +12156,11 @@ impl Interpreter {
                 .and_then(|obj| obj.borrow().module_namespace.clone());
             if let Some(ns_data) = ns_data {
                 // Deferred namespace: IsSymbolLikeNamespaceKey check
-                if ns_data.deferred && !Self::is_symbol_like_namespace_key(key, true) {
-                    if let Err(e) = self.ensure_deferred_namespace_evaluation(obj_id) {
-                        return Completion::Throw(e);
-                    }
+                if ns_data.deferred
+                    && !Self::is_symbol_like_namespace_key(key, true)
+                    && let Err(e) = self.ensure_deferred_namespace_evaluation(obj_id)
+                {
+                    return Completion::Throw(e);
                 }
                 if let Some(binding_name) = ns_data.export_to_binding.get(key) {
                     let module_path = ns_data.module_path.clone();
@@ -12278,7 +12270,7 @@ impl Interpreter {
                     .borrow()
                     .module_namespace
                     .as_ref()
-                    .map_or(false, |ns| ns.deferred);
+                    .is_some_and(|ns| ns.deferred);
                 if is_deferred_ns && !Self::is_symbol_like_namespace_key(key, true) {
                     self.ensure_deferred_namespace_evaluation(obj_id)?;
                 }
@@ -12591,11 +12583,9 @@ impl Interpreter {
                     .is_some_and(|d| d.get.is_some());
                 let global_id = global_obj_clone.borrow().id;
                 drop(env_borrow);
-                if has_getter {
-                    if let Some(gid) = global_id {
-                        let this_val = JsValue::Object(crate::types::JsObject { id: gid });
-                        return Some(self.get_object_property(gid, name, &this_val));
-                    }
+                if has_getter && let Some(gid) = global_id {
+                    let this_val = JsValue::Object(crate::types::JsObject { id: gid });
+                    return Some(self.get_object_property(gid, name, &this_val));
                 }
                 return None;
             }
@@ -12743,10 +12733,7 @@ impl Interpreter {
                 }
                 // Receiver differs: call Receiver.[[GetOwnProperty]](P) and [[DefineOwnProperty]]
                 if let Some(rid) = recv_id {
-                    let existing = match self.proxy_get_own_property_descriptor(rid, key) {
-                        Ok(v) => v,
-                        Err(e) => return Err(e),
-                    };
+                    let existing = self.proxy_get_own_property_descriptor(rid, key)?;
                     if matches!(existing, JsValue::Undefined) {
                         // CreateDataProperty(Receiver, P, V)
                         let desc = crate::interpreter::types::PropertyDescriptor {
@@ -12799,12 +12786,9 @@ impl Interpreter {
                 let recv_id = recv_o.id;
                 let is_proxy_recv = self
                     .get_object(recv_id)
-                    .map_or(false, |o| o.borrow().is_proxy() || o.borrow().proxy_revoked);
+                    .is_some_and(|o| o.borrow().is_proxy() || o.borrow().proxy_revoked);
                 if is_proxy_recv {
-                    let existing = match self.proxy_get_own_property_descriptor(recv_id, key) {
-                        Ok(v) => v,
-                        Err(e) => return Err(e),
-                    };
+                    let existing = self.proxy_get_own_property_descriptor(recv_id, key)?;
                     if matches!(existing, JsValue::Undefined) {
                         // CreateDataProperty(Receiver, P, V)
                         let create_desc = crate::interpreter::types::PropertyDescriptor {
@@ -12912,16 +12896,16 @@ impl Interpreter {
             // String exotic [[Delete]]: "length" and valid indices are non-configurable
             {
                 let borrow = obj.borrow();
-                if borrow.class_name == "String" {
-                    if let Some(JsValue::String(ref s)) = borrow.primitive_value {
-                        if key == "length" {
+                if borrow.class_name == "String"
+                    && let Some(JsValue::String(ref s)) = borrow.primitive_value
+                {
+                    if key == "length" {
+                        return Ok(false);
+                    }
+                    if let Ok(idx) = key.parse::<usize>() {
+                        let char_len = s.to_string().chars().count();
+                        if idx < char_len {
                             return Ok(false);
-                        }
-                        if let Ok(idx) = key.parse::<usize>() {
-                            let char_len = s.to_string().chars().count();
-                            if idx < char_len {
-                                return Ok(false);
-                            }
                         }
                     }
                 }
@@ -13088,16 +13072,16 @@ impl Interpreter {
             // After conversion, re-read ta info (buffer may have been detached during conversion)
             if let Some(obj) = self.get_object(obj_id) {
                 let b = obj.borrow();
-                if let Some(ref ta) = b.typed_array_info {
-                    if is_valid_integer_index(ta, index) {
-                        let ta_clone2 = ta.clone();
-                        drop(b);
-                        crate::interpreter::types::typed_array_set_index(
-                            &ta_clone2,
-                            index as usize,
-                            &num_val,
-                        );
-                    }
+                if let Some(ref ta) = b.typed_array_info
+                    && is_valid_integer_index(ta, index)
+                {
+                    let ta_clone2 = ta.clone();
+                    drop(b);
+                    crate::interpreter::types::typed_array_set_index(
+                        &ta_clone2,
+                        index as usize,
+                        &num_val,
+                    );
                 }
             }
             return Ok(Some(true));
@@ -13192,7 +13176,7 @@ impl Interpreter {
                     .borrow()
                     .module_namespace
                     .as_ref()
-                    .map_or(false, |ns| ns.deferred);
+                    .is_some_and(|ns| ns.deferred);
                 if is_deferred_ns && !Self::is_symbol_like_namespace_key(&key, true) {
                     self.ensure_deferred_namespace_evaluation(obj_id)?;
                 }
@@ -13404,7 +13388,7 @@ impl Interpreter {
                     .borrow()
                     .module_namespace
                     .as_ref()
-                    .map_or(false, |ns| ns.deferred);
+                    .is_some_and(|ns| ns.deferred);
                 if is_deferred_ns {
                     self.ensure_deferred_namespace_evaluation(obj_id)?;
                 }
@@ -13807,15 +13791,15 @@ impl Interpreter {
 
         match &desc {
             Some(d) if d.is_accessor_descriptor() => {
-                if let Some(ref setter) = d.set {
-                    if !matches!(setter, JsValue::Undefined) {
-                        let setter = setter.clone();
-                        let recv = receiver.clone();
-                        return match self.call_function(&setter, &recv, &[val.clone()]) {
-                            Completion::Normal(_) => Completion::Normal(val),
-                            other => other,
-                        };
-                    }
+                if let Some(ref setter) = d.set
+                    && !matches!(setter, JsValue::Undefined)
+                {
+                    let setter = setter.clone();
+                    let recv = receiver.clone();
+                    return match self.call_function(&setter, &recv, std::slice::from_ref(&val)) {
+                        Completion::Normal(_) => Completion::Normal(val),
+                        other => other,
+                    };
                 }
                 if strict {
                     return Completion::Throw(self.create_type_error(&format!(
@@ -13834,43 +13818,41 @@ impl Interpreter {
             }
             _ => {
                 // §10.1.9.2 OrdinarySetWithOwnDescriptor: set on Receiver
-                if let JsValue::Object(o) = receiver {
-                    if let Some(obj) = self.get_object(o.id) {
-                        let existing = obj.borrow().get_own_property_full(key);
-                        match &existing {
-                            Some(ed) if ed.is_accessor_descriptor() => {
+                if let JsValue::Object(o) = receiver
+                    && let Some(obj) = self.get_object(o.id)
+                {
+                    let existing = obj.borrow().get_own_property_full(key);
+                    match &existing {
+                        Some(ed) if ed.is_accessor_descriptor() => {
+                            if strict {
+                                return Completion::Throw(
+                                    self.create_type_error(&format!("Cannot set property '{key}'")),
+                                );
+                            }
+                            return Completion::Normal(val);
+                        }
+                        Some(ed) if ed.writable == Some(false) => {
+                            if strict {
+                                return Completion::Throw(self.create_type_error(&format!(
+                                    "Cannot assign to read only property '{key}'"
+                                )));
+                            }
+                            return Completion::Normal(val);
+                        }
+                        Some(_) => {
+                            let _ = obj.borrow_mut().set_property_value(key, val.clone());
+                        }
+                        None => {
+                            // CreateDataProperty: checks extensibility
+                            if !obj.borrow().extensible {
                                 if strict {
                                     return Completion::Throw(self.create_type_error(&format!(
-                                        "Cannot set property '{key}'"
+                                        "Cannot add property '{key}', object is not extensible"
                                     )));
                                 }
                                 return Completion::Normal(val);
                             }
-                            Some(ed) if ed.writable == Some(false) => {
-                                if strict {
-                                    return Completion::Throw(self.create_type_error(&format!(
-                                        "Cannot assign to read only property '{key}'"
-                                    )));
-                                }
-                                return Completion::Normal(val);
-                            }
-                            Some(_) => {
-                                let _ = obj.borrow_mut().set_property_value(key, val.clone());
-                            }
-                            None => {
-                                // CreateDataProperty: checks extensibility
-                                if !obj.borrow().extensible {
-                                    if strict {
-                                        return Completion::Throw(
-                                            self.create_type_error(&format!(
-                                                "Cannot add property '{key}', object is not extensible"
-                                            )),
-                                        );
-                                    }
-                                    return Completion::Normal(val);
-                                }
-                                let _ = obj.borrow_mut().set_property_value(key, val.clone());
-                            }
+                            let _ = obj.borrow_mut().set_property_value(key, val.clone());
                         }
                     }
                 }

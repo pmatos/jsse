@@ -82,8 +82,8 @@ fn strip_unicode_extensions(locale_str: &str) -> String {
         let after_u = &locale_str[idx + 3..];
         let tokens: Vec<&str> = after_u.split('-').collect();
         let mut end_of_u = tokens.len();
-        for i in 0..tokens.len() {
-            if tokens[i].len() == 1 && tokens[i] != "u" {
+        for (i, token) in tokens.iter().enumerate() {
+            if token.len() == 1 && *token != "u" {
                 end_of_u = i;
                 break;
             }
@@ -166,57 +166,57 @@ impl Interpreter {
             "select".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        let data = {
-                            let b = obj.borrow();
-                            b.intl_data.clone()
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let data = {
+                        let b = obj.borrow();
+                        b.intl_data.clone()
+                    };
+                    if let Some(IntlData::PluralRules {
+                        ref locale,
+                        ref plural_type,
+                        ref notation,
+                        ..
+                    }) = data
+                    {
+                        let n_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let n = match interp.to_number_value(&n_val) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
                         };
-                        if let Some(IntlData::PluralRules {
-                            ref locale,
-                            ref plural_type,
-                            ref notation,
-                            ..
-                        }) = data
-                        {
-                            let n_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                            let n = match interp.to_number_value(&n_val) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
-                            };
 
-                            if n.is_nan() {
+                        if n.is_nan() {
+                            return Completion::Normal(JsValue::String(JsString::from_str(
+                                "other",
+                            )));
+                        }
+
+                        let base = base_locale(locale);
+                        let icu_locale: IcuLocale =
+                            base.parse().unwrap_or_else(|_| "en".parse().unwrap());
+                        let prefs = PluralRulesPreferences::from(&icu_locale);
+                        let mut opts = IcuPluralRulesOptions::default();
+                        opts.rule_type = Some(if plural_type == "ordinal" {
+                            PluralRuleType::Ordinal
+                        } else {
+                            PluralRuleType::Cardinal
+                        });
+
+                        let rules = match IcuPluralRules::try_new(prefs, opts) {
+                            Ok(r) => r,
+                            Err(_) => {
                                 return Completion::Normal(JsValue::String(JsString::from_str(
                                     "other",
                                 )));
                             }
+                        };
 
-                            let base = base_locale(locale);
-                            let icu_locale: IcuLocale =
-                                base.parse().unwrap_or_else(|_| "en".parse().unwrap());
-                            let prefs = PluralRulesPreferences::from(&icu_locale);
-                            let mut opts = IcuPluralRulesOptions::default();
-                            opts.rule_type = Some(if plural_type == "ordinal" {
-                                PluralRuleType::Ordinal
-                            } else {
-                                PluralRuleType::Cardinal
-                            });
-
-                            let rules = match IcuPluralRules::try_new(prefs, opts) {
-                                Ok(r) => r,
-                                Err(_) => {
-                                    return Completion::Normal(JsValue::String(
-                                        JsString::from_str("other"),
-                                    ));
-                                }
-                            };
-
-                            let operands = number_to_plural_operands_with_notation(n, notation);
-                            let cat = rules.category_for(operands);
-                            return Completion::Normal(JsValue::String(JsString::from_str(
-                                plural_category_to_str(cat),
-                            )));
-                        }
+                        let operands = number_to_plural_operands_with_notation(n, notation);
+                        let cat = rules.category_for(operands);
+                        return Completion::Normal(JsValue::String(JsString::from_str(
+                            plural_category_to_str(cat),
+                        )));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -233,74 +233,72 @@ impl Interpreter {
             "selectRange".to_string(),
             2,
             |interp, this, args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        let data = {
-                            let b = obj.borrow();
-                            b.intl_data.clone()
-                        };
-                        if let Some(IntlData::PluralRules {
-                            ref locale,
-                            ref plural_type,
-                            ..
-                        }) = data
-                        {
-                            let start_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                            let end_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let data = {
+                        let b = obj.borrow();
+                        b.intl_data.clone()
+                    };
+                    if let Some(IntlData::PluralRules {
+                        ref locale,
+                        ref plural_type,
+                        ..
+                    }) = data
+                    {
+                        let start_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let end_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
-                            if matches!(start_val, JsValue::Undefined) {
-                                return Completion::Throw(
-                                    interp.create_type_error("start is undefined"),
-                                );
-                            }
-                            if matches!(end_val, JsValue::Undefined) {
-                                return Completion::Throw(
-                                    interp.create_type_error("end is undefined"),
-                                );
-                            }
-
-                            let start_n = match interp.to_number_value(&start_val) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
-                            };
-                            let end_n = match interp.to_number_value(&end_val) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
-                            };
-
-                            if start_n.is_nan() || end_n.is_nan() {
-                                return Completion::Throw(
-                                    interp.create_range_error("Invalid number NaN for selectRange"),
-                                );
-                            }
-
-                            let base = base_locale(locale);
-                            let icu_locale: IcuLocale =
-                                base.parse().unwrap_or_else(|_| "en".parse().unwrap());
-                            let prefs = PluralRulesPreferences::from(&icu_locale);
-                            let mut opts = IcuPluralRulesOptions::default();
-                            opts.rule_type = Some(if plural_type == "ordinal" {
-                                PluralRuleType::Ordinal
-                            } else {
-                                PluralRuleType::Cardinal
-                            });
-
-                            let range_rules = match PluralRulesWithRanges::try_new(prefs, opts) {
-                                Ok(r) => r,
-                                Err(_) => {
-                                    return Completion::Normal(JsValue::String(
-                                        JsString::from_str("other"),
-                                    ));
-                                }
-                            };
-
-                            let start_ops = number_to_plural_operands(start_n);
-                            let end_ops = number_to_plural_operands(end_n);
-                            let cat = range_rules.category_for_range(start_ops, end_ops);
-                            return Completion::Normal(JsValue::String(JsString::from_str(
-                                plural_category_to_str(cat),
-                            )));
+                        if matches!(start_val, JsValue::Undefined) {
+                            return Completion::Throw(
+                                interp.create_type_error("start is undefined"),
+                            );
                         }
+                        if matches!(end_val, JsValue::Undefined) {
+                            return Completion::Throw(interp.create_type_error("end is undefined"));
+                        }
+
+                        let start_n = match interp.to_number_value(&start_val) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let end_n = match interp.to_number_value(&end_val) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+
+                        if start_n.is_nan() || end_n.is_nan() {
+                            return Completion::Throw(
+                                interp.create_range_error("Invalid number NaN for selectRange"),
+                            );
+                        }
+
+                        let base = base_locale(locale);
+                        let icu_locale: IcuLocale =
+                            base.parse().unwrap_or_else(|_| "en".parse().unwrap());
+                        let prefs = PluralRulesPreferences::from(&icu_locale);
+                        let mut opts = IcuPluralRulesOptions::default();
+                        opts.rule_type = Some(if plural_type == "ordinal" {
+                            PluralRuleType::Ordinal
+                        } else {
+                            PluralRuleType::Cardinal
+                        });
+
+                        let range_rules = match PluralRulesWithRanges::try_new(prefs, opts) {
+                            Ok(r) => r,
+                            Err(_) => {
+                                return Completion::Normal(JsValue::String(JsString::from_str(
+                                    "other",
+                                )));
+                            }
+                        };
+
+                        let start_ops = number_to_plural_operands(start_n);
+                        let end_ops = number_to_plural_operands(end_n);
+                        let cat = range_rules.category_for_range(start_ops, end_ops);
+                        return Completion::Normal(JsValue::String(JsString::from_str(
+                            plural_category_to_str(cat),
+                        )));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -317,76 +315,98 @@ impl Interpreter {
             "resolvedOptions".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        let data = {
-                            let b = obj.borrow();
-                            b.intl_data.clone()
-                        };
-                        if let Some(IntlData::PluralRules {
-                            locale,
-                            plural_type,
-                            notation,
-                            minimum_integer_digits,
-                            minimum_fraction_digits,
-                            maximum_fraction_digits,
-                            minimum_significant_digits,
-                            maximum_significant_digits,
-                            rounding_mode,
-                            rounding_increment,
-                            rounding_priority,
-                            trailing_zero_display,
-                        }) = data
-                        {
-                            let result = interp.create_object();
-                            if let Some(ref op) = interp.realm().object_prototype {
-                                result.borrow_mut().prototype = Some(op.clone());
-                            }
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let data = {
+                        let b = obj.borrow();
+                        b.intl_data.clone()
+                    };
+                    if let Some(IntlData::PluralRules {
+                        locale,
+                        plural_type,
+                        notation,
+                        minimum_integer_digits,
+                        minimum_fraction_digits,
+                        maximum_fraction_digits,
+                        minimum_significant_digits,
+                        maximum_significant_digits,
+                        rounding_mode,
+                        rounding_increment,
+                        rounding_priority,
+                        trailing_zero_display,
+                    }) = data
+                    {
+                        let result = interp.create_object();
+                        if let Some(ref op) = interp.realm().object_prototype {
+                            result.borrow_mut().prototype = Some(op.clone());
+                        }
 
-                            // Spec order: locale, type, notation, minimumIntegerDigits,
-                            // then fraction/significant digits depending on what's set,
-                            // pluralCategories, roundingIncrement, roundingMode,
-                            // roundingPriority, trailingZeroDisplay
+                        // Spec order: locale, type, notation, minimumIntegerDigits,
+                        // then fraction/significant digits depending on what's set,
+                        // pluralCategories, roundingIncrement, roundingMode,
+                        // roundingPriority, trailingZeroDisplay
 
-                            result.borrow_mut().insert_property(
-                                "locale".to_string(),
-                                PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&locale)),
-                                    true,
-                                    true,
-                                    true,
-                                ),
-                            );
-                            result.borrow_mut().insert_property(
-                                "type".to_string(),
-                                PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&plural_type)),
-                                    true,
-                                    true,
-                                    true,
-                                ),
-                            );
-                            result.borrow_mut().insert_property(
-                                "notation".to_string(),
-                                PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&notation)),
-                                    true,
-                                    true,
-                                    true,
-                                ),
-                            );
-                            result.borrow_mut().insert_property(
-                                "minimumIntegerDigits".to_string(),
-                                PropertyDescriptor::data(
-                                    JsValue::Number(minimum_integer_digits as f64),
-                                    true,
-                                    true,
-                                    true,
-                                ),
-                            );
+                        result.borrow_mut().insert_property(
+                            "locale".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::String(JsString::from_str(&locale)),
+                                true,
+                                true,
+                                true,
+                            ),
+                        );
+                        result.borrow_mut().insert_property(
+                            "type".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::String(JsString::from_str(&plural_type)),
+                                true,
+                                true,
+                                true,
+                            ),
+                        );
+                        result.borrow_mut().insert_property(
+                            "notation".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::String(JsString::from_str(&notation)),
+                                true,
+                                true,
+                                true,
+                            ),
+                        );
+                        result.borrow_mut().insert_property(
+                            "minimumIntegerDigits".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::Number(minimum_integer_digits as f64),
+                                true,
+                                true,
+                                true,
+                            ),
+                        );
 
-                            if minimum_significant_digits.is_none() {
-                                // Only show fraction digits when no significant digits
+                        if minimum_significant_digits.is_none() {
+                            // Only show fraction digits when no significant digits
+                            result.borrow_mut().insert_property(
+                                "minimumFractionDigits".to_string(),
+                                PropertyDescriptor::data(
+                                    JsValue::Number(minimum_fraction_digits as f64),
+                                    true,
+                                    true,
+                                    true,
+                                ),
+                            );
+                            result.borrow_mut().insert_property(
+                                "maximumFractionDigits".to_string(),
+                                PropertyDescriptor::data(
+                                    JsValue::Number(maximum_fraction_digits as f64),
+                                    true,
+                                    true,
+                                    true,
+                                ),
+                            );
+                        } else {
+                            // Both specified (morePrecision/lessPrecision) - show both
+                            if rounding_priority != "auto" {
                                 result.borrow_mut().insert_property(
                                     "minimumFractionDigits".to_string(),
                                     PropertyDescriptor::data(
@@ -405,107 +425,85 @@ impl Interpreter {
                                         true,
                                     ),
                                 );
-                            } else {
-                                // Both specified (morePrecision/lessPrecision) - show both
-                                if rounding_priority != "auto" {
-                                    result.borrow_mut().insert_property(
-                                        "minimumFractionDigits".to_string(),
-                                        PropertyDescriptor::data(
-                                            JsValue::Number(minimum_fraction_digits as f64),
-                                            true,
-                                            true,
-                                            true,
-                                        ),
-                                    );
-                                    result.borrow_mut().insert_property(
-                                        "maximumFractionDigits".to_string(),
-                                        PropertyDescriptor::data(
-                                            JsValue::Number(maximum_fraction_digits as f64),
-                                            true,
-                                            true,
-                                            true,
-                                        ),
-                                    );
-                                }
                             }
-
-                            if let Some(min_sd) = minimum_significant_digits {
-                                result.borrow_mut().insert_property(
-                                    "minimumSignificantDigits".to_string(),
-                                    PropertyDescriptor::data(
-                                        JsValue::Number(min_sd as f64),
-                                        true,
-                                        true,
-                                        true,
-                                    ),
-                                );
-                            }
-                            if let Some(max_sd) = maximum_significant_digits {
-                                result.borrow_mut().insert_property(
-                                    "maximumSignificantDigits".to_string(),
-                                    PropertyDescriptor::data(
-                                        JsValue::Number(max_sd as f64),
-                                        true,
-                                        true,
-                                        true,
-                                    ),
-                                );
-                            }
-
-                            // pluralCategories
-                            let cats = get_plural_categories_sorted(&locale, &plural_type);
-                            let cat_values: Vec<JsValue> = cats
-                                .iter()
-                                .map(|c| JsValue::String(JsString::from_str(c)))
-                                .collect();
-                            let cat_array = interp.create_array(cat_values);
-                            result.borrow_mut().insert_property(
-                                "pluralCategories".to_string(),
-                                PropertyDescriptor::data(cat_array, true, true, true),
-                            );
-
-                            result.borrow_mut().insert_property(
-                                "roundingIncrement".to_string(),
-                                PropertyDescriptor::data(
-                                    JsValue::Number(rounding_increment as f64),
-                                    true,
-                                    true,
-                                    true,
-                                ),
-                            );
-                            result.borrow_mut().insert_property(
-                                "roundingMode".to_string(),
-                                PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&rounding_mode)),
-                                    true,
-                                    true,
-                                    true,
-                                ),
-                            );
-                            result.borrow_mut().insert_property(
-                                "roundingPriority".to_string(),
-                                PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&rounding_priority)),
-                                    true,
-                                    true,
-                                    true,
-                                ),
-                            );
-                            result.borrow_mut().insert_property(
-                                "trailingZeroDisplay".to_string(),
-                                PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&trailing_zero_display)),
-                                    true,
-                                    true,
-                                    true,
-                                ),
-                            );
-
-                            let result_id = result.borrow().id.unwrap();
-                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
-                                id: result_id,
-                            }));
                         }
+
+                        if let Some(min_sd) = minimum_significant_digits {
+                            result.borrow_mut().insert_property(
+                                "minimumSignificantDigits".to_string(),
+                                PropertyDescriptor::data(
+                                    JsValue::Number(min_sd as f64),
+                                    true,
+                                    true,
+                                    true,
+                                ),
+                            );
+                        }
+                        if let Some(max_sd) = maximum_significant_digits {
+                            result.borrow_mut().insert_property(
+                                "maximumSignificantDigits".to_string(),
+                                PropertyDescriptor::data(
+                                    JsValue::Number(max_sd as f64),
+                                    true,
+                                    true,
+                                    true,
+                                ),
+                            );
+                        }
+
+                        // pluralCategories
+                        let cats = get_plural_categories_sorted(&locale, &plural_type);
+                        let cat_values: Vec<JsValue> = cats
+                            .iter()
+                            .map(|c| JsValue::String(JsString::from_str(c)))
+                            .collect();
+                        let cat_array = interp.create_array(cat_values);
+                        result.borrow_mut().insert_property(
+                            "pluralCategories".to_string(),
+                            PropertyDescriptor::data(cat_array, true, true, true),
+                        );
+
+                        result.borrow_mut().insert_property(
+                            "roundingIncrement".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::Number(rounding_increment as f64),
+                                true,
+                                true,
+                                true,
+                            ),
+                        );
+                        result.borrow_mut().insert_property(
+                            "roundingMode".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::String(JsString::from_str(&rounding_mode)),
+                                true,
+                                true,
+                                true,
+                            ),
+                        );
+                        result.borrow_mut().insert_property(
+                            "roundingPriority".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::String(JsString::from_str(&rounding_priority)),
+                                true,
+                                true,
+                                true,
+                            ),
+                        );
+                        result.borrow_mut().insert_property(
+                            "trailingZeroDisplay".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::String(JsString::from_str(&trailing_zero_display)),
+                                true,
+                                true,
+                                true,
+                            ),
+                        );
+
+                        let result_id = result.borrow().id.unwrap();
+                        return Completion::Normal(JsValue::Object(crate::types::JsObject {
+                            id: result_id,
+                        }));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -723,7 +721,7 @@ impl Interpreter {
                         let min_sd = if let Some(ref v) = raw_min_sd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 1.0 || n > 21.0 {
+                                    if n.is_nan() || !(1.0..=21.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "minimumSignificantDigits is out of range",
                                         ));
@@ -738,7 +736,7 @@ impl Interpreter {
                         let max_sd = if let Some(ref v) = raw_max_sd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 1.0 || n > 21.0 {
+                                    if n.is_nan() || !(1.0..=21.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "maximumSignificantDigits is out of range",
                                         ));
@@ -760,7 +758,7 @@ impl Interpreter {
                         let explicit_min_fd = if let Some(ref v) = raw_min_fd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 0.0 || n > 100.0 {
+                                    if n.is_nan() || !(0.0..=100.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "minimumFractionDigits is out of range",
                                         ));
@@ -775,7 +773,7 @@ impl Interpreter {
                         let explicit_max_fd = if let Some(ref v) = raw_max_fd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 0.0 || n > 100.0 {
+                                    if n.is_nan() || !(0.0..=100.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "maximumFractionDigits is out of range",
                                         ));
@@ -803,7 +801,7 @@ impl Interpreter {
                         let min_sd = if let Some(ref v) = raw_min_sd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 1.0 || n > 21.0 {
+                                    if n.is_nan() || !(1.0..=21.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "minimumSignificantDigits is out of range",
                                         ));
@@ -818,7 +816,7 @@ impl Interpreter {
                         let max_sd = if let Some(ref v) = raw_max_sd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 1.0 || n > 21.0 {
+                                    if n.is_nan() || !(1.0..=21.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "maximumSignificantDigits is out of range",
                                         ));
@@ -833,7 +831,7 @@ impl Interpreter {
                         let min_fd = if let Some(ref v) = raw_min_fd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 0.0 || n > 100.0 {
+                                    if n.is_nan() || !(0.0..=100.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "minimumFractionDigits is out of range",
                                         ));
@@ -848,7 +846,7 @@ impl Interpreter {
                         let max_fd = if let Some(ref v) = raw_max_fd {
                             match interp.to_number_value(v) {
                                 Ok(n) => {
-                                    if n.is_nan() || n < 0.0 || n > 100.0 {
+                                    if n.is_nan() || !(0.0..=100.0).contains(&n) {
                                         return Completion::Throw(interp.create_range_error(
                                             "maximumFractionDigits is out of range",
                                         ));
@@ -881,7 +879,7 @@ impl Interpreter {
                         Ok(n) => n,
                         Err(e) => return Completion::Throw(e),
                     };
-                    if num.is_nan() || num < 1.0 || num > 5000.0 {
+                    if num.is_nan() || !(1.0..=5000.0).contains(&num) {
                         return Completion::Throw(
                             interp.create_range_error("roundingIncrement value is out of range"),
                         );
@@ -966,33 +964,33 @@ impl Interpreter {
         ));
 
         // Set PluralRules.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &ctor {
-            if let Some(obj) = self.get_object(ctor_ref.id) {
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
-                );
+        if let JsValue::Object(ctor_ref) = &ctor
+            && let Some(obj) = self.get_object(ctor_ref.id)
+        {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val.clone(), false, false, false),
+            );
 
-                // supportedLocalesOf static method
-                let slof = self.create_function(JsFunction::native(
-                    "supportedLocalesOf".to_string(),
-                    1,
-                    |interp, _this, args| {
-                        let locales = args.first().unwrap_or(&JsValue::Undefined);
-                        let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                        let requested = match interp.intl_canonicalize_locale_list(locales) {
-                            Ok(list) => list,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match interp.intl_supported_locales(&requested, &options) {
-                            Ok(v) => Completion::Normal(v),
-                            Err(e) => Completion::Throw(e),
-                        }
-                    },
-                ));
-                obj.borrow_mut()
-                    .insert_builtin("supportedLocalesOf".to_string(), slof);
-            }
+            // supportedLocalesOf static method
+            let slof = self.create_function(JsFunction::native(
+                "supportedLocalesOf".to_string(),
+                1,
+                |interp, _this, args| {
+                    let locales = args.first().unwrap_or(&JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let requested = match interp.intl_canonicalize_locale_list(locales) {
+                        Ok(list) => list,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    match interp.intl_supported_locales(&requested, &options) {
+                        Ok(v) => Completion::Normal(v),
+                        Err(e) => Completion::Throw(e),
+                    }
+                },
+            ));
+            obj.borrow_mut()
+                .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype

@@ -200,13 +200,13 @@ impl<'a> Parser<'a> {
                 // §13.15.5.1: DestructuringAssignmentTarget must have
                 // AssignmentTargetType == simple (identifier or member expression)
                 if Self::is_simple_assignment_target(expr) {
-                    if self.strict {
-                        if let Expression::Identifier(name) = expr {
-                            if name == "eval" || name == "arguments" {
-                                return Err(self
-                                    .error("Assignment to 'eval' or 'arguments' in strict mode"));
-                            }
-                        }
+                    if self.strict
+                        && let Expression::Identifier(name) = expr
+                        && (name == "eval" || name == "arguments")
+                    {
+                        return Err(
+                            self.error("Assignment to 'eval' or 'arguments' in strict mode")
+                        );
                     }
                     Ok(())
                 } else if !self.strict && matches!(expr, Expression::Call(_, _)) {
@@ -1943,12 +1943,12 @@ impl<'a> Parser<'a> {
             ));
         }
         if body_strict {
-            if let Some(ref n) = name {
-                if n == "eval" || n == "arguments" {
-                    return Err(self.error(&format!(
-                        "'{n}' is not allowed as a function name in strict mode"
-                    )));
-                }
+            if let Some(ref n) = name
+                && (n == "eval" || n == "arguments")
+            {
+                return Err(self.error(format!(
+                    "'{n}' is not allowed as a function name in strict mode"
+                )));
             }
             self.check_strict_params(&params)?;
         }
@@ -1997,12 +1997,12 @@ impl<'a> Parser<'a> {
             ));
         }
         if body_strict {
-            if let Some(ref n) = name {
-                if n == "eval" || n == "arguments" {
-                    return Err(self.error(&format!(
-                        "'{n}' is not allowed as a function name in strict mode"
-                    )));
-                }
+            if let Some(ref n) = name
+                && (n == "eval" || n == "arguments")
+            {
+                return Err(self.error(format!(
+                    "'{n}' is not allowed as a function name in strict mode"
+                )));
             }
             self.check_strict_params(&params)?;
         }

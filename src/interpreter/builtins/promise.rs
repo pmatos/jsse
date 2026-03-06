@@ -1663,6 +1663,7 @@ impl Interpreter {
         false
     }
 
+    #[allow(dead_code)]
     pub(crate) fn is_promise(&self, val: &JsValue) -> bool {
         if let JsValue::Object(o) = val
             && let Some(obj) = self.get_object(o.id)

@@ -123,7 +123,7 @@ impl<'a> Parser<'a> {
                     return Err(self.error("Expected attribute key"));
                 };
                 if !seen_keys.insert(key.clone()) {
-                    return Err(self.error(&format!("Duplicate attribute key '{}'", key)));
+                    return Err(self.error(format!("Duplicate attribute key '{}'", key)));
                 }
                 self.eat(&Token::Colon)?;
                 if !matches!(&self.current, Token::StringLiteral(_)) {
@@ -268,6 +268,7 @@ impl<'a> Parser<'a> {
         Ok(ExportDeclaration::Default(Box::new(expr)))
     }
 
+    #[allow(dead_code)]
     fn parse_export_specifiers(&mut self) -> Result<Vec<ExportSpecifier>, ParseError> {
         let (specs, _) = self.parse_export_specifiers_with_info()?;
         Ok(specs)

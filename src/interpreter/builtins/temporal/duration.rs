@@ -217,38 +217,38 @@ fn to_relative_to_date(
         }
     }
     // If the value is a Temporal object, handle directly (no property bag reading)
-    if let JsValue::Object(obj_ref) = val {
-        if let Some(obj) = interp.get_object(obj_ref.id) {
-            let td = obj.borrow().temporal_data.clone();
-            if let Some(super::TemporalData::ZonedDateTime {
-                epoch_nanoseconds,
-                time_zone,
-                ..
-            }) = &td
-            {
-                let ns: i128 = epoch_nanoseconds.try_into().unwrap_or(0);
-                let (y, m, d, _, _, _, _, _, _) =
-                    super::zoned_date_time::epoch_ns_to_components(epoch_nanoseconds, time_zone);
-                return Ok(Some((y, m, d, Some((ns, time_zone.clone())))));
-            }
-            if let Some(super::TemporalData::PlainDate {
-                iso_year,
-                iso_month,
-                iso_day,
-                ..
-            }) = &td
-            {
-                return Ok(Some((*iso_year, *iso_month, *iso_day, None)));
-            }
-            if let Some(super::TemporalData::PlainDateTime {
-                iso_year,
-                iso_month,
-                iso_day,
-                ..
-            }) = &td
-            {
-                return Ok(Some((*iso_year, *iso_month, *iso_day, None)));
-            }
+    if let JsValue::Object(obj_ref) = val
+        && let Some(obj) = interp.get_object(obj_ref.id)
+    {
+        let td = obj.borrow().temporal_data.clone();
+        if let Some(super::TemporalData::ZonedDateTime {
+            epoch_nanoseconds,
+            time_zone,
+            ..
+        }) = &td
+        {
+            let ns: i128 = epoch_nanoseconds.try_into().unwrap_or(0);
+            let (y, m, d, _, _, _, _, _, _) =
+                super::zoned_date_time::epoch_ns_to_components(epoch_nanoseconds, time_zone);
+            return Ok(Some((y, m, d, Some((ns, time_zone.clone())))));
+        }
+        if let Some(super::TemporalData::PlainDate {
+            iso_year,
+            iso_month,
+            iso_day,
+            ..
+        }) = &td
+        {
+            return Ok(Some((*iso_year, *iso_month, *iso_day, None)));
+        }
+        if let Some(super::TemporalData::PlainDateTime {
+            iso_year,
+            iso_month,
+            iso_day,
+            ..
+        }) = &td
+        {
+            return Ok(Some((*iso_year, *iso_month, *iso_day, None)));
         }
     }
 
@@ -803,7 +803,7 @@ fn nanoseconds_to_tz_days(
     let sign: i128 = if total_ns > 0 { 1 } else { -1 };
     let mut day_count: i64 = 0;
     let mut current_ns = inter_epoch_ns;
-    let mut day_length_ns: i128 = 86_400_000_000_000;
+    let mut day_length_ns: i128;
     let mut current_epoch_days = iso_date_to_epoch_days(inter_year, inter_month, inter_day) as i128;
 
     loop {
@@ -946,7 +946,7 @@ fn total_relative_duration_zdt(
             // DifferenceZonedDateTimeWithTotal: total from base to dest
             // Get end date in the timezone
             let end_bi = num_bigint::BigInt::from(dest_epoch_ns);
-            let (ey, em, ed, eh, emi, es, ems, eus, ens) =
+            let (ey, em, ed, _eh, _emi, _es, _ems, _eus, _ens) =
                 super::zoned_date_time::epoch_ns_to_components(&end_bi, tz);
 
             // Date difference from base to end
@@ -1261,7 +1261,7 @@ fn round_relative_duration(
                     let inter_iso = add_iso_date(
                         base_year, base_month, base_day, y as i32, mo as i32, w as i32, 0,
                     );
-                    let day_pos_iso =
+                    let _day_pos_iso =
                         add_iso_date(inter_iso.0, inter_iso.1, inter_iso.2, 0, 0, 0, total_days_i);
                     let day_pos_ens = add_zdt(y as i32, mo as i32, w as i32, total_days_i);
                     let next_day_ens =
@@ -1271,7 +1271,7 @@ fn round_relative_duration(
 
                     // Round using actual day length as the increment unit
                     let inc_ns = increment as i128 * day_length_ns;
-                    let total_ns_in_day = total_days_i as i128 * day_length_ns + remaining_ns;
+                    let _total_ns_in_day = total_days_i as i128 * day_length_ns + remaining_ns;
                     let rounded_ns =
                         super::round_i128_to_increment(remaining_ns, inc_ns, rounding_mode);
                     let rounded_days = total_days_i + (rounded_ns / day_length_ns) as i32;
@@ -1304,7 +1304,7 @@ fn round_relative_duration(
                 );
                 if smallest_unit == "week" && dd != 0 {
                     dw = dd / 7;
-                    dd = dd % 7;
+                    dd %= 7;
                 }
                 Ok((
                     dy as f64, dm as f64, dw as f64, dd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -1359,7 +1359,7 @@ fn round_relative_duration(
                 );
                 if smallest_unit == "week" && dd != 0 {
                     dw = dd / 7;
-                    dd = dd % 7;
+                    dd %= 7;
                 }
                 Ok((
                     dy as f64, dm as f64, dw as f64, dd as f64, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -1417,15 +1417,7 @@ fn round_relative_duration(
                 let mut day_start_ns = super::zoned_date_time::get_start_of_day(tz, day_epoch_days);
 
                 // Normalize: carry full days using actual day lengths
-                let sign: i128 = if dest_epoch_ns >= day_start_ns {
-                    if dest_epoch_ns == day_start_ns && time_ns == 0 {
-                        1
-                    } else {
-                        1
-                    }
-                } else {
-                    -1
-                };
+                let sign: i128 = if dest_epoch_ns >= day_start_ns { 1 } else { -1 };
 
                 let mut time_within_day = dest_epoch_ns - day_start_ns;
                 let mut extra_days: i32 = 0;
@@ -2391,7 +2383,7 @@ impl Interpreter {
             "toLocaleString".to_string(),
             0,
             |interp, this, args| {
-                let fields = match get_duration_fields(interp, &this) {
+                let fields = match get_duration_fields(interp, this) {
                     Ok(f) => f,
                     Err(c) => return c,
                 };
@@ -2422,7 +2414,11 @@ impl Interpreter {
                             Completion::Throw(e) => return Completion::Throw(e),
                             _ => JsValue::Undefined,
                         };
-                    match interp.call_function(&format_val, &df_instance, &[this.clone()]) {
+                    match interp.call_function(
+                        &format_val,
+                        &df_instance,
+                        std::slice::from_ref(this),
+                    ) {
                         Completion::Normal(v) => Completion::Normal(v),
                         Completion::Throw(e) => Completion::Throw(e),
                         _ => Completion::Normal(JsValue::Undefined),

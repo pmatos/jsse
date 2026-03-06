@@ -439,16 +439,16 @@ impl Interpreter {
                 "get monthCode".to_string(),
                 0,
                 |interp, this, _| {
-                    let (m, d, ry, cal) = match get_md_fields(interp, &this) {
+                    let (m, d, ry, cal) = match get_md_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    if cal != "iso8601" {
-                        if let Some(cf) = super::iso_to_calendar_fields(ry, m, d, &cal) {
-                            return Completion::Normal(JsValue::String(JsString::from_str(
-                                &cf.month_code,
-                            )));
-                        }
+                    if cal != "iso8601"
+                        && let Some(cf) = super::iso_to_calendar_fields(ry, m, d, &cal)
+                    {
+                        return Completion::Normal(JsValue::String(JsString::from_str(
+                            &cf.month_code,
+                        )));
                     }
                     Completion::Normal(JsValue::String(JsString::from_str(&iso_month_code(m))))
                 },
@@ -470,14 +470,14 @@ impl Interpreter {
                 "get day".to_string(),
                 0,
                 |interp, this, _| {
-                    let (m, d, ry, cal) = match get_md_fields(interp, &this) {
+                    let (m, d, ry, cal) = match get_md_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    if cal != "iso8601" {
-                        if let Some(cf) = super::iso_to_calendar_fields(ry, m, d, &cal) {
-                            return Completion::Normal(JsValue::Number(cf.day as f64));
-                        }
+                    if cal != "iso8601"
+                        && let Some(cf) = super::iso_to_calendar_fields(ry, m, d, &cal)
+                    {
+                        return Completion::Normal(JsValue::Number(cf.day as f64));
                     }
                     Completion::Normal(JsValue::Number(d as f64))
                 },
@@ -587,8 +587,8 @@ impl Interpreter {
                         }
                         create_plain_month_day_result(interp, new_m, new_d, ry, &cal)
                     } else {
-                        let cm = new_m.max(1).min(12);
-                        let cd = new_d.max(1).min(iso_days_in_month(ry, cm));
+                        let cm = new_m.clamp(1, 12);
+                        let cd = new_d.clamp(1, iso_days_in_month(ry, cm));
                         create_plain_month_day_result(interp, cm, cd, ry, &cal)
                     }
                 }
@@ -693,7 +693,7 @@ impl Interpreter {
             "toLocaleString".to_string(),
             0,
             |interp, this, args| {
-                let (m, d, ref_year, cal) = match get_md_fields(interp, &this) {
+                let (m, d, ref_year, cal) = match get_md_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -720,7 +720,7 @@ impl Interpreter {
                 if let Err(e) = super::check_calendar_mismatch(interp, &dtf_instance, &cal, false) {
                     return Completion::Throw(e);
                 }
-                super::temporal_format_with_dtf(interp, &dtf_instance, &this)
+                super::temporal_format_with_dtf(interp, &dtf_instance, this)
             },
         ));
         proto
@@ -746,7 +746,7 @@ impl Interpreter {
             "toPlainDate".to_string(),
             1,
             |interp, this, args| {
-                let (m, d, ref_y, cal) = match get_md_fields(interp, &this) {
+                let (m, d, ref_y, cal) = match get_md_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -1041,23 +1041,19 @@ impl Interpreter {
                         };
 
                         // If era+eraYear and year both present, check consistency
-                        if let (Some(es), Some(ey)) = (&era_str, era_year) {
-                            if let Some(yr) = year_opt {
-                                if let Some((iso_y_era, _, _)) = super::calendar_fields_to_iso(
+                        if let (Some(es), Some(ey)) = (&era_str, era_year)
+                            && let Some(yr) = year_opt
+                                && let Some((iso_y_era, _, _)) = super::calendar_fields_to_iso(
                                     Some(es), ey, Some("M01"), None, 1, &cal,
-                                ) {
-                                    if let Some((iso_y_plain, _, _)) = super::calendar_fields_to_iso(
+                                )
+                                    && let Some((iso_y_plain, _, _)) = super::calendar_fields_to_iso(
                                         None, yr, Some("M01"), None, 1, &cal,
-                                    ) {
-                                        if iso_y_era != iso_y_plain {
+                                    )
+                                        && iso_y_era != iso_y_plain {
                                             return Completion::Throw(
                                                 interp.create_range_error("eraYear/era and year are inconsistent"),
                                             );
                                         }
-                                    }
-                                }
-                            }
-                        }
 
                         // Resolve monthCode
                         // CalendarResolveFields: when month is present, year is required
@@ -1069,7 +1065,7 @@ impl Interpreter {
                                 ),
                             );
                         }
-                        let has_month_code = mc_str.is_some();
+                        let _has_month_code = mc_str.is_some();
                         let mc = if let Some(mc) = mc_str {
                             // If monthCode and month both present, check consistency
                             if let Some(mn) = month_num {
@@ -1082,13 +1078,12 @@ impl Interpreter {
                                             interp.create_range_error("monthCode and month are inconsistent"),
                                         );
                                     }
-                                } else if let Some(mc_num) = super::plain_date::month_code_to_number_pub(&mc) {
-                                    if mc_num != mn as u8 {
+                                } else if let Some(mc_num) = super::plain_date::month_code_to_number_pub(&mc)
+                                    && mc_num != mn as u8 {
                                         return Completion::Throw(
                                             interp.create_range_error("monthCode and month are inconsistent"),
                                         );
                                     }
-                                }
                             }
                             mc
                         } else if let Some(mn) = month_num {
@@ -1119,7 +1114,7 @@ impl Interpreter {
                                             super::ordinal_month_to_month_code(yr, max_m, &cal)
                                                 .unwrap_or_else(|| format!("M{:02}", max_m))
                                         } else {
-                                            format!("M12")
+                                            "M12".to_string()
                                         }
                                     }
                                 }

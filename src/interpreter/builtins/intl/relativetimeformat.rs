@@ -12,7 +12,7 @@ fn is_valid_numbering_system(ns: &str) -> bool {
     }
     for part in ns.split('-') {
         let len = part.len();
-        if len < 3 || len > 8 {
+        if !(3..=8).contains(&len) {
             return false;
         }
         if !part.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -253,11 +253,11 @@ fn detect_locale_separators(locale_str: &str) -> (String, String) {
         if c == '2' {
             // Collect chars until we hit '3'
             let mut sep = String::new();
-            for j in (i + 1)..chars.len() {
-                if chars[j] == '3' {
+            for &ch in &chars[(i + 1)..] {
+                if ch == '3' {
                     break;
                 }
-                sep.push(chars[j]);
+                sep.push(ch);
             }
             if !sep.is_empty() {
                 group_sep = sep;
@@ -266,11 +266,11 @@ fn detect_locale_separators(locale_str: &str) -> (String, String) {
         if c == '5' {
             // Collect chars until we hit '6'
             let mut sep = String::new();
-            for j in (i + 1)..chars.len() {
-                if chars[j] == '6' {
+            for &ch in &chars[(i + 1)..] {
+                if ch == '6' {
                     break;
                 }
-                sep.push(chars[j]);
+                sep.push(ch);
             }
             if !sep.is_empty() {
                 decimal_sep = sep;
@@ -439,23 +439,23 @@ fn extract_rtf_data(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<(String, String, String, String), JsValue> {
-    if let JsValue::Object(o) = this {
-        if let Some(obj) = interp.get_object(o.id) {
-            let b = obj.borrow();
-            if let Some(IntlData::RelativeTimeFormat {
-                ref locale,
-                ref style,
-                ref numeric,
-                ref numbering_system,
-            }) = b.intl_data
-            {
-                return Ok((
-                    locale.clone(),
-                    style.clone(),
-                    numeric.clone(),
-                    numbering_system.clone(),
-                ));
-            }
+    if let JsValue::Object(o) = this
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let b = obj.borrow();
+        if let Some(IntlData::RelativeTimeFormat {
+            ref locale,
+            ref style,
+            ref numeric,
+            ref numbering_system,
+        }) = b.intl_data
+        {
+            return Ok((
+                locale.clone(),
+                style.clone(),
+                numeric.clone(),
+                numbering_system.clone(),
+            ));
         }
     }
     Err(interp.create_type_error("Intl.RelativeTimeFormat method called on incompatible receiver"))
@@ -714,13 +714,13 @@ impl Interpreter {
                 };
 
                 // Validate numberingSystem per UTS 35 type sequence: (3*8alphanum) *("-" (3*8alphanum))
-                if let Some(ref ns) = ns_opt {
-                    if !is_valid_numbering_system(ns) {
-                        return Completion::Throw(interp.create_range_error(&format!(
-                            "Invalid numberingSystem value: {}",
-                            ns
-                        )));
-                    }
+                if let Some(ref ns) = ns_opt
+                    && !is_valid_numbering_system(ns)
+                {
+                    return Completion::Throw(
+                        interp
+                            .create_range_error(&format!("Invalid numberingSystem value: {}", ns)),
+                    );
                 }
 
                 // Step 14: style
@@ -793,10 +793,10 @@ impl Interpreter {
                     if opt_supported {
                         numbering_system = opt_ns.clone();
                         // Option overrides extension: strip nu from locale unless they match
-                        if let Some(ref loc_nu) = locale_nu {
-                            if loc_nu != opt_ns {
-                                locale = strip_nu_extension(&locale);
-                            }
+                        if let Some(ref loc_nu) = locale_nu
+                            && loc_nu != opt_ns
+                        {
+                            locale = strip_nu_extension(&locale);
                         }
                     } else {
                         // Option is unsupported, fall back to locale extension or default
@@ -843,33 +843,33 @@ impl Interpreter {
         ));
 
         // Set RelativeTimeFormat.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &rtf_ctor {
-            if let Some(obj) = self.get_object(ctor_ref.id) {
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
-                );
+        if let JsValue::Object(ctor_ref) = &rtf_ctor
+            && let Some(obj) = self.get_object(ctor_ref.id)
+        {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val.clone(), false, false, false),
+            );
 
-                // supportedLocalesOf static method
-                let slof = self.create_function(JsFunction::native(
-                    "supportedLocalesOf".to_string(),
-                    1,
-                    |interp, _this, args| {
-                        let locales = args.first().unwrap_or(&JsValue::Undefined);
-                        let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                        let requested = match interp.intl_canonicalize_locale_list(locales) {
-                            Ok(list) => list,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match interp.intl_supported_locales(&requested, &options) {
-                            Ok(v) => Completion::Normal(v),
-                            Err(e) => Completion::Throw(e),
-                        }
-                    },
-                ));
-                obj.borrow_mut()
-                    .insert_builtin("supportedLocalesOf".to_string(), slof);
-            }
+            // supportedLocalesOf static method
+            let slof = self.create_function(JsFunction::native(
+                "supportedLocalesOf".to_string(),
+                1,
+                |interp, _this, args| {
+                    let locales = args.first().unwrap_or(&JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let requested = match interp.intl_canonicalize_locale_list(locales) {
+                        Ok(list) => list,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    match interp.intl_supported_locales(&requested, &options) {
+                        Ok(v) => Completion::Normal(v),
+                        Err(e) => Completion::Throw(e),
+                    }
+                },
+            ));
+            obj.borrow_mut()
+                .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype

@@ -48,9 +48,9 @@ fn strip_unicode_extensions(locale_str: &str) -> String {
         let after_u = &locale_str[idx + 3..];
         let tokens: Vec<&str> = after_u.split('-').collect();
         let mut end_of_u = tokens.len();
-        for i in 0..tokens.len() {
+        for (i, token) in tokens.iter().enumerate() {
             // A single-letter token that's not 'u' starts a new extension section
-            if tokens[i].len() == 1 && tokens[i] != "u" {
+            if token.len() == 1 && *token != "u" {
                 end_of_u = i;
                 break;
             }
@@ -164,6 +164,7 @@ pub(crate) fn do_compare(
     }
 }
 
+#[allow(dead_code)]
 fn collation_type_for_name(name: &str) -> Option<CollationType> {
     match name {
         "phonebk" => Some(CollationType::Phonebk),
@@ -361,54 +362,54 @@ impl Interpreter {
             "resolvedOptions".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        let data = {
-                            let b = obj.borrow();
-                            b.intl_data.clone()
-                        };
-                        if let Some(IntlData::Collator {
-                            locale,
-                            usage,
-                            sensitivity,
-                            ignore_punctuation,
-                            collation,
-                            numeric,
-                            case_first,
-                        }) = data
-                        {
-                            let result = interp.create_object();
-                            if let Some(ref op) = interp.realm().object_prototype {
-                                result.borrow_mut().prototype = Some(op.clone());
-                            }
-
-                            let props = vec![
-                                ("locale", JsValue::String(JsString::from_str(&locale))),
-                                ("usage", JsValue::String(JsString::from_str(&usage))),
-                                (
-                                    "sensitivity",
-                                    JsValue::String(JsString::from_str(&sensitivity)),
-                                ),
-                                ("ignorePunctuation", JsValue::Boolean(ignore_punctuation)),
-                                ("collation", JsValue::String(JsString::from_str(&collation))),
-                                ("numeric", JsValue::Boolean(numeric)),
-                                (
-                                    "caseFirst",
-                                    JsValue::String(JsString::from_str(&case_first)),
-                                ),
-                            ];
-                            for (key, val) in props {
-                                result.borrow_mut().insert_property(
-                                    key.to_string(),
-                                    PropertyDescriptor::data(val, true, true, true),
-                                );
-                            }
-
-                            let result_id = result.borrow().id.unwrap();
-                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
-                                id: result_id,
-                            }));
+                if let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let data = {
+                        let b = obj.borrow();
+                        b.intl_data.clone()
+                    };
+                    if let Some(IntlData::Collator {
+                        locale,
+                        usage,
+                        sensitivity,
+                        ignore_punctuation,
+                        collation,
+                        numeric,
+                        case_first,
+                    }) = data
+                    {
+                        let result = interp.create_object();
+                        if let Some(ref op) = interp.realm().object_prototype {
+                            result.borrow_mut().prototype = Some(op.clone());
                         }
+
+                        let props = vec![
+                            ("locale", JsValue::String(JsString::from_str(&locale))),
+                            ("usage", JsValue::String(JsString::from_str(&usage))),
+                            (
+                                "sensitivity",
+                                JsValue::String(JsString::from_str(&sensitivity)),
+                            ),
+                            ("ignorePunctuation", JsValue::Boolean(ignore_punctuation)),
+                            ("collation", JsValue::String(JsString::from_str(&collation))),
+                            ("numeric", JsValue::Boolean(numeric)),
+                            (
+                                "caseFirst",
+                                JsValue::String(JsString::from_str(&case_first)),
+                            ),
+                        ];
+                        for (key, val) in props {
+                            result.borrow_mut().insert_property(
+                                key.to_string(),
+                                PropertyDescriptor::data(val, true, true, true),
+                            );
+                        }
+
+                        let result_id = result.borrow().id.unwrap();
+                        return Completion::Normal(JsValue::Object(crate::types::JsObject {
+                            id: result_id,
+                        }));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -538,24 +539,21 @@ impl Interpreter {
                     let base_loc = base_locale(&raw_locale);
                     let mut resolved_co = "default".to_string();
 
-                    if let Some(ref co) = opt_collation {
-                        if valid_collations.contains(&co.as_str())
-                            && is_collation_supported_for_locale(&base_loc, co)
-                        {
-                            resolved_co = co.clone();
-                        }
+                    if let Some(ref co) = opt_collation
+                        && valid_collations.contains(&co.as_str())
+                        && is_collation_supported_for_locale(&base_loc, co)
+                    {
+                        resolved_co = co.clone();
                     }
 
-                    if resolved_co == "default" {
-                        if let Some(ref co) = ext_co {
-                            if co != "search"
-                                && co != "standard"
-                                && valid_collations.contains(&co.as_str())
-                                && is_collation_supported_for_locale(&base_loc, co)
-                            {
-                                resolved_co = co.clone();
-                            }
-                        }
+                    if resolved_co == "default"
+                        && let Some(ref co) = ext_co
+                        && co != "search"
+                        && co != "standard"
+                        && valid_collations.contains(&co.as_str())
+                        && is_collation_supported_for_locale(&base_loc, co)
+                    {
+                        resolved_co = co.clone();
                     }
 
                     resolved_co
@@ -607,12 +605,11 @@ impl Interpreter {
                 }
 
                 // Reflect co in locale if the extension value is the one being used
-                if collation != "default" {
-                    if let Some(ref co) = ext_co {
-                        if &collation == co {
-                            ext_parts.push(format!("co-{}", collation));
-                        }
-                    }
+                if collation != "default"
+                    && let Some(ref co) = ext_co
+                    && &collation == co
+                {
+                    ext_parts.push(format!("co-{}", collation));
                 }
 
                 ext_parts.sort();
@@ -678,33 +675,33 @@ impl Interpreter {
         ));
 
         // Set Collator.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &collator_ctor {
-            if let Some(obj) = self.get_object(ctor_ref.id) {
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
-                );
+        if let JsValue::Object(ctor_ref) = &collator_ctor
+            && let Some(obj) = self.get_object(ctor_ref.id)
+        {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val.clone(), false, false, false),
+            );
 
-                // supportedLocalesOf static method
-                let slof = self.create_function(JsFunction::native(
-                    "supportedLocalesOf".to_string(),
-                    1,
-                    |interp, _this, args| {
-                        let locales = args.first().unwrap_or(&JsValue::Undefined);
-                        let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                        let requested = match interp.intl_canonicalize_locale_list(locales) {
-                            Ok(list) => list,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match interp.intl_supported_locales(&requested, &options) {
-                            Ok(v) => Completion::Normal(v),
-                            Err(e) => Completion::Throw(e),
-                        }
-                    },
-                ));
-                obj.borrow_mut()
-                    .insert_builtin("supportedLocalesOf".to_string(), slof);
-            }
+            // supportedLocalesOf static method
+            let slof = self.create_function(JsFunction::native(
+                "supportedLocalesOf".to_string(),
+                1,
+                |interp, _this, args| {
+                    let locales = args.first().unwrap_or(&JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let requested = match interp.intl_canonicalize_locale_list(locales) {
+                        Ok(list) => list,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    match interp.intl_supported_locales(&requested, &options) {
+                        Ok(v) => Completion::Normal(v),
+                        Err(e) => Completion::Throw(e),
+                    }
+                },
+            ));
+            obj.borrow_mut()
+                .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype
@@ -800,24 +797,21 @@ impl Interpreter {
             let base_loc = base_locale(&raw_locale);
             let mut resolved_co = "default".to_string();
 
-            if let Some(ref co) = opt_collation {
-                if valid_collations.contains(&co.as_str())
-                    && is_collation_supported_for_locale(&base_loc, co)
-                {
-                    resolved_co = co.clone();
-                }
+            if let Some(ref co) = opt_collation
+                && valid_collations.contains(&co.as_str())
+                && is_collation_supported_for_locale(&base_loc, co)
+            {
+                resolved_co = co.clone();
             }
 
-            if resolved_co == "default" {
-                if let Some(ref co) = ext_co {
-                    if co != "search"
-                        && co != "standard"
-                        && valid_collations.contains(&co.as_str())
-                        && is_collation_supported_for_locale(&base_loc, co)
-                    {
-                        resolved_co = co.clone();
-                    }
-                }
+            if resolved_co == "default"
+                && let Some(ref co) = ext_co
+                && co != "search"
+                && co != "standard"
+                && valid_collations.contains(&co.as_str())
+                && is_collation_supported_for_locale(&base_loc, co)
+            {
+                resolved_co = co.clone();
             }
 
             resolved_co

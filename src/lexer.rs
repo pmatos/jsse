@@ -1209,19 +1209,19 @@ impl<'a> Lexer<'a> {
             // Numeric literals
             if ch.is_ascii_digit() {
                 let tok = self.read_numeric_literal(ch)?;
-                if let Some(next) = self.peek() {
-                    if Self::is_identifier_start(next) {
-                        return Err(self.error("Identifier directly after number"));
-                    }
+                if let Some(next) = self.peek()
+                    && Self::is_identifier_start(next)
+                {
+                    return Err(self.error("Identifier directly after number"));
                 }
                 return Ok(tok);
             }
             if ch == '.' && self.peek().is_some_and(|c| c.is_ascii_digit()) {
                 let tok = self.read_numeric_literal(ch)?;
-                if let Some(next) = self.peek() {
-                    if Self::is_identifier_start(next) {
-                        return Err(self.error("Identifier directly after number"));
-                    }
+                if let Some(next) = self.peek()
+                    && Self::is_identifier_start(next)
+                {
+                    return Err(self.error("Identifier directly after number"));
                 }
                 return Ok(tok);
             }

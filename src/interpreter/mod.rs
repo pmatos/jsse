@@ -339,7 +339,7 @@ impl Interpreter {
         let agent_obj_id = agent_obj.borrow().id.unwrap();
 
         // $262.agent.start(script)
-        let reports_clone = self.agent_reports.clone();
+        let _reports_clone = self.agent_reports.clone();
         let start_fn = self.create_function(JsFunction::native(
             "start".to_string(),
             1,
@@ -536,6 +536,7 @@ impl Interpreter {
         JsValue::Object(crate::types::JsObject { id: dollar_262_id })
     }
 
+    #[allow(dead_code)]
     pub(crate) fn drain_agent_async_completions(&mut self) {
         let completions: Vec<_> = {
             let mut lock = self.agent_async_completions.0.lock().unwrap();
@@ -605,6 +606,7 @@ impl Interpreter {
     }
 
     // GetPrototypeFromConstructor — §10.2.4
+    #[allow(dead_code)]
     pub(crate) fn get_prototype_from_new_target(
         &mut self,
         default_proto: &Option<Rc<RefCell<JsObjectData>>>,
@@ -794,12 +796,11 @@ impl Interpreter {
     }
 
     pub(crate) fn to_boolean_val(&self, val: &JsValue) -> bool {
-        if let JsValue::Object(o) = val {
-            if let Some(Some(obj)) = self.objects.get(o.id as usize) {
-                if obj.borrow().is_htmldda {
-                    return false;
-                }
-            }
+        if let JsValue::Object(o) = val
+            && let Some(Some(obj)) = self.objects.get(o.id as usize)
+            && obj.borrow().is_htmldda
+        {
+            return false;
         }
         to_boolean(val)
     }
@@ -829,6 +830,7 @@ impl Interpreter {
         self.create_function(func)
     }
 
+    #[allow(dead_code)]
     fn is_strict_mode_body(body: &[Statement]) -> bool {
         for stmt in body {
             if let Statement::Expression(Expression::Literal(Literal::String(s))) = stmt {
@@ -1217,7 +1219,7 @@ impl Interpreter {
 
     pub fn run_with_path(&mut self, program: &Program, path: &Path) -> Completion {
         self.maybe_gc();
-        let result = match program.source_type {
+        match program.source_type {
             SourceType::Script => {
                 let prev = self.current_module_path.take();
                 self.current_module_path = Some(path.to_path_buf());
@@ -1229,7 +1231,7 @@ impl Interpreter {
                 // Drain microtasks before restoring path so async callbacks can use relative imports
                 self.drain_microtasks();
                 self.current_module_path = prev;
-                return r;
+                r
             }
             SourceType::Module => {
                 let r = self.run_module(program, Some(path.to_path_buf()));
@@ -1238,11 +1240,9 @@ impl Interpreter {
                 self.current_module_path = Some(path.to_path_buf());
                 self.drain_microtasks();
                 self.current_module_path = prev;
-                return r;
+                r
             }
-        };
-        self.drain_microtasks();
-        result
+        }
     }
 
     #[allow(dead_code)]
@@ -1507,15 +1507,15 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Result<(), JsValue> {
         let binding_info = loaded.borrow().export_bindings.get(imported).cloned();
-        if let Some(ref binding) = binding_info {
-            if binding.starts_with("*ns:") {
-                // Namespace re-export: copy the namespace value directly
-                if let Some(val) = loaded.borrow().exports.get(imported).cloned() {
-                    env.borrow_mut().declare(local, BindingKind::Const);
-                    env.borrow_mut().initialize_binding(local, val);
-                }
-                return Ok(());
+        if let Some(ref binding) = binding_info
+            && binding.starts_with("*ns:")
+        {
+            // Namespace re-export: copy the namespace value directly
+            if let Some(val) = loaded.borrow().exports.get(imported).cloned() {
+                env.borrow_mut().declare(local, BindingKind::Const);
+                env.borrow_mut().initialize_binding(local, val);
             }
+            return Ok(());
         }
         let has_export = binding_info.is_some();
         if has_export {
@@ -1697,7 +1697,7 @@ impl Interpreter {
             let parsed = match crate::interpreter::helpers::json_parse_value(self, &source) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                other => {
+                _other => {
                     return Err(JsValue::String(JsString::from_str(&format!(
                         "JSON parse error in '{}'",
                         path.display()
@@ -1764,7 +1764,7 @@ impl Interpreter {
         let program = match parser.parse_program_as_module() {
             Ok(p) => p,
             Err(e) => {
-                return Err(self.create_error("SyntaxError", &format!("{}", e.message)));
+                return Err(self.create_error("SyntaxError", &e.message.to_string()));
             }
         };
 
@@ -1906,12 +1906,11 @@ impl Interpreter {
                     source: Some(source),
                     ..
                 }) = item
+                    && let Err(e) = self.validate_named_reexports(&canon, source, specifiers)
                 {
-                    if let Err(e) = self.validate_named_reexports(&canon, source, specifiers) {
-                        self.current_module_path = prev_path;
-                        loaded_module.borrow_mut().error = Some(e.clone());
-                        return Err(e);
-                    }
+                    self.current_module_path = prev_path;
+                    loaded_module.borrow_mut().error = Some(e.clone());
+                    return Err(e);
                 }
             }
         }
@@ -1961,7 +1960,7 @@ impl Interpreter {
         let program = match parser.parse_program_as_module() {
             Ok(p) => p,
             Err(e) => {
-                return Err(self.create_error("SyntaxError", &format!("{}", e.message)));
+                return Err(self.create_error("SyntaxError", &e.message.to_string()));
             }
         };
 
@@ -2043,7 +2042,7 @@ impl Interpreter {
 
         // Pre-load pass: load sub-dependencies
         for item in &program.module_items {
-            let (specifier, is_deferred) = match item {
+            let (specifier, _is_deferred) = match item {
                 ModuleItem::ImportDeclaration(import) => {
                     let is_defer = import
                         .specifiers
@@ -2062,21 +2061,8 @@ impl Interpreter {
             };
             if let Some(spec) = specifier {
                 let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
-                    if let Err(e) = self.load_module_no_eval(&resolved) {
-                        self.loading_deferred = prev_loading_deferred;
-                        return Err(e);
-                    }
-                }
-            }
-        }
-
-        // Process re-exports
-        for item in &program.module_items {
-            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
-            {
-                if let Err(e) =
-                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref())
+                    && let Err(e) = self.load_module_no_eval(&resolved)
                 {
                     self.loading_deferred = prev_loading_deferred;
                     return Err(e);
@@ -2084,13 +2070,24 @@ impl Interpreter {
             }
         }
 
+        // Process re-exports
+        for item in &program.module_items {
+            if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
+                && let Err(e) =
+                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
+            {
+                self.loading_deferred = prev_loading_deferred;
+                return Err(e);
+            }
+        }
+
         // Process imports
         for item in &program.module_items {
-            if let ModuleItem::ImportDeclaration(import) = item {
-                if let Err(e) = self.process_import(import, &module_env) {
-                    self.loading_deferred = prev_loading_deferred;
-                    return Err(e);
-                }
+            if let ModuleItem::ImportDeclaration(import) = item
+                && let Err(e) = self.process_import(import, &module_env)
+            {
+                self.loading_deferred = prev_loading_deferred;
+                return Err(e);
             }
         }
 
@@ -2103,13 +2100,12 @@ impl Interpreter {
                     source: Some(source),
                     ..
                 }) = item
+                    && let Err(e) = self.validate_named_reexports(&canon, source, specifiers)
                 {
-                    if let Err(e) = self.validate_named_reexports(&canon, source, specifiers) {
-                        self.loading_deferred = prev_loading_deferred;
-                        self.current_module_path = prev_path;
-                        loaded_module.borrow_mut().error = Some(e.clone());
-                        return Err(e);
-                    }
+                    self.loading_deferred = prev_loading_deferred;
+                    self.current_module_path = prev_path;
+                    loaded_module.borrow_mut().error = Some(e.clone());
+                    return Err(e);
                 }
             }
         }
@@ -2158,17 +2154,16 @@ impl Interpreter {
                         .specifiers
                         .iter()
                         .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    if !is_defer {
-                        if let Ok(resolved) =
+                    if !is_defer
+                        && let Ok(resolved) =
                             self.resolve_module_specifier(&import.source, Some(&canon_path))
+                    {
+                        let resolved_canon =
+                            resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+                        if let Some(dep) = self.module_registry.get(&resolved_canon).cloned()
+                            && !dep.borrow().evaluated
                         {
-                            let resolved_canon =
-                                resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
-                            if let Some(dep) = self.module_registry.get(&resolved_canon).cloned() {
-                                if !dep.borrow().evaluated {
-                                    self.evaluate_module(&dep)?;
-                                }
-                            }
+                            self.evaluate_module(&dep)?;
                         }
                     }
                 }
@@ -2180,10 +2175,10 @@ impl Interpreter {
                     if let Ok(resolved) = self.resolve_module_specifier(source, Some(&canon_path)) {
                         let resolved_canon =
                             resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
-                        if let Some(dep) = self.module_registry.get(&resolved_canon).cloned() {
-                            if !dep.borrow().evaluated {
-                                self.evaluate_module(&dep)?;
-                            }
+                        if let Some(dep) = self.module_registry.get(&resolved_canon).cloned()
+                            && !dep.borrow().evaluated
+                        {
+                            self.evaluate_module(&dep)?;
                         }
                     }
                 }
@@ -2259,7 +2254,7 @@ impl Interpreter {
                 }
                 decl.declarations
                     .iter()
-                    .any(|d| d.init.as_ref().map_or(false, |e| Self::expr_has_await(e)))
+                    .any(|d| d.init.as_ref().is_some_and(Self::expr_has_await))
             }
             Statement::Return(Some(expr)) | Statement::Throw(expr) => Self::expr_has_await(expr),
             Statement::If(if_stmt) => {
@@ -2268,10 +2263,10 @@ impl Interpreter {
                     || if_stmt
                         .alternate
                         .as_ref()
-                        .map_or(false, |s| Self::stmt_has_tla(s))
+                        .is_some_and(|s| Self::stmt_has_tla(s))
             }
             Statement::For(for_stmt) => {
-                for_stmt.init.as_ref().map_or(false, |init| match init {
+                for_stmt.init.as_ref().is_some_and(|init| match init {
                     crate::ast::ForInit::Expression(e) => Self::expr_has_await(e),
                     crate::ast::ForInit::Variable(v) => {
                         if matches!(v.kind, crate::ast::VarKind::AwaitUsing) {
@@ -2279,16 +2274,10 @@ impl Interpreter {
                         }
                         v.declarations
                             .iter()
-                            .any(|d| d.init.as_ref().map_or(false, |e| Self::expr_has_await(e)))
+                            .any(|d| d.init.as_ref().is_some_and(Self::expr_has_await))
                     }
-                }) || for_stmt
-                    .test
-                    .as_ref()
-                    .map_or(false, |e| Self::expr_has_await(e))
-                    || for_stmt
-                        .update
-                        .as_ref()
-                        .map_or(false, |e| Self::expr_has_await(e))
+                }) || for_stmt.test.as_ref().is_some_and(Self::expr_has_await)
+                    || for_stmt.update.as_ref().is_some_and(Self::expr_has_await)
                     || Self::stmt_has_tla(&for_stmt.body)
             }
             Statement::ForIn(fi) => Self::expr_has_await(&fi.right) || Self::stmt_has_tla(&fi.body),
@@ -2299,22 +2288,22 @@ impl Interpreter {
             Statement::DoWhile(dw) => {
                 Self::stmt_has_tla(&dw.body) || Self::expr_has_await(&dw.test)
             }
-            Statement::Block(stmts) => stmts.iter().any(|s| Self::stmt_has_tla(s)),
+            Statement::Block(stmts) => stmts.iter().any(Self::stmt_has_tla),
             Statement::Try(t) => {
-                t.block.iter().any(|s| Self::stmt_has_tla(s))
+                t.block.iter().any(Self::stmt_has_tla)
                     || t.handler
                         .as_ref()
-                        .map_or(false, |h| h.body.iter().any(|s| Self::stmt_has_tla(s)))
+                        .is_some_and(|h| h.body.iter().any(Self::stmt_has_tla))
                     || t.finalizer
                         .as_ref()
-                        .map_or(false, |f| f.iter().any(|s| Self::stmt_has_tla(s)))
+                        .is_some_and(|f| f.iter().any(Self::stmt_has_tla))
             }
             Statement::Switch(sw) => {
                 Self::expr_has_await(&sw.discriminant)
                     || sw
                         .cases
                         .iter()
-                        .any(|c| c.consequent.iter().any(|s| Self::stmt_has_tla(s)))
+                        .any(|c| c.consequent.iter().any(Self::stmt_has_tla))
             }
             Statement::Labeled(_, body) => Self::stmt_has_tla(body),
             _ => false,
@@ -2356,11 +2345,11 @@ impl Interpreter {
             }
             Expression::Call(callee, arguments) => {
                 Self::expr_has_await(callee)
-                    || arguments.iter().any(|a| Self::expr_has_await(a))
+                    || arguments.iter().any(Self::expr_has_await)
             }
             Expression::New(callee, arguments) => {
                 Self::expr_has_await(callee)
-                    || arguments.iter().any(|a| Self::expr_has_await(a))
+                    || arguments.iter().any(Self::expr_has_await)
             }
             Expression::Member(object, prop) => {
                 Self::expr_has_await(object) || match prop {
@@ -2372,7 +2361,7 @@ impl Interpreter {
                 Self::expr_has_await(left) || Self::expr_has_await(right)
             }
             Expression::Array(elements, _) => {
-                elements.iter().any(|e| e.as_ref().map_or(false, |e| Self::expr_has_await(e)))
+                elements.iter().any(|e| e.as_ref().is_some_and(Self::expr_has_await))
             }
             Expression::Object(props) => {
                 props.iter().any(|p| {
@@ -2381,21 +2370,21 @@ impl Interpreter {
                 })
             }
             Expression::Comma(exprs) | Expression::Sequence(exprs) => {
-                exprs.iter().any(|e| Self::expr_has_await(e))
+                exprs.iter().any(Self::expr_has_await)
             }
             Expression::TaggedTemplate(tag, quasi) => {
                 Self::expr_has_await(tag)
-                    || quasi.expressions.iter().any(|e| Self::expr_has_await(e))
+                    || quasi.expressions.iter().any(Self::expr_has_await)
             }
             Expression::Template(tl) => {
-                tl.expressions.iter().any(|e| Self::expr_has_await(e))
+                tl.expressions.iter().any(Self::expr_has_await)
             }
             Expression::Yield(arg, _) => {
-                arg.as_ref().map_or(false, |a| Self::expr_has_await(a))
+                arg.as_ref().is_some_and(|a| Self::expr_has_await(a))
             }
             Expression::Import(src, opts) | Expression::ImportDefer(src, opts) => {
                 Self::expr_has_await(src)
-                    || opts.as_ref().map_or(false, |o| Self::expr_has_await(o))
+                    || opts.as_ref().is_some_and(|o| Self::expr_has_await(o))
             }
             _ => false,
         }
@@ -2408,13 +2397,13 @@ impl Interpreter {
         self.gather_async_transitive_deps(deferred_path, &mut to_eval, &mut seen);
 
         for path in to_eval {
-            if let Some(module) = self.module_registry.get(&path).cloned() {
-                if !module.borrow().evaluated {
-                    let prev_path = self.current_module_path.take();
-                    self.current_module_path = Some(path.clone());
-                    let _ = self.evaluate_module(&module);
-                    self.current_module_path = prev_path;
-                }
+            if let Some(module) = self.module_registry.get(&path).cloned()
+                && !module.borrow().evaluated
+            {
+                let prev_path = self.current_module_path.take();
+                self.current_module_path = Some(path.clone());
+                let _ = self.evaluate_module(&module);
+                self.current_module_path = prev_path;
             }
         }
     }
@@ -2465,10 +2454,10 @@ impl Interpreter {
                     }) => Some(source.as_str()),
                     _ => None,
                 };
-                if let Some(spec) = specifier {
-                    if let Ok(resolved) = self.resolve_module_specifier_pure(spec, Some(&canon)) {
-                        self.gather_async_transitive_deps(&resolved, result, seen);
-                    }
+                if let Some(spec) = specifier
+                    && let Ok(resolved) = self.resolve_module_specifier_pure(spec, Some(&canon))
+                {
+                    self.gather_async_transitive_deps(&resolved, result, seen);
                 }
             }
         }
@@ -2543,12 +2532,11 @@ impl Interpreter {
                     }) => Some(source.as_str()),
                     _ => None,
                 };
-                if let Some(spec) = specifier {
-                    if let Ok(resolved) = self.resolve_module_specifier_pure(spec, Some(&canon)) {
-                        if !self.ready_for_sync_execution(&resolved, seen) {
-                            return false;
-                        }
-                    }
+                if let Some(spec) = specifier
+                    && let Ok(resolved) = self.resolve_module_specifier_pure(spec, Some(&canon))
+                    && !self.ready_for_sync_execution(&resolved, seen)
+                {
+                    return false;
                 }
             }
         }
@@ -2604,10 +2592,9 @@ impl Interpreter {
                     drop(module_ref);
                     if let Ok(resolved) =
                         self.resolve_module_specifier(&ns_source, Some(&canon_path))
+                        && let Ok(ns_mod) = self.load_module(&resolved)
                     {
-                        if let Ok(ns_mod) = self.load_module(&resolved) {
-                            return Ok((ns_mod.borrow().env.clone(), "*namespace*".to_string()));
-                        }
+                        return Ok((ns_mod.borrow().env.clone(), "*namespace*".to_string()));
                     }
                     let module_ref = module.borrow();
                     return Ok((module_ref.env.clone(), export_name.to_string()));
@@ -2626,16 +2613,16 @@ impl Interpreter {
                     let ns_path = module_ref.namespace_imports.get(&binding_name).cloned();
                     drop(module_ref);
                     // Namespace import (import * as foo) resolves to the source module
-                    if let Some(ns_path) = ns_path {
-                        if let Ok(ns_mod) = self.load_module(&ns_path) {
-                            return Ok((ns_mod.borrow().env.clone(), "*namespace*".to_string()));
-                        }
+                    if let Some(ns_path) = ns_path
+                        && let Ok(ns_mod) = self.load_module(&ns_path)
+                    {
+                        return Ok((ns_mod.borrow().env.clone(), "*namespace*".to_string()));
                     }
                     // Check if it's an indirect (imported) binding
-                    if let Some(ref indirect_map) = env.borrow().indirect_bindings {
-                        if let Some((src_env, src_name)) = indirect_map.get(&binding_name) {
-                            return Ok((src_env.clone(), src_name.clone()));
-                        }
+                    if let Some(ref indirect_map) = env.borrow().indirect_bindings
+                        && let Some((src_env, src_name)) = indirect_map.get(&binding_name)
+                    {
+                        return Ok((src_env.clone(), src_name.clone()));
                     }
                     return Ok((env, binding_name));
                 }
@@ -2918,7 +2905,7 @@ impl Interpreter {
                     module_ref
                         .export_bindings
                         .get(*k)
-                        .map_or(true, |b| b != "*ambiguous*")
+                        .is_none_or(|b| b != "*ambiguous*")
                 })
                 .cloned()
                 .collect();
@@ -2993,7 +2980,7 @@ impl Interpreter {
                     module_ref
                         .export_bindings
                         .get(*k)
-                        .map_or(true, |b| b != "*ambiguous*")
+                        .is_none_or(|b| b != "*ambiguous*")
                 })
                 .cloned()
                 .collect();
@@ -3401,7 +3388,7 @@ impl Interpreter {
                 iterations += 1;
                 // Periodically check agent async completions (e.g. waitAsync timeouts)
                 // so they get processed even when the microtask queue stays busy
-                if iterations % 64 == 0 {
+                if iterations.is_multiple_of(64) {
                     let completions: Vec<_> = {
                         let mut lock = self.agent_async_completions.0.lock().unwrap();
                         lock.drain(..).collect()
@@ -3464,7 +3451,7 @@ impl Interpreter {
             if remaining.is_zero() {
                 break;
             }
-            let (_guard, timeout_result) = cvar
+            let (_guard, _timeout_result) = cvar
                 .wait_timeout(lock, remaining.min(std::time::Duration::from_millis(100)))
                 .unwrap();
             drop(_guard);
@@ -3617,10 +3604,8 @@ impl Interpreter {
                 len_desc.value = Some(JsValue::Number(actual_new_len as f64));
             }
             // 13.d.iii.2. If newWritable is false, set length writable to false.
-            if !new_writable {
-                if let Some(len_desc) = obj.properties.get_mut("length") {
-                    len_desc.writable = Some(false);
-                }
+            if !new_writable && let Some(len_desc) = obj.properties.get_mut("length") {
+                len_desc.writable = Some(false);
             }
             return Ok(false);
         }
@@ -3778,7 +3763,7 @@ fn to_uint32_f64(n: f64) -> u32 {
 }
 
 fn setup_agent_side_262(interp: &mut Interpreter) {
-    use crate::types::{JsObject, JsString};
+    use crate::types::JsObject;
 
     let dollar_262 = interp.create_object();
     let dollar_262_id = dollar_262.borrow().id.unwrap();

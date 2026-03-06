@@ -69,10 +69,12 @@ impl BufferData {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_shared(&self) -> bool {
         matches!(self, BufferData::Shared(_))
     }
 
+    #[allow(dead_code)]
     pub fn shared_inner(&self) -> Option<&Arc<SharedBufferInner>> {
         match self {
             BufferData::Shared(s) => Some(s),
@@ -152,6 +154,7 @@ pub(crate) enum GeneratorResumeKind {
 pub(crate) struct GeneratorContext {
     pub(crate) target_yield: usize,
     pub(crate) current_yield: usize,
+    #[allow(dead_code)]
     pub(crate) sent_value: JsValue,
     /// Values sent to previous yields (index k = value passed to next() after yield k)
     pub(crate) prev_sent_values: Vec<JsValue>,
@@ -201,6 +204,7 @@ pub type EnvRef = Rc<RefCell<Environment>>;
 
 #[allow(clippy::type_complexity)]
 pub struct Realm {
+    #[allow(dead_code)]
     pub(crate) id: usize,
     pub(crate) global_env: EnvRef,
     pub(crate) global_object: Option<Rc<RefCell<JsObjectData>>>,
@@ -669,29 +673,29 @@ impl Environment {
 
     /// Resolve an indirect binding, returning the current value from the source environment.
     pub fn resolve_indirect_binding(&self, name: &str) -> Option<Option<JsValue>> {
-        if let Some(ref indirect) = self.indirect_bindings {
-            if let Some((source_env, source_name)) = indirect.get(name) {
-                let source = source_env.borrow();
-                if let Some(binding) = source.bindings.get(source_name.as_str()) {
+        if let Some(ref indirect) = self.indirect_bindings
+            && let Some((source_env, source_name)) = indirect.get(name)
+        {
+            let source = source_env.borrow();
+            if let Some(binding) = source.bindings.get(source_name.as_str()) {
+                if !binding.initialized {
+                    return Some(None); // TDZ
+                }
+                return Some(Some(binding.value.clone()));
+            }
+            // Binding not found in direct bindings, try its own indirect bindings
+            if let Some(ref src_indirect) = source.indirect_bindings
+                && let Some((src2_env, src2_name)) = src_indirect.get(source_name.as_str())
+            {
+                let src2 = src2_env.borrow();
+                if let Some(binding) = src2.bindings.get(src2_name.as_str()) {
                     if !binding.initialized {
                         return Some(None); // TDZ
                     }
                     return Some(Some(binding.value.clone()));
                 }
-                // Binding not found in direct bindings, try its own indirect bindings
-                if let Some(ref src_indirect) = source.indirect_bindings {
-                    if let Some((src2_env, src2_name)) = src_indirect.get(source_name.as_str()) {
-                        let src2 = src2_env.borrow();
-                        if let Some(binding) = src2.bindings.get(src2_name.as_str()) {
-                            if !binding.initialized {
-                                return Some(None); // TDZ
-                            }
-                            return Some(Some(binding.value.clone()));
-                        }
-                    }
-                }
-                return Some(None); // binding not found = TDZ
             }
+            return Some(None); // binding not found = TDZ
         }
         None
     }
@@ -934,9 +938,7 @@ impl Environment {
     }
 
     pub fn has(&self, name: &str) -> bool {
-        if self.is_indirect_binding(name) {
-            true
-        } else if self.bindings.contains_key(name) {
+        if self.is_indirect_binding(name) || self.bindings.contains_key(name) {
             true
         } else if let Some(parent) = &self.parent {
             parent.borrow().has(name)
@@ -1999,10 +2001,10 @@ impl JsObjectData {
     pub fn has_property(&self, key: &str) -> bool {
         // §10.4.5.2 TypedArray [[HasProperty]]: canonical numeric index strings
         // never consult the prototype chain
-        if let Some(ref ta) = self.typed_array_info {
-            if let Some(index) = canonical_numeric_index_string(key) {
-                return is_valid_integer_index(ta, index);
-            }
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key)
+        {
+            return is_valid_integer_index(ta, index);
         }
         if self.has_own_property(key) {
             return true;
@@ -2017,34 +2019,32 @@ impl JsObjectData {
         // String exotic §10.4.3.3 [[DefineOwnProperty]]: reject changes to character index properties
         if self.class_name == "String"
             && let Some(JsValue::String(ref s)) = self.primitive_value
+            && let Ok(idx) = key.parse::<usize>()
+            && idx < s.code_units.len()
         {
-            if let Ok(idx) = key.parse::<usize>()
-                && idx < s.code_units.len()
-            {
-                // String index property: {value: char, writable: false, enumerable: true, configurable: false}
-                // Only allow if desc is compatible (no changes to value, not setting writable/configurable)
-                if desc.configurable == Some(true) {
-                    return false;
-                }
-                if desc.enumerable == Some(false) {
-                    return false;
-                }
-                if desc.get.is_some() || desc.set.is_some() {
-                    return false;
-                }
-                if desc.writable == Some(true) {
-                    return false;
-                }
-                if let Some(ref v) = desc.value {
-                    let char_val = JsValue::String(crate::types::JsString {
-                        code_units: vec![s.code_units[idx]],
-                    });
-                    if !same_value(v, &char_val) {
-                        return false;
-                    }
-                }
-                return true;
+            // String index property: {value: char, writable: false, enumerable: true, configurable: false}
+            // Only allow if desc is compatible (no changes to value, not setting writable/configurable)
+            if desc.configurable == Some(true) {
+                return false;
             }
+            if desc.enumerable == Some(false) {
+                return false;
+            }
+            if desc.get.is_some() || desc.set.is_some() {
+                return false;
+            }
+            if desc.writable == Some(true) {
+                return false;
+            }
+            if let Some(ref v) = desc.value {
+                let char_val = JsValue::String(crate::types::JsString {
+                    code_units: vec![s.code_units[idx]],
+                });
+                if !same_value(v, &char_val) {
+                    return false;
+                }
+            }
+            return true;
         }
         // Module namespace exotic: §10.4.6.5 [[DefineOwnProperty]]
         if self.module_namespace.is_some() {
@@ -2234,7 +2234,7 @@ impl JsObjectData {
             };
 
             // Build merged descriptor
-            let mut merged = if desc_is_data
+            let merged = if desc_is_data
                 && !desc_is_accessor
                 && current_is_accessor
                 && !current_is_data
@@ -2487,10 +2487,9 @@ impl JsObjectData {
             // String exotic: length and index properties are non-writable (§10.4.3.2)
             if let Some(JsValue::String(ref s)) = self.primitive_value
                 && self.class_name == "String"
+                && (key == "length" || (key.parse::<usize>().is_ok_and(|i| i < s.code_units.len())))
             {
-                if key == "length" || (key.parse::<usize>().is_ok_and(|i| i < s.code_units.len())) {
-                    return false;
-                }
+                return false;
             }
             if !self.extensible {
                 return false;
@@ -2795,7 +2794,7 @@ fn to_uint8_clamped(v: &JsValue) -> u8 {
         f as u8
     } else if n > half {
         (f + 1.0) as u8
-    } else if (f as u64) % 2 == 0 {
+    } else if (f as u64).is_multiple_of(2) {
         f as u8
     } else {
         (f + 1.0) as u8

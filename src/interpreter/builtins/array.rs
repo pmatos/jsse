@@ -161,11 +161,11 @@ pub(crate) fn create_data_property_or_throw(
     if let JsValue::Object(obj_ref) = o {
         // Deferred namespace: trigger evaluation on [[DefineOwnProperty]]
         {
-            let is_deferred_ns = interp.get_object(obj_ref.id).map_or(false, |obj| {
+            let is_deferred_ns = interp.get_object(obj_ref.id).is_some_and(|obj| {
                 obj.borrow()
                     .module_namespace
                     .as_ref()
-                    .map_or(false, |ns| ns.deferred)
+                    .is_some_and(|ns| ns.deferred)
             });
             if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(key, true) {
                 interp.ensure_deferred_namespace_evaluation(obj_ref.id)?;
@@ -257,13 +257,11 @@ fn obj_has_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<boo
 
 // AsyncIteratorClose: call iterator.return() if it exists (best-effort)
 fn close_async_iterator(interp: &mut Interpreter, iterator: &JsValue) {
-    if let JsValue::Object(ref io) = *iterator {
-        if let Completion::Normal(return_fn) = interp.get_object_property(io.id, "return", iterator)
-        {
-            if interp.is_callable(&return_fn) {
-                let _ = interp.call_function(&return_fn, iterator, &[]);
-            }
-        }
+    if let JsValue::Object(ref io) = *iterator
+        && let Completion::Normal(return_fn) = interp.get_object_property(io.id, "return", iterator)
+        && interp.is_callable(&return_fn)
+    {
+        let _ = interp.call_function(&return_fn, iterator, &[]);
     }
 }
 
@@ -317,12 +315,12 @@ fn obj_delete_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<
 fn set_length(interp: &mut Interpreter, o: &JsValue, len: usize) {
     if let Some(obj) = get_obj(interp, o) {
         let mut borrow = obj.borrow_mut();
-        if let Some(ref mut elems) = borrow.array_elements {
-            if len <= elems.len() {
-                elems.truncate(len);
-            }
-            // Don't pre-allocate for sparse arrays
+        if let Some(ref mut elems) = borrow.array_elements
+            && len <= elems.len()
+        {
+            elems.truncate(len);
         }
+        // Don't pre-allocate for sparse arrays
         borrow.set_property_value("length", JsValue::Number(len as f64));
     }
 }
@@ -358,12 +356,12 @@ fn set_length_throw(interp: &mut Interpreter, o: &JsValue, len: usize) -> Result
             }
         }
         let mut borrow = obj.borrow_mut();
-        if let Some(ref mut elems) = borrow.array_elements {
-            if len <= elems.len() {
-                elems.truncate(len);
-            }
-            // Don't pre-allocate for sparse arrays
+        if let Some(ref mut elems) = borrow.array_elements
+            && len <= elems.len()
+        {
+            elems.truncate(len);
         }
+        // Don't pre-allocate for sparse arrays
         borrow.set_property_value("length", JsValue::Number(len as f64));
         return Ok(());
     }
@@ -414,19 +412,19 @@ fn array_species_create(
     };
     // §9.4.2.3 step 5-6: If C is a constructor from a different realm and
     // equals that realm's intrinsic %Array%, set C to undefined
-    if interp.is_constructor(&c) {
-        if let JsValue::Object(co) = &c {
-            let c_realm = match interp.get_function_realm(&JsValue::Object(co.clone())) {
-                Ok(r) => r,
-                Err(e) => return Err(Completion::Throw(e)),
-            };
-            if c_realm != interp.current_realm_id {
-                let realm_array = interp.realms[c_realm].global_env.borrow().get("Array");
-                if let Some(ref ra) = realm_array {
-                    if same_value(&c, ra) {
-                        c = JsValue::Undefined;
-                    }
-                }
+    if interp.is_constructor(&c)
+        && let JsValue::Object(co) = &c
+    {
+        let c_realm = match interp.get_function_realm(&JsValue::Object(co.clone())) {
+            Ok(r) => r,
+            Err(e) => return Err(Completion::Throw(e)),
+        };
+        if c_realm != interp.current_realm_id {
+            let realm_array = interp.realms[c_realm].global_env.borrow().get("Array");
+            if let Some(ref ra) = realm_array
+                && same_value(&c, ra)
+            {
+                c = JsValue::Undefined;
             }
         }
     }

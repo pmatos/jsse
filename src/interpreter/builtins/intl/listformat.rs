@@ -330,33 +330,33 @@ impl Interpreter {
         ));
 
         // Set ListFormat.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &list_format_ctor {
-            if let Some(obj) = self.get_object(ctor_ref.id) {
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
-                );
+        if let JsValue::Object(ctor_ref) = &list_format_ctor
+            && let Some(obj) = self.get_object(ctor_ref.id)
+        {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val.clone(), false, false, false),
+            );
 
-                // supportedLocalesOf static method
-                let slof = self.create_function(JsFunction::native(
-                    "supportedLocalesOf".to_string(),
-                    1,
-                    |interp, _this, args| {
-                        let locales = args.first().unwrap_or(&JsValue::Undefined);
-                        let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                        let requested = match interp.intl_canonicalize_locale_list(locales) {
-                            Ok(list) => list,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match interp.intl_supported_locales(&requested, &options) {
-                            Ok(v) => Completion::Normal(v),
-                            Err(e) => Completion::Throw(e),
-                        }
-                    },
-                ));
-                obj.borrow_mut()
-                    .insert_builtin("supportedLocalesOf".to_string(), slof);
-            }
+            // supportedLocalesOf static method
+            let slof = self.create_function(JsFunction::native(
+                "supportedLocalesOf".to_string(),
+                1,
+                |interp, _this, args| {
+                    let locales = args.first().unwrap_or(&JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let requested = match interp.intl_canonicalize_locale_list(locales) {
+                        Ok(list) => list,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    match interp.intl_supported_locales(&requested, &options) {
+                        Ok(v) => Completion::Normal(v),
+                        Err(e) => Completion::Throw(e),
+                    }
+                },
+            ));
+            obj.borrow_mut()
+                .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype
@@ -377,17 +377,17 @@ fn extract_list_format_data(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<(String, String, String), JsValue> {
-    if let JsValue::Object(o) = this {
-        if let Some(obj) = interp.get_object(o.id) {
-            let b = obj.borrow();
-            if let Some(IntlData::ListFormat {
-                ref locale,
-                ref list_type,
-                ref style,
-            }) = b.intl_data
-            {
-                return Ok((locale.clone(), list_type.clone(), style.clone()));
-            }
+    if let JsValue::Object(o) = this
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let b = obj.borrow();
+        if let Some(IntlData::ListFormat {
+            ref locale,
+            ref list_type,
+            ref style,
+        }) = b.intl_data
+        {
+            return Ok((locale.clone(), list_type.clone(), style.clone()));
         }
     }
     Err(interp.create_type_error("Intl.ListFormat method called on incompatible receiver"))

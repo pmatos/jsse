@@ -190,13 +190,13 @@ impl<'a> Parser<'a> {
                 let stmt = if !self.strict && self.current == Token::Keyword(Keyword::Function) {
                     // Annex B: labeled function declaration in sloppy mode (not generators)
                     let fdecl = self.parse_function_declaration()?;
-                    if let Statement::FunctionDeclaration(ref f) = fdecl {
-                        if f.is_generator {
-                            self.labels.pop();
-                            return Err(self.error(
-                                "Generators can only be declared at the top level or inside a block",
-                            ));
-                        }
+                    if let Statement::FunctionDeclaration(ref f) = fdecl
+                        && f.is_generator
+                    {
+                        self.labels.pop();
+                        return Err(self.error(
+                            "Generators can only be declared at the top level or inside a block",
+                        ));
                     }
                     fdecl
                 } else {
@@ -299,12 +299,10 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        if is_sloppy_regular_func {
-            if let Some(fns) = func_decl_names {
-                for name in &new_names {
-                    if !fns.contains(name) {
-                        fns.push(name.clone());
-                    }
+        if is_sloppy_regular_func && let Some(fns) = func_decl_names {
+            for name in &new_names {
+                if !fns.contains(name) {
+                    fns.push(name.clone());
                 }
             }
         }
@@ -631,10 +629,10 @@ impl<'a> Parser<'a> {
                 if self.advance().is_ok()
                     && !self.prev_line_terminator
                     && matches!(&self.current, Token::Keyword(Keyword::Of))
+                    && self.advance().is_ok()
+                    && self.current == Token::Assign
                 {
-                    if self.advance().is_ok() && self.current == Token::Assign {
-                        result = true;
-                    }
+                    result = true;
                 }
                 self.current = saved_current;
                 self.prev_line_terminator = saved_lt;
@@ -1200,23 +1198,21 @@ impl<'a> Parser<'a> {
         self.eat(&Token::RightParen)?;
         let body = self.parse_iteration_body()?;
         // §14.7.4.2: BoundNames of LexicalDeclaration must not overlap VarDeclaredNames of Statement
-        if let Some(ForInit::Variable(ref vd)) = init {
-            if matches!(
+        if let Some(ForInit::Variable(ref vd)) = init
+            && matches!(
                 vd.kind,
                 VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
-            ) {
-                let mut bound = Vec::new();
-                for d in &vd.declarations {
-                    Self::bound_names_from_pattern(&d.pattern, &mut bound);
-                }
-                let mut var_names = Vec::new();
-                Self::collect_var_declared_names(&body, &mut var_names);
-                for vn in &var_names {
-                    if bound.contains(vn) {
-                        return Err(
-                            self.error(&format!("Identifier '{vn}' has already been declared"))
-                        );
-                    }
+            )
+        {
+            let mut bound = Vec::new();
+            for d in &vd.declarations {
+                Self::bound_names_from_pattern(&d.pattern, &mut bound);
+            }
+            let mut var_names = Vec::new();
+            Self::collect_var_declared_names(&body, &mut var_names);
+            for vn in &var_names {
+                if bound.contains(vn) {
+                    return Err(self.error(format!("Identifier '{vn}' has already been declared")));
                 }
             }
         }

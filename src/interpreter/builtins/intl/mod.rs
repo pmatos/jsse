@@ -458,15 +458,15 @@ impl Interpreter {
         }
 
         // Check if locales is an Intl.Locale object itself (treat as single-element list)
-        if let JsValue::Object(o) = locales {
-            if let Some(obj) = self.get_object(o.id) {
-                let b = obj.borrow();
-                if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
-                    let tag_clone = tag.clone();
-                    drop(b);
-                    seen.push(tag_clone);
-                    return Ok(seen);
-                }
+        if let JsValue::Object(o) = locales
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let b = obj.borrow();
+            if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
+                let tag_clone = tag.clone();
+                drop(b);
+                seen.push(tag_clone);
+                return Ok(seen);
             }
         }
 
@@ -487,10 +487,7 @@ impl Interpreter {
         };
 
         // Step 5: Let len be ? ToLength(? Get(O, "length")).
-        let len_num = match self.to_number_value(&len_val) {
-            Ok(n) => n,
-            Err(e) => return Err(e),
-        };
+        let len_num = self.to_number_value(&len_val)?;
         let len = if len_num.is_nan() || len_num <= 0.0 {
             0u64
         } else if len_num.is_infinite() {
@@ -808,7 +805,7 @@ impl Interpreter {
                 Completion::Throw(e) => return Completion::Throw(e),
                 _ => return Completion::Throw(self.create_type_error("format not found")),
             };
-            self.call_function(&format_fn, &JsValue::Undefined, &[value.clone()])
+            self.call_function(&format_fn, &JsValue::Undefined, std::slice::from_ref(value))
         } else {
             Completion::Throw(self.create_type_error("NumberFormat is not an object"))
         }

@@ -14,10 +14,10 @@ fn extract_unicode_keyword(locale: &IcuLocale, key_str: &str) -> Option<String> 
 }
 
 fn set_unicode_keyword(locale: &mut IcuLocale, key_str: &str, value_str: &str) {
-    if let Ok(key) = key_str.parse::<Key>() {
-        if let Ok(val) = value_str.parse::<Value>() {
-            locale.extensions.unicode.keywords.set(key, val);
-        }
+    if let Ok(key) = key_str.parse::<Key>()
+        && let Ok(val) = value_str.parse::<Value>()
+    {
+        locale.extensions.unicode.keywords.set(key, val);
     }
 }
 
@@ -30,10 +30,10 @@ fn canonicalize_unicode_keyword_values(locale: &mut IcuLocale) {
             "ethiopic-amete-alem" => Some("ethioaa"),
             _ => None,
         };
-        if let Some(new_val) = canonical {
-            if let Ok(v) = new_val.parse::<Value>() {
-                locale.extensions.unicode.keywords.set(ca_key, v);
-            }
+        if let Some(new_val) = canonical
+            && let Ok(v) = new_val.parse::<Value>()
+        {
+            locale.extensions.unicode.keywords.set(ca_key, v);
         }
     }
 }
@@ -54,7 +54,7 @@ fn is_valid_unicode_type_value(s: &str) -> bool {
     }
     for part in s.split('-') {
         let len = part.len();
-        if len < 3 || len > 8 {
+        if !(3..=8).contains(&len) {
             return false;
         }
         if !part.chars().all(|c| c.is_ascii_alphanumeric()) {
@@ -82,9 +82,8 @@ fn is_valid_variants_value(s: &str) -> bool {
         if !all_alphanum {
             return false;
         }
-        let is_digit_variant =
-            len == 4 && part.chars().next().map_or(false, |c| c.is_ascii_digit());
-        let is_alpha_variant = len >= 5 && len <= 8;
+        let is_digit_variant = len == 4 && part.chars().next().is_some_and(|c| c.is_ascii_digit());
+        let is_alpha_variant = (5..=8).contains(&len);
         if !is_digit_variant && !is_alpha_variant {
             return false;
         }
@@ -92,6 +91,7 @@ fn is_valid_variants_value(s: &str) -> bool {
     true
 }
 
+#[allow(dead_code)]
 fn number_to_weekday_string(n: f64) -> Option<&'static str> {
     match n as i64 {
         0 => Some("sun"),

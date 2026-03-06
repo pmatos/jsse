@@ -90,16 +90,10 @@ fn is_valid_language_code(code: &str) -> bool {
         }
 
         let all_alnum = subtag.chars().all(|c| c.is_ascii_alphanumeric());
-        if (5..=8).contains(&slen) && all_alnum {
-            let lower = subtag.to_ascii_lowercase();
-            if seen_variants.contains(&lower) {
-                return false;
-            }
-            seen_variants.push(lower);
-            idx += 1;
-        } else if slen == 4
-            && subtag.chars().next().map_or(false, |c| c.is_ascii_digit())
-            && subtag[1..].chars().all(|c| c.is_ascii_alphanumeric())
+        if ((5..=8).contains(&slen) && all_alnum)
+            || (slen == 4
+                && subtag.chars().next().is_some_and(|c| c.is_ascii_digit())
+                && subtag[1..].chars().all(|c| c.is_ascii_alphanumeric()))
         {
             let lower = subtag.to_ascii_lowercase();
             if seen_variants.contains(&lower) {
@@ -892,25 +886,25 @@ fn extract_display_names_data(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<DisplayNamesData, JsValue> {
-    if let JsValue::Object(o) = this {
-        if let Some(obj) = interp.get_object(o.id) {
-            let b = obj.borrow();
-            if let Some(IntlData::DisplayNames {
-                ref locale,
-                ref style,
-                ref display_type,
-                ref fallback,
-                ref language_display,
-            }) = b.intl_data
-            {
-                return Ok(DisplayNamesData {
-                    locale: locale.clone(),
-                    style: style.clone(),
-                    display_type: display_type.clone(),
-                    fallback: fallback.clone(),
-                    language_display: language_display.clone(),
-                });
-            }
+    if let JsValue::Object(o) = this
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let b = obj.borrow();
+        if let Some(IntlData::DisplayNames {
+            ref locale,
+            ref style,
+            ref display_type,
+            ref fallback,
+            ref language_display,
+        }) = b.intl_data
+        {
+            return Ok(DisplayNamesData {
+                locale: locale.clone(),
+                style: style.clone(),
+                display_type: display_type.clone(),
+                fallback: fallback.clone(),
+                language_display: language_display.clone(),
+            });
         }
     }
     Err(interp.create_type_error("Intl.DisplayNames method called on incompatible receiver"))
@@ -976,10 +970,10 @@ fn get_display_name_for_code(
             let prefs = (&locale).into();
             if let Ok(formatter) = RegionDisplayNames::try_new(prefs, opts) {
                 let upper = code.to_ascii_uppercase();
-                if let Ok(region) = upper.parse() {
-                    if let Some(name) = formatter.of(region) {
-                        return Ok(Some(name.to_string()));
-                    }
+                if let Ok(region) = upper.parse()
+                    && let Some(name) = formatter.of(region)
+                {
+                    return Ok(Some(name.to_string()));
                 }
             }
             if fallback == "code" {
@@ -1011,10 +1005,10 @@ fn get_display_name_for_code(
                         capitalized.push(c.to_ascii_lowercase());
                     }
                 }
-                if let Ok(script) = capitalized.parse() {
-                    if let Some(name) = formatter.of(script) {
-                        return Ok(Some(name.to_string()));
-                    }
+                if let Ok(script) = capitalized.parse()
+                    && let Some(name) = formatter.of(script)
+                {
+                    return Ok(Some(name.to_string()));
                 }
             }
             if fallback == "code" {
@@ -1341,33 +1335,33 @@ impl Interpreter {
         ));
 
         // Set DisplayNames.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &display_names_ctor {
-            if let Some(obj) = self.get_object(ctor_ref.id) {
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
-                );
+        if let JsValue::Object(ctor_ref) = &display_names_ctor
+            && let Some(obj) = self.get_object(ctor_ref.id)
+        {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val.clone(), false, false, false),
+            );
 
-                // supportedLocalesOf static method
-                let slof = self.create_function(JsFunction::native(
-                    "supportedLocalesOf".to_string(),
-                    1,
-                    |interp, _this, args| {
-                        let locales = args.first().unwrap_or(&JsValue::Undefined);
-                        let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                        let requested = match interp.intl_canonicalize_locale_list(locales) {
-                            Ok(list) => list,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match interp.intl_supported_locales(&requested, &options) {
-                            Ok(v) => Completion::Normal(v),
-                            Err(e) => Completion::Throw(e),
-                        }
-                    },
-                ));
-                obj.borrow_mut()
-                    .insert_builtin("supportedLocalesOf".to_string(), slof);
-            }
+            // supportedLocalesOf static method
+            let slof = self.create_function(JsFunction::native(
+                "supportedLocalesOf".to_string(),
+                1,
+                |interp, _this, args| {
+                    let locales = args.first().unwrap_or(&JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let requested = match interp.intl_canonicalize_locale_list(locales) {
+                        Ok(list) => list,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    match interp.intl_supported_locales(&requested, &options) {
+                        Ok(v) => Completion::Normal(v),
+                        Err(e) => Completion::Throw(e),
+                    }
+                },
+            ));
+            obj.borrow_mut()
+                .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype

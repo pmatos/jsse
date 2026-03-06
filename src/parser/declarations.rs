@@ -249,7 +249,7 @@ impl<'a> Parser<'a> {
         }
         if body_strict {
             if name == "eval" || name == "arguments" {
-                return Err(self.error(&format!(
+                return Err(self.error(format!(
                     "'{name}' is not allowed as a function name in strict mode"
                 )));
             }
@@ -1248,16 +1248,16 @@ impl<'a> Parser<'a> {
 
             if in_directive_prologue {
                 if Self::is_string_literal_statement(&stmt) {
-                    if let Some(directive) = self.is_directive_prologue(&stmt) {
-                        if directive == "use strict" {
-                            if prologue_had_legacy_octal {
-                                return Err(self.error(
-                                    "Octal escape sequences are not allowed in strict mode",
-                                ));
-                            }
-                            self.set_strict(true);
-                            has_use_strict_directive = true;
+                    if let Some(directive) = self.is_directive_prologue(&stmt)
+                        && directive == "use strict"
+                    {
+                        if prologue_had_legacy_octal {
+                            return Err(
+                                self.error("Octal escape sequences are not allowed in strict mode")
+                            );
                         }
+                        self.set_strict(true);
+                        has_use_strict_directive = true;
                     }
                     if self.last_string_literal_has_legacy_octal {
                         prologue_had_legacy_octal = true;

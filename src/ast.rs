@@ -465,6 +465,7 @@ impl Expression {
     }
 }
 
+#[allow(dead_code)]
 pub fn utf16_eq(code_units: &[u16], s: &str) -> bool {
     let expected: Vec<u16> = s.encode_utf16().collect();
     code_units == expected.as_slice()

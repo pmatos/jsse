@@ -869,7 +869,7 @@ impl Interpreter {
                             }
                             let is_proxy = interp
                                 .get_object(array_id)
-                                .map_or(false, |o| o.borrow().is_proxy());
+                                .is_some_and(|o| o.borrow().is_proxy());
                             if is_proxy {
                                 let arr_val =
                                     JsValue::Object(crate::types::JsObject { id: array_id });
@@ -965,7 +965,7 @@ impl Interpreter {
                                     let has_accessor = borrowed
                                         .properties
                                         .get(&idx_str)
-                                        .map_or(false, |d| d.get.is_some());
+                                        .is_some_and(|d| d.get.is_some());
                                     let fast_val = if !has_accessor {
                                         borrowed
                                             .array_elements
@@ -1293,10 +1293,10 @@ impl Interpreter {
             },
         ));
         // Root the wrapped next_fn so GC can trace it
-        if let JsValue::Object(o) = &guarded_next {
-            if let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut().gc_native_roots = Some(vec![next_fn_root]);
-            }
+        if let JsValue::Object(o) = &guarded_next
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut().gc_native_roots = Some(vec![next_fn_root]);
         }
 
         let state_ret = state.clone();
@@ -1328,10 +1328,10 @@ impl Interpreter {
             },
         ));
         // Root the wrapped return_fn so GC can trace it
-        if let JsValue::Object(o) = &guarded_return {
-            if let Some(obj) = self.get_object(o.id) {
-                obj.borrow_mut().gc_native_roots = Some(vec![return_fn_root]);
-            }
+        if let JsValue::Object(o) = &guarded_return
+            && let Some(obj) = self.get_object(o.id)
+        {
+            obj.borrow_mut().gc_native_roots = Some(vec![return_fn_root]);
         }
 
         let obj = self.create_object();
@@ -1368,10 +1368,10 @@ impl Interpreter {
     }
 
     fn set_helper_gc_roots(&mut self, helper: &JsValue, roots: Vec<JsValue>) {
-        if let JsValue::Object(ho) = helper {
-            if let Some(obj) = self.get_object(ho.id) {
-                obj.borrow_mut().gc_native_roots = Some(roots);
-            }
+        if let JsValue::Object(ho) = helper
+            && let Some(obj) = self.get_object(ho.id)
+        {
+            obj.borrow_mut().gc_native_roots = Some(roots);
         }
     }
 

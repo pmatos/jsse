@@ -1274,19 +1274,18 @@ impl Interpreter {
                         }
                     }
                 };
-                if interp.new_target.is_some() {
-                    if let JsValue::Object(o) = this
-                        && let Some(obj) = interp.get_object(o.id)
+                if interp.new_target.is_some()
+                    && let JsValue::Object(o) = this
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let proto = match interp
+                        .get_prototype_from_new_target_realm(|realm| realm.string_prototype.clone())
                     {
-                        let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                            realm.string_prototype.clone()
-                        }) {
-                            Ok(p) => p,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        if let Some(proto_rc) = proto {
-                            obj.borrow_mut().prototype = Some(proto_rc);
-                        }
+                        Ok(p) => p,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    if let Some(proto_rc) = proto {
+                        obj.borrow_mut().prototype = Some(proto_rc);
                     }
                 }
                 if let JsValue::Object(o) = this
@@ -1985,9 +1984,9 @@ impl Interpreter {
                 let x = args.first().map(to_number).unwrap_or(f64::NAN);
                 let result = if x.is_nan() || x.is_infinite() || x == 0.0 {
                     x
-                } else if x >= -0.5 && x < 0.0 {
+                } else if (-0.5..0.0).contains(&x) {
                     -0.0_f64
-                } else if x >= 0.0 && x < 0.5 {
+                } else if (0.0..0.5).contains(&x) {
                     0.0_f64
                 } else if x.fract() == 0.0 {
                     x
@@ -2960,10 +2959,10 @@ impl Interpreter {
                     .borrow()
                     .get("Function")
                     .unwrap_or(JsValue::Undefined);
-                if let JsValue::Object(fc) = &function_ctor {
-                    if let Some(fc_obj) = self.get_object(fc.id) {
-                        af.borrow_mut().prototype = Some(fc_obj.clone());
-                    }
+                if let JsValue::Object(fc) = &function_ctor
+                    && let Some(fc_obj) = self.get_object(fc.id)
+                {
+                    af.borrow_mut().prototype = Some(fc_obj.clone());
                 }
                 let proto_id = af_proto.borrow().id.unwrap();
                 // Set AsyncFunction.prototype
@@ -3092,10 +3091,10 @@ impl Interpreter {
                     .borrow()
                     .get("Function")
                     .unwrap_or(JsValue::Undefined);
-                if let JsValue::Object(fc) = &function_ctor {
-                    if let Some(fc_obj) = self.get_object(fc.id) {
-                        gf.borrow_mut().prototype = Some(fc_obj.clone());
-                    }
+                if let JsValue::Object(fc) = &function_ctor
+                    && let Some(fc_obj) = self.get_object(fc.id)
+                {
+                    gf.borrow_mut().prototype = Some(fc_obj.clone());
                 }
                 let proto_id = gf_proto.borrow().id.unwrap();
                 // Set GeneratorFunction.prototype
@@ -3226,10 +3225,10 @@ impl Interpreter {
                     .borrow()
                     .get("Function")
                     .unwrap_or(JsValue::Undefined);
-                if let JsValue::Object(fc) = &function_ctor {
-                    if let Some(fc_obj) = self.get_object(fc.id) {
-                        agf.borrow_mut().prototype = Some(fc_obj.clone());
-                    }
+                if let JsValue::Object(fc) = &function_ctor
+                    && let Some(fc_obj) = self.get_object(fc.id)
+                {
+                    agf.borrow_mut().prototype = Some(fc_obj.clone());
                 }
                 let proto_id = agf_proto.borrow().id.unwrap();
                 // Set AsyncGeneratorFunction.prototype
@@ -3520,7 +3519,7 @@ impl Interpreter {
                                 );
                             }
                             let cp = next_cp as i64;
-                            if cp < 0 || cp > 0x10FFFF {
+                            if !(0..=0x10FFFF).contains(&cp) {
                                 return Completion::Throw(
                                     interp.create_range_error(&format!("Invalid code point {cp}")),
                                 );
@@ -4030,12 +4029,8 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        loop {
-                            let v_id = if let JsValue::Object(ref vo) = v {
-                                vo.id
-                            } else {
-                                break;
-                            };
+                        while let JsValue::Object(ref vo) = v {
+                            let v_id = vo.id;
                             // Use proxy-aware [[GetPrototypeOf]]
                             let proto = if let Some(obj) = interp.get_object(v_id) {
                                 if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
@@ -4058,10 +4053,10 @@ impl Interpreter {
                             if matches!(proto, JsValue::Null) {
                                 break;
                             }
-                            if let (JsValue::Object(po), JsValue::Object(oo)) = (&proto, &o) {
-                                if po.id == oo.id {
-                                    return Completion::Normal(JsValue::Boolean(true));
-                                }
+                            if let (JsValue::Object(po), JsValue::Object(oo)) = (&proto, &o)
+                                && po.id == oo.id
+                            {
+                                return Completion::Normal(JsValue::Boolean(true));
                             }
                             v = proto;
                         }
@@ -4115,11 +4110,10 @@ impl Interpreter {
                                     Ok(false) => return Completion::Throw(interp.create_type_error("Cannot define property")),
                                     Err(e) => return Completion::Throw(e),
                                 }
-                            } else if let Some(obj) = interp.get_object(obj_ref.id) {
-                                if !obj.borrow_mut().define_own_property(key, desc) {
+                            } else if let Some(obj) = interp.get_object(obj_ref.id)
+                                && !obj.borrow_mut().define_own_property(key, desc) {
                                     return Completion::Throw(interp.create_type_error("Cannot define property"));
                                 }
-                            }
                         }
                         Completion::Normal(JsValue::Undefined)
                     },
@@ -4169,11 +4163,10 @@ impl Interpreter {
                                     Ok(false) => return Completion::Throw(interp.create_type_error("Cannot define property")),
                                     Err(e) => return Completion::Throw(e),
                                 }
-                            } else if let Some(obj) = interp.get_object(obj_ref.id) {
-                                if !obj.borrow_mut().define_own_property(key, desc) {
+                            } else if let Some(obj) = interp.get_object(obj_ref.id)
+                                && !obj.borrow_mut().define_own_property(key, desc) {
                                     return Completion::Throw(interp.create_type_error("Cannot define property"));
                                 }
-                            }
                         }
                         Completion::Normal(JsValue::Undefined)
                     },
@@ -4197,12 +4190,8 @@ impl Interpreter {
                             Ok(k) => k,
                             Err(e) => return Completion::Throw(e),
                         };
-                        loop {
-                            let obj_id = if let JsValue::Object(ref o) = current {
-                                o.id
-                            } else {
-                                break;
-                            };
+                        while let JsValue::Object(ref o) = current {
+                            let obj_id = o.id;
                             // Step 4a: O.[[GetOwnProperty]](key) (proxy-aware)
                             let desc_val =
                                 match interp.proxy_get_own_property_descriptor(obj_id, &key) {
@@ -4210,10 +4199,10 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 };
                             if !matches!(desc_val, JsValue::Undefined) {
-                                if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
-                                    if let Some(g) = desc.get {
-                                        return Completion::Normal(g);
-                                    }
+                                if let Ok(desc) = interp.to_property_descriptor(&desc_val)
+                                    && let Some(g) = desc.get
+                                {
+                                    return Completion::Normal(g);
                                 }
                                 return Completion::Normal(JsValue::Undefined);
                             }
@@ -4268,22 +4257,18 @@ impl Interpreter {
                             Ok(k) => k,
                             Err(e) => return Completion::Throw(e),
                         };
-                        loop {
-                            let obj_id = if let JsValue::Object(ref o) = current {
-                                o.id
-                            } else {
-                                break;
-                            };
+                        while let JsValue::Object(ref o) = current {
+                            let obj_id = o.id;
                             let desc_val =
                                 match interp.proxy_get_own_property_descriptor(obj_id, &key) {
                                     Ok(v) => v,
                                     Err(e) => return Completion::Throw(e),
                                 };
                             if !matches!(desc_val, JsValue::Undefined) {
-                                if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
-                                    if let Some(s) = desc.set {
-                                        return Completion::Normal(s);
-                                    }
+                                if let Ok(desc) = interp.to_property_descriptor(&desc_val)
+                                    && let Some(s) = desc.set
+                                {
+                                    return Completion::Normal(s);
                                 }
                                 return Completion::Normal(JsValue::Undefined);
                             }
@@ -4474,12 +4459,11 @@ impl Interpreter {
                     {
                         // Deferred namespace: trigger evaluation on [[DefineOwnProperty]]
                         {
-                            let is_deferred_ns = obj.borrow().module_namespace.as_ref().map_or(false, |ns| ns.deferred);
-                            if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(&key, true) {
-                                if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
+                            let is_deferred_ns = obj.borrow().module_namespace.as_ref().is_some_and(|ns| ns.deferred);
+                            if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(&key, true)
+                                && let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
                                     return Completion::Throw(e);
                                 }
-                            }
                         }
                         let obj = interp.get_object(o.id).unwrap();
                         // Proxy defineProperty trap
@@ -4589,10 +4573,9 @@ impl Interpreter {
                             });
                             if deferred_ns == Some(true)
                                 && !Interpreter::is_symbol_like_namespace_key(&key, true)
+                                && let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id)
                             {
-                                if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
-                                    return Completion::Throw(e);
-                                }
+                                return Completion::Throw(e);
                             }
                         }
                         // Proxy getOwnPropertyDescriptor trap
@@ -4682,13 +4665,12 @@ impl Interpreter {
                             .get_object(obj_id)
                             .map(|ob| !ob.borrow().is_proxy())
                             .unwrap_or(false)
+                            && let Some(obj) = interp.get_object(obj_id)
                         {
-                            if let Some(obj) = interp.get_object(obj_id) {
-                                let b = obj.borrow();
-                                if let Some(JsValue::String(ref s)) = b.primitive_value {
-                                    for i in 0..s.len() {
-                                        extra_str_keys.push(i.to_string());
-                                    }
+                            let b = obj.borrow();
+                            if let Some(JsValue::String(ref s)) = b.primitive_value {
+                                for i in 0..s.len() {
+                                    extra_str_keys.push(i.to_string());
                                 }
                             }
                         }
@@ -4745,10 +4727,10 @@ impl Interpreter {
                                 if matches!(desc_val, JsValue::Undefined) {
                                     continue;
                                 }
-                                if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
-                                    if desc.enumerable != Some(false) {
-                                        enum_keys.push(kv.clone());
-                                    }
+                                if let Ok(desc) = interp.to_property_descriptor(&desc_val)
+                                    && desc.enumerable != Some(false)
+                                {
+                                    enum_keys.push(kv.clone());
                                 }
                             }
                         }
@@ -4846,11 +4828,11 @@ impl Interpreter {
                                     let has_elements = b
                                         .typed_array_info
                                         .as_ref()
-                                        .map_or(false, |ta| ta.array_length > 0);
+                                        .is_some_and(|ta| ta.array_length > 0);
                                     let is_resizable = b
                                         .view_buffer_object_id
                                         .and_then(|buf_id| interp.get_object(buf_id))
-                                        .map_or(false, |buf| {
+                                        .is_some_and(|buf| {
                                             buf.borrow().arraybuffer_max_byte_length.is_some()
                                         });
                                     if has_elements || is_resizable {
@@ -5002,10 +4984,10 @@ impl Interpreter {
                                 if matches!(desc_check, JsValue::Undefined) {
                                     continue;
                                 }
-                                if let Ok(chk) = interp.to_property_descriptor(&desc_check) {
-                                    if chk.enumerable == Some(false) {
-                                        continue;
-                                    }
+                                if let Ok(chk) = interp.to_property_descriptor(&desc_check)
+                                    && chk.enumerable == Some(false)
+                                {
+                                    continue;
                                 }
                                 let prop_desc_val =
                                     match interp.get_object_property(d_id, &key, &props_obj_val) {
@@ -5067,13 +5049,12 @@ impl Interpreter {
                                 .get_object(obj_id)
                                 .map(|ob| !ob.borrow().is_proxy())
                                 .unwrap_or(false)
+                                && let Some(obj) = interp.get_object(obj_id)
                             {
-                                if let Some(obj) = interp.get_object(obj_id) {
-                                    let b = obj.borrow();
-                                    if let Some(JsValue::String(ref s)) = b.primitive_value {
-                                        for i in 0..s.len() {
-                                            extra_str_keys.push(i.to_string());
-                                        }
+                                let b = obj.borrow();
+                                if let Some(JsValue::String(ref s)) = b.primitive_value {
+                                    for i in 0..s.len() {
+                                        extra_str_keys.push(i.to_string());
                                     }
                                 }
                             }
@@ -5173,13 +5154,12 @@ impl Interpreter {
                             .get_object(obj_id)
                             .map(|ob| !ob.borrow().is_proxy())
                             .unwrap_or(false)
+                            && let Some(obj) = interp.get_object(obj_id)
                         {
-                            if let Some(obj) = interp.get_object(obj_id) {
-                                let b = obj.borrow();
-                                if let Some(JsValue::String(ref s)) = b.primitive_value {
-                                    for i in 0..s.len() {
-                                        extra_str_keys.push(i.to_string());
-                                    }
+                            let b = obj.borrow();
+                            if let Some(JsValue::String(ref s)) = b.primitive_value {
+                                for i in 0..s.len() {
+                                    extra_str_keys.push(i.to_string());
                                 }
                             }
                         }
@@ -5522,11 +5502,11 @@ impl Interpreter {
                                 .borrow()
                                 .module_namespace
                                 .as_ref()
-                                .map_or(false, |ns| ns.deferred);
-                            if is_deferred_ns {
-                                if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
-                                    return Completion::Throw(e);
-                                }
+                                .is_some_and(|ns| ns.deferred);
+                            if is_deferred_ns
+                                && let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id)
+                            {
+                                return Completion::Throw(e);
                             }
                         }
                         let obj = interp.get_object(o.id).unwrap();
@@ -5580,11 +5560,10 @@ impl Interpreter {
                         let is_string_wrapper =
                             matches!(b.primitive_value, Some(JsValue::String(_)));
                         let mut names: Vec<JsValue> = Vec::new();
-                        if is_string_wrapper {
-                            if let Some(JsValue::String(ref s)) = b.primitive_value {
-                                for i in 0..s.len() {
-                                    names.push(JsValue::String(JsString::from_str(&i.to_string())));
-                                }
+                        if is_string_wrapper && let Some(JsValue::String(ref s)) = b.primitive_value
+                        {
+                            for i in 0..s.len() {
+                                names.push(JsValue::String(JsString::from_str(&i.to_string())));
                             }
                         }
                         // Collect and sort non-symbol keys from property_order
@@ -5663,12 +5642,11 @@ impl Interpreter {
                                 .borrow()
                                 .module_namespace
                                 .as_ref()
-                                .map_or(false, |ns| ns.deferred);
-                            if is_deferred_ns {
-                                if let Err(e) = interp.ensure_deferred_namespace_evaluation(obj_id)
-                                {
-                                    return Completion::Throw(e);
-                                }
+                                .is_some_and(|ns| ns.deferred);
+                            if is_deferred_ns
+                                && let Err(e) = interp.ensure_deferred_namespace_evaluation(obj_id)
+                            {
+                                return Completion::Throw(e);
                             }
                         }
                         // Use [[OwnPropertyKeys]] for proxy support
@@ -5802,10 +5780,10 @@ impl Interpreter {
                                 Ok(false) => {}
                                 Err(e) => return Completion::Throw(e),
                             }
-                        } else if let Some(obj) = interp.get_object(obj_id) {
-                            if obj.borrow().extensible {
-                                return Completion::Normal(JsValue::Boolean(false));
-                            }
+                        } else if let Some(obj) = interp.get_object(obj_id)
+                            && obj.borrow().extensible
+                        {
+                            return Completion::Normal(JsValue::Boolean(false));
                         }
                         // Get all own keys via proxy_own_keys
                         let all_keys = match interp.proxy_own_keys(obj_id) {
@@ -5862,10 +5840,10 @@ impl Interpreter {
                                 Ok(false) => {}
                                 Err(e) => return Completion::Throw(e),
                             }
-                        } else if let Some(obj) = interp.get_object(obj_id) {
-                            if obj.borrow().extensible {
-                                return Completion::Normal(JsValue::Boolean(false));
-                            }
+                        } else if let Some(obj) = interp.get_object(obj_id)
+                            && obj.borrow().extensible
+                        {
+                            return Completion::Normal(JsValue::Boolean(false));
                         }
                         let all_keys = match interp.proxy_own_keys(obj_id) {
                             Ok(k) => k,
@@ -5882,10 +5860,10 @@ impl Interpreter {
                                     Ok(v) => v,
                                     Err(e) => return Completion::Throw(e),
                                 };
-                            if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
-                                if desc.configurable != Some(false) {
-                                    return Completion::Normal(JsValue::Boolean(false));
-                                }
+                            if let Ok(desc) = interp.to_property_descriptor(&desc_val)
+                                && desc.configurable != Some(false)
+                            {
+                                return Completion::Normal(JsValue::Boolean(false));
                             }
                         }
                         return Completion::Normal(JsValue::Boolean(true));
@@ -6159,9 +6137,8 @@ impl Interpreter {
                             };
                             if matches!(desc_val, JsValue::Undefined) { continue; }
                             // Only process enumerable properties (spec: ObjectDefineProperties)
-                            if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
-                                if desc.enumerable == Some(false) { continue; }
-                            }
+                            if let Ok(desc) = interp.to_property_descriptor(&desc_val)
+                                && desc.enumerable == Some(false) { continue; }
                             let prop_desc_val = match interp.get_object_property(d_id, &key, &descs) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
@@ -6237,13 +6214,11 @@ impl Interpreter {
                                 matches!(ob.borrow().primitive_value, Some(JsValue::String(_)))
                             })
                             .unwrap_or(false);
-                        if is_string_wrapper {
-                            if let Some(obj) = interp.get_object(obj_id) {
-                                let b = obj.borrow();
-                                if let Some(JsValue::String(ref s)) = b.primitive_value {
-                                    for i in 0..s.code_units.len() {
-                                        keys.push(i.to_string());
-                                    }
+                        if is_string_wrapper && let Some(obj) = interp.get_object(obj_id) {
+                            let b = obj.borrow();
+                            if let Some(JsValue::String(ref s)) = b.primitive_value {
+                                for i in 0..s.code_units.len() {
+                                    keys.push(i.to_string());
                                 }
                             }
                         }
@@ -7203,12 +7178,12 @@ impl Interpreter {
                             .borrow()
                             .module_namespace
                             .as_ref()
-                            .map_or(false, |ns| ns.deferred);
-                        if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(&key, true)
+                            .is_some_and(|ns| ns.deferred);
+                        if is_deferred_ns
+                            && !Interpreter::is_symbol_like_namespace_key(&key, true)
+                            && let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id)
                         {
-                            if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
-                                return Completion::Throw(e);
-                            }
+                            return Completion::Throw(e);
                         }
                     }
                     let obj = interp.get_object(o.id).unwrap();
@@ -7370,10 +7345,9 @@ impl Interpreter {
                             });
                             if deferred_ns == Some(true)
                                 && !Interpreter::is_symbol_like_namespace_key(&key, true)
+                                && let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id)
                             {
-                                if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
-                                    return Completion::Throw(e);
-                                }
+                                return Completion::Throw(e);
                             }
                         }
                         if let Some(obj) = interp.get_object(o.id)
@@ -7557,11 +7531,11 @@ impl Interpreter {
                             .borrow()
                             .module_namespace
                             .as_ref()
-                            .map_or(false, |ns| ns.deferred);
-                        if is_deferred_ns {
-                            if let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
-                                return Completion::Throw(e);
-                            }
+                            .is_some_and(|ns| ns.deferred);
+                        if is_deferred_ns
+                            && let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id)
+                        {
+                            return Completion::Throw(e);
                         }
                     }
                     let obj = interp.get_object(o.id).unwrap();
@@ -7757,15 +7731,47 @@ impl Interpreter {
                     let ta_info_opt = interp
                         .get_object(o.id)
                         .and_then(|obj| obj.borrow().typed_array_info.clone());
-                    if let Some(ta_info) = ta_info_opt {
-                        if let Some(index) = canonical_numeric_index_string(&key) {
-                            let same = if let JsValue::Object(ref r) = receiver {
-                                r.id == o.id
+                    if let Some(ta_info) = ta_info_opt
+                        && let Some(index) = canonical_numeric_index_string(&key)
+                    {
+                        let same = if let JsValue::Object(ref r) = receiver {
+                            r.id == o.id
+                        } else {
+                            false
+                        };
+                        if same {
+                            let is_bigint = ta_info.kind.is_bigint();
+                            let num_val = if is_bigint {
+                                match interp.to_bigint_value(&value) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
+                                }
                             } else {
-                                false
+                                JsValue::Number(match interp.to_number_value(&value) {
+                                    Ok(n) => n,
+                                    Err(e) => return Completion::Throw(e),
+                                })
                             };
-                            if same {
-                                let is_bigint = ta_info.kind.is_bigint();
+                            if is_valid_integer_index(&ta_info, index) {
+                                typed_array_set_index(&ta_info, index as usize, &num_val);
+                            }
+                            return Completion::Normal(JsValue::Boolean(true));
+                        }
+                        // Not same: if index is out of bounds in target, silently succeed
+                        if !is_valid_integer_index(&ta_info, index) {
+                            return Completion::Normal(JsValue::Boolean(true));
+                        }
+                        // Index is in bounds in target: OrdinarySet to receiver
+                        if let JsValue::Object(ref r) = receiver {
+                            let recv_ta_opt = interp
+                                .get_object(r.id)
+                                .and_then(|obj| obj.borrow().typed_array_info.clone());
+                            if let Some(recv_ta) = recv_ta_opt {
+                                // Receiver is TypedArray: IntegerIndexedElementSet
+                                if !is_valid_integer_index(&recv_ta, index) {
+                                    return Completion::Normal(JsValue::Boolean(false));
+                                }
+                                let is_bigint = recv_ta.kind.is_bigint();
                                 let num_val = if is_bigint {
                                     match interp.to_bigint_value(&value) {
                                         Ok(v) => v,
@@ -7777,68 +7783,36 @@ impl Interpreter {
                                         Err(e) => return Completion::Throw(e),
                                     })
                                 };
-                                if is_valid_integer_index(&ta_info, index) {
-                                    typed_array_set_index(&ta_info, index as usize, &num_val);
-                                }
+                                typed_array_set_index(&recv_ta, index as usize, &num_val);
                                 return Completion::Normal(JsValue::Boolean(true));
-                            }
-                            // Not same: if index is out of bounds in target, silently succeed
-                            if !is_valid_integer_index(&ta_info, index) {
-                                return Completion::Normal(JsValue::Boolean(true));
-                            }
-                            // Index is in bounds in target: OrdinarySet to receiver
-                            if let JsValue::Object(ref r) = receiver {
-                                let recv_ta_opt = interp
-                                    .get_object(r.id)
-                                    .and_then(|obj| obj.borrow().typed_array_info.clone());
-                                if let Some(recv_ta) = recv_ta_opt {
-                                    // Receiver is TypedArray: IntegerIndexedElementSet
-                                    if !is_valid_integer_index(&recv_ta, index) {
+                            } else if let Some(recv_obj) = interp.get_object(r.id) {
+                                // Non-TypedArray receiver: create plain property, no coercion
+                                let existing = recv_obj.borrow().get_own_property(&key);
+                                if let Some(ref ed) = existing {
+                                    if ed.get.is_some() || ed.set.is_some() {
                                         return Completion::Normal(JsValue::Boolean(false));
                                     }
-                                    let is_bigint = recv_ta.kind.is_bigint();
-                                    let num_val = if is_bigint {
-                                        match interp.to_bigint_value(&value) {
-                                            Ok(v) => v,
-                                            Err(e) => return Completion::Throw(e),
-                                        }
-                                    } else {
-                                        JsValue::Number(match interp.to_number_value(&value) {
-                                            Ok(n) => n,
-                                            Err(e) => return Completion::Throw(e),
-                                        })
-                                    };
-                                    typed_array_set_index(&recv_ta, index as usize, &num_val);
-                                    return Completion::Normal(JsValue::Boolean(true));
-                                } else if let Some(recv_obj) = interp.get_object(r.id) {
-                                    // Non-TypedArray receiver: create plain property, no coercion
-                                    let existing = recv_obj.borrow().get_own_property(&key);
-                                    if let Some(ref ed) = existing {
-                                        if ed.get.is_some() || ed.set.is_some() {
-                                            return Completion::Normal(JsValue::Boolean(false));
-                                        }
-                                        if ed.writable == Some(false) {
-                                            return Completion::Normal(JsValue::Boolean(false));
-                                        }
-                                        let update_desc = PropertyDescriptor {
-                                            value: Some(value),
-                                            writable: None,
-                                            enumerable: None,
-                                            configurable: None,
-                                            get: None,
-                                            set: None,
-                                        };
-                                        recv_obj.borrow_mut().define_own_property(key, update_desc);
-                                    } else {
-                                        let success =
-                                            recv_obj.borrow_mut().set_property_value(&key, value);
-                                        return Completion::Normal(JsValue::Boolean(success));
+                                    if ed.writable == Some(false) {
+                                        return Completion::Normal(JsValue::Boolean(false));
                                     }
-                                    return Completion::Normal(JsValue::Boolean(true));
+                                    let update_desc = PropertyDescriptor {
+                                        value: Some(value),
+                                        writable: None,
+                                        enumerable: None,
+                                        configurable: None,
+                                        get: None,
+                                        set: None,
+                                    };
+                                    recv_obj.borrow_mut().define_own_property(key, update_desc);
+                                } else {
+                                    let success =
+                                        recv_obj.borrow_mut().set_property_value(&key, value);
+                                    return Completion::Normal(JsValue::Boolean(success));
                                 }
+                                return Completion::Normal(JsValue::Boolean(true));
                             }
-                            return Completion::Normal(JsValue::Boolean(false));
                         }
+                        return Completion::Normal(JsValue::Boolean(false));
                     }
                 }
                 // OrdinarySet: find ownDesc on target, walking prototype chain
@@ -7859,43 +7833,41 @@ impl Interpreter {
                             // TypedArray [[Set]] §10.4.5.5 via prototype chain
                             {
                                 let borrow = cur_obj.borrow();
-                                if let Some(ref ta) = borrow.typed_array_info {
-                                    if let Some(index) = canonical_numeric_index_string(&key) {
-                                        let same = if let JsValue::Object(ref r) = receiver {
-                                            r.id == cid
-                                        } else {
-                                            false
-                                        };
-                                        if same {
-                                            let is_bigint = ta.kind.is_bigint();
-                                            let ta_clone = ta.clone();
-                                            drop(borrow);
-                                            let num_val = if is_bigint {
-                                                match interp.to_bigint_value(&value) {
-                                                    Ok(v) => v,
-                                                    Err(e) => return Completion::Throw(e),
-                                                }
-                                            } else {
-                                                JsValue::Number(
-                                                    match interp.to_number_value(&value) {
-                                                        Ok(n) => n,
-                                                        Err(e) => return Completion::Throw(e),
-                                                    },
-                                                )
-                                            };
-                                            if is_valid_integer_index(&ta_clone, index) {
-                                                typed_array_set_index(
-                                                    &ta_clone,
-                                                    index as usize,
-                                                    &num_val,
-                                                );
+                                if let Some(ref ta) = borrow.typed_array_info
+                                    && let Some(index) = canonical_numeric_index_string(&key)
+                                {
+                                    let same = if let JsValue::Object(ref r) = receiver {
+                                        r.id == cid
+                                    } else {
+                                        false
+                                    };
+                                    if same {
+                                        let is_bigint = ta.kind.is_bigint();
+                                        let ta_clone = ta.clone();
+                                        drop(borrow);
+                                        let num_val = if is_bigint {
+                                            match interp.to_bigint_value(&value) {
+                                                Ok(v) => v,
+                                                Err(e) => return Completion::Throw(e),
                                             }
-                                            return Completion::Normal(JsValue::Boolean(true));
-                                        } else if !is_valid_integer_index(ta, index) {
-                                            return Completion::Normal(JsValue::Boolean(true));
+                                        } else {
+                                            JsValue::Number(match interp.to_number_value(&value) {
+                                                Ok(n) => n,
+                                                Err(e) => return Completion::Throw(e),
+                                            })
+                                        };
+                                        if is_valid_integer_index(&ta_clone, index) {
+                                            typed_array_set_index(
+                                                &ta_clone,
+                                                index as usize,
+                                                &num_val,
+                                            );
                                         }
-                                        // Valid index, not same: fall through to get_own_property
+                                        return Completion::Normal(JsValue::Boolean(true));
+                                    } else if !is_valid_integer_index(ta, index) {
+                                        return Completion::Normal(JsValue::Boolean(true));
                                     }
+                                    // Valid index, not same: fall through to get_own_property
                                 }
                             }
                             if let Some(d) = cur_obj.borrow().get_own_property(&key) {

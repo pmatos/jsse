@@ -19,11 +19,7 @@ fn compute_segments(input: &[u16], granularity: &str) -> Vec<SegmentInfo> {
                 Some(p) => p,
                 None => return segments,
             };
-            loop {
-                let pos = match iter.next() {
-                    Some(p) => p,
-                    None => break,
-                };
+            while let Some(pos) = iter.next() {
                 let is_word_like = iter.is_word_like();
                 segments.push(SegmentInfo {
                     segment: input[prev..pos].to_vec(),
@@ -143,16 +139,16 @@ fn extract_segmenter_data(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<(String, String), JsValue> {
-    if let JsValue::Object(o) = this {
-        if let Some(obj) = interp.get_object(o.id) {
-            let b = obj.borrow();
-            if let Some(IntlData::Segmenter {
-                ref locale,
-                ref granularity,
-            }) = b.intl_data
-            {
-                return Ok((locale.clone(), granularity.clone()));
-            }
+    if let JsValue::Object(o) = this
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let b = obj.borrow();
+        if let Some(IntlData::Segmenter {
+            ref locale,
+            ref granularity,
+        }) = b.intl_data
+        {
+            return Ok((locale.clone(), granularity.clone()));
         }
     }
     Err(interp.create_type_error("Intl.Segmenter method called on incompatible receiver"))
@@ -265,9 +261,7 @@ impl Interpreter {
                         };
 
                         // ToInteger: NaN -> 0, -0 -> 0
-                        let idx = if idx.is_nan() {
-                            0.0
-                        } else if idx == 0.0 {
+                        let idx = if idx.is_nan() || idx == 0.0 {
                             0.0
                         } else {
                             idx.trunc()
@@ -310,14 +304,14 @@ impl Interpreter {
                                 drop(b);
 
                                 let mut break_points = Vec::new();
-                                if let Some(JsValue::Object(arr_obj)) = breaks_val {
-                                    if let Some(arr) = interp.get_object(arr_obj.id) {
-                                        let ab = arr.borrow();
-                                        if let Some(elems) = &ab.array_elements {
-                                            for elem in elems {
-                                                if let JsValue::Number(n) = elem {
-                                                    break_points.push(*n as usize);
-                                                }
+                                if let Some(JsValue::Object(arr_obj)) = breaks_val
+                                    && let Some(arr) = interp.get_object(arr_obj.id)
+                                {
+                                    let ab = arr.borrow();
+                                    if let Some(elems) = &ab.array_elements {
+                                        for elem in elems {
+                                            if let JsValue::Number(n) = elem {
+                                                break_points.push(*n as usize);
                                             }
                                         }
                                     }
@@ -414,62 +408,62 @@ impl Interpreter {
                             "next".to_string(),
                             0,
                             |interp, this, _args| {
-                                if let JsValue::Object(o) = this {
-                                    if let Some(obj) = interp.get_object(o.id) {
-                                        let (state, has_word_like) = {
-                                            let b = obj.borrow();
-                                            let hwl = b
-                                                .properties
-                                                .get("[[HasWordLike]]")
-                                                .and_then(|pd| pd.value.as_ref())
-                                                .map(|v| matches!(v, JsValue::Boolean(true)))
-                                                .unwrap_or(false);
-                                            (b.iterator_state.clone(), hwl)
-                                        };
+                                if let JsValue::Object(o) = this
+                                    && let Some(obj) = interp.get_object(o.id)
+                                {
+                                    let (state, has_word_like) = {
+                                        let b = obj.borrow();
+                                        let hwl = b
+                                            .properties
+                                            .get("[[HasWordLike]]")
+                                            .and_then(|pd| pd.value.as_ref())
+                                            .map(|v| matches!(v, JsValue::Boolean(true)))
+                                            .unwrap_or(false);
+                                        (b.iterator_state.clone(), hwl)
+                                    };
 
-                                        if let Some(IteratorState::SegmentIterator {
-                                            ref segments,
-                                            position,
-                                            done,
-                                        }) = state
-                                        {
-                                            if done || position >= segments.len() {
-                                                obj.borrow_mut().iterator_state =
-                                                    Some(IteratorState::SegmentIterator {
-                                                        segments: segments.clone(),
-                                                        position,
-                                                        done: true,
-                                                    });
-                                                return Completion::Normal(
-                                                    interp.create_iter_result_object(
-                                                        JsValue::Undefined,
-                                                        true,
-                                                    ),
-                                                );
-                                            }
-
-                                            let (ref seg, idx, ref inp, wl) = segments[position];
-                                            let is_word_like =
-                                                if has_word_like { Some(wl) } else { None };
-                                            let seg_obj = create_segment_object(
-                                                interp,
-                                                seg,
-                                                idx,
-                                                inp,
-                                                is_word_like,
-                                            );
-
+                                    if let Some(IteratorState::SegmentIterator {
+                                        ref segments,
+                                        position,
+                                        done,
+                                    }) = state
+                                    {
+                                        if done || position >= segments.len() {
                                             obj.borrow_mut().iterator_state =
                                                 Some(IteratorState::SegmentIterator {
                                                     segments: segments.clone(),
-                                                    position: position + 1,
-                                                    done: false,
+                                                    position,
+                                                    done: true,
                                                 });
-
                                             return Completion::Normal(
-                                                interp.create_iter_result_object(seg_obj, false),
+                                                interp.create_iter_result_object(
+                                                    JsValue::Undefined,
+                                                    true,
+                                                ),
                                             );
                                         }
+
+                                        let (ref seg, idx, ref inp, wl) = segments[position];
+                                        let is_word_like =
+                                            if has_word_like { Some(wl) } else { None };
+                                        let seg_obj = create_segment_object(
+                                            interp,
+                                            seg,
+                                            idx,
+                                            inp,
+                                            is_word_like,
+                                        );
+
+                                        obj.borrow_mut().iterator_state =
+                                            Some(IteratorState::SegmentIterator {
+                                                segments: segments.clone(),
+                                                position: position + 1,
+                                                done: false,
+                                            });
+
+                                        return Completion::Normal(
+                                            interp.create_iter_result_object(seg_obj, false),
+                                        );
                                     }
                                 }
                                 Completion::Normal(
@@ -613,33 +607,33 @@ impl Interpreter {
         ));
 
         // Set Segmenter.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &segmenter_ctor {
-            if let Some(obj) = self.get_object(ctor_ref.id) {
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
-                );
+        if let JsValue::Object(ctor_ref) = &segmenter_ctor
+            && let Some(obj) = self.get_object(ctor_ref.id)
+        {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val.clone(), false, false, false),
+            );
 
-                // supportedLocalesOf static method
-                let slof = self.create_function(JsFunction::native(
-                    "supportedLocalesOf".to_string(),
-                    1,
-                    |interp, _this, args| {
-                        let locales = args.first().unwrap_or(&JsValue::Undefined);
-                        let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                        let requested = match interp.intl_canonicalize_locale_list(locales) {
-                            Ok(list) => list,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match interp.intl_supported_locales(&requested, &options) {
-                            Ok(v) => Completion::Normal(v),
-                            Err(e) => Completion::Throw(e),
-                        }
-                    },
-                ));
-                obj.borrow_mut()
-                    .insert_builtin("supportedLocalesOf".to_string(), slof);
-            }
+            // supportedLocalesOf static method
+            let slof = self.create_function(JsFunction::native(
+                "supportedLocalesOf".to_string(),
+                1,
+                |interp, _this, args| {
+                    let locales = args.first().unwrap_or(&JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let requested = match interp.intl_canonicalize_locale_list(locales) {
+                        Ok(list) => list,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    match interp.intl_supported_locales(&requested, &options) {
+                        Ok(v) => Completion::Normal(v),
+                        Err(e) => Completion::Throw(e),
+                    }
+                },
+            ));
+            obj.borrow_mut()
+                .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype

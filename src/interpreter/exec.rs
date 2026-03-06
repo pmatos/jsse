@@ -9,10 +9,8 @@ impl Interpreter {
 
         // §16.1.7 GlobalDeclarationInstantiation: pre-check CanDeclareGlobalFunction
         // and CanDeclareGlobalVar before any hoisting takes place.
-        if is_global {
-            if let Some(err) = self.check_global_declarations(stmts, env) {
-                return err;
-            }
+        if is_global && let Some(err) = self.check_global_declarations(stmts, env) {
+            return err;
         }
 
         for stmt in stmts {
@@ -212,23 +210,20 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Option<Completion> {
         let global_obj = env.borrow().global_object.clone();
-        let global_obj = match global_obj {
-            Some(g) => g,
-            None => return None,
-        };
+        let global_obj = global_obj?;
 
         // §16.1.7 step 3: Check lexical names
         let lex_names = Self::collect_lex_names(stmts);
         for name in &lex_names {
             // Step 3a: If envRec.HasLexicalDeclaration(name) is true, throw SyntaxError
-            if let Some(binding) = env.borrow().bindings.get(name) {
-                if matches!(binding.kind, BindingKind::Let | BindingKind::Const) {
-                    let err = self.create_error(
-                        "SyntaxError",
-                        &format!("Identifier '{}' has already been declared", name),
-                    );
-                    return Some(Completion::Throw(err));
-                }
+            if let Some(binding) = env.borrow().bindings.get(name)
+                && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
+            {
+                let err = self.create_error(
+                    "SyntaxError",
+                    &format!("Identifier '{}' has already been declared", name),
+                );
+                return Some(Completion::Throw(err));
             }
             // Step 3b-d: If HasRestrictedGlobalProperty(name) is true, throw SyntaxError
             // Non-eval var/function declarations create non-configurable global properties,
@@ -246,52 +241,50 @@ impl Interpreter {
         let mut var_names = std::collections::HashSet::new();
         Self::collect_var_names_from_stmts(stmts, &mut var_names);
         for name in &var_names {
-            if let Some(binding) = env.borrow().bindings.get(name) {
-                if matches!(binding.kind, BindingKind::Let | BindingKind::Const) {
-                    let err = self.create_error(
-                        "SyntaxError",
-                        &format!("Identifier '{}' has already been declared", name),
-                    );
-                    return Some(Completion::Throw(err));
-                }
+            if let Some(binding) = env.borrow().bindings.get(name)
+                && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
+            {
+                let err = self.create_error(
+                    "SyntaxError",
+                    &format!("Identifier '{}' has already been declared", name),
+                );
+                return Some(Completion::Throw(err));
             }
         }
 
         // Collect function declaration names (step 10)
         let mut declared_function_names: Vec<String> = Vec::new();
         for stmt in stmts.iter().rev() {
-            if let Some(f) = Self::unwrap_labeled_function(stmt) {
-                if !declared_function_names.contains(&f.name) {
-                    // Step 6 also applies to function decl names
-                    if let Some(binding) = env.borrow().bindings.get(&f.name) {
-                        if matches!(binding.kind, BindingKind::Let | BindingKind::Const) {
-                            let err = self.create_error(
-                                "SyntaxError",
-                                &format!("Identifier '{}' has already been declared", f.name),
-                            );
-                            return Some(Completion::Throw(err));
-                        }
-                    }
-                    if !Self::can_declare_global_function(&global_obj, &f.name) {
-                        let err = self.create_type_error(&format!(
-                            "Cannot declare global function '{}'",
-                            f.name
-                        ));
-                        return Some(Completion::Throw(err));
-                    }
-                    declared_function_names.push(f.name.clone());
+            if let Some(f) = Self::unwrap_labeled_function(stmt)
+                && !declared_function_names.contains(&f.name)
+            {
+                // Step 6 also applies to function decl names
+                if let Some(binding) = env.borrow().bindings.get(&f.name)
+                    && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
+                {
+                    let err = self.create_error(
+                        "SyntaxError",
+                        &format!("Identifier '{}' has already been declared", f.name),
+                    );
+                    return Some(Completion::Throw(err));
                 }
+                if !Self::can_declare_global_function(&global_obj, &f.name) {
+                    let err = self
+                        .create_type_error(&format!("Cannot declare global function '{}'", f.name));
+                    return Some(Completion::Throw(err));
+                }
+                declared_function_names.push(f.name.clone());
             }
         }
 
         // Collect var declaration names (step 12)
         for name in &var_names {
-            if !declared_function_names.contains(name) {
-                if !Self::can_declare_global_var(&global_obj, name) {
-                    let err = self
-                        .create_type_error(&format!("Cannot declare global variable '{}'", name));
-                    return Some(Completion::Throw(err));
-                }
+            if !declared_function_names.contains(name)
+                && !Self::can_declare_global_var(&global_obj, name)
+            {
+                let err =
+                    self.create_type_error(&format!("Cannot declare global variable '{}'", name));
+                return Some(Completion::Throw(err));
             }
         }
 
@@ -675,10 +668,10 @@ impl Interpreter {
                     let prev_len = blocked.len();
                     blocked.extend(block_lexicals);
                     for s in inner {
-                        if let Statement::FunctionDeclaration(f) = s {
-                            if !blocked.contains(&f.name) {
-                                blocked.push(f.name.clone());
-                            }
+                        if let Statement::FunctionDeclaration(f) = s
+                            && !blocked.contains(&f.name)
+                        {
+                            blocked.push(f.name.clone());
                         }
                     }
                     Self::collect_annexb_function_names(inner, names, blocked);
@@ -1117,10 +1110,8 @@ impl Interpreter {
                     if let Err(e) = self.with_set_mutable_binding(with_obj_id, name, val, strict) {
                         return Completion::Throw(e);
                     }
-                } else {
-                    if let Err(e) = self.bind_pattern(&d.pattern, val, kind, env) {
-                        return Completion::Throw(e);
-                    }
+                } else if let Err(e) = self.bind_pattern(&d.pattern, val, kind, env) {
+                    return Completion::Throw(e);
                 }
             } else if let Err(e) = self.bind_pattern(&d.pattern, val, kind, env) {
                 return Completion::Throw(e);
@@ -1831,14 +1822,14 @@ impl Interpreter {
 
     fn collect_for_decl_bound_names(left: &ForInOfLeft) -> Vec<String> {
         let mut names = Vec::new();
-        if let ForInOfLeft::Variable(decl) = left {
-            if matches!(
+        if let ForInOfLeft::Variable(decl) = left
+            && matches!(
                 decl.kind,
                 VarKind::Let | VarKind::Const | VarKind::Using | VarKind::AwaitUsing
-            ) {
-                for d in &decl.declarations {
-                    Self::collect_pattern_bound_names(&d.pattern, &mut names);
-                }
+            )
+        {
+            for d in &decl.declarations {
+                Self::collect_pattern_bound_names(&d.pattern, &mut names);
             }
         }
         names
@@ -2423,9 +2414,9 @@ impl Interpreter {
                 Self::expr_may_contain_tail_call(cons) || Self::expr_may_contain_tail_call(alt)
             }
             Expression::Logical(_, _, right) => Self::expr_may_contain_tail_call(right),
-            Expression::Sequence(exprs) | Expression::Comma(exprs) => exprs
-                .last()
-                .map_or(false, |e| Self::expr_may_contain_tail_call(e)),
+            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
+                exprs.last().is_some_and(Self::expr_may_contain_tail_call)
+            }
             _ => false,
         }
     }

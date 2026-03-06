@@ -43,7 +43,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if obj_ref.arraybuffer_data.is_some() {
+                    if let Some(ref buf_data) = obj_ref.arraybuffer_data {
                         if obj_ref.arraybuffer_is_shared {
                             return Completion::Throw(
                                 interp.create_type_error("not an ArrayBuffer"),
@@ -54,7 +54,7 @@ impl Interpreter {
                         {
                             return Completion::Normal(JsValue::Number(0.0));
                         }
-                        let len = obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len();
+                        let len = buf_data.borrow().len();
                         return Completion::Normal(JsValue::Number(len as f64));
                     }
                 }
@@ -196,7 +196,7 @@ impl Interpreter {
                     {
                         {
                             let obj_ref = obj.borrow();
-                            if !obj_ref.arraybuffer_data.is_some() {
+                            if obj_ref.arraybuffer_data.is_none() {
                                 return Completion::Throw(
                                     interp.create_type_error("not an ArrayBuffer"),
                                 );
@@ -282,7 +282,7 @@ impl Interpreter {
                         };
                         if let Some(new_rc) = interp.get_object(new_id) {
                             let new_ref = new_rc.borrow();
-                            if !new_ref.arraybuffer_data.is_some() {
+                            if new_ref.arraybuffer_data.is_none() {
                                 return Completion::Throw(interp.create_type_error(
                                     "species constructor must return an ArrayBuffer",
                                 ));
@@ -894,6 +894,7 @@ impl Interpreter {
         Completion::Throw(self.create_type_error("not an ArrayBuffer"))
     }
 
+    #[allow(dead_code)]
     pub(crate) fn create_shared_arraybuffer(
         &mut self,
         data: Vec<u8>,
@@ -1158,7 +1159,7 @@ impl Interpreter {
                     };
                     if let Some(new_rc) = interp.get_object(new_id) {
                         let new_ref = new_rc.borrow();
-                        if !new_ref.arraybuffer_is_shared || !new_ref.arraybuffer_data.is_some() {
+                        if !new_ref.arraybuffer_is_shared || new_ref.arraybuffer_data.is_none() {
                             return Completion::Throw(
                                 interp.create_type_error("species constructor must return a SharedArrayBuffer"),
                             );
@@ -1460,10 +1461,10 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if obj_ref.typed_array_info.is_some() {
-                        if let Some(buf_id) = obj_ref.view_buffer_object_id {
-                            return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
-                        }
+                    if obj_ref.typed_array_info.is_some()
+                        && let Some(buf_id) = obj_ref.view_buffer_object_id
+                    {
+                        return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
                     }
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -1857,47 +1858,45 @@ impl Interpreter {
                         let begin = begin.min(new_len);
                         let count = end.saturating_sub(begin);
 
-                        if count > 0 {
-                            if let JsValue::Object(new_o) = &new_ta_val
-                                && let Some(new_obj) = interp.get_object(new_o.id)
-                            {
-                                let new_ta = {
-                                    let obj_ref = new_obj.borrow();
-                                    obj_ref.typed_array_info.as_ref().unwrap().clone()
-                                };
-                                if new_ta.kind == ta.kind {
-                                    let bpe = ta.kind.bytes_per_element();
-                                    let src_start = ta.byte_offset + begin * bpe;
-                                    let dst_start = new_ta.byte_offset;
-                                    let byte_count = count * bpe;
-                                    let same_buf = Rc::ptr_eq(&ta.buffer, &new_ta.buffer);
-                                    if same_buf {
-                                        let mut buf = ta.buffer.borrow_mut();
-                                        if src_start + byte_count <= buf.len()
-                                            && dst_start + byte_count <= buf.len()
-                                        {
-                                            // Spec: copy byte-by-byte in forward order (overlapping-write semantics)
-                                            for j in 0..byte_count {
-                                                buf[dst_start + j] = buf[src_start + j];
-                                            }
-                                        }
-                                    } else {
-                                        let src_buf = ta.buffer.borrow();
-                                        let mut dst_buf = new_ta.buffer.borrow_mut();
-                                        if src_start + byte_count <= src_buf.len()
-                                            && dst_start + byte_count <= dst_buf.len()
-                                        {
-                                            dst_buf[dst_start..dst_start + byte_count]
-                                                .copy_from_slice(
-                                                    &src_buf[src_start..src_start + byte_count],
-                                                );
+                        if count > 0
+                            && let JsValue::Object(new_o) = &new_ta_val
+                            && let Some(new_obj) = interp.get_object(new_o.id)
+                        {
+                            let new_ta = {
+                                let obj_ref = new_obj.borrow();
+                                obj_ref.typed_array_info.as_ref().unwrap().clone()
+                            };
+                            if new_ta.kind == ta.kind {
+                                let bpe = ta.kind.bytes_per_element();
+                                let src_start = ta.byte_offset + begin * bpe;
+                                let dst_start = new_ta.byte_offset;
+                                let byte_count = count * bpe;
+                                let same_buf = Rc::ptr_eq(&ta.buffer, &new_ta.buffer);
+                                if same_buf {
+                                    let mut buf = ta.buffer.borrow_mut();
+                                    if src_start + byte_count <= buf.len()
+                                        && dst_start + byte_count <= buf.len()
+                                    {
+                                        // Spec: copy byte-by-byte in forward order (overlapping-write semantics)
+                                        for j in 0..byte_count {
+                                            buf[dst_start + j] = buf[src_start + j];
                                         }
                                     }
                                 } else {
-                                    for i in 0..count {
-                                        let val = typed_array_get_index(&ta, begin + i);
-                                        typed_array_set_index(&new_ta, i, &val);
+                                    let src_buf = ta.buffer.borrow();
+                                    let mut dst_buf = new_ta.buffer.borrow_mut();
+                                    if src_start + byte_count <= src_buf.len()
+                                        && dst_start + byte_count <= dst_buf.len()
+                                    {
+                                        dst_buf[dst_start..dst_start + byte_count].copy_from_slice(
+                                            &src_buf[src_start..src_start + byte_count],
+                                        );
                                     }
+                                }
+                            } else {
+                                for i in 0..count {
+                                    let val = typed_array_get_index(&ta, begin + i);
+                                    typed_array_set_index(&new_ta, i, &val);
                                 }
                             }
                         }
@@ -1983,7 +1982,7 @@ impl Interpreter {
                         );
                     }
                     // Use original len for count (per spec), but bound copy by actual buffer
-                    let cur_len = typed_array_length(&ta) as usize;
+                    let _cur_len = typed_array_length(&ta) as usize;
                     let count = if end <= start || target >= len as usize {
                         0
                     } else {
@@ -3681,10 +3680,10 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     let key = k.to_string();
-                    if let JsValue::Object(ref o) = target_obj {
-                        if let Some(obj) = interp.get_object(o.id) {
-                            obj.borrow_mut().set_property_value(&key, coerced);
-                        }
+                    if let JsValue::Object(ref o) = target_obj
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().set_property_value(&key, coerced);
                     }
                 }
                 Completion::Normal(target_obj)
@@ -3730,10 +3729,10 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     let key = k.to_string();
-                    if let JsValue::Object(ref o) = new_obj {
-                        if let Some(obj) = interp.get_object(o.id) {
-                            obj.borrow_mut().set_property_value(&key, coerced);
-                        }
+                    if let JsValue::Object(ref o) = new_obj
+                        && let Some(obj) = interp.get_object(o.id)
+                    {
+                        obj.borrow_mut().set_property_value(&key, coerced);
                     }
                 }
                 Completion::Normal(new_obj)
@@ -4651,21 +4650,21 @@ impl Interpreter {
             Completion::Normal(v) => v,
             other => return other,
         };
-        if let JsValue::Object(ref o) = new_obj {
-            if let Some(obj) = self.get_object(o.id) {
-                let ta_len = obj
-                    .borrow()
-                    .typed_array_info
-                    .as_ref()
-                    .map(|ti| ti.array_length);
-                if let Some(ta_len) = ta_len {
-                    if ta_len < len {
-                        return Completion::Throw(self.create_type_error(
-                            "TypedArray created from constructor is too small",
-                        ));
-                    }
-                    return Completion::Normal(new_obj);
+        if let JsValue::Object(ref o) = new_obj
+            && let Some(obj) = self.get_object(o.id)
+        {
+            let ta_len = obj
+                .borrow()
+                .typed_array_info
+                .as_ref()
+                .map(|ti| ti.array_length);
+            if let Some(ta_len) = ta_len {
+                if ta_len < len {
+                    return Completion::Throw(
+                        self.create_type_error("TypedArray created from constructor is too small"),
+                    );
                 }
+                return Completion::Normal(new_obj);
             }
         }
         Completion::Throw(
@@ -4673,6 +4672,7 @@ impl Interpreter {
         )
     }
 
+    #[allow(dead_code)]
     fn construct_typed_array_from_this(
         &mut self,
         this_val: &JsValue,
@@ -4797,10 +4797,10 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
-            if let JsValue::Object(ref o) = new_obj {
-                if let Some(obj) = self.get_object(o.id) {
-                    obj.borrow_mut().set_property_value(&key, coerced);
-                }
+            if let JsValue::Object(ref o) = new_obj
+                && let Some(obj) = self.get_object(o.id)
+            {
+                obj.borrow_mut().set_property_value(&key, coerced);
             }
         }
         Completion::Normal(new_obj)

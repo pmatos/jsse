@@ -45,6 +45,7 @@ struct DurationRecord {
 }
 
 impl DurationRecord {
+    #[allow(dead_code)]
     fn is_zero(&self) -> bool {
         self.years == 0.0
             && self.months == 0.0
@@ -244,8 +245,8 @@ fn strip_unicode_extensions(locale_str: &str) -> String {
         let after_u = &locale_str[idx + 3..];
         let tokens: Vec<&str> = after_u.split('-').collect();
         let mut end_of_u = tokens.len();
-        for i in 0..tokens.len() {
-            if tokens[i].len() == 1 && tokens[i] != "u" {
+        for (i, token) in tokens.iter().enumerate() {
+            if token.len() == 1 && *token != "u" {
                 end_of_u = i;
                 break;
             }
@@ -477,24 +478,24 @@ fn format_duration(data: &DurationFormatData, dur: &DurationRecord) -> String {
         let mut rounding_mode = "halfExpand";
 
         // Numeric seconds and sub-seconds are combined into a single value.
-        if unit == "seconds" || unit == "milliseconds" || unit == "microseconds" {
-            if let Some(next_unit) = UNITS.get(i + 1) {
-                let next_style = data.get_style(next_unit);
-                if next_style == "numeric" {
-                    let exponent = match unit {
-                        "seconds" => 9u32,
-                        "milliseconds" => 6,
-                        _ => 3,
-                    };
-                    let frac_str = duration_to_fractional(dur, exponent);
-                    value_str = Some(frac_str);
+        if (unit == "seconds" || unit == "milliseconds" || unit == "microseconds")
+            && let Some(next_unit) = UNITS.get(i + 1)
+        {
+            let next_style = data.get_style(next_unit);
+            if next_style == "numeric" {
+                let exponent = match unit {
+                    "seconds" => 9u32,
+                    "milliseconds" => 6,
+                    _ => 3,
+                };
+                let frac_str = duration_to_fractional(dur, exponent);
+                value_str = Some(frac_str);
 
-                    let fd = data.fractional_digits;
-                    extra_max_frac = Some(fd.unwrap_or(9));
-                    extra_min_frac = Some(fd.unwrap_or(0));
-                    rounding_mode = "trunc";
-                    done = true;
-                }
+                let fd = data.fractional_digits;
+                extra_max_frac = Some(fd.unwrap_or(9));
+                extra_min_frac = Some(fd.unwrap_or(0));
+                rounding_mode = "trunc";
+                done = true;
             }
         }
 
@@ -550,8 +551,7 @@ fn format_duration(data: &DurationFormatData, dur: &DurationRecord) -> String {
                     last.push(formatted);
                 }
             } else {
-                let mut group = Vec::new();
-                group.push(formatted);
+                let group = vec![formatted];
 
                 if style == "2-digit" || style == "numeric" {
                     need_separator = true;
@@ -914,63 +914,63 @@ fn extract_duration_format_data(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<DurationFormatData, JsValue> {
-    if let JsValue::Object(o) = this {
-        if let Some(obj) = interp.get_object(o.id) {
-            let b = obj.borrow();
-            if let Some(IntlData::DurationFormat {
-                ref locale,
-                ref numbering_system,
-                ref style,
-                ref years,
-                ref years_display,
-                ref months,
-                ref months_display,
-                ref weeks,
-                ref weeks_display,
-                ref days,
-                ref days_display,
-                ref hours,
-                ref hours_display,
-                ref minutes,
-                ref minutes_display,
-                ref seconds,
-                ref seconds_display,
-                ref milliseconds,
-                ref milliseconds_display,
-                ref microseconds,
-                ref microseconds_display,
-                ref nanoseconds,
-                ref nanoseconds_display,
-                ref fractional_digits,
-            }) = b.intl_data
-            {
-                return Ok(DurationFormatData {
-                    locale: locale.clone(),
-                    numbering_system: numbering_system.clone(),
-                    style: style.clone(),
-                    years: years.clone(),
-                    years_display: years_display.clone(),
-                    months: months.clone(),
-                    months_display: months_display.clone(),
-                    weeks: weeks.clone(),
-                    weeks_display: weeks_display.clone(),
-                    days: days.clone(),
-                    days_display: days_display.clone(),
-                    hours: hours.clone(),
-                    hours_display: hours_display.clone(),
-                    minutes: minutes.clone(),
-                    minutes_display: minutes_display.clone(),
-                    seconds: seconds.clone(),
-                    seconds_display: seconds_display.clone(),
-                    milliseconds: milliseconds.clone(),
-                    milliseconds_display: milliseconds_display.clone(),
-                    microseconds: microseconds.clone(),
-                    microseconds_display: microseconds_display.clone(),
-                    nanoseconds: nanoseconds.clone(),
-                    nanoseconds_display: nanoseconds_display.clone(),
-                    fractional_digits: *fractional_digits,
-                });
-            }
+    if let JsValue::Object(o) = this
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let b = obj.borrow();
+        if let Some(IntlData::DurationFormat {
+            ref locale,
+            ref numbering_system,
+            ref style,
+            ref years,
+            ref years_display,
+            ref months,
+            ref months_display,
+            ref weeks,
+            ref weeks_display,
+            ref days,
+            ref days_display,
+            ref hours,
+            ref hours_display,
+            ref minutes,
+            ref minutes_display,
+            ref seconds,
+            ref seconds_display,
+            ref milliseconds,
+            ref milliseconds_display,
+            ref microseconds,
+            ref microseconds_display,
+            ref nanoseconds,
+            ref nanoseconds_display,
+            ref fractional_digits,
+        }) = b.intl_data
+        {
+            return Ok(DurationFormatData {
+                locale: locale.clone(),
+                numbering_system: numbering_system.clone(),
+                style: style.clone(),
+                years: years.clone(),
+                years_display: years_display.clone(),
+                months: months.clone(),
+                months_display: months_display.clone(),
+                weeks: weeks.clone(),
+                weeks_display: weeks_display.clone(),
+                days: days.clone(),
+                days_display: days_display.clone(),
+                hours: hours.clone(),
+                hours_display: hours_display.clone(),
+                minutes: minutes.clone(),
+                minutes_display: minutes_display.clone(),
+                seconds: seconds.clone(),
+                seconds_display: seconds_display.clone(),
+                milliseconds: milliseconds.clone(),
+                milliseconds_display: milliseconds_display.clone(),
+                microseconds: microseconds.clone(),
+                microseconds_display: microseconds_display.clone(),
+                nanoseconds: nanoseconds.clone(),
+                nanoseconds_display: nanoseconds_display.clone(),
+                fractional_digits: *fractional_digits,
+            });
         }
     }
     Err(interp.create_type_error("Intl.DurationFormat method called on incompatible receiver"))
@@ -1003,24 +1003,24 @@ fn format_to_parts_duration(
         let mut extra_max_frac: Option<u32> = None;
         let mut rounding_mode = "halfExpand";
 
-        if unit == "seconds" || unit == "milliseconds" || unit == "microseconds" {
-            if let Some(next_unit) = UNITS.get(i + 1) {
-                let next_style = data.get_style(next_unit);
-                if next_style == "numeric" {
-                    let exponent = match unit {
-                        "seconds" => 9u32,
-                        "milliseconds" => 6,
-                        _ => 3,
-                    };
-                    let frac_str = duration_to_fractional(dur, exponent);
-                    value_str = Some(frac_str);
+        if (unit == "seconds" || unit == "milliseconds" || unit == "microseconds")
+            && let Some(next_unit) = UNITS.get(i + 1)
+        {
+            let next_style = data.get_style(next_unit);
+            if next_style == "numeric" {
+                let exponent = match unit {
+                    "seconds" => 9u32,
+                    "milliseconds" => 6,
+                    _ => 3,
+                };
+                let frac_str = duration_to_fractional(dur, exponent);
+                value_str = Some(frac_str);
 
-                    let fd = data.fractional_digits;
-                    extra_max_frac = Some(fd.unwrap_or(9));
-                    extra_min_frac = Some(fd.unwrap_or(0));
-                    rounding_mode = "trunc";
-                    done = true;
-                }
+                let fd = data.fractional_digits;
+                extra_max_frac = Some(fd.unwrap_or(9));
+                extra_min_frac = Some(fd.unwrap_or(0));
+                rounding_mode = "trunc";
+                done = true;
             }
         }
 
@@ -1422,12 +1422,12 @@ impl Interpreter {
                     };
 
                 // Validate numberingSystem if provided
-                if let Some(ref ns) = numbering_system_opt {
-                    if !is_valid_numbering_system(ns) {
-                        return Completion::Throw(
-                            interp.create_range_error(&format!("Invalid numberingSystem: {}", ns)),
-                        );
-                    }
+                if let Some(ref ns) = numbering_system_opt
+                    && !is_valid_numbering_system(ns)
+                {
+                    return Completion::Throw(
+                        interp.create_range_error(&format!("Invalid numberingSystem: {}", ns)),
+                    );
                 }
 
                 // Read style
@@ -1520,7 +1520,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
 
-                    let (mut unit_style, mut display_default);
+                    let (mut unit_style, display_default);
                     if let Some(s) = explicit_style {
                         // User provided explicit style; displayDefault stays "always"
                         display_default = "always";
@@ -1597,7 +1597,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
 
-                    let (mut unit_style, mut display_default);
+                    let (unit_style, mut display_default);
                     if let Some(s) = explicit_style {
                         display_default = "always";
                         unit_style = s;
@@ -1740,33 +1740,33 @@ impl Interpreter {
         ));
 
         // Set DurationFormat.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &duration_format_ctor {
-            if let Some(obj) = self.get_object(ctor_ref.id) {
-                obj.borrow_mut().insert_property(
-                    "prototype".to_string(),
-                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
-                );
+        if let JsValue::Object(ctor_ref) = &duration_format_ctor
+            && let Some(obj) = self.get_object(ctor_ref.id)
+        {
+            obj.borrow_mut().insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(proto_val.clone(), false, false, false),
+            );
 
-                // supportedLocalesOf static method
-                let slof = self.create_function(JsFunction::native(
-                    "supportedLocalesOf".to_string(),
-                    1,
-                    |interp, _this, args| {
-                        let locales = args.first().unwrap_or(&JsValue::Undefined);
-                        let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                        let requested = match interp.intl_canonicalize_locale_list(locales) {
-                            Ok(list) => list,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        match interp.intl_supported_locales(&requested, &options) {
-                            Ok(v) => Completion::Normal(v),
-                            Err(e) => Completion::Throw(e),
-                        }
-                    },
-                ));
-                obj.borrow_mut()
-                    .insert_builtin("supportedLocalesOf".to_string(), slof);
-            }
+            // supportedLocalesOf static method
+            let slof = self.create_function(JsFunction::native(
+                "supportedLocalesOf".to_string(),
+                1,
+                |interp, _this, args| {
+                    let locales = args.first().unwrap_or(&JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let requested = match interp.intl_canonicalize_locale_list(locales) {
+                        Ok(list) => list,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    match interp.intl_supported_locales(&requested, &options) {
+                        Ok(v) => Completion::Normal(v),
+                        Err(e) => Completion::Throw(e),
+                    }
+                },
+            ));
+            obj.borrow_mut()
+                .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype

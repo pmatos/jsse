@@ -596,19 +596,19 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _args| {
-                    let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
+                    let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    if cal != "iso8601" {
-                        if let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal) {
-                            let val = match idx {
-                                0 => cf.year as f64,
-                                1 => cf.month_ordinal as f64,
-                                _ => cf.day as f64,
-                            };
-                            return Completion::Normal(JsValue::Number(val));
-                        }
+                    if cal != "iso8601"
+                        && let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal)
+                    {
+                        let val = match idx {
+                            0 => cf.year as f64,
+                            1 => cf.month_ordinal as f64,
+                            _ => cf.day as f64,
+                        };
+                        return Completion::Normal(JsValue::Number(val));
                     }
                     let val = match idx {
                         0 => y as f64,
@@ -678,16 +678,16 @@ impl Interpreter {
                 "get monthCode".to_string(),
                 0,
                 |interp, this, _args| {
-                    let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
+                    let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    if cal != "iso8601" {
-                        if let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal) {
-                            return Completion::Normal(JsValue::String(JsString::from_str(
-                                &cf.month_code,
-                            )));
-                        }
+                    if cal != "iso8601"
+                        && let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal)
+                    {
+                        return Completion::Normal(JsValue::String(JsString::from_str(
+                            &cf.month_code,
+                        )));
                     }
                     Completion::Normal(JsValue::String(JsString::from_str(&iso_month_code(m))))
                 },
@@ -721,7 +721,7 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _args| {
-                    let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
+                    let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -782,23 +782,23 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _args| {
-                    let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, &this) {
+                    let (y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    if cal != "iso8601" {
-                        if let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal) {
-                            if is_era {
-                                return Completion::Normal(match cf.era {
-                                    Some(e) => JsValue::String(JsString::from_str(&e)),
-                                    None => JsValue::Undefined,
-                                });
-                            } else {
-                                return Completion::Normal(match cf.era_year {
-                                    Some(ey) => JsValue::Number(ey as f64),
-                                    None => JsValue::Undefined,
-                                });
-                            }
+                    if cal != "iso8601"
+                        && let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal)
+                    {
+                        if is_era {
+                            return Completion::Normal(match cf.era {
+                                Some(e) => JsValue::String(JsString::from_str(&e)),
+                                None => JsValue::Undefined,
+                            });
+                        } else {
+                            return Completion::Normal(match cf.era_year {
+                                Some(ey) => JsValue::Number(ey as f64),
+                                None => JsValue::Undefined,
+                            });
                         }
                     }
                     Completion::Normal(JsValue::Undefined)
@@ -833,184 +833,180 @@ impl Interpreter {
                 }
 
                 // Non-ISO calendar path (reads fields in its own order)
-                if cal != "iso8601" {
-                    if let Some(cf) = super::iso_to_calendar_fields(y as i32, m, d, &cal) {
-                        let mut has_any = false;
-                        let (new_d, has_d) =
-                            match read_field_positive_int(interp, &item, "day", cf.day) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                        has_any |= has_d;
-                        let (new_h, has_h) =
-                            match read_time_field_new(interp, &item, "hour", h as f64) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                        has_any |= has_h;
-                        let (new_us, has_us) =
-                            match read_time_field_new(interp, &item, "microsecond", us as f64) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                        has_any |= has_us;
-                        let (new_ms, has_ms) =
-                            match read_time_field_new(interp, &item, "millisecond", ms as f64) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                        has_any |= has_ms;
-                        let (new_mi, has_mi) =
-                            match read_time_field_new(interp, &item, "minute", mi as f64) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                        has_any |= has_mi;
-                        let (raw_month, has_m) =
-                            match read_field_positive_int(interp, &item, "month", cf.month_ordinal)
-                            {
-                                Ok(v) => (Some(v.0), v.1),
-                                Err(c) => return c,
-                            };
-                        let raw_month = if has_m { raw_month } else { None };
-                        has_any |= has_m;
-                        let (raw_month_code, has_mc) = match read_month_code_field(interp, &item) {
+                if cal != "iso8601"
+                    && let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal)
+                {
+                    let mut has_any = false;
+                    let (new_d, has_d) = match read_field_positive_int(interp, &item, "day", cf.day)
+                    {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    has_any |= has_d;
+                    let (new_h, has_h) = match read_time_field_new(interp, &item, "hour", h as f64)
+                    {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    has_any |= has_h;
+                    let (new_us, has_us) =
+                        match read_time_field_new(interp, &item, "microsecond", us as f64) {
                             Ok(v) => v,
                             Err(c) => return c,
                         };
-                        has_any |= has_mc;
-                        let (new_ns_f, has_ns) =
-                            match read_time_field_new(interp, &item, "nanosecond", ns as f64) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                        has_any |= has_ns;
-                        let (new_s, has_s) =
-                            match read_time_field_new(interp, &item, "second", s as f64) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                        has_any |= has_s;
-                        let (new_y_cal, has_y) =
-                            match read_field_i32(interp, &item, "year", cf.year) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                        has_any |= has_y;
-                        let era_val = match super::get_prop(interp, &item, "era") {
-                            Completion::Normal(v) => v,
-                            other => return other,
+                    has_any |= has_us;
+                    let (new_ms, has_ms) =
+                        match read_time_field_new(interp, &item, "millisecond", ms as f64) {
+                            Ok(v) => v,
+                            Err(c) => return c,
                         };
-                        let has_era = !super::is_undefined(&era_val);
-                        has_any |= has_era;
-                        let era_year_val = match super::get_prop(interp, &item, "eraYear") {
-                            Completion::Normal(v) => v,
-                            other => return other,
+                    has_any |= has_ms;
+                    let (new_mi, has_mi) =
+                        match read_time_field_new(interp, &item, "minute", mi as f64) {
+                            Ok(v) => v,
+                            Err(c) => return c,
                         };
-                        let has_era_year = !super::is_undefined(&era_year_val);
-                        has_any |= has_era_year;
+                    has_any |= has_mi;
+                    let (raw_month, has_m) =
+                        match read_field_positive_int(interp, &item, "month", cf.month_ordinal) {
+                            Ok(v) => (Some(v.0), v.1),
+                            Err(c) => return c,
+                        };
+                    let raw_month = if has_m { raw_month } else { None };
+                    has_any |= has_m;
+                    let (raw_month_code, has_mc) = match read_month_code_field(interp, &item) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    has_any |= has_mc;
+                    let (new_ns_f, has_ns) =
+                        match read_time_field_new(interp, &item, "nanosecond", ns as f64) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                    has_any |= has_ns;
+                    let (new_s, has_s) =
+                        match read_time_field_new(interp, &item, "second", s as f64) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                    has_any |= has_s;
+                    let (new_y_cal, has_y) = match read_field_i32(interp, &item, "year", cf.year) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    has_any |= has_y;
+                    let era_val = match super::get_prop(interp, &item, "era") {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let has_era = !super::is_undefined(&era_val);
+                    has_any |= has_era;
+                    let era_year_val = match super::get_prop(interp, &item, "eraYear") {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let has_era_year = !super::is_undefined(&era_year_val);
+                    has_any |= has_era_year;
 
-                        if !has_any {
-                            return Completion::Throw(interp.create_type_error(
-                                "with() requires at least one recognized property",
-                            ));
+                    if !has_any {
+                        return Completion::Throw(interp.create_type_error(
+                            "with() requires at least one recognized property",
+                        ));
+                    }
+
+                    if super::calendar_has_eras(&cal) {
+                        if has_era && !has_era_year {
+                            return Completion::Throw(
+                                interp.create_type_error("era provided without eraYear"),
+                            );
                         }
-
-                        if super::calendar_has_eras(&cal) {
-                            if has_era && !has_era_year {
-                                return Completion::Throw(
-                                    interp.create_type_error("era provided without eraYear"),
-                                );
-                            }
-                            if has_era_year && !has_era {
-                                return Completion::Throw(
-                                    interp.create_type_error("eraYear provided without era"),
-                                );
-                            }
-                        } else if has_era || has_era_year {
-                            return Completion::Throw(interp.create_type_error(
+                        if has_era_year && !has_era {
+                            return Completion::Throw(
+                                interp.create_type_error("eraYear provided without era"),
+                            );
+                        }
+                    } else if has_era || has_era_year {
+                        return Completion::Throw(
+                            interp.create_type_error(
                                 "era and eraYear are not valid for this calendar",
-                            ));
-                        }
+                            ),
+                        );
+                    }
 
-                        let mc_for_icu = if has_mc {
-                            raw_month_code.clone()
-                        } else if !has_m {
-                            Some(cf.month_code.clone())
-                        } else {
-                            None
-                        };
-                        let mo_for_icu = if has_m { raw_month } else { None };
+                    let mc_for_icu = if has_mc {
+                        raw_month_code.clone()
+                    } else if !has_m {
+                        Some(cf.month_code.clone())
+                    } else {
+                        None
+                    };
+                    let mo_for_icu = if has_m { raw_month } else { None };
 
-                        let (icu_era, icu_year) = if super::calendar_has_eras(&cal)
-                            && has_era
-                            && has_era_year
-                        {
-                            let era_str = match super::to_primitive_and_require_string(
-                                interp, &era_val, "era",
-                            ) {
+                    let (icu_era, icu_year) = if super::calendar_has_eras(&cal)
+                        && has_era
+                        && has_era_year
+                    {
+                        let era_str =
+                            match super::to_primitive_and_require_string(interp, &era_val, "era") {
                                 Ok(v) => v,
                                 Err(c) => return c,
                             };
-                            let ey = match super::to_integer_with_truncation(interp, &era_year_val)
-                            {
-                                Ok(v) => v as i32,
-                                Err(c) => return c,
-                            };
-                            (Some(era_str), ey)
-                        } else {
-                            (None, new_y_cal)
-                        };
-
-                        let overflow = match parse_overflow_option(
-                            interp,
-                            &args.get(1).cloned().unwrap_or(JsValue::Undefined),
-                        ) {
-                            Ok(v) => v,
+                        let ey = match super::to_integer_with_truncation(interp, &era_year_val) {
+                            Ok(v) => v as i32,
                             Err(c) => return c,
                         };
+                        (Some(era_str), ey)
+                    } else {
+                        (None, new_y_cal)
+                    };
 
-                        match super::calendar_fields_to_iso_overflow(
-                            icu_era.as_deref(),
-                            icu_year,
-                            mc_for_icu.as_deref(),
-                            mo_for_icu,
-                            new_d,
-                            &cal,
-                            &overflow,
-                        ) {
-                            Some((iso_y, iso_m, iso_d)) => {
-                                if !iso_time_valid_f64(
-                                    new_h, new_mi, new_s, new_ms, new_us, new_ns_f,
-                                ) {
-                                    return Completion::Throw(
-                                        interp.create_range_error("Invalid time"),
-                                    );
-                                }
-                                let (ch, cmi, cs, cms, cus, cns) = (
-                                    new_h as u8,
-                                    new_mi as u8,
-                                    new_s as u8,
-                                    new_ms as u16,
-                                    new_us as u16,
-                                    new_ns_f as u16,
-                                );
-                                if !iso_date_time_within_limits(
-                                    iso_y, iso_m, iso_d, ch, cmi, cs, cms, cus, cns,
-                                ) {
-                                    return Completion::Throw(
-                                        interp.create_range_error("DateTime outside valid range"),
-                                    );
-                                }
-                                return create_plain_date_time_result(
-                                    interp, iso_y, iso_m, iso_d, ch, cmi, cs, cms, cus, cns, &cal,
-                                );
-                            }
-                            None => {
+                    let overflow = match parse_overflow_option(
+                        interp,
+                        &args.get(1).cloned().unwrap_or(JsValue::Undefined),
+                    ) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+
+                    match super::calendar_fields_to_iso_overflow(
+                        icu_era.as_deref(),
+                        icu_year,
+                        mc_for_icu.as_deref(),
+                        mo_for_icu,
+                        new_d,
+                        &cal,
+                        &overflow,
+                    ) {
+                        Some((iso_y, iso_m, iso_d)) => {
+                            if !iso_time_valid_f64(new_h, new_mi, new_s, new_ms, new_us, new_ns_f) {
                                 return Completion::Throw(
-                                    interp.create_range_error("Invalid calendar date"),
+                                    interp.create_range_error("Invalid time"),
                                 );
                             }
+                            let (ch, cmi, cs, cms, cus, cns) = (
+                                new_h as u8,
+                                new_mi as u8,
+                                new_s as u8,
+                                new_ms as u16,
+                                new_us as u16,
+                                new_ns_f as u16,
+                            );
+                            if !iso_date_time_within_limits(
+                                iso_y, iso_m, iso_d, ch, cmi, cs, cms, cus, cns,
+                            ) {
+                                return Completion::Throw(
+                                    interp.create_range_error("DateTime outside valid range"),
+                                );
+                            }
+                            return create_plain_date_time_result(
+                                interp, iso_y, iso_m, iso_d, ch, cmi, cs, cms, cus, cns, &cal,
+                            );
+                        }
+                        None => {
+                            return Completion::Throw(
+                                interp.create_range_error("Invalid calendar date"),
+                            );
                         }
                     }
                 }
@@ -1115,13 +1111,13 @@ impl Interpreter {
                     )
                 } else {
                     let cm = new_m.clamp(1, 12);
-                    let cd = new_d.max(1).min(iso_days_in_month(new_y, cm));
-                    let ch = (new_h.max(0.0).min(23.0)) as u8;
-                    let cmi = (new_mi.max(0.0).min(59.0)) as u8;
-                    let cs = (new_s.max(0.0).min(59.0)) as u8;
-                    let cms = (new_ms.max(0.0).min(999.0)) as u16;
-                    let cus = (new_us.max(0.0).min(999.0)) as u16;
-                    let cns = (new_ns_f.max(0.0).min(999.0)) as u16;
+                    let cd = new_d.clamp(1, iso_days_in_month(new_y, cm));
+                    let ch = (new_h.clamp(0.0, 23.0)) as u8;
+                    let cmi = (new_mi.clamp(0.0, 59.0)) as u8;
+                    let cs = (new_s.clamp(0.0, 59.0)) as u8;
+                    let cms = (new_ms.clamp(0.0, 999.0)) as u16;
+                    let cus = (new_us.clamp(0.0, 999.0)) as u16;
+                    let cns = (new_ns_f.clamp(0.0, 999.0)) as u16;
                     if !iso_date_time_within_limits(new_y, cm, cd, ch, cmi, cs, cms, cus, cns) {
                         return Completion::Throw(
                             interp.create_range_error("DateTime outside valid range"),
@@ -1280,7 +1276,7 @@ impl Interpreter {
                 1,
                 move |interp, this, args| {
                     let (y1, m1, d1, h1, mi1, s1, ms1, us1, ns1, cal) =
-                        match get_pdt_fields(interp, &this) {
+                        match get_pdt_fields(interp, this) {
                             Ok(v) => v,
                             Err(c) => return c,
                         };
@@ -1961,7 +1957,7 @@ impl Interpreter {
             0,
             |interp, this, args| {
                 let (_y, _m, _d, _h, _mi, _s, _ms, _us, _ns, _cal) =
-                    match get_pdt_fields(interp, &this) {
+                    match get_pdt_fields(interp, this) {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
@@ -1984,7 +1980,7 @@ impl Interpreter {
                 if let Err(e) = super::check_calendar_mismatch(interp, &dtf_instance, &_cal, true) {
                     return Completion::Throw(e);
                 }
-                super::temporal_format_with_dtf(interp, &dtf_instance, &this)
+                super::temporal_format_with_dtf(interp, &dtf_instance, this)
             },
         ));
         proto

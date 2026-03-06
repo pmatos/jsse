@@ -46,10 +46,10 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let b = obj.borrow();
-                    if b.class_name == "DisposableStack" {
-                        if let Some(ref ds) = b.disposable_stack {
-                            return Completion::Normal(JsValue::Boolean(ds.disposed));
-                        }
+                    if b.class_name == "DisposableStack"
+                        && let Some(ref ds) = b.disposable_stack
+                    {
+                        return Completion::Normal(JsValue::Boolean(ds.disposed));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -510,10 +510,10 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let b = obj.borrow();
-                    if b.class_name == "AsyncDisposableStack" {
-                        if let Some(ref ds) = b.disposable_stack {
-                            return Completion::Normal(JsValue::Boolean(ds.disposed));
-                        }
+                    if b.class_name == "AsyncDisposableStack"
+                        && let Some(ref ds) = b.disposable_stack
+                    {
+                        return Completion::Normal(JsValue::Boolean(ds.disposed));
                     }
                 }
                 Completion::Throw(interp.create_type_error(

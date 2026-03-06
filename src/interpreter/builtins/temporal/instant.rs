@@ -497,7 +497,7 @@ impl Interpreter {
             "toLocaleString".to_string(),
             0,
             |interp, this, args| {
-                let _ns = match get_instant_ns(interp, &this) {
+                let _ns = match get_instant_ns(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
@@ -515,7 +515,7 @@ impl Interpreter {
                     Completion::Throw(e) => return Completion::Throw(e),
                     _ => return Completion::Normal(JsValue::Undefined),
                 };
-                super::temporal_format_with_dtf(interp, &dtf_instance, &this)
+                super::temporal_format_with_dtf(interp, &dtf_instance, this)
             },
         ));
         proto
@@ -1090,7 +1090,7 @@ pub(super) fn floor_div_bigint(n: &BigInt, d: i128) -> BigInt {
 
 fn instant_to_string_with_tz(
     ns: &BigInt,
-    tz_id: &str,
+    _tz_id: &str,
     tz_offset_ns: i64,
     precision: Option<i32>,
     tz_explicit: bool,

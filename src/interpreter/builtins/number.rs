@@ -205,11 +205,7 @@ fn format_precision(n: f64, precision: usize) -> String {
     } else if e >= 0 {
         // Fixed notation, non-negative exponent
         let int_count = (e + 1) as usize;
-        let frac_count = if precision > int_count {
-            precision - int_count
-        } else {
-            0
-        };
+        let frac_count = precision.saturating_sub(int_count);
         let int_part: String = if int_count <= rounded.len() {
             rounded[..int_count]
                 .iter()

@@ -468,7 +468,7 @@ impl<'a> Parser<'a> {
         match pat {
             Pattern::Identifier(name) => {
                 if name == "eval" || name == "arguments" {
-                    return Err(self.error(&format!("Assignment to '{name}' in strict mode")));
+                    return Err(self.error(format!("Assignment to '{name}' in strict mode")));
                 }
             }
             Pattern::Array(elems) => {
@@ -489,7 +489,7 @@ impl<'a> Parser<'a> {
                         ObjectPatternProperty::Shorthand(name) => {
                             if name == "eval" || name == "arguments" {
                                 return Err(
-                                    self.error(&format!("Assignment to '{name}' in strict mode"))
+                                    self.error(format!("Assignment to '{name}' in strict mode"))
                                 );
                             }
                         }
@@ -586,11 +586,10 @@ impl<'a> Parser<'a> {
             // Class expressions: recurse into computed property names and field initializers
             // (they are evaluated in the enclosing scope), but NOT method bodies
             Expression::Class(cls) => {
-                if let Some(ref sc) = cls.super_class {
-                    if Self::contains_arguments(sc) {
+                if let Some(ref sc) = cls.super_class
+                    && Self::contains_arguments(sc) {
                         return true;
                     }
-                }
                 Self::class_elements_contain_arguments(&cls.body)
             }
             // Functions/classes create their own scope, don't recurse
@@ -608,17 +607,17 @@ impl<'a> Parser<'a> {
         for elem in body {
             match elem {
                 crate::ast::ClassElement::Method(m) => {
-                    if let crate::ast::PropertyKey::Computed(e) = &m.key {
-                        if Self::contains_arguments(e) {
-                            return true;
-                        }
+                    if let crate::ast::PropertyKey::Computed(e) = &m.key
+                        && Self::contains_arguments(e)
+                    {
+                        return true;
                     }
                 }
                 crate::ast::ClassElement::Property(p) => {
-                    if let crate::ast::PropertyKey::Computed(e) = &p.key {
-                        if Self::contains_arguments(e) {
-                            return true;
-                        }
+                    if let crate::ast::PropertyKey::Computed(e) = &p.key
+                        && Self::contains_arguments(e)
+                    {
+                        return true;
                     }
                 }
                 crate::ast::ClassElement::StaticBlock(_) => {}
@@ -697,10 +696,10 @@ impl<'a> Parser<'a> {
             Statement::FunctionDeclaration(_) => false,
             // Class declarations: check computed property names (evaluated in enclosing scope)
             Statement::ClassDeclaration(cls) => {
-                if let Some(ref sc) = cls.super_class {
-                    if Self::contains_arguments(sc) {
-                        return true;
-                    }
+                if let Some(ref sc) = cls.super_class
+                    && Self::contains_arguments(sc)
+                {
+                    return true;
                 }
                 Self::class_elements_contain_arguments(&cls.body)
             }
@@ -1016,16 +1015,16 @@ impl<'a> Parser<'a> {
 
             if in_directive_prologue {
                 if Self::is_string_literal_statement(&stmt) {
-                    if let Some(directive) = self.is_directive_prologue(&stmt) {
-                        if directive == "use strict" {
-                            if prologue_had_legacy_octal {
-                                return Err(self.error(
-                                    "Octal escape sequences are not allowed in strict mode",
-                                ));
-                            }
-                            self.set_strict(true);
-                            body_is_strict = true;
+                    if let Some(directive) = self.is_directive_prologue(&stmt)
+                        && directive == "use strict"
+                    {
+                        if prologue_had_legacy_octal {
+                            return Err(
+                                self.error("Octal escape sequences are not allowed in strict mode")
+                            );
                         }
+                        self.set_strict(true);
+                        body_is_strict = true;
                     }
                     if self.last_string_literal_has_legacy_octal {
                         prologue_had_legacy_octal = true;
@@ -1043,7 +1042,7 @@ impl<'a> Parser<'a> {
                     for name in &new_names {
                         if lexical_names.contains(name) {
                             return Err(self
-                                .error(&format!("Identifier '{name}' has already been declared")));
+                                .error(format!("Identifier '{name}' has already been declared")));
                         }
                     }
                     lexical_names.extend(new_names);
@@ -1052,7 +1051,7 @@ impl<'a> Parser<'a> {
                     let name = &cls.name;
                     if lexical_names.contains(name) {
                         return Err(
-                            self.error(&format!("Identifier '{name}' has already been declared"))
+                            self.error(format!("Identifier '{name}' has already been declared"))
                         );
                     }
                     lexical_names.push(name.clone());
@@ -1072,7 +1071,7 @@ impl<'a> Parser<'a> {
             for name in &var_names {
                 if lexical_names.contains(name) {
                     return Err(
-                        self.error(&format!("Identifier '{name}' has already been declared"))
+                        self.error(format!("Identifier '{name}' has already been declared"))
                     );
                 }
             }
