@@ -78,6 +78,24 @@ pub struct Interpreter {
     )>,
     pub(crate) iterator_next_cache: HashMap<u64, JsValue>,
     last_identifier_with_base: Option<u64>,
+    pub(crate) async_gen_queues: HashMap<u64, std::collections::VecDeque<AsyncGenRequest>>,
+    pub(crate) async_gen_yield_pending: bool,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct AsyncGenRequest {
+    pub kind: AsyncGenRequestKind,
+    pub value: JsValue,
+    pub promise: JsValue,
+    pub resolve_fn: JsValue,
+    pub reject_fn: JsValue,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum AsyncGenRequestKind {
+    Next,
+    Return,
+    Throw,
 }
 
 pub struct LoadedModule {
@@ -172,6 +190,8 @@ impl Interpreter {
             )),
             iterator_next_cache: HashMap::new(),
             last_identifier_with_base: None,
+            async_gen_queues: HashMap::new(),
+            async_gen_yield_pending: false,
         };
         interp.setup_globals();
         interp

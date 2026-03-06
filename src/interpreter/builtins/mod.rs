@@ -6644,11 +6644,11 @@ impl Interpreter {
                             let e = interp.create_type_error("Iterator result is not an object");
                             return interp.create_rejected_promise(e);
                         }
-                        // AsyncFromSyncIteratorContinuation(throwResult, promiseCap, syncIterRec, closeOnRejection=false)
+                        // AsyncFromSyncIteratorContinuation(throwResult, promiseCap, syncIterRec, closeOnRejection=true)
                         interp.async_from_sync_continuation(
                             throw_result,
                             sync_for_throw.clone(),
-                            false,
+                            true,
                         )
                     } else {
                         // §27.1.2.3 step 8: throw is undefined
