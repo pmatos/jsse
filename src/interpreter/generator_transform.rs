@@ -80,6 +80,11 @@ pub enum StateTerminator {
         after_state: usize,
         is_await: bool,
     },
+    Await {
+        value: Expression,
+        resume_state: usize,
+        sent_value_binding: Option<SentValueBinding>,
+    },
     Completed,
 }
 
@@ -295,6 +300,9 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
             } else {
                 ctx.finalize_current_state(StateTerminator::Return(None));
             }
+            // Advance to a fresh unreachable state so subsequent terminators
+            // (e.g. TryExit after a finally body) don't overwrite this Return.
+            ctx.current_state_id = ctx.new_state();
         }
 
         Statement::Throw(expr) => {
@@ -308,6 +316,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
             } else {
                 ctx.finalize_current_state(StateTerminator::Throw(expr.clone()));
             }
+            ctx.current_state_id = ctx.new_state();
         }
 
         Statement::Try(try_stmt) => {
@@ -1345,6 +1354,258 @@ fn transform_labeled_statement(
     ctx.break_targets.remove(&Some(label.to_string()));
     ctx.finalize_current_state(StateTerminator::Goto(after_labeled));
     ctx.current_state_id = after_labeled;
+}
+
+pub fn transform_async_function(body: &[Statement], params: &[Pattern]) -> GeneratorStateMachine {
+    let rewritten = rewrite_stmts_await_to_yield(body);
+    let mut machine = transform_generator(&rewritten, params);
+    rewrite_terminators_yield_to_await(&mut machine);
+    machine
+}
+
+fn rewrite_terminators_yield_to_await(machine: &mut GeneratorStateMachine) {
+    for state in &mut machine.states {
+        let replacement = match &state.terminator {
+            StateTerminator::Yield {
+                value,
+                is_delegate: false,
+                resume_state,
+                sent_value_binding,
+            } => Some(StateTerminator::Await {
+                value: value
+                    .clone()
+                    .unwrap_or(Expression::Identifier("undefined".to_string())),
+                resume_state: *resume_state,
+                sent_value_binding: sent_value_binding.clone(),
+            }),
+            _ => None,
+        };
+        if let Some(new_term) = replacement {
+            state.terminator = new_term;
+        }
+    }
+}
+
+fn rewrite_stmts_await_to_yield(stmts: &[Statement]) -> Vec<Statement> {
+    stmts.iter().map(rewrite_stmt_await_to_yield).collect()
+}
+
+fn rewrite_stmt_await_to_yield(stmt: &Statement) -> Statement {
+    match stmt {
+        Statement::Empty | Statement::Break(_) | Statement::Continue(_) | Statement::Debugger => {
+            stmt.clone()
+        }
+        Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => stmt.clone(),
+        Statement::Expression(e) => Statement::Expression(rewrite_expr(e)),
+        Statement::Block(stmts) => Statement::Block(rewrite_stmts_await_to_yield(stmts)),
+        Statement::Variable(decl) => Statement::Variable(VariableDeclaration {
+            kind: decl.kind,
+            declarations: decl
+                .declarations
+                .iter()
+                .map(|d| VariableDeclarator {
+                    pattern: d.pattern.clone(),
+                    init: d.init.as_ref().map(rewrite_expr),
+                })
+                .collect(),
+        }),
+        Statement::If(if_stmt) => Statement::If(IfStatement {
+            test: rewrite_expr(&if_stmt.test),
+            consequent: Box::new(rewrite_stmt_await_to_yield(&if_stmt.consequent)),
+            alternate: if_stmt
+                .alternate
+                .as_ref()
+                .map(|s| Box::new(rewrite_stmt_await_to_yield(s))),
+        }),
+        Statement::While(w) => Statement::While(WhileStatement {
+            test: rewrite_expr(&w.test),
+            body: Box::new(rewrite_stmt_await_to_yield(&w.body)),
+        }),
+        Statement::DoWhile(d) => Statement::DoWhile(DoWhileStatement {
+            test: rewrite_expr(&d.test),
+            body: Box::new(rewrite_stmt_await_to_yield(&d.body)),
+        }),
+        Statement::For(f) => Statement::For(ForStatement {
+            init: f.init.as_ref().map(|i| match i {
+                ForInit::Variable(v) => ForInit::Variable(VariableDeclaration {
+                    kind: v.kind,
+                    declarations: v
+                        .declarations
+                        .iter()
+                        .map(|d| VariableDeclarator {
+                            pattern: d.pattern.clone(),
+                            init: d.init.as_ref().map(rewrite_expr),
+                        })
+                        .collect(),
+                }),
+                ForInit::Expression(e) => ForInit::Expression(rewrite_expr(e)),
+            }),
+            test: f.test.as_ref().map(rewrite_expr),
+            update: f.update.as_ref().map(rewrite_expr),
+            body: Box::new(rewrite_stmt_await_to_yield(&f.body)),
+        }),
+        Statement::ForIn(f) => Statement::ForIn(ForInStatement {
+            left: rewrite_for_left(&f.left),
+            right: rewrite_expr(&f.right),
+            body: Box::new(rewrite_stmt_await_to_yield(&f.body)),
+        }),
+        Statement::ForOf(f) => Statement::ForOf(ForOfStatement {
+            left: rewrite_for_left(&f.left),
+            right: rewrite_expr(&f.right),
+            body: Box::new(rewrite_stmt_await_to_yield(&f.body)),
+            is_await: f.is_await,
+        }),
+        Statement::Return(e) => Statement::Return(e.as_ref().map(rewrite_expr)),
+        Statement::Throw(e) => Statement::Throw(rewrite_expr(e)),
+        Statement::Try(t) => Statement::Try(TryStatement {
+            block: rewrite_stmts_await_to_yield(&t.block),
+            handler: t.handler.as_ref().map(|h| CatchClause {
+                param: h.param.clone(),
+                body: rewrite_stmts_await_to_yield(&h.body),
+            }),
+            finalizer: t
+                .finalizer
+                .as_ref()
+                .map(|f| rewrite_stmts_await_to_yield(f)),
+        }),
+        Statement::Switch(s) => Statement::Switch(SwitchStatement {
+            discriminant: rewrite_expr(&s.discriminant),
+            cases: s
+                .cases
+                .iter()
+                .map(|c| SwitchCase {
+                    test: c.test.as_ref().map(rewrite_expr),
+                    consequent: rewrite_stmts_await_to_yield(&c.consequent),
+                })
+                .collect(),
+        }),
+        Statement::Labeled(label, inner) => {
+            Statement::Labeled(label.clone(), Box::new(rewrite_stmt_await_to_yield(inner)))
+        }
+        Statement::With(e, inner) => Statement::With(
+            rewrite_expr(e),
+            Box::new(rewrite_stmt_await_to_yield(inner)),
+        ),
+    }
+}
+
+fn rewrite_for_left(left: &ForInOfLeft) -> ForInOfLeft {
+    match left {
+        ForInOfLeft::Variable(_) | ForInOfLeft::Pattern(_) => left.clone(),
+        ForInOfLeft::Expression(e) => ForInOfLeft::Expression(rewrite_expr(e)),
+    }
+}
+
+fn rewrite_expr(expr: &Expression) -> Expression {
+    match expr {
+        Expression::Await(inner) => Expression::Yield(Some(Box::new(rewrite_expr(inner))), false),
+        Expression::Function(_)
+        | Expression::ArrowFunction(_)
+        | Expression::Class(_)
+        | Expression::Literal(_)
+        | Expression::Identifier(_)
+        | Expression::This
+        | Expression::Super
+        | Expression::NewTarget
+        | Expression::ImportMeta
+        | Expression::PrivateIdentifier(_) => expr.clone(),
+        Expression::Array(elems, trailing) => Expression::Array(
+            elems.iter().map(|e| e.as_ref().map(rewrite_expr)).collect(),
+            *trailing,
+        ),
+        Expression::Object(props) => Expression::Object(
+            props
+                .iter()
+                .map(|p| Property {
+                    key: match &p.key {
+                        PropertyKey::Computed(e) => {
+                            PropertyKey::Computed(Box::new(rewrite_expr(e)))
+                        }
+                        other => other.clone(),
+                    },
+                    value: rewrite_expr(&p.value),
+                    kind: p.kind,
+                    computed: p.computed,
+                    shorthand: p.shorthand,
+                    method: p.method,
+                })
+                .collect(),
+        ),
+        Expression::Unary(op, e) => Expression::Unary(*op, Box::new(rewrite_expr(e))),
+        Expression::Binary(op, l, r) => {
+            Expression::Binary(*op, Box::new(rewrite_expr(l)), Box::new(rewrite_expr(r)))
+        }
+        Expression::Logical(op, l, r) => {
+            Expression::Logical(*op, Box::new(rewrite_expr(l)), Box::new(rewrite_expr(r)))
+        }
+        Expression::Update(op, prefix, e) => {
+            Expression::Update(*op, *prefix, Box::new(rewrite_expr(e)))
+        }
+        Expression::Assign(op, l, r) => {
+            Expression::Assign(*op, Box::new(rewrite_expr(l)), Box::new(rewrite_expr(r)))
+        }
+        Expression::Conditional(t, c, a) => Expression::Conditional(
+            Box::new(rewrite_expr(t)),
+            Box::new(rewrite_expr(c)),
+            Box::new(rewrite_expr(a)),
+        ),
+        Expression::Call(callee, args) => Expression::Call(
+            Box::new(rewrite_expr(callee)),
+            args.iter().map(rewrite_expr).collect(),
+        ),
+        Expression::New(callee, args) => Expression::New(
+            Box::new(rewrite_expr(callee)),
+            args.iter().map(rewrite_expr).collect(),
+        ),
+        Expression::Member(obj, prop) => Expression::Member(
+            Box::new(rewrite_expr(obj)),
+            match prop {
+                MemberProperty::Computed(e) => MemberProperty::Computed(Box::new(rewrite_expr(e))),
+                other => other.clone(),
+            },
+        ),
+        Expression::OptionalChain(base, chain) => {
+            Expression::OptionalChain(Box::new(rewrite_expr(base)), Box::new(rewrite_expr(chain)))
+        }
+        Expression::Comma(exprs) => Expression::Comma(exprs.iter().map(rewrite_expr).collect()),
+        Expression::Spread(e) => Expression::Spread(Box::new(rewrite_expr(e))),
+        Expression::Yield(inner, delegate) => {
+            Expression::Yield(inner.as_ref().map(|e| Box::new(rewrite_expr(e))), *delegate)
+        }
+        Expression::TaggedTemplate(tag, tl) => Expression::TaggedTemplate(
+            Box::new(rewrite_expr(tag)),
+            TemplateLiteral {
+                id: tl.id,
+                quasis: tl.quasis.clone(),
+                raw_quasis: tl.raw_quasis.clone(),
+                expressions: tl.expressions.iter().map(rewrite_expr).collect(),
+            },
+        ),
+        Expression::Template(tl) => Expression::Template(TemplateLiteral {
+            id: tl.id,
+            quasis: tl.quasis.clone(),
+            raw_quasis: tl.raw_quasis.clone(),
+            expressions: tl.expressions.iter().map(rewrite_expr).collect(),
+        }),
+        Expression::Typeof(e) => Expression::Typeof(Box::new(rewrite_expr(e))),
+        Expression::Void(e) => Expression::Void(Box::new(rewrite_expr(e))),
+        Expression::Delete(e) => Expression::Delete(Box::new(rewrite_expr(e))),
+        Expression::Sequence(exprs) => {
+            Expression::Sequence(exprs.iter().map(rewrite_expr).collect())
+        }
+        Expression::Import(spec, opts) => Expression::Import(
+            Box::new(rewrite_expr(spec)),
+            opts.as_ref().map(|o| Box::new(rewrite_expr(o))),
+        ),
+        Expression::ImportDefer(spec, opts) => Expression::ImportDefer(
+            Box::new(rewrite_expr(spec)),
+            opts.as_ref().map(|o| Box::new(rewrite_expr(o))),
+        ),
+        Expression::ImportSource(spec, opts) => Expression::ImportSource(
+            Box::new(rewrite_expr(spec)),
+            opts.as_ref().map(|o| Box::new(rewrite_expr(o))),
+        ),
+    }
 }
 
 #[cfg(test)]

@@ -63,6 +63,17 @@ impl Interpreter {
         for val in self.iterator_next_cache.values() {
             Self::collect_value_roots(val, &mut worklist);
         }
+        for afs in self.async_function_states.values() {
+            Self::collect_env_roots(&afs.func_env, &mut worklist);
+            Self::collect_value_roots(&afs.resolve_fn, &mut worklist);
+            Self::collect_value_roots(&afs.reject_fn, &mut worklist);
+            if let Some(ref v) = afs.pending_return {
+                Self::collect_value_roots(v, &mut worklist);
+            }
+            if let Some(ref v) = afs.saved_finally_exception {
+                Self::collect_value_roots(v, &mut worklist);
+            }
+        }
 
         // Mark phase (BFS)
         while let Some(id) = worklist.pop() {

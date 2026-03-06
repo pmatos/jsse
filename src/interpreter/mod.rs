@@ -80,6 +80,8 @@ pub struct Interpreter {
     last_identifier_with_base: Option<u64>,
     pub(crate) async_gen_queues: HashMap<u64, std::collections::VecDeque<AsyncGenRequest>>,
     pub(crate) async_gen_yield_pending: bool,
+    pub(crate) async_function_states: HashMap<u64, AsyncFunctionState>,
+    next_async_function_id: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -192,6 +194,8 @@ impl Interpreter {
             last_identifier_with_base: None,
             async_gen_queues: HashMap::new(),
             async_gen_yield_pending: false,
+            async_function_states: HashMap::new(),
+            next_async_function_id: 0,
         };
         interp.setup_globals();
         interp

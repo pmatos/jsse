@@ -268,14 +268,8 @@ fn analyze_statement(
                         );
                     }
                 }
-                ForInOfLeft::Pattern(pat) => {
-                    collect_pattern_vars(
-                        pat,
-                        VarKind::Var,
-                        ctx.scope_depth,
-                        &mut analysis.local_vars,
-                        ctx,
-                    );
+                ForInOfLeft::Pattern(_) => {
+                    // Pattern LHS is an assignment target, not a declaration
                 }
                 ForInOfLeft::Expression(expr) => {
                     analyze_expression(expr, analysis, ctx, true);
@@ -316,14 +310,8 @@ fn analyze_statement(
                         );
                     }
                 }
-                ForInOfLeft::Pattern(pat) => {
-                    collect_pattern_vars(
-                        pat,
-                        VarKind::Var,
-                        ctx.scope_depth,
-                        &mut analysis.local_vars,
-                        ctx,
-                    );
+                ForInOfLeft::Pattern(_) => {
+                    // Pattern LHS is an assignment target, not a declaration
                 }
                 ForInOfLeft::Expression(expr) => {
                     analyze_expression(expr, analysis, ctx, true);

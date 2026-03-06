@@ -192,6 +192,19 @@ pub struct TryContextInfo {
     pub entered_finally: bool,
 }
 
+pub struct AsyncFunctionState {
+    pub state_machine: Rc<GeneratorStateMachine>,
+    pub func_env: EnvRef,
+    pub is_strict: bool,
+    pub current_state: usize,
+    pub try_stack: Vec<TryContextInfo>,
+    pub pending_binding: Option<SentValueBinding>,
+    pub pending_return: Option<JsValue>,
+    pub saved_finally_exception: Option<JsValue>,
+    pub resolve_fn: JsValue,
+    pub reject_fn: JsValue,
+}
+
 #[derive(Debug, Clone)]
 pub struct DelegatedIteratorInfo {
     pub iterator: JsValue,

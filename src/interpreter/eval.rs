@@ -6898,6 +6898,10 @@ impl Interpreter {
                         self.create_iter_result_object(JsValue::Undefined, true),
                     );
                 }
+
+                StateTerminator::Await { .. } => {
+                    unreachable!("Await terminator in sync generator")
+                }
             }
         }
     }
@@ -9784,6 +9788,10 @@ impl Interpreter {
                     let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[iter_result]);
                     self.drain_microtasks();
                     return Completion::Normal(promise);
+                }
+
+                StateTerminator::Await { .. } => {
+                    unreachable!("Await terminator in async generator")
                 }
             }
         }
@@ -16153,29 +16161,678 @@ impl Interpreter {
 
         func_env.borrow_mut().strict = is_strict;
         self.in_tail_position = false;
-        let result = self.exec_statements(body, &func_env);
-        let result = self.dispose_resources(&func_env, result);
-        let result = match result {
-            Completion::TailCall { func, this, args } => self.call_function(&func, &this, &args),
-            other => other,
-        };
-        match result {
-            Completion::Return(v) | Completion::Normal(v) => {
-                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[v]);
-            }
-            Completion::Empty => {
-                let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[JsValue::Undefined]);
-            }
-            Completion::Throw(e) => {
-                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-            }
-            _ => {}
+
+        let sm = Rc::new(
+            crate::interpreter::generator_transform::transform_async_function(body, params),
+        );
+
+        for tv in &sm.temp_vars {
+            func_env.borrow_mut().declare(tv, BindingKind::Var);
         }
-        self.drain_microtasks();
-        self.gc_unroot_value(&reject_fn);
-        self.gc_unroot_value(&resolve_fn);
+        for lv in &sm.local_vars {
+            if !func_env.borrow().bindings.contains_key(&lv.name) {
+                func_env.borrow_mut().declare(&lv.name, BindingKind::Var);
+            }
+        }
+
+        let async_id = self.next_async_function_id;
+        self.next_async_function_id += 1;
+
+        self.async_function_states.insert(
+            async_id,
+            AsyncFunctionState {
+                state_machine: sm,
+                func_env,
+                is_strict,
+                current_state: 0,
+                try_stack: vec![],
+                pending_binding: None,
+                pending_return: None,
+                saved_finally_exception: None,
+                resolve_fn,
+                reject_fn,
+            },
+        );
+
+        self.async_function_resume(async_id, JsValue::Undefined, false);
+
         self.gc_unroot_value(&promise);
         Completion::Normal(promise)
+    }
+
+    fn async_function_resume(&mut self, async_id: u64, sent_value: JsValue, is_error: bool) {
+        use crate::interpreter::generator_transform::{SentValueBindingKind, StateTerminator};
+
+        let Some(state) = self.async_function_states.remove(&async_id) else {
+            return;
+        };
+
+        let AsyncFunctionState {
+            state_machine,
+            func_env,
+            is_strict,
+            current_state,
+            mut try_stack,
+            pending_binding,
+            pending_return: saved_pending_return,
+            saved_finally_exception: restored_saved_finally_exception,
+            resolve_fn,
+            reject_fn,
+        } = state;
+
+        if let Some(binding) = pending_binding {
+            match &binding.kind {
+                SentValueBindingKind::Variable(name) => {
+                    func_env.borrow_mut().set(name, sent_value.clone()).ok();
+                }
+                SentValueBindingKind::Pattern(pattern) => {
+                    let _ =
+                        self.bind_pattern(pattern, sent_value.clone(), BindingKind::Var, &func_env);
+                }
+                SentValueBindingKind::Discard | SentValueBindingKind::InlineYield { .. } => {}
+            }
+        }
+
+        // If the sent_value is an error (from a rejected promise), route through try stack
+        let mut pending_exception: Option<JsValue> = if is_error { Some(sent_value) } else { None };
+
+        // Re-insert state so GC can trace it during execution
+        self.async_function_states.insert(
+            async_id,
+            AsyncFunctionState {
+                state_machine: state_machine.clone(),
+                func_env: func_env.clone(),
+                is_strict,
+                current_state,
+                try_stack: try_stack.clone(),
+                pending_binding: None,
+                pending_return: None,
+                saved_finally_exception: None,
+                resolve_fn: resolve_fn.clone(),
+                reject_fn: reject_fn.clone(),
+            },
+        );
+
+        func_env.borrow_mut().strict = is_strict;
+        let mut current_id = current_state;
+        let mut pending_return: Option<JsValue> = saved_pending_return;
+        let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
+
+        // Helper: route a return through finally blocks in try_stack
+        macro_rules! route_return {
+            ($val:expr) => {{
+                let ret_val: JsValue = $val;
+                let mut routed = false;
+                for i in (0..try_stack.len()).rev() {
+                    if !try_stack[i].entered_finally
+                        && let Some(finally_state) = try_stack[i].finally_state
+                    {
+                        pending_return = Some(ret_val.clone());
+                        current_id = finally_state;
+                        routed = true;
+                        break;
+                    }
+                }
+                if !routed {
+                    let disp = self.dispose_resources(&func_env, Completion::Return(ret_val));
+                    match disp {
+                        Completion::Return(v) => {
+                            self.async_function_states.remove(&async_id);
+                            let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[v]);
+                            return;
+                        }
+                        Completion::Throw(e) => {
+                            pending_exception = Some(e);
+                        }
+                        _ => {}
+                    }
+                }
+            }};
+        }
+
+        loop {
+            if current_id >= state_machine.states.len() {
+                self.async_fn_complete(async_id, &func_env, &resolve_fn, &reject_fn);
+                return;
+            }
+            let state_ref = &state_machine.states[current_id];
+            let statements = &state_ref.statements;
+            let terminator = state_ref.terminator.clone();
+
+            // Route pending exception through try stack
+            // Skip routing if we're at EnterCatch/EnterFinally (already routed to handler)
+            if pending_exception.is_some()
+                && !matches!(
+                    terminator,
+                    StateTerminator::EnterCatch { .. } | StateTerminator::EnterFinally { .. }
+                )
+                && let Some(exc) = pending_exception.take()
+            {
+                let mut handled = false;
+                for i in (0..try_stack.len()).rev() {
+                    if !try_stack[i].entered_catch
+                        && !try_stack[i].entered_finally
+                        && let Some(catch_state) = try_stack[i].catch_state
+                    {
+                        try_stack.truncate(i);
+                        pending_exception = Some(exc.clone());
+                        current_id = catch_state;
+                        handled = true;
+                        break;
+                    }
+                    if !try_stack[i].entered_finally
+                        && let Some(finally_state) = try_stack[i].finally_state
+                    {
+                        pending_exception = Some(exc.clone());
+                        current_id = finally_state;
+                        handled = true;
+                        break;
+                    }
+                }
+                if handled {
+                    continue;
+                }
+                let disp = self.dispose_resources(&func_env, Completion::Throw(exc));
+                let exc = match disp {
+                    Completion::Throw(e) => e,
+                    _ => JsValue::Undefined,
+                };
+                self.async_function_states.remove(&async_id);
+                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exc]);
+                return;
+            }
+
+            let stmt_result = self.exec_statements(statements, &func_env);
+
+            match &stmt_result {
+                Completion::Throw(e) => {
+                    let e = e.clone();
+                    pending_exception = Some(e);
+                    continue;
+                }
+                Completion::Return(v) => {
+                    let v = v.clone();
+                    route_return!(v);
+                    continue;
+                }
+                _ => {}
+            }
+
+            // Handle Completion::Yield from inline awaits (await expressions not
+            // decomposed by the state machine transform)
+            if let Completion::Yield(yield_val) = stmt_result {
+                let yield_val = yield_val.clone();
+                self.async_fn_suspend_at_await(
+                    async_id,
+                    &state_machine,
+                    &func_env,
+                    is_strict,
+                    current_id,
+                    &try_stack,
+                    None,
+                    pending_return.take(),
+                    saved_finally_exception.take(),
+                    &resolve_fn,
+                    &reject_fn,
+                    &yield_val,
+                );
+                return;
+            }
+
+            match terminator {
+                StateTerminator::Await {
+                    ref value,
+                    resume_state,
+                    ref sent_value_binding,
+                } => {
+                    let await_val = match self.eval_expr(value, &func_env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            pending_exception = Some(e);
+                            continue;
+                        }
+                        Completion::Yield(v) => {
+                            self.async_fn_suspend_at_await(
+                                async_id,
+                                &state_machine,
+                                &func_env,
+                                is_strict,
+                                current_id,
+                                &try_stack,
+                                sent_value_binding.clone(),
+                                pending_return.take(),
+                                saved_finally_exception.take(),
+                                &resolve_fn,
+                                &reject_fn,
+                                &v,
+                            );
+                            return;
+                        }
+                        _ => JsValue::Undefined,
+                    };
+
+                    self.async_fn_suspend_at_await(
+                        async_id,
+                        &state_machine,
+                        &func_env,
+                        is_strict,
+                        resume_state,
+                        &try_stack,
+                        sent_value_binding.clone(),
+                        pending_return.take(),
+                        saved_finally_exception.take(),
+                        &resolve_fn,
+                        &reject_fn,
+                        &await_val,
+                    );
+                    return;
+                }
+
+                StateTerminator::Return(ref expr) => {
+                    let ret_val = if let Some(e) = expr {
+                        match self.eval_expr(e, &func_env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                pending_exception = Some(e);
+                                continue;
+                            }
+                            _ => JsValue::Undefined,
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+
+                    route_return!(ret_val);
+                    continue;
+                }
+
+                StateTerminator::Throw(ref expr) => {
+                    let throw_val = match self.eval_expr(expr, &func_env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => e,
+                        _ => JsValue::Undefined,
+                    };
+                    pending_exception = Some(throw_val);
+                    continue;
+                }
+
+                StateTerminator::Goto(next) => {
+                    current_id = next;
+                }
+
+                StateTerminator::ConditionalGoto {
+                    ref condition,
+                    true_state,
+                    false_state,
+                } => {
+                    let cond_val = match self.eval_expr(condition, &func_env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            pending_exception = Some(e);
+                            continue;
+                        }
+                        _ => JsValue::Undefined,
+                    };
+                    current_id = if self.to_boolean_val(&cond_val) {
+                        true_state
+                    } else {
+                        false_state
+                    };
+                }
+
+                StateTerminator::TryEnter {
+                    try_state,
+                    ref catch_state,
+                    finally_state,
+                    after_state,
+                } => {
+                    try_stack.push(TryContextInfo {
+                        catch_state: catch_state.as_ref().map(|c| c.state),
+                        finally_state,
+                        _after_state: after_state,
+                        entered_catch: false,
+                        entered_finally: false,
+                    });
+                    current_id = try_state;
+                }
+
+                StateTerminator::TryExit { after_state } => {
+                    try_stack.pop();
+                    if let Some(exc) = pending_exception.take() {
+                        pending_exception = Some(exc);
+                        continue;
+                    }
+                    if let Some(ret_val) = pending_return.take() {
+                        route_return!(ret_val);
+                        continue;
+                    }
+                    // Restore any exception saved from before the finally block
+                    if let Some(exc) = saved_finally_exception.take() {
+                        pending_exception = Some(exc);
+                        continue;
+                    }
+                    current_id = after_state;
+                }
+
+                StateTerminator::EnterCatch {
+                    body_state,
+                    ref param,
+                } => {
+                    if let Some(ctx) = try_stack.last_mut() {
+                        ctx.entered_catch = true;
+                    }
+                    if let Some(pattern) = param {
+                        let exc_val = pending_exception.take().unwrap_or(JsValue::Undefined);
+                        let _ = self.bind_pattern(pattern, exc_val, BindingKind::Let, &func_env);
+                    }
+                    current_id = body_state;
+                }
+
+                StateTerminator::EnterFinally { body_state } => {
+                    if let Some(ctx) = try_stack.last_mut() {
+                        ctx.entered_finally = true;
+                    }
+                    // Park any pending exception so the finally body runs normally
+                    saved_finally_exception = pending_exception.take();
+                    current_id = body_state;
+                }
+
+                StateTerminator::SwitchDispatch {
+                    ref discriminant,
+                    ref cases,
+                    default_state,
+                    after_state,
+                } => {
+                    let disc_val = match self.eval_expr(discriminant, &func_env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            pending_exception = Some(e);
+                            continue;
+                        }
+                        _ => JsValue::Undefined,
+                    };
+                    let mut matched = false;
+                    for case in cases {
+                        let case_val = match self.eval_expr(&case.test, &func_env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                pending_exception = Some(e);
+                                matched = true;
+                                break;
+                            }
+                            _ => JsValue::Undefined,
+                        };
+                        if strict_equality(&disc_val, &case_val) {
+                            current_id = case.state;
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if pending_exception.is_some() {
+                        continue;
+                    }
+                    if !matched {
+                        current_id = default_state.unwrap_or(after_state);
+                    }
+                }
+
+                StateTerminator::ForOfInit {
+                    ref iterable,
+                    ref iter_var,
+                    head_state,
+                    is_await,
+                    ..
+                } => {
+                    let iterable_val = match self.eval_expr(iterable, &func_env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            pending_exception = Some(e);
+                            continue;
+                        }
+                        _ => JsValue::Undefined,
+                    };
+                    let iterator = if is_await {
+                        match self.get_async_iterator(&iterable_val) {
+                            Ok(it) => it,
+                            Err(_) => match self.get_iterator(&iterable_val) {
+                                Ok(it) => it,
+                                Err(e) => {
+                                    pending_exception = Some(e);
+                                    continue;
+                                }
+                            },
+                        }
+                    } else {
+                        match self.get_iterator(&iterable_val) {
+                            Ok(it) => it,
+                            Err(e) => {
+                                pending_exception = Some(e);
+                                continue;
+                            }
+                        }
+                    };
+                    self.gc_root_value(&iterator);
+                    func_env.borrow_mut().set(iter_var, iterator).ok();
+                    current_id = head_state;
+                }
+
+                StateTerminator::ForOfHead {
+                    ref iter_var,
+                    ref left,
+                    body_state,
+                    after_state,
+                    is_await,
+                    ..
+                } => {
+                    let iterator = func_env
+                        .borrow()
+                        .get(iter_var)
+                        .unwrap_or(JsValue::Undefined);
+                    let step_result = match self.iterator_next(&iterator) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            pending_exception = Some(e);
+                            continue;
+                        }
+                    };
+                    let step_result = if is_await {
+                        match self.await_value(&step_result) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => {
+                                pending_exception = Some(e);
+                                continue;
+                            }
+                            _ => step_result,
+                        }
+                    } else {
+                        step_result
+                    };
+                    let done = match self.iterator_complete(&step_result) {
+                        Ok(d) => d,
+                        Err(e) => {
+                            pending_exception = Some(e);
+                            continue;
+                        }
+                    };
+                    if done {
+                        current_id = after_state;
+                    } else {
+                        let value = match self.iterator_value(&step_result) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                pending_exception = Some(e);
+                                continue;
+                            }
+                        };
+                        match left {
+                            ForInOfLeft::Variable(decl) => {
+                                if let Some(d) = decl.declarations.first() {
+                                    let _ = self.bind_pattern(
+                                        &d.pattern,
+                                        value,
+                                        match decl.kind {
+                                            VarKind::Var => BindingKind::Var,
+                                            VarKind::Let | VarKind::Using | VarKind::AwaitUsing => {
+                                                BindingKind::Let
+                                            }
+                                            VarKind::Const => BindingKind::Const,
+                                        },
+                                        &func_env,
+                                    );
+                                }
+                            }
+                            ForInOfLeft::Pattern(p) => {
+                                let _ = self.bind_pattern(p, value, BindingKind::Var, &func_env);
+                            }
+                            ForInOfLeft::Expression(e) => {
+                                if let Expression::Identifier(name) = e {
+                                    func_env.borrow_mut().set(name, value).ok();
+                                }
+                            }
+                        }
+                        current_id = body_state;
+                    }
+                }
+
+                StateTerminator::Completed => {
+                    self.async_fn_complete(async_id, &func_env, &resolve_fn, &reject_fn);
+                    return;
+                }
+
+                StateTerminator::Yield { .. } => {
+                    unreachable!("Yield terminator in async function")
+                }
+            }
+        }
+    }
+
+    fn async_fn_complete(
+        &mut self,
+        async_id: u64,
+        func_env: &EnvRef,
+        resolve_fn: &JsValue,
+        reject_fn: &JsValue,
+    ) {
+        let disp = self.dispose_resources(func_env, Completion::Normal(JsValue::Undefined));
+        self.async_function_states.remove(&async_id);
+        match disp {
+            Completion::Throw(e) => {
+                let _ = self.call_function(reject_fn, &JsValue::Undefined, &[e]);
+            }
+            _ => {
+                let _ = self.call_function(resolve_fn, &JsValue::Undefined, &[JsValue::Undefined]);
+            }
+        }
+    }
+
+    fn async_fn_suspend_at_await(
+        &mut self,
+        async_id: u64,
+        state_machine: &Rc<crate::interpreter::generator_transform::GeneratorStateMachine>,
+        func_env: &EnvRef,
+        is_strict: bool,
+        resume_state: usize,
+        try_stack: &[TryContextInfo],
+        sent_value_binding: Option<crate::interpreter::generator_transform::SentValueBinding>,
+        pending_return: Option<JsValue>,
+        saved_finally_exception: Option<JsValue>,
+        resolve_fn: &JsValue,
+        reject_fn: &JsValue,
+        await_val: &JsValue,
+    ) {
+        let promise = self.promise_resolve_value(await_val);
+        let promise_id = if let JsValue::Object(ref o) = promise {
+            o.id
+        } else {
+            0
+        };
+
+        // Save state for resumption
+        self.async_function_states.insert(
+            async_id,
+            AsyncFunctionState {
+                state_machine: state_machine.clone(),
+                func_env: func_env.clone(),
+                is_strict,
+                current_state: resume_state,
+                try_stack: try_stack.to_vec(),
+                pending_binding: sent_value_binding,
+                pending_return,
+                saved_finally_exception,
+                resolve_fn: resolve_fn.clone(),
+                reject_fn: reject_fn.clone(),
+            },
+        );
+
+        // Schedule continuation based on promise state
+        let pstate = self.get_promise_state(promise_id);
+        match pstate {
+            Some(PromiseState::Fulfilled(v)) => {
+                let value = v.clone();
+                self.microtask_queue.push((
+                    vec![resolve_fn.clone(), reject_fn.clone(), value.clone()],
+                    Box::new(move |interp| {
+                        interp.async_function_resume(async_id, value, false);
+                        Completion::Normal(JsValue::Undefined)
+                    }),
+                ));
+            }
+            Some(PromiseState::Rejected(e)) => {
+                let err = e.clone();
+                self.microtask_queue.push((
+                    vec![resolve_fn.clone(), reject_fn.clone(), err.clone()],
+                    Box::new(move |interp| {
+                        interp.async_function_resume(async_id, err, true);
+                        Completion::Normal(JsValue::Undefined)
+                    }),
+                ));
+            }
+            _ => {
+                // Pending or not a promise — attach handlers
+                let resolve_c = resolve_fn.clone();
+                let reject_c = reject_fn.clone();
+                let fulfill_handler = self.create_function(JsFunction::native(
+                    "asyncFnFulfill".to_string(),
+                    1,
+                    move |interp, _this, args| {
+                        let v = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        interp.async_function_resume(async_id, v, false);
+                        Completion::Normal(JsValue::Undefined)
+                    },
+                ));
+
+                let reject_handler = self.create_function(JsFunction::native(
+                    "asyncFnReject".to_string(),
+                    1,
+                    move |interp, _this, args| {
+                        let e = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        interp.async_function_resume(async_id, e, true);
+                        Completion::Normal(JsValue::Undefined)
+                    },
+                ));
+
+                if let Some(obj) = self.get_object(promise_id) {
+                    let mut ob = obj.borrow_mut();
+                    if let Some(ref mut pd) = ob.promise_data {
+                        pd.is_handled = true;
+                        pd.fulfill_reactions.push(PromiseReaction {
+                            handler: Some(fulfill_handler),
+                            promise_id: None,
+                            resolve: resolve_c,
+                            reject: reject_c,
+                            reaction_type: PromiseReactionType::Fulfill,
+                        });
+                        pd.reject_reactions.push(PromiseReaction {
+                            handler: Some(reject_handler),
+                            promise_id: None,
+                            resolve: JsValue::Undefined,
+                            reject: JsValue::Undefined,
+                            reaction_type: PromiseReactionType::Reject,
+                        });
+                    }
+                }
+            }
+        }
     }
 
     /// Spec [[Get]] — reads a property from an object, invoking getters.
