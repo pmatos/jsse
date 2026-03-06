@@ -5776,6 +5776,8 @@ impl Interpreter {
                         continue;
                     }
                 }
+                // §27.5.3.3: DisposeResources when generator throws
+                let disp = self.dispose_resources(&func_env, Completion::Throw(e));
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
                     state_machine,
                     func_env,
@@ -5789,9 +5791,32 @@ impl Interpreter {
                     pending_return: None,
                 });
                 self.generator_inline_iters.remove(&o.id);
-                return Completion::Throw(e);
+                return disp;
             }
             if let Completion::Return(v) = stmt_result {
+                // §27.5.3.3: DisposeResources when generator returns
+                let disp = self.dispose_resources(&func_env, Completion::Return(v));
+                let ret_val = match disp {
+                    Completion::Return(v) => v,
+                    Completion::Throw(e) => {
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                _sent_value: JsValue::Undefined,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                                pending_return: None,
+                            });
+                        self.generator_inline_iters.remove(&o.id);
+                        return Completion::Throw(e);
+                    }
+                    _ => JsValue::Undefined,
+                };
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
                     state_machine,
                     func_env,
@@ -5805,7 +5830,7 @@ impl Interpreter {
                     pending_return: None,
                 });
                 self.generator_inline_iters.remove(&o.id);
-                return Completion::Normal(self.create_iter_result_object(v, true));
+                return Completion::Normal(self.create_iter_result_object(ret_val, true));
             }
 
             match &terminator {
@@ -6123,6 +6148,10 @@ impl Interpreter {
                         match self.eval_expr(e, &func_env) {
                             Completion::Normal(v) => v,
                             Completion::Throw(err) => {
+                                let disp = self.dispose_resources(
+                                    &func_env,
+                                    Completion::Throw(err),
+                                );
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineGenerator {
                                         state_machine,
@@ -6137,12 +6166,39 @@ impl Interpreter {
                                         pending_return: None,
                                     });
                                 self.generator_inline_iters.remove(&o.id);
-                                return Completion::Throw(err);
+                                return disp;
                             }
                             other => return other,
                         }
                     } else {
                         JsValue::Undefined
+                    };
+
+                    // §27.5.3.3: DisposeResources when generator completes via return
+                    let disp = self.dispose_resources(
+                        &func_env,
+                        Completion::Return(ret_val),
+                    );
+                    let ret_val = match disp {
+                        Completion::Return(v) => v,
+                        Completion::Throw(e) => {
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::Completed,
+                                    _sent_value: JsValue::Undefined,
+                                    try_stack: vec![],
+                                    pending_binding: None,
+                                    delegated_iterator: None,
+                                    pending_exception: None,
+                                    pending_return: None,
+                                });
+                            self.generator_inline_iters.remove(&o.id);
+                            return Completion::Throw(e);
+                        }
+                        _ => JsValue::Undefined,
                     };
 
                     obj_rc.borrow_mut().iterator_state =
@@ -6379,6 +6435,27 @@ impl Interpreter {
                 }
 
                 StateTerminator::Completed => {
+                    // §27.5.3.3 GeneratorStart: DisposeResources when generator completes
+                    let disp = self.dispose_resources(
+                        &func_env,
+                        Completion::Normal(JsValue::Undefined),
+                    );
+                    if let Completion::Throw(e) = disp {
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                _sent_value: JsValue::Undefined,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                                pending_return: None,
+                            });
+                        return Completion::Throw(e);
+                    }
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineGenerator {
                             state_machine,
@@ -7312,6 +7389,12 @@ impl Interpreter {
                         continue;
                     }
                 }
+                // §27.6.3.3: DisposeResources when async generator throws
+                let disp = self.dispose_resources(&func_env, Completion::Throw(e));
+                let e = match disp {
+                    Completion::Throw(e) => e,
+                    _ => unreachable!(),
+                };
                 obj_rc.borrow_mut().iterator_state =
                     Some(IteratorState::StateMachineAsyncGenerator {
                         state_machine,
@@ -7330,6 +7413,30 @@ impl Interpreter {
                 return Completion::Normal(promise);
             }
             if let Completion::Return(v) = stmt_result {
+                // §27.6.3.3: DisposeResources when async generator returns
+                let disp = self.dispose_resources(&func_env, Completion::Return(v));
+                let v = match disp {
+                    Completion::Return(v) => v,
+                    Completion::Throw(e) => {
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineAsyncGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                _sent_value: JsValue::Undefined,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                                pending_return: None,
+                            });
+                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                        self.drain_microtasks();
+                        return Completion::Normal(promise);
+                    }
+                    _ => JsValue::Undefined,
+                };
                 let awaited = match self.await_value(&v) {
                     Completion::Normal(av) => av,
                     Completion::Throw(e) => {
@@ -7757,6 +7864,14 @@ impl Interpreter {
                         match self.eval_expr(e, &func_env) {
                             Completion::Normal(v) => v,
                             Completion::Throw(err) => {
+                                let disp = self.dispose_resources(
+                                    &func_env,
+                                    Completion::Throw(err),
+                                );
+                                let err = match disp {
+                                    Completion::Throw(e) => e,
+                                    _ => unreachable!(),
+                                };
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -7785,6 +7900,34 @@ impl Interpreter {
                     } else {
                         JsValue::Undefined
                     };
+
+                    // §27.6.3.3: DisposeResources when async generator returns
+                    let disp = self.dispose_resources(
+                        &func_env,
+                        Completion::Return(ret_val.clone()),
+                    );
+                    match disp {
+                        Completion::Return(_) => {}
+                        Completion::Throw(e) => {
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineAsyncGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::Completed,
+                                    _sent_value: JsValue::Undefined,
+                                    try_stack: vec![],
+                                    pending_binding: None,
+                                    delegated_iterator: None,
+                                    pending_exception: None,
+                                    pending_return: None,
+                                });
+                            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                            self.drain_microtasks();
+                            return Completion::Normal(promise);
+                        }
+                        _ => {}
+                    }
 
                     let awaited = match self.await_value(&ret_val) {
                         Completion::Normal(v) => v,
@@ -8084,6 +8227,29 @@ impl Interpreter {
                 }
 
                 StateTerminator::Completed => {
+                    // §27.6.3.3: DisposeResources when async generator completes
+                    let disp = self.dispose_resources(
+                        &func_env,
+                        Completion::Normal(JsValue::Undefined),
+                    );
+                    if let Completion::Throw(e) = disp {
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineAsyncGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                _sent_value: JsValue::Undefined,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                                pending_return: None,
+                            });
+                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                        self.drain_microtasks();
+                        return Completion::Normal(promise);
+                    }
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineAsyncGenerator {
                             state_machine,

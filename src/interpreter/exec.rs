@@ -175,7 +175,41 @@ impl Interpreter {
         gb.extensible
     }
 
-    /// Pre-check all global function/var declarations per §16.1.7.
+    /// Collect lexical declaration names (let/const/class) from top-level statements.
+    fn collect_lex_names(stmts: &[Statement]) -> Vec<String> {
+        let mut names = Vec::new();
+        for stmt in stmts {
+            match stmt {
+                Statement::Variable(decl)
+                    if matches!(decl.kind, VarKind::Let | VarKind::Const) =>
+                {
+                    for d in &decl.declarations {
+                        Self::collect_pattern_names(&d.pattern, &mut names);
+                    }
+                }
+                Statement::ClassDeclaration(c) if !c.name.is_empty() => {
+                    names.push(c.name.clone());
+                }
+                _ => {}
+            }
+        }
+        names
+    }
+
+    /// §9.1.1.4.13 HasRestrictedGlobalProperty
+    fn has_restricted_global_property(
+        global_obj: &Rc<RefCell<JsObjectData>>,
+        name: &str,
+    ) -> bool {
+        let gb = global_obj.borrow();
+        if let Some(desc) = gb.properties.get(name) {
+            desc.configurable == Some(false)
+        } else {
+            false
+        }
+    }
+
+    /// Pre-check all global function/var/lex declarations per §16.1.7.
     /// Returns Some(Completion::Throw) if any check fails, None if all OK.
     fn check_global_declarations(
         &mut self,
@@ -188,11 +222,64 @@ impl Interpreter {
             None => return None,
         };
 
+        // §16.1.7 step 3: Check lexical names
+        let lex_names = Self::collect_lex_names(stmts);
+        for name in &lex_names {
+            // Step 3a: If envRec.HasLexicalDeclaration(name) is true, throw SyntaxError
+            if let Some(binding) = env.borrow().bindings.get(name) {
+                if matches!(binding.kind, BindingKind::Let | BindingKind::Const) {
+                    let err = self.create_error(
+                        "SyntaxError",
+                        &format!("Identifier '{}' has already been declared", name),
+                    );
+                    return Some(Completion::Throw(err));
+                }
+            }
+            // Step 3b-d: If HasRestrictedGlobalProperty(name) is true, throw SyntaxError
+            // Non-eval var/function declarations create non-configurable global properties,
+            // so this also catches var-lex collisions for non-eval declarations.
+            if Self::has_restricted_global_property(&global_obj, name) {
+                let err = self.create_error(
+                    "SyntaxError",
+                    &format!("Identifier '{}' has already been declared", name),
+                );
+                return Some(Completion::Throw(err));
+            }
+        }
+
+        // §16.1.7 step 6: For each var name, check HasLexicalDeclaration
+        let mut var_names = std::collections::HashSet::new();
+        Self::collect_var_names_from_stmts(stmts, &mut var_names);
+        for name in &var_names {
+            if let Some(binding) = env.borrow().bindings.get(name) {
+                if matches!(binding.kind, BindingKind::Let | BindingKind::Const) {
+                    let err = self.create_error(
+                        "SyntaxError",
+                        &format!("Identifier '{}' has already been declared", name),
+                    );
+                    return Some(Completion::Throw(err));
+                }
+            }
+        }
+
         // Collect function declaration names (step 10)
         let mut declared_function_names: Vec<String> = Vec::new();
         for stmt in stmts.iter().rev() {
             if let Some(f) = Self::unwrap_labeled_function(stmt) {
                 if !declared_function_names.contains(&f.name) {
+                    // Step 6 also applies to function decl names
+                    if let Some(binding) = env.borrow().bindings.get(&f.name) {
+                        if matches!(binding.kind, BindingKind::Let | BindingKind::Const) {
+                            let err = self.create_error(
+                                "SyntaxError",
+                                &format!(
+                                    "Identifier '{}' has already been declared",
+                                    f.name
+                                ),
+                            );
+                            return Some(Completion::Throw(err));
+                        }
+                    }
                     if !Self::can_declare_global_function(&global_obj, &f.name) {
                         let err = self.create_type_error(&format!(
                             "Cannot declare global function '{}'",
@@ -206,8 +293,6 @@ impl Interpreter {
         }
 
         // Collect var declaration names (step 12)
-        let mut var_names = std::collections::HashSet::new();
-        Self::collect_var_names_from_stmts(stmts, &mut var_names);
         for name in &var_names {
             if !declared_function_names.contains(name) {
                 if !Self::can_declare_global_var(&global_obj, name) {
@@ -222,11 +307,6 @@ impl Interpreter {
     }
 
     fn hoist_function_decl(&mut self, f: &FunctionDecl, env: &EnvRef, is_global: bool) {
-        if is_global {
-            env.borrow_mut().declare_global_var(&f.name);
-        } else {
-            env.borrow_mut().declare(&f.name, BindingKind::Var);
-        }
         let enclosing_strict = env.borrow().strict;
         let func = JsFunction::User {
             name: Some(f.name.clone()),
@@ -242,7 +322,14 @@ impl Interpreter {
             captured_new_target: None,
         };
         let val = self.create_function(func);
-        let _ = env.borrow_mut().set(&f.name, val);
+        if is_global {
+            // §16.1.7 step 17c: CreateGlobalFunctionBinding(fn, fo, false)
+            env.borrow_mut()
+                .declare_global_function_binding(&f.name, val, false);
+        } else {
+            env.borrow_mut().declare(&f.name, BindingKind::Var);
+            let _ = env.borrow_mut().set(&f.name, val);
+        }
     }
 
     /// §14.2.2 BlockDeclarationInstantiation: Hoist let/const/class declarations as
@@ -2102,8 +2189,23 @@ impl Interpreter {
         value: &JsValue,
         hint: DisposeHint,
     ) -> Result<(), JsValue> {
-        // §AddDisposableResource step 1: early return for null/undefined
+        // §AddDisposableResource step 1a: early return for null/undefined only for sync-dispose
         if matches!(value, JsValue::Null | JsValue::Undefined) {
+            if hint == DisposeHint::Sync {
+                return Ok(());
+            }
+            // For async-dispose, we still need a resource record with method=undefined
+            // so that DisposeResources will perform Await(undefined) per §10.4.4.3 Dispose step 3
+            let resource = DisposableResource {
+                value: JsValue::Undefined,
+                hint,
+                dispose_method: JsValue::Undefined,
+            };
+            let mut env_ref = env.borrow_mut();
+            if env_ref.dispose_stack.is_none() {
+                env_ref.dispose_stack = Some(Vec::new());
+            }
+            env_ref.dispose_stack.as_mut().unwrap().push(resource);
             return Ok(());
         }
 
@@ -2186,7 +2288,12 @@ impl Interpreter {
         let _had_error = current_error.is_some();
 
         for resource in &stack {
-            let result = self.call_function(&resource.dispose_method, &resource.value, &[]);
+            // §10.4.4.3 Dispose: If method is undefined, result is undefined; else Call(method, V)
+            let result = if matches!(resource.dispose_method, JsValue::Undefined) {
+                Completion::Normal(JsValue::Undefined)
+            } else {
+                self.call_function(&resource.dispose_method, &resource.value, &[])
+            };
             match result {
                 Completion::Normal(v) => {
                     if resource.hint == DisposeHint::Async {
