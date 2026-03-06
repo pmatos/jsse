@@ -59,6 +59,27 @@ pub enum StateTerminator {
         default_state: Option<usize>,
         after_state: usize,
     },
+    ForOfInit {
+        iterable: Expression,
+        iter_var: String,
+        #[allow(dead_code)]
+        next_var: String,
+        #[allow(dead_code)]
+        left: ForInOfLeft,
+        head_state: usize,
+        #[allow(dead_code)]
+        after_state: usize,
+        is_await: bool,
+    },
+    ForOfHead {
+        iter_var: String,
+        #[allow(dead_code)]
+        next_var: String,
+        left: ForInOfLeft,
+        body_state: usize,
+        after_state: usize,
+        is_await: bool,
+    },
     Completed,
 }
 
@@ -1089,10 +1110,55 @@ fn transform_for_in_statement(
 fn transform_for_of_statement(
     for_of_stmt: &ForOfStatement,
     ctx: &mut TransformContext,
-    _after_state: usize,
+    after_state: usize,
 ) {
-    // Emit the for-of statement as-is and let runtime handle
-    ctx.emit_statement(Statement::ForOf(for_of_stmt.clone()));
+    let after_loop = if after_state == usize::MAX {
+        ctx.new_state()
+    } else {
+        after_state
+    };
+
+    let head_state = ctx.new_state();
+    let body_state = ctx.new_state();
+
+    let iter_var = ctx.new_temp_var("forofiter");
+    let next_var = ctx.new_temp_var("forofnext");
+
+    ctx.break_targets.insert(None, after_loop);
+    ctx.continue_targets.insert(None, head_state);
+
+    ctx.finalize_current_state(StateTerminator::ForOfInit {
+        iterable: for_of_stmt.right.clone(),
+        iter_var: iter_var.clone(),
+        next_var: next_var.clone(),
+        left: for_of_stmt.left.clone(),
+        head_state,
+        after_state: after_loop,
+        is_await: for_of_stmt.is_await,
+    });
+
+    ctx.current_state_id = head_state;
+    ctx.finalize_current_state(StateTerminator::ForOfHead {
+        iter_var: iter_var.clone(),
+        next_var: next_var.clone(),
+        left: for_of_stmt.left.clone(),
+        body_state,
+        after_state: after_loop,
+        is_await: for_of_stmt.is_await,
+    });
+
+    ctx.current_state_id = body_state;
+    if contains_yield(&for_of_stmt.body) {
+        transform_yielding_statement(&for_of_stmt.body, ctx, head_state);
+    } else {
+        ctx.emit_statement(*for_of_stmt.body.clone());
+    }
+    ctx.finalize_current_state(StateTerminator::Goto(head_state));
+
+    ctx.break_targets.remove(&None);
+    ctx.continue_targets.remove(&None);
+
+    ctx.current_state_id = after_loop;
 }
 
 fn transform_try_statement(
