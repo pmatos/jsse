@@ -1071,14 +1071,15 @@ impl Interpreter {
         } else {
             0
         };
-        // Check if value is a thenable using [[Get]] to trigger getters
-        if matches!(value, JsValue::Object(_)) {
-            let then_val = match self.obj_get(value, "then") {
-                Ok(v) => v,
-                Err(e) => {
+        // Check if value is a thenable using [[Get]] to trigger Proxy traps/getters
+        if let JsValue::Object(o) = value {
+            let then_val = match self.get_object_property(o.id, "then", value) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => {
                     self.reject_promise(promise_id, e);
                     return promise;
                 }
+                _ => JsValue::Undefined,
             };
             if self.is_callable(&then_val) {
                 self.promise_resolve_thenable(promise_id, value.clone(), then_val);

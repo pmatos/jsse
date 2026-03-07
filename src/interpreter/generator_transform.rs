@@ -129,6 +129,7 @@ struct TransformContext {
     try_stack: Vec<TryInfo>,
     temp_vars: Vec<String>,
     is_async: bool,
+    with_scopes: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -152,6 +153,7 @@ impl TransformContext {
             try_stack: Vec::new(),
             temp_vars: Vec::new(),
             is_async,
+            with_scopes: Vec::new(),
         }
     }
 
@@ -173,8 +175,19 @@ impl TransformContext {
 
     fn finalize_current_state(&mut self, terminator: StateTerminator) {
         if self.current_state_id < self.states.len() {
-            self.states[self.current_state_id].statements =
-                std::mem::take(&mut self.current_statements);
+            let mut stmts = std::mem::take(&mut self.current_statements);
+            if !self.with_scopes.is_empty() && !stmts.is_empty() {
+                let block = Statement::Block(stmts);
+                let mut wrapped = block;
+                for with_var in self.with_scopes.iter().rev() {
+                    wrapped = Statement::With(
+                        Expression::Identifier(with_var.clone()),
+                        Box::new(wrapped),
+                    );
+                }
+                stmts = vec![wrapped];
+            }
+            self.states[self.current_state_id].statements = stmts;
             self.states[self.current_state_id].terminator = terminator;
         }
     }
@@ -367,20 +380,29 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::With(expr, inner) => {
+            let with_var = ctx.new_temp_var("with");
             if expr_has_suspension(expr, ctx.is_async) {
-                let temp_var = ctx.new_temp_var("with");
-                let binding = SentValueBindingKind::Variable(temp_var.clone());
+                let binding = SentValueBindingKind::Variable(with_var.clone());
                 transform_yielding_expression(expr, ctx, usize::MAX, Some(binding));
-                let new_with =
-                    Statement::With(Expression::Identifier(temp_var), Box::new(*inner.clone()));
-                if stmt_has_suspension(inner, ctx.is_async) {
-                    transform_yielding_statement(&new_with, ctx, after_state);
-                } else {
-                    ctx.emit_statement(new_with);
-                }
             } else {
-                ctx.emit_statement(Statement::With(expr.clone(), Box::new(Statement::Empty)));
+                ctx.emit_statement(Statement::Expression(Expression::Assign(
+                    AssignOp::Assign,
+                    Box::new(Expression::Identifier(with_var.clone())),
+                    Box::new(expr.clone()),
+                )));
+            }
+            if stmt_has_suspension(inner, ctx.is_async) {
+                let with_body_state = ctx.new_state();
+                ctx.finalize_current_state(StateTerminator::Goto(with_body_state));
+                ctx.current_state_id = with_body_state;
+                ctx.with_scopes.push(with_var.clone());
                 transform_yielding_statement(inner, ctx, after_state);
+                ctx.with_scopes.pop();
+            } else {
+                ctx.emit_statement(Statement::With(
+                    Expression::Identifier(with_var),
+                    Box::new(*inner.clone()),
+                ));
             }
         }
 
@@ -403,6 +425,14 @@ fn transform_yielding_expression(
                     let temp_var = ctx.new_temp_var("yield_val");
                     let inner_binding = SentValueBindingKind::Variable(temp_var.clone());
                     transform_yielding_expression(inner, ctx, usize::MAX, Some(inner_binding));
+                    Some(Expression::Identifier(temp_var))
+                } else if !ctx.with_scopes.is_empty() {
+                    let temp_var = ctx.new_temp_var("yield_val");
+                    ctx.emit_statement(Statement::Expression(Expression::Assign(
+                        AssignOp::Assign,
+                        Box::new(Expression::Identifier(temp_var.clone())),
+                        Box::new(*inner.clone()),
+                    )));
                     Some(Expression::Identifier(temp_var))
                 } else {
                     Some(*inner.clone())
@@ -1034,10 +1064,34 @@ fn transform_call_expression(
 ) {
     let mut temp_callee = callee.clone();
     if expr_has_suspension(callee, ctx.is_async) {
-        let temp_var = ctx.new_temp_var("call_callee");
-        let callee_binding = SentValueBindingKind::Variable(temp_var.clone());
-        transform_yielding_expression(callee, ctx, usize::MAX, Some(callee_binding));
-        temp_callee = Expression::Identifier(temp_var);
+        if let Expression::Member(obj, prop) = callee {
+            let mut temp_obj = *obj.clone();
+            if expr_has_suspension(obj, ctx.is_async) {
+                let tv = ctx.new_temp_var("call_obj");
+                let b = SentValueBindingKind::Variable(tv.clone());
+                transform_yielding_expression(obj, ctx, usize::MAX, Some(b));
+                temp_obj = Expression::Identifier(tv);
+            }
+            match prop {
+                MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async) => {
+                    let tv = ctx.new_temp_var("call_prop");
+                    let b = SentValueBindingKind::Variable(tv.clone());
+                    transform_yielding_expression(e, ctx, usize::MAX, Some(b));
+                    temp_callee = Expression::Member(
+                        Box::new(temp_obj),
+                        MemberProperty::Computed(Box::new(Expression::Identifier(tv))),
+                    );
+                }
+                _ => {
+                    temp_callee = Expression::Member(Box::new(temp_obj), prop.clone());
+                }
+            }
+        } else {
+            let temp_var = ctx.new_temp_var("call_callee");
+            let callee_binding = SentValueBindingKind::Variable(temp_var.clone());
+            transform_yielding_expression(callee, ctx, usize::MAX, Some(callee_binding));
+            temp_callee = Expression::Identifier(temp_var);
+        }
     }
 
     let mut temp_args = Vec::new();

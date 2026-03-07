@@ -14586,6 +14586,13 @@ impl Interpreter {
                 }
             }
 
+            // TypedArray [[OwnPropertyKeys]]: virtual integer indices
+            if let Some(ref ta) = b.typed_array_info {
+                for i in 0..ta.array_length {
+                    int_keys_set.insert(i as u64, i.to_string());
+                }
+            }
+
             for k in &b.property_order {
                 if k.starts_with("Symbol(") {
                     sym_keys.push(k.clone());
@@ -16309,15 +16316,21 @@ impl Interpreter {
         // Set up `this` and `arguments` before binding parameters so that
         // default parameter expressions can reference `arguments`.
         if !is_arrow {
-            let effective_this = if !is_strict
-                && !closure_strict
-                && matches!(this_val, JsValue::Undefined | JsValue::Null)
-            {
-                self.realm()
-                    .global_env
-                    .borrow()
-                    .get("this")
-                    .unwrap_or(this_val.clone())
+            let effective_this = if !is_strict && !closure_strict {
+                if matches!(this_val, JsValue::Undefined | JsValue::Null) {
+                    self.realm()
+                        .global_env
+                        .borrow()
+                        .get("this")
+                        .unwrap_or(this_val.clone())
+                } else if !matches!(this_val, JsValue::Object(_)) {
+                    match self.to_object(this_val) {
+                        Completion::Normal(v) => v,
+                        _ => this_val.clone(),
+                    }
+                } else {
+                    this_val.clone()
+                }
             } else {
                 this_val.clone()
             };

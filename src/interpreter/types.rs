@@ -1975,6 +1975,17 @@ impl JsObjectData {
             }
         }
 
+        // TypedArray: integer-indexed properties are enumerable
+        if let Some(ref ta) = self.typed_array_info {
+            let len = ta.array_length;
+            for i in 0..len {
+                let k = i.to_string();
+                if seen.insert(k.clone()) {
+                    index_keys.push((i as u32, k));
+                }
+            }
+        }
+
         // Own properties: add ALL to seen set (even non-enumerable, to shadow proto)
         for k in &self.property_order {
             if k.starts_with("Symbol(") {
