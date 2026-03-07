@@ -1911,11 +1911,10 @@ impl JsObjectData {
             if let Ok(idx) = key.parse::<usize>()
                 && idx < s.code_units.len()
             {
-                let ch = std::char::from_u32(s.code_units[idx] as u32)
-                    .map(|c| c.to_string())
-                    .unwrap_or_else(|| String::from_utf16_lossy(&[s.code_units[idx]]));
                 return Some(PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str(&ch)),
+                    JsValue::String(JsString {
+                        code_units: vec![s.code_units[idx]],
+                    }),
                     false,
                     true,
                     false,

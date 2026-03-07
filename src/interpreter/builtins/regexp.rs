@@ -132,7 +132,6 @@ pub(crate) fn js_string_to_regex_input(code_units: &[u16]) -> String {
     js_string_to_regex_input_mode(code_units, true)
 }
 
-#[allow(dead_code)]
 fn js_string_to_regex_input_non_unicode(code_units: &[u16]) -> String {
     js_string_to_regex_input_mode(code_units, false)
 }
@@ -6109,7 +6108,13 @@ impl Interpreter {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
-                let length_s = s.len();
+                // Non-unicode version for string slicing (surrogates kept as
+                // individual PUA chars so UTF-16 indexing works correctly)
+                let s_slice = match &string_arg {
+                    JsValue::String(js) => js_string_to_regex_input_non_unicode(&js.code_units),
+                    _ => s.clone(),
+                };
+                let length_s = s_slice.len();
 
                 // 5. Let functionalReplace be IsCallable(replaceValue).
                 let replace_value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -6290,15 +6295,13 @@ impl Interpreter {
                             return Completion::Throw(e);
                         }
                     };
-                    // Get match_length in byte offsets within the PUA-mapped string
-                    let matched_pua = match to_regex_input(interp, &matched_val) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            interp.gc_temp_roots.truncate(gc_root_start);
-                            return Completion::Throw(e);
+                    // Get match_length in byte offsets within the non-unicode PUA-mapped string
+                    let match_length = match &matched_val {
+                        JsValue::String(js) => {
+                            js_string_to_regex_input_non_unicode(&js.code_units).len()
                         }
+                        _ => matched.len(),
                     };
-                    let match_length = matched_pua.len();
 
                     // e. Let position be ? ToIntegerOrInfinity(? Get(result, "index")).
                     let index_val = match interp.get_object_property(result_id, "index", result_val)
@@ -6321,7 +6324,10 @@ impl Interpreter {
                         };
                         let int = to_integer_or_infinity(n);
                         let utf16_pos = int.max(0.0) as usize;
-                        (utf16_pos, utf16_to_byte_offset(&s, utf16_pos).min(length_s))
+                        (
+                            utf16_pos,
+                            utf16_to_byte_offset(&s_slice, utf16_pos).min(length_s),
+                        )
                     };
 
                     // g-i. Get captures
@@ -6369,7 +6375,7 @@ impl Interpreter {
                         }
                         // Pass UTF-16 position and the primitive string S (non-PUA)
                         replacer_args.push(JsValue::Number(position_utf16 as f64));
-                        replacer_args.push(JsValue::String(regex_output_to_js_string(&s)));
+                        replacer_args.push(JsValue::String(regex_output_to_js_string(&s_slice)));
                         if !named_captures.is_undefined() {
                             replacer_args.push(named_captures.clone());
                         }
@@ -6410,7 +6416,7 @@ impl Interpreter {
                         match get_substitution(
                             interp,
                             &matched,
-                            &s,
+                            &s_slice,
                             position,
                             &captures,
                             &named_captures_obj,
@@ -6426,7 +6432,7 @@ impl Interpreter {
 
                     // p. If position >= nextSourcePosition, then
                     if position >= next_source_position {
-                        accumulated_result.push_str(&s[next_source_position..position]);
+                        accumulated_result.push_str(&s_slice[next_source_position..position]);
                         accumulated_result.push_str(&replacement);
                         next_source_position = position + match_length;
                     }
@@ -6436,7 +6442,7 @@ impl Interpreter {
 
                 // 15. Return accumulatedResult + remainder of S.
                 if next_source_position < length_s {
-                    accumulated_result.push_str(&s[next_source_position..]);
+                    accumulated_result.push_str(&s_slice[next_source_position..]);
                 }
                 Completion::Normal(JsValue::String(regex_output_to_js_string(
                     &accumulated_result,

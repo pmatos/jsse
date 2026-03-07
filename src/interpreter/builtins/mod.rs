@@ -7237,6 +7237,20 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 }
                             } else {
+                                // Array [[DefineOwnProperty]] §10.4.2.1
+                                let is_array = obj.borrow().class_name == "Array";
+                                if is_array {
+                                    match interp.array_define_own_property(
+                                        o.id as usize,
+                                        &key,
+                                        desc,
+                                    ) {
+                                        Ok(result) => {
+                                            return Completion::Normal(JsValue::Boolean(result));
+                                        }
+                                        Err(e) => return Completion::Throw(e),
+                                    }
+                                }
                                 let result = obj.borrow_mut().define_own_property(key, desc);
                                 return Completion::Normal(JsValue::Boolean(result));
                             }
@@ -8009,6 +8023,20 @@ impl Interpreter {
                                 get: None,
                                 set: None,
                             };
+                            // Array [[DefineOwnProperty]] §10.4.2.1
+                            let is_array = recv_obj.borrow().class_name == "Array";
+                            if is_array {
+                                match interp.array_define_own_property(
+                                    r.id as usize,
+                                    &key,
+                                    update_desc,
+                                ) {
+                                    Ok(success) => {
+                                        return Completion::Normal(JsValue::Boolean(success));
+                                    }
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
                             recv_obj.borrow_mut().define_own_property(key, update_desc);
                         } else {
                             recv_obj.borrow_mut().set_property_value(&key, value);

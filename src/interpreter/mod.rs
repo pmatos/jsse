@@ -2611,6 +2611,16 @@ impl Interpreter {
         let reexport_info = {
             let module_ref = module.borrow();
             if let Some(binding) = module_ref.export_bindings.get(export_name) {
+                if binding == "*ambiguous*" {
+                    return Err(self.create_error(
+                        "SyntaxError",
+                        &format!(
+                            "Ambiguous export '{}' in module '{}'",
+                            export_name,
+                            canon_path.display()
+                        ),
+                    ));
+                }
                 if let Some(ns_source) = binding.strip_prefix("*ns:") {
                     // Namespace re-export — resolve to the actual source module's env
                     // so that two re-exports of the same namespace compare equal
@@ -2684,9 +2694,16 @@ impl Interpreter {
             .unwrap_or_else(|_| module_path.to_path_buf());
         let key = (canon_path.clone(), export_name.to_string());
 
-        // §16.2.1.6.3 step 2: circular reference → return null (not an error)
+        // §16.2.1.6.3 step 2: circular reference → return null (not resolved)
         if visited.contains(&key) {
-            return Ok(());
+            return Err(self.create_error(
+                "SyntaxError",
+                &format!(
+                    "Circular re-export of '{}' in module '{}'",
+                    export_name,
+                    canon_path.display()
+                ),
+            ));
         }
         visited.insert(key);
 
@@ -2697,9 +2714,18 @@ impl Interpreter {
         let (reexport_info, star_sources) = {
             let module_ref = module.borrow();
             let reexport = if let Some(binding) = module_ref.export_bindings.get(export_name) {
-                if binding.starts_with("*ns:") || binding.starts_with("*ambiguous*") {
-                    // Namespace re-export or ambiguous — treat as found
+                if binding.starts_with("*ns:") {
                     return Ok(());
+                }
+                if binding == "*ambiguous*" {
+                    return Err(self.create_error(
+                        "SyntaxError",
+                        &format!(
+                            "Ambiguous export '{}' in module '{}'",
+                            export_name,
+                            canon_path.display()
+                        ),
+                    ));
                 }
                 if let Some(info) = binding.strip_prefix("*reexport:") {
                     let parts: Vec<&str> = info.splitn(2, ':').collect();
@@ -2726,12 +2752,56 @@ impl Interpreter {
         }
 
         // §16.2.1.6.3 step 8: check star re-exports
+        let mut found_in_star = false;
+        let mut first_star_source: Option<PathBuf> = None;
         for star_source in &star_sources {
             let resolved = self.resolve_module_specifier(star_source, Some(&canon_path))?;
-            // Try resolving — if it succeeds, the export exists
-            if self.resolve_export(&resolved, export_name, visited).is_ok() {
-                return Ok(());
+            let mut v2 = visited.clone();
+            if self.resolve_export(&resolved, export_name, &mut v2).is_ok() {
+                if found_in_star {
+                    // §16.2.1.6.3 step 10.d.ii: ambiguous — same name from multiple stars
+                    // Check if they resolve to the same (module, binding)
+                    let mut va = std::collections::HashSet::new();
+                    let ra = self.resolve_export_binding(
+                        first_star_source.as_ref().unwrap(),
+                        export_name,
+                        &mut va,
+                    );
+                    let mut vb = std::collections::HashSet::new();
+                    let rb = self.resolve_export_binding(&resolved, export_name, &mut vb);
+                    match (ra, rb) {
+                        (Ok((env1, name1)), Ok((env2, name2))) => {
+                            if !std::rc::Rc::ptr_eq(&env1, &env2) || name1 != name2 {
+                                return Err(self.create_error(
+                                    "SyntaxError",
+                                    &format!(
+                                        "Ambiguous export '{}' in module '{}'",
+                                        export_name,
+                                        canon_path.display()
+                                    ),
+                                ));
+                            }
+                        }
+                        _ => {
+                            return Err(self.create_error(
+                                "SyntaxError",
+                                &format!(
+                                    "Ambiguous export '{}' in module '{}'",
+                                    export_name,
+                                    canon_path.display()
+                                ),
+                            ));
+                        }
+                    }
+                }
+                found_in_star = true;
+                if first_star_source.is_none() {
+                    first_star_source = Some(resolved);
+                }
             }
+        }
+        if found_in_star {
+            return Ok(());
         }
 
         // Export not found

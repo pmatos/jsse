@@ -3481,29 +3481,34 @@ impl Interpreter {
                             proto_opt = proto_rc.borrow().prototype.clone();
                         }
                     }
-                    // ArraySetLength validation
+                    // ArraySetLength §10.4.2.4 via [[Set]]
                     if key == "length" && obj.borrow().class_name == "Array" {
-                        let num = match self.to_number_value(&final_val) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
+                        let desc = PropertyDescriptor {
+                            value: Some(final_val.clone()),
+                            writable: None,
+                            enumerable: None,
+                            configurable: None,
+                            get: None,
+                            set: None,
                         };
-                        let uint32 = num as u32;
-                        if (uint32 as f64) != num || num < 0.0 || num.is_nan() || num.is_infinite()
-                        {
-                            return Completion::Throw(
-                                self.create_error("RangeError", "Invalid array length"),
-                            );
+                        match self.array_set_length(o.id as usize, desc) {
+                            Ok(success) => {
+                                if !success && env.borrow().strict {
+                                    return Completion::Throw(self.create_type_error(
+                                        "Cannot assign to read only property 'length'",
+                                    ));
+                                }
+                                let obj_rc = self.get_object(o.id).unwrap();
+                                let len_val = obj_rc
+                                    .borrow()
+                                    .properties
+                                    .get("length")
+                                    .and_then(|d| d.value.clone())
+                                    .unwrap_or(JsValue::Number(0.0));
+                                return Completion::Normal(len_val);
+                            }
+                            Err(e) => return Completion::Throw(e),
                         }
-                        let length_val = JsValue::Number(uint32 as f64);
-                        let success = obj
-                            .borrow_mut()
-                            .set_property_value(&key, length_val.clone());
-                        if !success && env.borrow().strict {
-                            return Completion::Throw(self.create_type_error(&format!(
-                                "Cannot assign to read only property '{key}'"
-                            )));
-                        }
-                        return Completion::Normal(length_val);
                     }
                     let success = obj.borrow_mut().set_property_value(&key, final_val.clone());
                     if !success && env.borrow().strict {
@@ -3936,27 +3941,34 @@ impl Interpreter {
                             }
                         }
                     }
-                    // ArraySetLength validation: reject non-integral/negative length values
+                    // ArraySetLength §10.4.2.4 via [[Set]]
                     if key == "length" && obj.borrow().class_name == "Array" {
-                        let num = match self.to_number_value(&rval) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
+                        let desc = PropertyDescriptor {
+                            value: Some(rval.clone()),
+                            writable: None,
+                            enumerable: None,
+                            configurable: None,
+                            get: None,
+                            set: None,
                         };
-                        let uint32 = num as u32;
-                        if (uint32 as f64) != num || num < 0.0 || num.is_nan() || num.is_infinite()
-                        {
-                            return Completion::Throw(
-                                self.create_error("RangeError", "Invalid array length"),
-                            );
+                        match self.array_set_length(o.id as usize, desc) {
+                            Ok(success) => {
+                                if !success && env.borrow().strict {
+                                    return Completion::Throw(self.create_type_error(
+                                        "Cannot assign to read only property 'length'",
+                                    ));
+                                }
+                                let obj_rc = self.get_object(o.id).unwrap();
+                                let len_val = obj_rc
+                                    .borrow()
+                                    .properties
+                                    .get("length")
+                                    .and_then(|d| d.value.clone())
+                                    .unwrap_or(JsValue::Number(0.0));
+                                return Completion::Normal(len_val);
+                            }
+                            Err(e) => return Completion::Throw(e),
                         }
-                        let rval = JsValue::Number(uint32 as f64);
-                        let success = obj.borrow_mut().set_property_value(&key, rval.clone());
-                        if !success && env.borrow().strict {
-                            return Completion::Throw(self.create_type_error(&format!(
-                                "Cannot assign to read only property '{key}'"
-                            )));
-                        }
-                        return Completion::Normal(rval);
                     }
                     let success = obj.borrow_mut().set_property_value(&key, rval.clone());
                     if !success && env.borrow().strict {
@@ -15228,12 +15240,12 @@ impl Interpreter {
                 if key == "length" {
                     Completion::Normal(JsValue::Number(s.len() as f64))
                 } else if let Ok(idx) = key.parse::<usize>() {
-                    let ch = s.to_rust_string().chars().nth(idx);
-                    match ch {
-                        Some(c) => {
-                            Completion::Normal(JsValue::String(JsString::from_str(&c.to_string())))
-                        }
-                        None => Completion::Normal(JsValue::Undefined),
+                    if idx < s.code_units.len() {
+                        Completion::Normal(JsValue::String(JsString {
+                            code_units: vec![s.code_units[idx]],
+                        }))
+                    } else {
+                        Completion::Normal(JsValue::Undefined)
                     }
                 } else {
                     let wrapper = match self.to_object(&obj_val) {

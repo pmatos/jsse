@@ -2590,6 +2590,7 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             c => return c,
                         };
+                        let mut cached_offset_str_cal: Option<String> = None;
                         if !is_undefined(&offset_prop) {
                             has_any = true;
                             match &offset_prop {
@@ -2600,6 +2601,7 @@ impl Interpreter {
                                             &format!("invalid offset string: {s_str}"),
                                         ));
                                     }
+                                    cached_offset_str_cal = Some(s_str);
                                 }
                                 JsValue::Object(_) => {
                                     let s_str = match interp.to_string_value(&offset_prop) {
@@ -2611,6 +2613,7 @@ impl Interpreter {
                                             &format!("invalid offset string: {s_str}"),
                                         ));
                                     }
+                                    cached_offset_str_cal = Some(s_str);
                                 }
                                 _ => {
                                     return Completion::Throw(
@@ -2778,13 +2781,9 @@ impl Interpreter {
                                     + nns as i128;
                                 let local_ns = epoch_days * NS_PER_DAY + day_ns;
                                 let offset_ns = if offset_opt == "use"
-                                    && !is_undefined(&offset_prop)
+                                    && let Some(ref off_str) = cached_offset_str_cal
                                 {
-                                    let off_str = match interp.to_string_value(&offset_prop) {
-                                        Ok(sv) => sv,
-                                        Err(c) => return Completion::Throw(c),
-                                    };
-                                    match super::parse_utc_offset_timezone(&off_str) {
+                                    match super::parse_utc_offset_timezone(off_str) {
                                         Some(canonical) => super::offset_string_to_ns(&canonical),
                                         None => {
                                             get_tz_offset_ns(&tz, &BigInt::from(local_ns)) as i128
@@ -2856,6 +2855,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         c => return c,
                     };
+                    let mut cached_offset_str: Option<String> = None;
                     if !is_undefined(&offset_prop) {
                         has_any = true;
                         match &offset_prop {
@@ -2866,6 +2866,7 @@ impl Interpreter {
                                         "invalid offset string: {s_str}"
                                     )));
                                 }
+                                cached_offset_str = Some(s_str);
                             }
                             JsValue::Object(_) => {
                                 let s_str = match interp.to_string_value(&offset_prop) {
@@ -2877,6 +2878,7 @@ impl Interpreter {
                                         "invalid offset string: {s_str}"
                                     )));
                                 }
+                                cached_offset_str = Some(s_str);
                             }
                             _ => {
                                 return Completion::Throw(
@@ -2991,12 +2993,8 @@ impl Interpreter {
                     // Determine offset based on offset option
                     let tz_offset_ns = get_tz_offset_ns(&tz, &BigInt::from(local_ns)) as i128;
                     let offset_ns =
-                        if !is_undefined(&offset_prop) {
-                            let off_str = match interp.to_string_value(&offset_prop) {
-                                Ok(s) => s,
-                                Err(c) => return Completion::Throw(c),
-                            };
-                            let user_offset_ns = match super::parse_utc_offset_timezone(&off_str) {
+                        if let Some(ref off_str) = cached_offset_str {
+                            let user_offset_ns = match super::parse_utc_offset_timezone(off_str) {
                                 Some(canonical) => super::offset_string_to_ns(&canonical),
                                 None => tz_offset_ns,
                             };
