@@ -950,7 +950,9 @@ impl Interpreter {
                                     .as_ref()
                                     .map(|e| e.len())
                                     .unwrap_or_else(|| {
-                                        if let Some(JsValue::Number(n)) =
+                                        if let Some(ref ta) = borrowed.typed_array_info {
+                                            ta.array_length
+                                        } else if let Some(JsValue::Number(n)) =
                                             borrowed.get_property_value("length")
                                         {
                                             n as usize
