@@ -4388,6 +4388,166 @@ fn strip_renamed_qi_captures(caps: &mut RegexCaptures) {
     }
 }
 
+/// Reset captures from groups inside quantifiers per ES spec §22.2.2.5.1 RepeatMatcher steps 3-4.
+/// When a quantified group iterates multiple times, captures from inner groups that don't
+/// participate in the final iteration must be reset to undefined.
+fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
+    let parent_map = build_quantified_parent_map(source);
+    if parent_map.is_empty() {
+        return;
+    }
+    for (child_group, parent_group) in &parent_map {
+        let child_idx = *child_group;
+        let parent_idx = *parent_group;
+        if child_idx >= caps.groups.len() || parent_idx >= caps.groups.len() {
+            continue;
+        }
+        if let (Some(child_match), Some(parent_match)) =
+            (&caps.groups[child_idx], &caps.groups[parent_idx])
+        {
+            if child_match.start < parent_match.start || child_match.end > parent_match.end {
+                caps.groups[child_idx] = None;
+            }
+        }
+    }
+}
+
+/// Parse regex source to build a map: child_group_number -> nearest_quantified_ancestor_group_number.
+/// A "quantified group" is a capturing or non-capturing group that is followed by *, +, ?, or {n,m}.
+/// We track the nesting of groups and which groups are quantified to build this mapping.
+fn build_quantified_parent_map(source: &str) -> Vec<(usize, usize)> {
+    let chars: Vec<char> = source.chars().collect();
+    let len = chars.len();
+    let mut result = Vec::new();
+
+    // First pass: identify all groups (capturing and non-capturing), their nesting, and which are quantified
+    #[derive(Clone)]
+    struct GroupInfo {
+        capture_index: Option<usize>, // None for non-capturing groups
+        children: Vec<usize>,         // indices into groups_info
+        end_pos: usize,               // position of ')' in source
+        is_quantified: bool,
+    }
+
+    let mut groups_info: Vec<GroupInfo> = Vec::new();
+    let mut group_stack: Vec<usize> = Vec::new(); // indices into groups_info
+    let mut capture_count: usize = 0;
+    let mut i = 0;
+    let mut in_char_class = false;
+
+    while i < len {
+        if in_char_class {
+            if chars[i] == '\\' && i + 1 < len {
+                i += 2;
+            } else if chars[i] == ']' {
+                in_char_class = false;
+                i += 1;
+            } else {
+                i += 1;
+            }
+            continue;
+        }
+
+        if chars[i] == '[' {
+            in_char_class = true;
+            i += 1;
+            continue;
+        }
+
+        if chars[i] == '\\' && i + 1 < len {
+            i += 2;
+            continue;
+        }
+
+        if chars[i] == '(' {
+            let is_capturing = if i + 1 < len && chars[i + 1] == '?' {
+                false
+            } else {
+                true
+            };
+            let cap_idx = if is_capturing {
+                capture_count += 1;
+                Some(capture_count)
+            } else {
+                None
+            };
+            let group_idx = groups_info.len();
+            groups_info.push(GroupInfo {
+                capture_index: cap_idx,
+                children: Vec::new(),
+                end_pos: 0,
+                is_quantified: false,
+            });
+            if let Some(&parent_idx) = group_stack.last() {
+                groups_info[parent_idx].children.push(group_idx);
+            }
+            group_stack.push(group_idx);
+            i += 1;
+            continue;
+        }
+
+        if chars[i] == ')' {
+            if let Some(group_idx) = group_stack.pop() {
+                groups_info[group_idx].end_pos = i;
+                // Check if followed by a quantifier
+                let next = i + 1;
+                if next < len
+                    && (chars[next] == '*'
+                        || chars[next] == '+'
+                        || chars[next] == '?'
+                        || chars[next] == '{')
+                {
+                    groups_info[group_idx].is_quantified = true;
+                }
+            }
+            i += 1;
+            continue;
+        }
+
+        i += 1;
+    }
+
+    fn collect_pairs(
+        group_idx: usize,
+        groups_info: &[GroupInfo],
+        ancestor_stack: &mut Vec<usize>,
+        result: &mut Vec<(usize, usize)>,
+    ) {
+        let children = groups_info[group_idx].children.clone();
+        for &child_idx in &children {
+            if let Some(cap_idx) = groups_info[child_idx].capture_index {
+                // Find nearest quantified ancestor with a capture index
+                for &anc in ancestor_stack.iter().rev() {
+                    if groups_info[anc].is_quantified {
+                        if let Some(anc_cap) = groups_info[anc].capture_index {
+                            result.push((cap_idx, anc_cap));
+                            break;
+                        }
+                    }
+                }
+            }
+            ancestor_stack.push(child_idx);
+            collect_pairs(child_idx, groups_info, ancestor_stack, result);
+            ancestor_stack.pop();
+        }
+    }
+
+    // Process all top-level groups
+    let top_level: Vec<usize> = (0..groups_info.len())
+        .filter(|&idx| {
+            // A group is top-level if it's not a child of any other group
+            !groups_info.iter().any(|g| g.children.contains(&idx))
+        })
+        .collect();
+
+    for &top_idx in &top_level {
+        let mut stack = vec![top_idx];
+        collect_pairs(top_idx, &groups_info, &mut stack, &mut result);
+    }
+
+    result
+}
+
 fn build_regex(source: &str, flags: &str) -> Result<CompiledRegex, String> {
     build_regex_ex(source, flags).map(|(re, _, _)| re)
 }
@@ -5240,6 +5400,7 @@ fn regexp_exec_raw(
 
     clear_stale_dup_captures(&mut caps, &dup_map);
     strip_renamed_qi_captures(&mut caps);
+    reset_quantifier_inner_captures(&mut caps, source);
 
     let full_match = caps.get(0).unwrap();
     // Convert absolute byte offsets to UTF-16 code unit offsets

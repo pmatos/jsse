@@ -5839,6 +5839,8 @@ impl Interpreter {
         }
 
         func_env.borrow_mut().strict = is_strict;
+        let saved_in_state_machine = self.in_state_machine;
+        self.in_state_machine = true;
         let mut current_id = current_state_id;
         let mut current_try_stack = try_stack;
         let mut pending_exception: Option<JsValue> = stored_pending_exception;
@@ -5867,7 +5869,12 @@ impl Interpreter {
                 });
             }
 
-            let stmt_result = self.exec_statements(&statements, &func_env);
+            self.in_state_machine = true;
+            let mut stmt_result = self.exec_statements(&statements, &func_env);
+            self.in_state_machine = saved_in_state_machine;
+            while let Completion::TailCall { func, this, args } = stmt_result {
+                stmt_result = self.call_function(&func, &this, &args);
+            }
             let ctx_after = if is_inline_replay {
                 self.generator_context.take()
             } else {
@@ -5982,7 +5989,11 @@ impl Interpreter {
                     sent_value_binding,
                 } => {
                     let yield_val = if let Some(expr) = value {
-                        match self.eval_expr(expr, &func_env) {
+                        let mut _result = self.eval_expr(expr, &func_env);
+                        while let Completion::TailCall { func, this, args } = _result {
+                            _result = self.call_function(&func, &this, &args);
+                        }
+                        match _result {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
                                 // Route through try-stack for proper catch/finally handling
@@ -6297,7 +6308,11 @@ impl Interpreter {
 
                 StateTerminator::Return(expr) => {
                     let ret_val = if let Some(e) = expr {
-                        match self.eval_expr(e, &func_env) {
+                        let mut result = self.eval_expr(e, &func_env);
+                        while let Completion::TailCall { func, this, args } = result {
+                            result = self.call_function(&func, &this, &args);
+                        }
+                        match result {
                             Completion::Normal(v) => v,
                             Completion::Throw(err) => {
                                 let disp =
@@ -6366,10 +6381,16 @@ impl Interpreter {
                 }
 
                 StateTerminator::Throw(expr) => {
-                    let throw_val = match self.eval_expr(expr, &func_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => e,
-                        other => return other,
+                    let throw_val = {
+                        let mut result = self.eval_expr(expr, &func_env);
+                        while let Completion::TailCall { func, this, args } = result {
+                            result = self.call_function(&func, &this, &args);
+                        }
+                        match result {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => e,
+                            other => return other,
+                        }
                     };
 
                     if let Some(try_info) = current_try_stack.pop()
@@ -8271,6 +8292,8 @@ impl Interpreter {
         }
 
         func_env.borrow_mut().strict = is_strict;
+        let saved_in_state_machine = self.in_state_machine;
+        self.in_state_machine = true;
         let mut current_id = current_state_id;
         let mut current_try_stack = try_stack;
         let check_abrupt_on_resume =
@@ -8391,7 +8414,12 @@ impl Interpreter {
                 });
             }
 
-            let stmt_result = self.exec_statements(&statements, &func_env);
+            self.in_state_machine = true;
+            let mut stmt_result = self.exec_statements(&statements, &func_env);
+            self.in_state_machine = saved_in_state_machine;
+            while let Completion::TailCall { func, this, args } = stmt_result {
+                stmt_result = self.call_function(&func, &this, &args);
+            }
             let ctx_after = if is_inline_replay {
                 self.generator_context.take()
             } else {
@@ -9005,7 +9033,11 @@ impl Interpreter {
 
                 StateTerminator::Return(expr) => {
                     let ret_val = if let Some(e) = expr {
-                        match self.eval_expr(e, &func_env) {
+                        let mut result = self.eval_expr(e, &func_env);
+                        while let Completion::TailCall { func, this, args } = result {
+                            result = self.call_function(&func, &this, &args);
+                        }
+                        match result {
                             Completion::Normal(v) => v,
                             Completion::Throw(err) => {
                                 let disp =
@@ -9112,14 +9144,20 @@ impl Interpreter {
                 }
 
                 StateTerminator::Throw(expr) => {
-                    let throw_val = match self.eval_expr(expr, &func_env) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => e,
-                        other => {
-                            if let Completion::Yield(yv) = other {
-                                yv
-                            } else {
-                                JsValue::Undefined
+                    let throw_val = {
+                        let mut result = self.eval_expr(expr, &func_env);
+                        while let Completion::TailCall { func, this, args } = result {
+                            result = self.call_function(&func, &this, &args);
+                        }
+                        match result {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => e,
+                            other => {
+                                if let Completion::Yield(yv) = other {
+                                    yv
+                                } else {
+                                    JsValue::Undefined
+                                }
                             }
                         }
                     };
@@ -16494,6 +16532,8 @@ impl Interpreter {
         );
 
         func_env.borrow_mut().strict = is_strict;
+        let saved_in_state_machine = self.in_state_machine;
+        self.in_state_machine = true;
         let mut current_id = current_state;
         let mut pending_return: Option<JsValue> = saved_pending_return;
         let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
@@ -16582,7 +16622,9 @@ impl Interpreter {
                 return;
             }
 
+            self.in_state_machine = true;
             let mut stmt_result = self.exec_statements(statements, &func_env);
+            self.in_state_machine = saved_in_state_machine;
 
             // Execute tail calls inline — async functions don't use PTC, but
             // strict mode return statements produce TailCall completions.

@@ -864,6 +864,7 @@ impl Interpreter {
                 let val = if let Some(e) = expr {
                     let can_tco = env.borrow().strict
                         && self.generator_context.is_none()
+                        && !self.in_state_machine
                         && Self::expr_may_contain_tail_call(e);
                     if can_tco {
                         self.in_tail_position = true;
