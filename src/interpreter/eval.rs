@@ -9790,10 +9790,237 @@ impl Interpreter {
                     return Completion::Normal(promise);
                 }
 
-                StateTerminator::Await { .. } => {
-                    unreachable!("Await terminator in async generator")
+                StateTerminator::Await {
+                    value,
+                    resume_state,
+                    sent_value_binding,
+                } => {
+                    let await_val = match self.eval_expr(value, &func_env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => {
+                            pending_exception = Some(e);
+                            check_abrupt_on_resume = true;
+                            current_id = *resume_state;
+                            continue;
+                        }
+                        _ => JsValue::Undefined,
+                    };
+
+                    let p = self.promise_resolve_value(&await_val);
+                    let p_id = if let JsValue::Object(ref o) = p {
+                        o.id
+                    } else {
+                        0
+                    };
+                    let p_state = self.get_promise_state(p_id);
+
+                    match p_state {
+                        Some(PromiseState::Fulfilled(v)) => {
+                            if let Some(b) = sent_value_binding {
+                                self.apply_sent_value_binding(b, &v, &func_env);
+                            }
+                            current_id = *resume_state;
+                            continue;
+                        }
+                        Some(PromiseState::Rejected(e)) => {
+                            pending_exception = Some(e);
+                            check_abrupt_on_resume = true;
+                            current_id = *resume_state;
+                            continue;
+                        }
+                        Some(PromiseState::Pending) => {
+                            let binding_clone = sent_value_binding.clone();
+                            let resume_id = *resume_state;
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineAsyncGenerator {
+                                    state_machine: state_machine.clone(),
+                                    func_env: func_env.clone(),
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::SuspendedAtState {
+                                        state_id: resume_id,
+                                    },
+                                    _sent_value: JsValue::Undefined,
+                                    try_stack: current_try_stack.clone(),
+                                    pending_binding: binding_clone.clone(),
+                                    delegated_iterator: None,
+                                    pending_exception: None,
+                                    pending_return: pending_return.take(),
+                                });
+
+                            let this_clone = this.clone();
+                            let promise_c = promise.clone();
+                            let resolve_c = resolve_fn.clone();
+                            let reject_c = reject_fn.clone();
+                            let gen_id = if let JsValue::Object(o) = this {
+                                o.id
+                            } else {
+                                0
+                            };
+
+                            let this_f = this_clone.clone();
+                            let promise_f = promise_c.clone();
+                            let resolve_f = resolve_c.clone();
+                            let reject_f = reject_c.clone();
+                            let fulfill_handler = self.create_function(JsFunction::native(
+                                "asyncGenAwaitFulfill".to_string(),
+                                1,
+                                move |interp, _this, args| {
+                                    let v = args.first().cloned().unwrap_or(JsValue::Undefined);
+                                    interp.async_gen_await_resume(
+                                        &this_f, v, false, &promise_f, &resolve_f, &reject_f,
+                                        gen_id,
+                                    );
+                                    Completion::Normal(JsValue::Undefined)
+                                },
+                            ));
+
+                            let this_r = this_clone.clone();
+                            let promise_r = promise_c;
+                            let resolve_r = resolve_c;
+                            let reject_r = reject_c;
+                            let reject_handler = self.create_function(JsFunction::native(
+                                "asyncGenAwaitReject".to_string(),
+                                1,
+                                move |interp, _this, args| {
+                                    let e = args.first().cloned().unwrap_or(JsValue::Undefined);
+                                    interp.async_gen_await_resume(
+                                        &this_r, e, true, &promise_r, &resolve_r, &reject_r, gen_id,
+                                    );
+                                    Completion::Normal(JsValue::Undefined)
+                                },
+                            ));
+
+                            if let Some(obj) = self.get_object(p_id) {
+                                let mut o = obj.borrow_mut();
+                                if let Some(ref mut pd) = o.promise_data {
+                                    pd.is_handled = true;
+                                    pd.fulfill_reactions.push(PromiseReaction {
+                                        handler: Some(fulfill_handler),
+                                        promise_id: None,
+                                        resolve: JsValue::Undefined,
+                                        reject: JsValue::Undefined,
+                                        reaction_type: PromiseReactionType::Fulfill,
+                                    });
+                                    pd.reject_reactions.push(PromiseReaction {
+                                        handler: Some(reject_handler),
+                                        promise_id: None,
+                                        resolve: JsValue::Undefined,
+                                        reject: JsValue::Undefined,
+                                        reaction_type: PromiseReactionType::Reject,
+                                    });
+                                }
+                            }
+
+                            self.async_gen_yield_pending = true;
+                            return Completion::Normal(promise);
+                        }
+                        None => {
+                            if let Some(b) = sent_value_binding {
+                                self.apply_sent_value_binding(b, &await_val, &func_env);
+                            }
+                            current_id = *resume_state;
+                            continue;
+                        }
+                    }
                 }
             }
+        }
+    }
+
+    fn apply_sent_value_binding(
+        &mut self,
+        binding: &crate::interpreter::generator_transform::SentValueBinding,
+        value: &JsValue,
+        env: &EnvRef,
+    ) {
+        use crate::interpreter::generator_transform::SentValueBindingKind;
+        match &binding.kind {
+            SentValueBindingKind::Variable(name) => {
+                env.borrow_mut().set(name, value.clone()).ok();
+            }
+            SentValueBindingKind::Pattern(pattern) => {
+                let _ = self.bind_pattern(pattern, value.clone(), BindingKind::Var, env);
+            }
+            SentValueBindingKind::Discard | SentValueBindingKind::InlineYield { .. } => {}
+        }
+    }
+
+    fn async_gen_await_resume(
+        &mut self,
+        this: &JsValue,
+        value: JsValue,
+        is_reject: bool,
+        promise: &JsValue,
+        resolve_fn: &JsValue,
+        reject_fn: &JsValue,
+        gen_id: u64,
+    ) {
+        let Some(obj_rc) = self.get_object(gen_id) else {
+            return;
+        };
+
+        let state = obj_rc.borrow().iterator_state.clone();
+        let Some(IteratorState::StateMachineAsyncGenerator {
+            func_env,
+            pending_binding,
+            ..
+        }) = &state
+        else {
+            return;
+        };
+
+        if is_reject {
+            // Set pending_exception so the executor routes through try_stack
+            if let Some(obj) = self.get_object(gen_id) {
+                let mut o = obj.borrow_mut();
+                if let Some(IteratorState::StateMachineAsyncGenerator {
+                    ref mut pending_exception,
+                    ..
+                }) = o.iterator_state
+                {
+                    *pending_exception = Some(value);
+                }
+            }
+        } else if let Some(b) = pending_binding {
+            self.apply_sent_value_binding(b, &value, func_env);
+            // Clear the pending_binding
+            if let Some(obj) = self.get_object(gen_id) {
+                let mut o = obj.borrow_mut();
+                if let Some(IteratorState::StateMachineAsyncGenerator {
+                    ref mut pending_binding,
+                    ..
+                }) = o.iterator_state
+                {
+                    *pending_binding = None;
+                }
+            }
+        }
+
+        let _ = self.async_generator_next_state_machine_with_promise(
+            this,
+            JsValue::Undefined,
+            promise.clone(),
+            resolve_fn.clone(),
+            reject_fn.clone(),
+        );
+
+        // Pop the queue entry and process next
+        if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+            queue.pop_front();
+        }
+        let this_clone = this.clone();
+        if self
+            .async_gen_queues
+            .get(&gen_id)
+            .is_some_and(|q| !q.is_empty())
+        {
+            self.microtask_queue.push((
+                vec![this_clone.clone()],
+                Box::new(move |interp| {
+                    interp.async_gen_process_queue(&this_clone);
+                    Completion::Normal(JsValue::Undefined)
+                }),
+            ));
         }
     }
 
@@ -10594,8 +10821,8 @@ impl Interpreter {
                                 func_env.clone()
                             };
 
-                            use crate::interpreter::generator_transform::transform_generator;
-                            let state_machine = Rc::new(transform_generator(&body, &params));
+                            use crate::interpreter::generator_transform::transform_async_generator;
+                            let state_machine = Rc::new(transform_async_generator(&body, &params));
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
@@ -16402,11 +16629,11 @@ impl Interpreter {
 
             match terminator {
                 StateTerminator::Await {
-                    ref value,
+                    value,
                     resume_state,
-                    ref sent_value_binding,
+                    sent_value_binding,
                 } => {
-                    let await_val = match self.eval_expr(value, &func_env) {
+                    let await_val = match self.eval_expr(&value, &func_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             pending_exception = Some(e);

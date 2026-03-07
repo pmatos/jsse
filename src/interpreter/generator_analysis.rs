@@ -742,6 +742,120 @@ pub fn expr_contains_yield(expr: &Expression) -> bool {
     }
 }
 
+pub fn expr_contains_suspension(expr: &Expression) -> bool {
+    match expr {
+        Expression::Yield(_, _) | Expression::Await(_) => true,
+        Expression::Literal(_)
+        | Expression::Identifier(_)
+        | Expression::This
+        | Expression::Super
+        | Expression::NewTarget
+        | Expression::ImportMeta
+        | Expression::PrivateIdentifier(_) => false,
+        Expression::Array(elems, _) => elems.iter().flatten().any(expr_contains_suspension),
+        Expression::Object(props) => props.iter().any(|p| {
+            matches!(&p.key, PropertyKey::Computed(e) if expr_contains_suspension(e))
+                || expr_contains_suspension(&p.value)
+        }),
+        Expression::Function(_) | Expression::ArrowFunction(_) | Expression::Class(_) => false,
+        Expression::Unary(_, e)
+        | Expression::Typeof(e)
+        | Expression::Void(e)
+        | Expression::Delete(e)
+        | Expression::Spread(e)
+        | Expression::Update(_, _, e) => expr_contains_suspension(e),
+        Expression::Import(e, opts)
+        | Expression::ImportDefer(e, opts)
+        | Expression::ImportSource(e, opts) => {
+            expr_contains_suspension(e)
+                || opts.as_ref().is_some_and(|o| expr_contains_suspension(o))
+        }
+        Expression::Binary(_, l, r)
+        | Expression::Logical(_, l, r)
+        | Expression::Assign(_, l, r) => expr_contains_suspension(l) || expr_contains_suspension(r),
+        Expression::Conditional(t, c, a) => {
+            expr_contains_suspension(t)
+                || expr_contains_suspension(c)
+                || expr_contains_suspension(a)
+        }
+        Expression::Call(callee, args) | Expression::New(callee, args) => {
+            expr_contains_suspension(callee) || args.iter().any(expr_contains_suspension)
+        }
+        Expression::Member(obj, prop) => {
+            expr_contains_suspension(obj)
+                || matches!(prop, MemberProperty::Computed(e) if expr_contains_suspension(e))
+        }
+        Expression::OptionalChain(base, chain) => {
+            expr_contains_suspension(base) || expr_contains_suspension(chain)
+        }
+        Expression::Comma(exprs) | Expression::Sequence(exprs) => {
+            exprs.iter().any(expr_contains_suspension)
+        }
+        Expression::TaggedTemplate(tag, tpl) => {
+            expr_contains_suspension(tag) || tpl.expressions.iter().any(expr_contains_suspension)
+        }
+        Expression::Template(tpl) => tpl.expressions.iter().any(expr_contains_suspension),
+    }
+}
+
+pub fn contains_suspension(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::Empty | Statement::Debugger | Statement::Break(_) | Statement::Continue(_) => {
+            false
+        }
+        Statement::Expression(expr) => expr_contains_suspension(expr),
+        Statement::Block(stmts) => stmts.iter().any(contains_suspension),
+        Statement::Variable(decl) => decl
+            .declarations
+            .iter()
+            .any(|d| d.init.as_ref().is_some_and(expr_contains_suspension)),
+        Statement::If(if_stmt) => {
+            expr_contains_suspension(&if_stmt.test)
+                || contains_suspension(&if_stmt.consequent)
+                || if_stmt
+                    .alternate
+                    .as_ref()
+                    .is_some_and(|s| contains_suspension(s))
+        }
+        Statement::While(w) => expr_contains_suspension(&w.test) || contains_suspension(&w.body),
+        Statement::DoWhile(d) => contains_suspension(&d.body) || expr_contains_suspension(&d.test),
+        Statement::For(f) => {
+            f.init.as_ref().is_some_and(|i| match i {
+                ForInit::Variable(v) => v
+                    .declarations
+                    .iter()
+                    .any(|d| d.init.as_ref().is_some_and(expr_contains_suspension)),
+                ForInit::Expression(e) => expr_contains_suspension(e),
+            }) || f.test.as_ref().is_some_and(expr_contains_suspension)
+                || f.update.as_ref().is_some_and(expr_contains_suspension)
+                || contains_suspension(&f.body)
+        }
+        Statement::ForIn(f) => expr_contains_suspension(&f.right) || contains_suspension(&f.body),
+        Statement::ForOf(f) => expr_contains_suspension(&f.right) || contains_suspension(&f.body),
+        Statement::Return(e) => e.as_ref().is_some_and(expr_contains_suspension),
+        Statement::Throw(e) => expr_contains_suspension(e),
+        Statement::Try(t) => {
+            t.block.iter().any(contains_suspension)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| h.body.iter().any(contains_suspension))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| f.iter().any(contains_suspension))
+        }
+        Statement::Switch(s) => {
+            expr_contains_suspension(&s.discriminant)
+                || s.cases.iter().any(|c| {
+                    c.test.as_ref().is_some_and(expr_contains_suspension)
+                        || c.consequent.iter().any(contains_suspension)
+                })
+        }
+        Statement::Labeled(_, inner) => contains_suspension(inner),
+        Statement::With(e, s) => expr_contains_suspension(e) || contains_suspension(s),
+        Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -6441,7 +6441,31 @@ impl Interpreter {
                     return Err(self.create_type_error("is not iterable"));
                 }
             }
-            _ => return Err(self.create_type_error("is not iterable")),
+            _ => {
+                if let Some(key) = &sym_key {
+                    let wrapped = match self.to_object(obj) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Err(e),
+                        _ => return Err(self.create_type_error("is not iterable")),
+                    };
+                    if let JsValue::Object(wo) = &wrapped {
+                        let val = match self.get_object_property(wo.id, key, &wrapped) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Err(e),
+                            _ => JsValue::Undefined,
+                        };
+                        if !matches!(val, JsValue::Undefined | JsValue::Null) {
+                            val
+                        } else {
+                            return Err(self.create_type_error("is not iterable"));
+                        }
+                    } else {
+                        return Err(self.create_type_error("is not iterable"));
+                    }
+                } else {
+                    return Err(self.create_type_error("is not iterable"));
+                }
+            }
         };
         match self.call_function(&iter_fn, obj, &[]) {
             Completion::Normal(v) => {
