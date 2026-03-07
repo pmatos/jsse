@@ -939,6 +939,7 @@ impl Interpreter {
                             has_simple_params: true,
                             is_simple_catch_scope: false,
                             indirect_bindings: None,
+                            module_path: None,
                         }));
                         let c = self.exec_statement(body, &with_env);
                         // UpdateEmpty(C, undefined) per §14.11.2 step 9
@@ -1783,13 +1784,28 @@ impl Interpreter {
                         }
                     },
                     ForInOfLeft::Expression(expr) => {
-                        match self.eval_expr(expr, env) {
-                            Completion::Normal(_) => {}
-                            other => return other,
+                        match expr {
+                            Expression::Identifier(_) => {
+                                if let Err(e) = self.assign_to_expr(expr, key_val, env) {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                            Expression::Member(..) => {
+                                if let Err(e) = self.assign_to_expr(expr, key_val, env) {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                            _ => {
+                                // Evaluate for side effects, then throw ReferenceError
+                                match self.eval_expr(expr, env) {
+                                    Completion::Normal(_) => {}
+                                    other => return other,
+                                }
+                                return Completion::Throw(self.create_reference_error(
+                                    "Invalid left-hand side in for-in loop",
+                                ));
+                            }
                         }
-                        return Completion::Throw(
-                            self.create_reference_error("Invalid left-hand side in for-in loop"),
-                        );
                     }
                 }
                 let result = self.exec_statement(&fi.body, &for_env);
@@ -1990,19 +2006,28 @@ impl Interpreter {
                     }
                     other => return other,
                 },
-                ForInOfLeft::Expression(expr) => {
-                    match self.eval_expr(expr, env) {
-                        Completion::Normal(_) => {}
-                        Completion::Throw(e) => {
+                ForInOfLeft::Expression(expr) => match expr {
+                    Expression::Identifier(_) | Expression::Member(..) => {
+                        if let Err(e) = self.assign_to_expr(expr, val, env) {
                             self.iterator_close(iterator, e.clone());
                             return Completion::Throw(e);
                         }
-                        other => return other,
                     }
-                    let e = self.create_reference_error("Invalid left-hand side in for-of loop");
-                    self.iterator_close(iterator, e.clone());
-                    return Completion::Throw(e);
-                }
+                    _ => {
+                        match self.eval_expr(expr, env) {
+                            Completion::Normal(_) => {}
+                            Completion::Throw(e) => {
+                                self.iterator_close(iterator, e.clone());
+                                return Completion::Throw(e);
+                            }
+                            other => return other,
+                        }
+                        let e =
+                            self.create_reference_error("Invalid left-hand side in for-of loop");
+                        self.iterator_close(iterator, e.clone());
+                        return Completion::Throw(e);
+                    }
+                },
             }
             let body_result = self.exec_statement(&fo.body, &for_env);
             let body_result = self.dispose_resources(&for_env, body_result);

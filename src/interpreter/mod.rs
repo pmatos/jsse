@@ -1797,6 +1797,7 @@ impl Interpreter {
         // Create module environment
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
+        module_env.borrow_mut().module_path = Some(canon_path.clone());
         {
             let mut env = module_env.borrow_mut();
             env.declare("this", BindingKind::Var);
@@ -1992,6 +1993,7 @@ impl Interpreter {
 
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
+        module_env.borrow_mut().module_path = Some(canon_path.clone());
         {
             let mut env = module_env.borrow_mut();
             env.declare("this", BindingKind::Var);

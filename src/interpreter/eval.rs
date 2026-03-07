@@ -409,6 +409,7 @@ impl Interpreter {
                         has_simple_params: true,
                         is_simple_catch_scope: false,
                         indirect_bindings: None,
+                        module_path: None,
                     }));
                     func_env
                         .borrow_mut()
@@ -916,8 +917,10 @@ impl Interpreter {
                 self.await_value(&val)
             }
             Expression::ImportMeta => {
-                // §16.2.1.5.2: Return cached import.meta or create new one
-                if let Some(ref path) = self.current_module_path {
+                // §16.2.1.5.2 GetActiveScriptOrModule: walk env chain to find module path
+                let module_path =
+                    Environment::find_module_path(env).or_else(|| self.current_module_path.clone());
+                if let Some(ref path) = module_path {
                     let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
                     if let Some(module) = self.module_registry.get(&canon)
                         && let Some(ref cached) = module.borrow().cached_import_meta
@@ -927,7 +930,7 @@ impl Interpreter {
                 }
                 let meta = self.create_object();
                 meta.borrow_mut().prototype = None;
-                if let Some(ref path) = self.current_module_path {
+                if let Some(ref path) = module_path {
                     let url = format!("file://{}", path.display());
                     meta.borrow_mut().insert_property(
                         "url".to_string(),
@@ -941,8 +944,7 @@ impl Interpreter {
                 }
                 let id = meta.borrow().id.unwrap();
                 let meta_val = JsValue::Object(crate::types::JsObject { id });
-                // Cache in module record
-                if let Some(ref path) = self.current_module_path {
+                if let Some(ref path) = module_path {
                     let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
                     if let Some(module) = self.module_registry.get(&canon) {
                         module.borrow_mut().cached_import_meta = Some(meta_val.clone());
@@ -2929,6 +2931,16 @@ impl Interpreter {
                     }
                     MemberProperty::Private(_) => unreachable!(),
                 };
+                if obj_val.is_null() || obj_val.is_undefined() {
+                    return Err(self.create_type_error(&format!(
+                        "Cannot set properties of {} (setting '{key}')",
+                        if obj_val.is_null() {
+                            "null"
+                        } else {
+                            "undefined"
+                        }
+                    )));
+                }
                 if let JsValue::Object(ref o) = obj_val
                     && let Some(obj) = self.get_object(o.id)
                 {
@@ -2954,6 +2966,51 @@ impl Interpreter {
                             typed_array_set_index(&ta_clone, index as usize, &num_val);
                         }
                         return Ok(());
+                    }
+                    // Check own setter
+                    let desc = obj.borrow().get_own_property_full(&key);
+                    if let Some(ref d) = desc
+                        && let Some(ref setter) = d.set
+                        && !matches!(setter, JsValue::Undefined)
+                    {
+                        let setter = setter.clone();
+                        let this = obj_val.clone();
+                        return match self.call_function(
+                            &setter,
+                            &this,
+                            std::slice::from_ref(&value),
+                        ) {
+                            Completion::Throw(e) => Err(e),
+                            _ => Ok(()),
+                        };
+                    }
+                    // OrdinarySet: walk prototype chain for setters
+                    if !obj.borrow().has_own_property(&key) {
+                        let mut proto_opt = obj.borrow().prototype.clone();
+                        while let Some(proto_rc) = proto_opt {
+                            let inherited = proto_rc.borrow().get_property_descriptor(&key);
+                            if let Some(ref inherited_desc) = inherited {
+                                if inherited_desc.is_accessor_descriptor() {
+                                    if let Some(ref setter) = inherited_desc.set
+                                        && !matches!(setter, JsValue::Undefined)
+                                    {
+                                        let setter = setter.clone();
+                                        let this = obj_val.clone();
+                                        return match self.call_function(
+                                            &setter,
+                                            &this,
+                                            std::slice::from_ref(&value),
+                                        ) {
+                                            Completion::Throw(e) => Err(e),
+                                            _ => Ok(()),
+                                        };
+                                    }
+                                    return Ok(());
+                                }
+                                break;
+                            }
+                            proto_opt = proto_rc.borrow().prototype.clone();
+                        }
                     }
                     obj.borrow_mut().set_property_value(&key, value);
                 }
@@ -10303,8 +10360,16 @@ impl Interpreter {
             }
         }));
 
-        // Chain: Promise.resolve(value).then(onFulfilled, onRejected)
-        let _ = self.promise_then(&wrapper_promise, &on_fulfilled, &on_rejected);
+        // Chain: PerformPromiseThen(wrapper_promise, onFulfilled, onRejected, responseCap)
+        let (rp_resolve, rp_reject) = self.create_resolving_functions(response_promise_id);
+        let _ = self.perform_promise_then(
+            &wrapper_promise,
+            &on_fulfilled,
+            &on_rejected,
+            response_promise.clone(),
+            rp_resolve,
+            rp_reject,
+        );
         self.drain_microtasks();
 
         Completion::Normal(response_promise)

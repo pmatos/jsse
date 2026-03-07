@@ -6728,17 +6728,14 @@ impl Interpreter {
         let value_wrapper = match self.promise_resolve_with_constructor(&promise_ctor, &value) {
             Ok(w) => w,
             Err(e) => {
-                // Step 6: If abrupt, !done, closeOnRejection → IteratorClose first
-                let err = if !done_bool && close_on_rejection {
-                    match self.iterator_close_result(&sync_iter) {
-                        Err(close_err) => close_err,
-                        Ok(_) => e,
-                    }
-                } else {
-                    e
-                };
+                // Step 6: If abrupt, !done, closeOnRejection → IteratorClose(syncIterRec, valueWrapper)
+                // Per §7.4.7 step 4: since completion is a throw, IteratorClose returns completion
+                // regardless of whether return() succeeds or fails (original error takes priority)
+                if !done_bool && close_on_rejection {
+                    let _ = self.iterator_close_result(&sync_iter);
+                }
                 // Step 7: IfAbruptRejectPromise
-                return self.create_rejected_promise(err);
+                return self.create_rejected_promise(e);
             }
         };
 
@@ -6790,7 +6787,20 @@ impl Interpreter {
             ))
         };
 
-        let _ = self.promise_then(&value_wrapper, &on_fulfilled, &on_rejected);
+        let outer_id = if let JsValue::Object(ref o) = outer_promise {
+            o.id
+        } else {
+            0
+        };
+        let (outer_resolve, outer_reject) = self.create_resolving_functions(outer_id);
+        let _ = self.perform_promise_then(
+            &value_wrapper,
+            &on_fulfilled,
+            &on_rejected,
+            outer_promise.clone(),
+            outer_resolve,
+            outer_reject,
+        );
         Completion::Normal(outer_promise)
     }
 

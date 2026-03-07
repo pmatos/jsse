@@ -949,6 +949,89 @@ impl Interpreter {
         ));
     }
 
+    /// §27.2.5.4.1 PerformPromiseThen with a pre-created result capability.
+    /// Skips SpeciesConstructor — uses the provided promise/resolve/reject directly.
+    pub(crate) fn perform_promise_then(
+        &mut self,
+        promise_val: &JsValue,
+        on_fulfilled: &JsValue,
+        on_rejected: &JsValue,
+        result_promise: JsValue,
+        result_resolve: JsValue,
+        result_reject: JsValue,
+    ) -> Completion {
+        let promise_id = if let JsValue::Object(o) = promise_val {
+            o.id
+        } else {
+            return Completion::Throw(
+                self.create_type_error("PerformPromiseThen called on non-promise"),
+            );
+        };
+        let derived_id = if let JsValue::Object(ref o) = result_promise {
+            o.id
+        } else {
+            0
+        };
+
+        let fulfill_handler = if self.is_callable(on_fulfilled) {
+            Some(on_fulfilled.clone())
+        } else {
+            None
+        };
+        let reject_handler = if self.is_callable(on_rejected) {
+            Some(on_rejected.clone())
+        } else {
+            None
+        };
+
+        let fulfill_reaction = PromiseReaction {
+            handler: fulfill_handler,
+            promise_id: Some(derived_id),
+            resolve: result_resolve.clone(),
+            reject: result_reject.clone(),
+            reaction_type: PromiseReactionType::Fulfill,
+        };
+        let reject_reaction = PromiseReaction {
+            handler: reject_handler,
+            promise_id: Some(derived_id),
+            resolve: result_resolve,
+            reject: result_reject,
+            reaction_type: PromiseReactionType::Reject,
+        };
+
+        let fulfill_reaction2 = fulfill_reaction.clone();
+        let reject_reaction2 = reject_reaction.clone();
+        let state = if let Some(obj) = self.get_object(promise_id) {
+            let mut o = obj.borrow_mut();
+            if let Some(ref mut pd) = o.promise_data {
+                pd.is_handled = true;
+                match &pd.state {
+                    PromiseState::Pending => {
+                        pd.fulfill_reactions.push(fulfill_reaction);
+                        pd.reject_reactions.push(reject_reaction);
+                        None
+                    }
+                    PromiseState::Fulfilled(v) => Some((true, v.clone())),
+                    PromiseState::Rejected(r) => Some((false, r.clone())),
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some((is_fulfilled, value)) = state {
+            if is_fulfilled {
+                self.trigger_promise_reactions(vec![fulfill_reaction2], value);
+            } else {
+                self.trigger_promise_reactions(vec![reject_reaction2], value);
+            }
+        }
+
+        Completion::Normal(result_promise)
+    }
+
     pub(crate) fn promise_then(
         &mut self,
         promise_val: &JsValue,
@@ -1058,12 +1141,33 @@ impl Interpreter {
     }
 
     pub(crate) fn promise_resolve_value(&mut self, value: &JsValue) -> JsValue {
-        // If already a promise, return it
+        // §27.2.4.7.1 PromiseResolve(C, x): if IsPromise(x), check x.constructor === C
         if let JsValue::Object(o) = value
             && let Some(obj) = self.get_object(o.id)
             && obj.borrow().promise_data.is_some()
         {
-            return value.clone();
+            match self.get_object_property(o.id, "constructor", value) {
+                Completion::Normal(ctor) => {
+                    let promise_ctor = self.realm().global_env.borrow().get("Promise");
+                    if let Some(ref pc) = promise_ctor {
+                        if strict_equality(&ctor, pc) {
+                            return value.clone();
+                        }
+                    }
+                }
+                Completion::Throw(e) => {
+                    // Get(x, "constructor") threw — create rejected promise
+                    let promise = self.create_promise_object();
+                    let promise_id = if let JsValue::Object(ref o) = promise {
+                        o.id
+                    } else {
+                        0
+                    };
+                    self.reject_promise(promise_id, e);
+                    return promise;
+                }
+                _ => {}
+            }
         }
         let promise = self.create_promise_object();
         let promise_id = if let JsValue::Object(ref o) = promise {

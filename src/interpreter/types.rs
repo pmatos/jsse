@@ -528,6 +528,8 @@ pub struct Environment {
     pub(crate) is_simple_catch_scope: bool,
     // §9.1.1.5.5 CreateImportBinding: indirect bindings for module imports
     pub(crate) indirect_bindings: Option<HashMap<String, (EnvRef, String)>>,
+    // Module path for import.meta resolution (§16.2.1.5.2 GetActiveScriptOrModule)
+    pub(crate) module_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -616,6 +618,7 @@ impl Environment {
             has_simple_params: true,
             is_simple_catch_scope: false,
             indirect_bindings: None,
+            module_path: None,
         }))
     }
 
@@ -637,7 +640,18 @@ impl Environment {
             has_simple_params: true,
             is_simple_catch_scope: false,
             indirect_bindings: None,
+            module_path: None,
         }))
+    }
+
+    pub fn find_module_path(env: &EnvRef) -> Option<std::path::PathBuf> {
+        if let Some(ref mp) = env.borrow().module_path {
+            return Some(mp.clone());
+        }
+        if let Some(ref parent) = env.borrow().parent {
+            return Self::find_module_path(parent);
+        }
+        None
     }
 
     /// Find the nearest function scope (for var hoisting).

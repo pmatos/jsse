@@ -943,6 +943,27 @@ impl Interpreter {
                                     interp.create_iter_result_object(v, false),
                                 );
                             }
+                            // §23.1.5.1.1 step 3: TypedArray OOB check
+                            if let Some(arr_obj) = interp.get_object(array_id) {
+                                let borrowed = arr_obj.borrow();
+                                if let Some(ref ta) = borrowed.typed_array_info {
+                                    if is_typed_array_out_of_bounds(ta) {
+                                        drop(borrowed);
+                                        if let Some(obj) = interp.get_object(o.id) {
+                                            obj.borrow_mut().iterator_state =
+                                                Some(IteratorState::ArrayIterator {
+                                                    array_id,
+                                                    index,
+                                                    kind,
+                                                    done: true,
+                                                });
+                                        }
+                                        return Completion::Throw(
+                                            interp.create_type_error("TypedArray is out of bounds"),
+                                        );
+                                    }
+                                }
+                            }
                             let (len, val) = if let Some(arr_obj) = interp.get_object(array_id) {
                                 let borrowed = arr_obj.borrow();
                                 let len = borrowed
@@ -951,7 +972,7 @@ impl Interpreter {
                                     .map(|e| e.len())
                                     .unwrap_or_else(|| {
                                         if let Some(ref ta) = borrowed.typed_array_info {
-                                            ta.array_length
+                                            typed_array_length(ta)
                                         } else if let Some(JsValue::Number(n)) =
                                             borrowed.get_property_value("length")
                                         {

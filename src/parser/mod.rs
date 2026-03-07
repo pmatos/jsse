@@ -1526,7 +1526,56 @@ fn pattern_to_expr(pat: Pattern) -> Expression {
     match pat {
         Pattern::Identifier(name) => Expression::Identifier(name),
         Pattern::Rest(inner) => Expression::Spread(Box::new(pattern_to_expr(*inner))),
-        _ => Expression::Identifier("_".into()),
+        Pattern::Array(elements) => {
+            let exprs: Vec<Option<Expression>> = elements
+                .into_iter()
+                .map(|elem| {
+                    elem.map(|e| match e {
+                        ArrayPatternElement::Pattern(p) => pattern_to_expr(p),
+                        ArrayPatternElement::Rest(p) => {
+                            Expression::Spread(Box::new(pattern_to_expr(p)))
+                        }
+                    })
+                })
+                .collect();
+            Expression::Array(exprs, false)
+        }
+        Pattern::Object(props) => {
+            let expr_props: Vec<Property> = props
+                .into_iter()
+                .map(|prop| match prop {
+                    ObjectPatternProperty::KeyValue(key, val) => Property {
+                        key,
+                        value: pattern_to_expr(val),
+                        kind: PropertyKind::Init,
+                        computed: false,
+                        shorthand: false,
+                        method: false,
+                    },
+                    ObjectPatternProperty::Shorthand(name) => Property {
+                        key: PropertyKey::Identifier(name.clone()),
+                        value: Expression::Identifier(name),
+                        kind: PropertyKind::Init,
+                        computed: false,
+                        shorthand: true,
+                        method: false,
+                    },
+                    ObjectPatternProperty::Rest(p) => Property {
+                        key: PropertyKey::Identifier("__rest__".into()),
+                        value: Expression::Spread(Box::new(pattern_to_expr(p))),
+                        kind: PropertyKind::Init,
+                        computed: false,
+                        shorthand: false,
+                        method: false,
+                    },
+                })
+                .collect();
+            Expression::Object(expr_props)
+        }
+        Pattern::Assign(pat, default) => {
+            Expression::Assign(AssignOp::Assign, Box::new(pattern_to_expr(*pat)), default)
+        }
+        Pattern::MemberExpression(expr) => *expr,
     }
 }
 
