@@ -16342,7 +16342,28 @@ impl Interpreter {
                 return;
             }
 
-            let stmt_result = self.exec_statements(statements, &func_env);
+            let mut stmt_result = self.exec_statements(statements, &func_env);
+
+            // Execute tail calls inline — async functions don't use PTC, but
+            // strict mode return statements produce TailCall completions.
+            // The resolved result is a return value (TailCall always originates
+            // from a `return` statement).
+            if matches!(stmt_result, Completion::TailCall { .. }) {
+                while let Completion::TailCall { func, this, args } = stmt_result {
+                    stmt_result = self.call_function(&func, &this, &args);
+                }
+                match stmt_result {
+                    Completion::Normal(v) | Completion::Return(v) => {
+                        route_return!(v);
+                        continue;
+                    }
+                    Completion::Throw(e) => {
+                        pending_exception = Some(e);
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
 
             match &stmt_result {
                 Completion::Throw(e) => {
@@ -16430,7 +16451,11 @@ impl Interpreter {
 
                 StateTerminator::Return(ref expr) => {
                     let ret_val = if let Some(e) = expr {
-                        match self.eval_expr(e, &func_env) {
+                        let mut result = self.eval_expr(e, &func_env);
+                        while let Completion::TailCall { func, this, args } = result {
+                            result = self.call_function(&func, &this, &args);
+                        }
+                        match result {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
                                 pending_exception = Some(e);
