@@ -1362,16 +1362,88 @@ impl Interpreter {
                                 }
                             };
                             excluded_keys.push(key_str.clone());
-                            let v = if let JsValue::Object(o) = &obj_val {
-                                match self.get_object_property(o.id, &key_str, &obj_val) {
-                                    Completion::Normal(v) => v,
-                                    Completion::Throw(e) => return Err(e),
-                                    _ => JsValue::Undefined,
+
+                            // Spec §14.3.3.3: For SingleNameBinding, ResolveBinding
+                            // must happen BEFORE GetV (property access).
+                            let single_name = match pat {
+                                Pattern::Identifier(n) => Some((n.as_str(), None::<&Expression>)),
+                                Pattern::Assign(inner, dflt)
+                                    if matches!(**inner, Pattern::Identifier(_)) =>
+                                {
+                                    if let Pattern::Identifier(n) = &**inner {
+                                        Some((n.as_str(), Some(dflt.as_ref())))
+                                    } else {
+                                        None
+                                    }
+                                }
+                                _ => None,
+                            };
+
+                            if let Some((binding_name, default_expr)) = single_name
+                                && kind == BindingKind::Var
+                            {
+                                // Step 2: ResolveBinding(bindingId, environment)
+                                let var_scope = Environment::find_var_scope(env);
+                                let already = {
+                                    let vs = var_scope.borrow();
+                                    vs.bindings.contains_key(binding_name)
+                                        || vs.global_object.as_ref().is_some_and(|g| {
+                                            g.borrow().properties.contains_key(binding_name)
+                                        })
+                                };
+                                if !already {
+                                    var_scope.borrow_mut().declare(binding_name, kind);
+                                }
+                                let resolved = self.resolve_with_has_binding(binding_name, env)?;
+
+                                // Step 3: v = GetV(value, propertyName)
+                                let mut v = if let JsValue::Object(o) = &obj_val {
+                                    match self.get_object_property(o.id, &key_str, &obj_val) {
+                                        Completion::Normal(v) => v,
+                                        Completion::Throw(e) => return Err(e),
+                                        _ => JsValue::Undefined,
+                                    }
+                                } else {
+                                    JsValue::Undefined
+                                };
+
+                                // Step 4: If v undefined and initializer present, evaluate
+                                if v.is_undefined() {
+                                    if let Some(dflt) = default_expr {
+                                        v = match self.eval_expr(dflt, env) {
+                                            Completion::Normal(v) => v,
+                                            Completion::Throw(e) => return Err(e),
+                                            _ => JsValue::Undefined,
+                                        };
+                                        if dflt.is_anonymous_function_definition() {
+                                            self.set_function_name(&v, binding_name);
+                                        }
+                                    }
+                                }
+
+                                // Step 6: InitializeReferencedBinding(lhs, v)
+                                let strict = env.borrow().strict;
+                                match resolved {
+                                    Some(obj_id) => self.with_set_mutable_binding(
+                                        obj_id,
+                                        binding_name,
+                                        v,
+                                        strict,
+                                    )?,
+                                    None => env.borrow_mut().set(binding_name, v)?,
                                 }
                             } else {
-                                JsValue::Undefined
-                            };
-                            self.bind_pattern(pat, v, kind, env)?;
+                                let v = if let JsValue::Object(o) = &obj_val {
+                                    match self.get_object_property(o.id, &key_str, &obj_val) {
+                                        Completion::Normal(v) => v,
+                                        Completion::Throw(e) => return Err(e),
+                                        _ => JsValue::Undefined,
+                                    }
+                                } else {
+                                    JsValue::Undefined
+                                };
+                                self.bind_pattern(pat, v, kind, env)?;
+                            }
                         }
                         ObjectPatternProperty::Rest(pat) => {
                             let rest_obj = self.create_object();

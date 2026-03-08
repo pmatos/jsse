@@ -930,7 +930,24 @@ fn total_relative_duration_zdt(
 
     match unit {
         "day" => {
-            // Total days from base to dest (includes Y/M/W/D contributions)
+            // Spec: AddDaysToZonedDateTime(..., 1) — validate that base + 1 day is in range
+            let sign: i128 = if dest_epoch_ns > base_epoch_ns {
+                1
+            } else if dest_epoch_ns < base_epoch_ns {
+                -1
+            } else {
+                1 // zero duration: spec still checks +1 day
+            };
+            let next_day_iso = add_iso_date(base_year, base_month, base_day, 0, 0, 0, sign as i32);
+            let next_day_epoch_days =
+                iso_date_to_epoch_days(next_day_iso.0, next_day_iso.1, next_day_iso.2) as i128;
+            let next_day_local_ns = next_day_epoch_days * 86_400_000_000_000 + wall_time_ns;
+            let next_day_ns =
+                super::zoned_date_time::disambiguate_instant(tz, next_day_local_ns, "compatible");
+            if next_day_ns < -ns_max || next_day_ns > ns_max {
+                return Err(());
+            }
+
             let tz_days = nanoseconds_to_tz_days(
                 dest_epoch_ns,
                 base_epoch_ns,
