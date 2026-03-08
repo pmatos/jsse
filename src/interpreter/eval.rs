@@ -6597,8 +6597,8 @@ impl Interpreter {
                     if let Some(ctx) = current_try_stack.last_mut() {
                         ctx.entered_catch = true;
                     }
+                    let exception_val = pending_exception.take().unwrap_or(JsValue::Undefined);
                     if let Some(pattern) = param {
-                        let exception_val = pending_exception.take().unwrap_or(JsValue::Undefined);
                         let _ =
                             self.bind_pattern(pattern, exception_val, BindingKind::Let, &func_env);
                     }
@@ -9535,8 +9535,8 @@ impl Interpreter {
                     if let Some(ctx) = current_try_stack.last_mut() {
                         ctx.entered_catch = true;
                     }
+                    let exception_val = pending_exception.take().unwrap_or(JsValue::Undefined);
                     if let Some(pattern) = param {
-                        let exception_val = pending_exception.take().unwrap_or(JsValue::Undefined);
                         let _ =
                             self.bind_pattern(pattern, exception_val, BindingKind::Let, &func_env);
                     }
@@ -16820,6 +16820,30 @@ impl Interpreter {
         }
 
         loop {
+            // §10.4.4.3 Dispose step 3: async-dispose resources need Await(result),
+            // which must truly suspend the async function. dispose_resources already
+            // resolved the promise synchronously via await_value; this flag triggers
+            // an additional suspension so the continuation runs in a new microtask.
+            if self.pending_async_dispose_await {
+                self.pending_async_dispose_await = false;
+                self.async_fn_suspend_at_await(
+                    async_id,
+                    &state_machine,
+                    &func_env,
+                    is_strict,
+                    current_id,
+                    &try_stack,
+                    None,
+                    pending_return.take(),
+                    saved_finally_exception.take(),
+                    &resolve_fn,
+                    &reject_fn,
+                    &JsValue::Undefined,
+                    &for_of_stack,
+                );
+                return;
+            }
+
             if current_id >= state_machine.states.len() {
                 self.async_fn_complete(async_id, &func_env, &resolve_fn, &reject_fn);
                 return;
@@ -17141,8 +17165,8 @@ impl Interpreter {
                     if let Some(ctx) = try_stack.last_mut() {
                         ctx.entered_catch = true;
                     }
+                    let exc_val = pending_exception.take().unwrap_or(JsValue::Undefined);
                     if let Some(pattern) = param {
-                        let exc_val = pending_exception.take().unwrap_or(JsValue::Undefined);
                         let _ = self.bind_pattern(pattern, exc_val, BindingKind::Let, &func_env);
                     }
                     current_id = body_state;

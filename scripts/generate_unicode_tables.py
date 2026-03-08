@@ -15,6 +15,7 @@ UCD_FILES = {
     "ScriptExtensions.txt": "ScriptExtensions.txt",
     "DerivedGeneralCategory.txt": "extracted/DerivedGeneralCategory.txt",
     "DerivedCoreProperties.txt": "DerivedCoreProperties.txt",
+    "DerivedNormalizationProps.txt": "DerivedNormalizationProps.txt",
     "PropList.txt": "PropList.txt",
     "emoji-data.txt": "emoji/emoji-data.txt",
     "PropertyValueAliases.txt": "PropertyValueAliases.txt",
@@ -102,16 +103,16 @@ def parse_script_extensions(text: str, script_data: dict[str, list[tuple[int, in
 
     # For codepoints NOT in ScriptExtensions, inherit from Script property
     for script_name, ranges in script_data.items():
-        if script_name in ("Common", "Inherited"):
+        if script_name in ("Common", "Inherited", "Unknown"):
             continue
         for lo, hi in ranges:
             for cp in range(lo, hi + 1):
                 if cp not in scx_covered:
                     scx[script_name].append((cp, cp))
 
-    # Also, Common and Inherited codepoints that are NOT in ScriptExtensions
+    # Also, Common, Inherited, and Unknown codepoints that are NOT in ScriptExtensions
     # get their Script value as their Script_Extensions value
-    for script_name in ("Common", "Inherited"):
+    for script_name in ("Common", "Inherited", "Unknown"):
         if script_name in script_data:
             for lo, hi in script_data[script_name]:
                 for cp in range(lo, hi + 1):
@@ -484,6 +485,14 @@ def main():
     script_data = parse_ranges(texts["Scripts.txt"])
     print(f"Scripts: {len(script_data)} values", file=sys.stderr)
 
+    # Compute Script=Unknown as complement of all explicit script ranges
+    all_script_ranges = []
+    for ranges in script_data.values():
+        all_script_ranges.extend(ranges)
+    all_script_ranges = merge_ranges(sorted(all_script_ranges))
+    script_data["Unknown"] = compute_complement(all_script_ranges)
+    print(f"Scripts (with Unknown): {len(script_data)} values", file=sys.stderr)
+
     # Parse Script_Extensions
     # ScriptExtensions.txt uses short script names, we need to map them
     pva = parse_property_value_aliases(texts["PropertyValueAliases.txt"])
@@ -529,6 +538,13 @@ def main():
     emoji_data = parse_ranges(texts["emoji-data.txt"])
     for name, ranges in emoji_data.items():
         binary_data[name] = ranges
+
+    norm_props = parse_ranges(texts["DerivedNormalizationProps.txt"])
+    for name, ranges in norm_props.items():
+        if name in binary_data:
+            binary_data[name] = merge_ranges(sorted(binary_data[name] + ranges))
+        else:
+            binary_data[name] = ranges
 
     print(f"Binary properties: {len(binary_data)} values", file=sys.stderr)
 

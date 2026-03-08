@@ -234,6 +234,7 @@ fn transform_generator_inner_opts(
         && !body.iter().any(contains_suspension)
         && !(detect_for_await && body.iter().any(|s| stmt_contains_for_await(s)))
         && !body.iter().any(stmt_contains_return)
+        && !body.iter().any(has_block_with_await_using)
     {
         return create_simple_machine(body, params, &analysis);
     }
@@ -386,6 +387,8 @@ fn transform_statements(stmts: &[Statement], ctx: &mut TransformContext, after_s
             // Return statements in async generators need Return terminators
             // for proper Return(None) vs Return(Some) tick distinction
             transform_yielding_statement(stmt, ctx, next_after);
+        } else if ctx.is_async && has_block_with_await_using(stmt) {
+            transform_yielding_statement(stmt, ctx, next_after);
         } else {
             ctx.emit_statement(stmt.clone());
         }
@@ -399,7 +402,25 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
         }
 
         Statement::Block(stmts) => {
-            transform_statements(stmts, ctx, after_state);
+            if ctx.is_async && block_has_await_using(stmts) {
+                // Block with `await using` — keep the block intact so it creates
+                // a block_env with its own dispose_stack. The disposal will call
+                // await_value synchronously and set pending_async_dispose_await.
+                // Create a state boundary after the block so the async function
+                // executor can detect the flag and suspend.
+                let resume_state = if after_state == usize::MAX {
+                    ctx.new_state()
+                } else {
+                    after_state
+                };
+                ctx.emit_statement(stmt.clone());
+                ctx.finalize_current_state(StateTerminator::Goto(resume_state));
+                ctx.current_state_id = resume_state;
+                // If there were remaining statements after the block in the parent,
+                // they'll be emitted into resume_state by the caller.
+            } else {
+                transform_statements(stmts, ctx, after_state);
+            }
         }
 
         Statement::Variable(decl) => {

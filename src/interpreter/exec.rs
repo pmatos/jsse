@@ -832,8 +832,16 @@ impl Interpreter {
             Statement::Expression(expr) => self.eval_expr(expr, env),
             Statement::Block(stmts) => {
                 let block_env = Environment::new(Some(env.clone()));
+                let has_async_dispose = self.in_state_machine
+                    && stmts.iter().any(
+                        |s| matches!(s, Statement::Variable(d) if d.kind == VarKind::AwaitUsing),
+                    );
                 let result = self.exec_statements(stmts, &block_env);
-                self.dispose_resources(&block_env, result)
+                let result = self.dispose_resources(&block_env, result);
+                if has_async_dispose && !result.is_abrupt() {
+                    self.pending_async_dispose_await = true;
+                }
+                result
             }
             Statement::Variable(decl) => {
                 let r = self.exec_variable_declaration(decl, env);

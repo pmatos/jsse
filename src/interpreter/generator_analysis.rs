@@ -798,6 +798,29 @@ pub fn expr_contains_suspension(expr: &Expression) -> bool {
     }
 }
 
+/// Checks if a statement is or contains a Block with `await using` declarations.
+/// Only blocks need special handling because their disposal (at block exit) must
+/// trigger an Await suspension. For/try/switch handle disposal internally.
+pub fn has_block_with_await_using(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::Block(stmts) => block_has_await_using(stmts),
+        Statement::If(i) => {
+            has_block_with_await_using(&i.consequent)
+                || i.alternate
+                    .as_ref()
+                    .is_some_and(|s| has_block_with_await_using(s))
+        }
+        Statement::Labeled(_, inner) => has_block_with_await_using(inner),
+        _ => false,
+    }
+}
+
+pub fn block_has_await_using(stmts: &[Statement]) -> bool {
+    stmts
+        .iter()
+        .any(|s| matches!(s, Statement::Variable(decl) if decl.kind == VarKind::AwaitUsing))
+}
+
 pub fn contains_suspension(stmt: &Statement) -> bool {
     match stmt {
         Statement::Empty | Statement::Debugger | Statement::Break(_) | Statement::Continue(_) => {

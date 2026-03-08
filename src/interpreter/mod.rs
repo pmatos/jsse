@@ -83,6 +83,7 @@ pub struct Interpreter {
     pub(crate) async_gen_yield_pending: bool,
     pub(crate) async_function_states: HashMap<u64, AsyncFunctionState>,
     next_async_function_id: u64,
+    pub(crate) pending_async_dispose_await: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -198,6 +199,7 @@ impl Interpreter {
             async_gen_yield_pending: false,
             async_function_states: HashMap::new(),
             next_async_function_id: 0,
+            pending_async_dispose_await: false,
         };
         interp.setup_globals();
         interp
@@ -1960,9 +1962,8 @@ impl Interpreter {
         let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
         if let Some(existing) = self.module_registry.get(&canon_path) {
-            if let Some(ref err) = existing.borrow().error.clone() {
-                return Err(err.clone());
-            }
+            // Don't propagate evaluation errors during load — the error will be
+            // re-thrown when the module is actually evaluated (e.g. via deferred namespace access).
             return Ok(existing.clone());
         }
 
