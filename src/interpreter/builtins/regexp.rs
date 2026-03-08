@@ -4585,7 +4585,7 @@ fn build_quantified_parent_map(source: &str) -> (Vec<(usize, usize)>, Vec<usize>
                         return false; // consuming escape
                     }
                 }
-                '[' if !in_cc => {
+                '[' => {
                     return false; // char class is consuming
                 }
                 '^' | '$' => {

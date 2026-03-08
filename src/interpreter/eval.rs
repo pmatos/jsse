@@ -8303,7 +8303,14 @@ impl Interpreter {
                                 pending_exception: None,
                                 pending_return: None,
                             });
-                        return self.async_generator_next_state_machine(this, JsValue::Undefined);
+                        // Reuse the same promise — don't create a new one
+                        return self.async_generator_next_state_machine_with_promise(
+                            this,
+                            JsValue::Undefined,
+                            promise,
+                            resolve_fn,
+                            reject_fn,
+                        );
                     } else {
                         // Per spec §14.4.13 step 7.a.vi: for async generators,
                         // yield the value directly without awaiting (AsyncGeneratorYield)
