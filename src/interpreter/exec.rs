@@ -936,6 +936,7 @@ impl Interpreter {
                             class_private_names: None,
                             is_field_initializer: false,
                             arguments_immutable: false,
+                            has_parameter_expressions: false,
                             has_simple_params: true,
                             is_simple_catch_scope: false,
                             indirect_bindings: None,

@@ -525,6 +525,7 @@ pub struct Environment {
     pub(crate) class_private_names: Option<std::collections::HashMap<String, String>>,
     pub(crate) is_field_initializer: bool,
     pub(crate) arguments_immutable: bool,
+    pub(crate) has_parameter_expressions: bool,
     pub(crate) has_simple_params: bool,
     pub(crate) is_simple_catch_scope: bool,
     // §9.1.1.5.5 CreateImportBinding: indirect bindings for module imports
@@ -616,6 +617,7 @@ impl Environment {
             class_private_names: None,
             is_field_initializer: false,
             arguments_immutable: false,
+            has_parameter_expressions: false,
             has_simple_params: true,
             is_simple_catch_scope: false,
             indirect_bindings: None,
@@ -638,6 +640,7 @@ impl Environment {
             class_private_names: None,
             is_field_initializer: false,
             arguments_immutable: false,
+            has_parameter_expressions: false,
             has_simple_params: true,
             is_simple_catch_scope: false,
             indirect_bindings: None,

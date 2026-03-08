@@ -4391,10 +4391,8 @@ fn strip_renamed_qi_captures(caps: &mut RegexCaptures) {
 /// When a quantified group iterates multiple times, captures from inner groups that don't
 /// participate in the final iteration must be reset to undefined.
 fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
-    let parent_map = build_quantified_parent_map(source);
-    if parent_map.is_empty() {
-        return;
-    }
+    let (parent_map, zero_width_clears) = build_quantified_parent_map(source);
+    // Handle standard case: child capture outside parent capture bounds
     for (child_group, parent_group) in &parent_map {
         let child_idx = *child_group;
         let parent_idx = *parent_group;
@@ -4409,23 +4407,40 @@ fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
             }
         }
     }
+    // Handle zero-width quantified non-capturing groups with min=0:
+    // Per spec §22.2.2.5.1 RepeatMatcher step 2.b, when min=0 and the iteration
+    // matches empty string, it returns failure. For groups containing only
+    // zero-width assertions, every iteration matches empty, so inner captures
+    // must always be cleared.
+    for child_idx in &zero_width_clears {
+        if *child_idx < caps.groups.len() {
+            caps.groups[*child_idx] = None;
+        }
+    }
 }
 
 /// Parse regex source to build a map: child_group_number -> nearest_quantified_ancestor_group_number.
 /// A "quantified group" is a capturing or non-capturing group that is followed by *, +, ?, or {n,m}.
 /// We track the nesting of groups and which groups are quantified to build this mapping.
-fn build_quantified_parent_map(source: &str) -> Vec<(usize, usize)> {
+/// Returns (parent_map, zero_width_clears):
+/// - parent_map: Vec<(child_capture, parent_capture)> for bounds-based clearing
+/// - zero_width_clears: Vec<child_capture> for captures inside zero-width
+///   quantified groups with min=0 that must always be cleared
+fn build_quantified_parent_map(source: &str) -> (Vec<(usize, usize)>, Vec<usize>) {
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
     let mut result = Vec::new();
+    let mut zero_width_clears: Vec<usize> = Vec::new();
 
     // First pass: identify all groups (capturing and non-capturing), their nesting, and which are quantified
     #[derive(Clone)]
     struct GroupInfo {
         capture_index: Option<usize>, // None for non-capturing groups
         children: Vec<usize>,         // indices into groups_info
+        start_pos: usize,             // position of '(' in source
         end_pos: usize,               // position of ')' in source
         is_quantified: bool,
+        quantifier_min_zero: bool, // true if quantifier has min=0 (*, ?, {0,...})
     }
 
     let mut groups_info: Vec<GroupInfo> = Vec::new();
@@ -4474,8 +4489,10 @@ fn build_quantified_parent_map(source: &str) -> Vec<(usize, usize)> {
             groups_info.push(GroupInfo {
                 capture_index: cap_idx,
                 children: Vec::new(),
+                start_pos: i,
                 end_pos: 0,
                 is_quantified: false,
+                quantifier_min_zero: false,
             });
             if let Some(&parent_idx) = group_stack.last() {
                 groups_info[parent_idx].children.push(group_idx);
@@ -4497,6 +4514,26 @@ fn build_quantified_parent_map(source: &str) -> Vec<(usize, usize)> {
                         || chars[next] == '{')
                 {
                     groups_info[group_idx].is_quantified = true;
+                    let min_zero = match chars[next] {
+                        '*' | '?' => true,
+                        '{' => {
+                            // Parse {N,...} to check if N == 0
+                            let mut k = next + 1;
+                            let ns = k;
+                            while k < len && chars[k].is_ascii_digit() {
+                                k += 1;
+                            }
+                            if k > ns {
+                                let n: u32 =
+                                    chars[ns..k].iter().collect::<String>().parse().unwrap_or(1);
+                                n == 0
+                            } else {
+                                false
+                            }
+                        }
+                        _ => false, // '+'
+                    };
+                    groups_info[group_idx].quantifier_min_zero = min_zero;
                 }
             }
             i += 1;
@@ -4506,27 +4543,148 @@ fn build_quantified_parent_map(source: &str) -> Vec<(usize, usize)> {
         i += 1;
     }
 
+    // Check if a group's content (between start_pos and end_pos) is zero-width-only
+    fn is_group_zero_width_only(chars: &[char], group: &GroupInfo) -> bool {
+        // Content starts after '(' plus any group prefix like '?:', '?=', '?!', '?<=' etc
+        let start = group.start_pos + 1;
+        let end = group.end_pos;
+        let mut i = start;
+        // Skip group prefix
+        if i < end && chars[i] == '?' {
+            i += 1;
+            if i < end {
+                match chars[i] {
+                    ':' => {
+                        i += 1;
+                    }
+                    '=' | '!' => return true, // lookahead is zero-width
+                    '<' if i + 1 < end && (chars[i + 1] == '=' || chars[i + 1] == '!') => {
+                        return true; // lookbehind is zero-width
+                    }
+                    '<' => {
+                        // Named group (?<name>...) — skip name
+                        while i < end && chars[i] != '>' {
+                            i += 1;
+                        }
+                        if i < end {
+                            i += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // Check remaining content — must be only assertions/zero-width elements
+        while i < end {
+            match chars[i] {
+                '\\' if i + 1 < end => {
+                    let c2 = chars[i + 1];
+                    if c2 == 'b' || c2 == 'B' {
+                        i += 2; // zero-width anchors
+                    } else {
+                        return false; // consuming escape
+                    }
+                }
+                '[' if !in_cc => {
+                    return false; // char class is consuming
+                }
+                '^' | '$' => {
+                    i += 1;
+                }
+                '(' if i + 2 < end && chars[i + 1] == '?' => {
+                    let c2 = chars[i + 2];
+                    if c2 == '=' || c2 == '!' {
+                        // Lookahead — skip to matching close
+                        let mut depth = 1;
+                        i += 1;
+                        while i < end && depth > 0 {
+                            if chars[i] == '\\' && i + 1 < end {
+                                i += 2;
+                                continue;
+                            }
+                            if chars[i] == '(' {
+                                depth += 1;
+                            }
+                            if chars[i] == ')' {
+                                depth -= 1;
+                            }
+                            i += 1;
+                        }
+                    } else if c2 == '<'
+                        && i + 3 < end
+                        && (chars[i + 3] == '=' || chars[i + 3] == '!')
+                    {
+                        // Lookbehind — skip to matching close
+                        let mut depth = 1;
+                        i += 1;
+                        while i < end && depth > 0 {
+                            if chars[i] == '\\' && i + 1 < end {
+                                i += 2;
+                                continue;
+                            }
+                            if chars[i] == '(' {
+                                depth += 1;
+                            }
+                            if chars[i] == ')' {
+                                depth -= 1;
+                            }
+                            i += 1;
+                        }
+                    } else if c2 == ':' {
+                        // Non-capturing group — need to check content recursively
+                        // For simplicity, find matching close and check if it's all zero-width
+                        return false; // Conservative: treat as consuming
+                    } else {
+                        return false;
+                    }
+                }
+                _ => return false, // Any other char is consuming
+            }
+        }
+        true
+    }
+
     fn collect_pairs(
         group_idx: usize,
+        chars: &[char],
         groups_info: &[GroupInfo],
         ancestor_stack: &mut Vec<usize>,
         result: &mut Vec<(usize, usize)>,
+        zero_width_clears: &mut Vec<usize>,
     ) {
         let children = groups_info[group_idx].children.clone();
         for &child_idx in &children {
             if let Some(cap_idx) = groups_info[child_idx].capture_index {
+                let mut found_capturing_ancestor = false;
                 // Find nearest quantified ancestor with a capture index
                 for &anc in ancestor_stack.iter().rev() {
                     if groups_info[anc].is_quantified {
                         if let Some(anc_cap) = groups_info[anc].capture_index {
                             result.push((cap_idx, anc_cap));
+                            found_capturing_ancestor = true;
+                            break;
+                        }
+                        // Non-capturing quantified ancestor with min=0 and zero-width content
+                        if groups_info[anc].quantifier_min_zero
+                            && is_group_zero_width_only(chars, &groups_info[anc])
+                        {
+                            zero_width_clears.push(cap_idx);
+                            found_capturing_ancestor = true;
                             break;
                         }
                     }
                 }
+                let _ = found_capturing_ancestor;
             }
             ancestor_stack.push(child_idx);
-            collect_pairs(child_idx, groups_info, ancestor_stack, result);
+            collect_pairs(
+                child_idx,
+                chars,
+                groups_info,
+                ancestor_stack,
+                result,
+                zero_width_clears,
+            );
             ancestor_stack.pop();
         }
     }
@@ -4541,10 +4699,17 @@ fn build_quantified_parent_map(source: &str) -> Vec<(usize, usize)> {
 
     for &top_idx in &top_level {
         let mut stack = vec![top_idx];
-        collect_pairs(top_idx, &groups_info, &mut stack, &mut result);
+        collect_pairs(
+            top_idx,
+            &chars,
+            &groups_info,
+            &mut stack,
+            &mut result,
+            &mut zero_width_clears,
+        );
     }
 
-    result
+    (result, zero_width_clears)
 }
 
 fn build_regex(source: &str, flags: &str) -> Result<CompiledRegex, String> {
@@ -4804,6 +4969,184 @@ fn try_build_custom_lookbehind(
     ))
 }
 
+/// Fix patterns that fancy-regex rejects with TargetNotRepeatable.
+/// When a non-capturing group `(?:...)` contains only zero-width assertions
+/// (lookaheads/lookbehinds) and is followed by a quantifier, fancy-regex
+/// considers it non-repeatable. We fix this by inserting an empty-matching
+/// element `(?:)` before the closing `)` to make the group "consuming".
+fn fix_assertion_only_quantified_groups(pattern: &str) -> String {
+    let chars: Vec<char> = pattern.chars().collect();
+    let len = chars.len();
+    if len == 0 {
+        return pattern.to_string();
+    }
+
+    // Find all non-capturing groups and check if they contain only assertions
+    let mut result = String::with_capacity(pattern.len() + 16);
+
+    // First, find all group open positions and their matching close positions
+    // Then check which non-capturing groups are assertion-only
+    struct GroupInfo {
+        open: usize,
+        close: usize,
+        is_non_capturing: bool,
+    }
+
+    let mut groups: Vec<GroupInfo> = Vec::new();
+    let mut stack: Vec<(usize, bool)> = Vec::new(); // (open_pos, is_non_capturing)
+    let mut j = 0;
+    let mut in_cc = false;
+    while j < len {
+        match chars[j] {
+            '\\' if j + 1 < len => {
+                j += 2;
+                continue;
+            }
+            '[' if !in_cc => {
+                in_cc = true;
+            }
+            ']' if in_cc => {
+                in_cc = false;
+            }
+            '(' if !in_cc => {
+                let is_nc = j + 2 < len && chars[j + 1] == '?' && chars[j + 2] == ':';
+                stack.push((j, is_nc));
+            }
+            ')' if !in_cc => {
+                if let Some((open, is_nc)) = stack.pop() {
+                    groups.push(GroupInfo {
+                        open,
+                        close: j,
+                        is_non_capturing: is_nc,
+                    });
+                }
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+
+    // For each non-capturing group followed by a quantifier, check if it's assertion-only
+    let mut insert_positions: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    for g in &groups {
+        if !g.is_non_capturing {
+            continue;
+        }
+        // Check if followed by a quantifier
+        let after = g.close + 1;
+        if after >= len {
+            continue;
+        }
+        let qc = chars[after];
+        if qc != '?' && qc != '*' && qc != '+' && qc != '{' {
+            continue;
+        }
+        // Check if group content is assertion-only (only lookaheads/lookbehinds/anchors)
+        if is_assertion_only_content(&chars, g.open + 3, g.close) {
+            insert_positions.insert(g.close);
+        }
+    }
+
+    if insert_positions.is_empty() {
+        return pattern.to_string();
+    }
+
+    for (idx, &c) in chars.iter().enumerate() {
+        if insert_positions.contains(&idx) {
+            // Insert zero-width padding that fancy-regex considers repeatable
+            result.push_str("a{0}");
+        }
+        result.push(c);
+    }
+    result
+}
+
+/// Check if the content between `start` and `end` (exclusive) in chars
+/// consists only of zero-width assertions (lookaheads, lookbehinds, anchors).
+fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
+    let mut i = start;
+    let len = end;
+    while i < len {
+        match chars[i] {
+            // Lookahead/lookbehind groups are zero-width
+            '(' if i + 2 < len && chars[i + 1] == '?' => {
+                let c2 = chars[i + 2];
+                if c2 == '=' || c2 == '!' {
+                    // Lookahead (?= or (?! — find matching close
+                    if let Some(close) = find_matching_close(&chars[..len], i) {
+                        i = close + 1;
+                        continue;
+                    }
+                    return false;
+                }
+                if c2 == '<' && i + 3 < len && (chars[i + 3] == '=' || chars[i + 3] == '!') {
+                    // Lookbehind (?<= or (?<! — find matching close
+                    if let Some(close) = find_matching_close(&chars[..len], i) {
+                        i = close + 1;
+                        continue;
+                    }
+                    return false;
+                }
+                // Non-capturing group (?:...) — check recursively
+                if c2 == ':' {
+                    if let Some(close) = find_matching_close(&chars[..len], i) {
+                        if !is_assertion_only_content(chars, i + 3, close) {
+                            return false;
+                        }
+                        i = close + 1;
+                        continue;
+                    }
+                }
+                return false;
+            }
+            // Anchors are zero-width
+            '^' | '$' => {
+                i += 1;
+            }
+            '\\' if i + 1 < len => {
+                let next = chars[i + 1];
+                // \b, \B are zero-width anchors
+                if next == 'b' || next == 'B' {
+                    i += 2;
+                } else {
+                    return false; // \d, \w, etc. are consuming
+                }
+            }
+            // Whitespace between assertions is ok
+            ' ' | '\t' | '\n' | '\r' => {
+                i += 1;
+            }
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Find the closing ')' matching '(' at position `open`.
+fn find_matching_close(chars: &[char], open: usize) -> Option<usize> {
+    let mut depth = 0;
+    let mut i = open;
+    let len = chars.len();
+    while i < len {
+        match chars[i] {
+            '\\' if i + 1 < len => {
+                i += 2;
+                continue;
+            }
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
 fn build_regex_ex(
     source: &str,
     flags: &str,
@@ -4821,7 +5164,18 @@ fn build_regex_ex(
 
     match fancy_regex::Regex::new(&tr.pattern) {
         Ok(r) => Ok((CompiledRegex::Fancy(r), dup_map, name_order)),
-        Err(_) => {
+        Err(e) => {
+            // If the error is TargetNotRepeatable, try fixing assertion-only groups
+            let err_str = e.to_string();
+            if err_str.contains("Target of repeat operator") {
+                let fixed = fix_assertion_only_quantified_groups(&tr.pattern);
+                if fixed != tr.pattern {
+                    if let Ok(r) = fancy_regex::Regex::new(&fixed) {
+                        return Ok((CompiledRegex::Fancy(r), dup_map, name_order));
+                    }
+                }
+            }
+
             // If fancy-regex fails and the pattern has lookbehinds, try custom path
             if (source.contains("(?<=") || source.contains("(?<!"))
                 && let Some(result) =

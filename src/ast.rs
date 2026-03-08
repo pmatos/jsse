@@ -42,6 +42,7 @@ pub enum ImportSpecifier {
     Default(String),
     Namespace(String),
     DeferredNamespace(String),
+    SourcePhase(String),
 }
 
 #[derive(Clone, Debug)]

@@ -43,6 +43,52 @@ impl<'a> Parser<'a> {
             self.prev_line_terminator = saved_lt;
         }
 
+        // import source X from "module" (source-phase import)
+        if self.current_identifier_name().as_deref() == Some("source") {
+            let saved_lt = self.prev_line_terminator;
+            let saved = self.advance()?; // consume `source`
+            if self.is_from_keyword() {
+                // Could be `import source from "..."` (default) or
+                // `import source from from "..."` (source-phase, binding=from)
+                let _saved2_lt = self.prev_line_terminator;
+                let _saved2 = self.advance()?; // consume first `from`
+                if self.is_from_keyword() {
+                    // `import source from from "..."` — source-phase, binding = "from"
+                    let local = "from".to_string();
+                    self.advance()?; // consume second `from`
+                    specifiers.push(ImportSpecifier::SourcePhase(local));
+                    let source = self.parse_module_specifier()?;
+                    self.skip_import_attributes()?;
+                    self.eat_semicolon()?;
+                    return Ok(ImportDeclaration { specifiers, source });
+                }
+                // `import source from "..."` — default import, binding = "source"
+                // current is the string literal, saved2 was `from`
+                // We already consumed `source` and `from`, current is the string
+                specifiers.push(ImportSpecifier::Default("source".to_string()));
+                let source = self.parse_module_specifier()?;
+                self.skip_import_attributes()?;
+                self.eat_semicolon()?;
+                return Ok(ImportDeclaration { specifiers, source });
+            } else if self.current_identifier_name().is_some() {
+                // `import source X from "..."` — source-phase, binding = X
+                let local = self
+                    .current_identifier_name()
+                    .ok_or_else(|| self.error("Expected identifier after 'source'"))?;
+                self.advance()?;
+                specifiers.push(ImportSpecifier::SourcePhase(local));
+                self.eat_from()?;
+                let source = self.parse_module_specifier()?;
+                self.skip_import_attributes()?;
+                self.eat_semicolon()?;
+                return Ok(ImportDeclaration { specifiers, source });
+            }
+            // Not source-phase and not followed by from/ident, restore
+            self.push_back(self.current.clone(), self.prev_line_terminator);
+            self.current = saved;
+            self.prev_line_terminator = saved_lt;
+        }
+
         // import defaultExport from "module"
         if let Some(name) = self.current_identifier_name() {
             self.advance()?;

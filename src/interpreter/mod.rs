@@ -1518,6 +1518,11 @@ impl Interpreter {
                     env.borrow_mut().declare(local, BindingKind::Const);
                     env.borrow_mut().initialize_binding(local, ns);
                 }
+                ImportSpecifier::SourcePhase(_) => {
+                    return Err(self.create_type_error(
+                        "Source phase imports are not supported for Source Text Module Records",
+                    ));
+                }
             }
         }
 

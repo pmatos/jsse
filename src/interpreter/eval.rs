@@ -406,6 +406,7 @@ impl Interpreter {
                         class_private_names: None,
                         is_field_initializer: false,
                         arguments_immutable: false,
+                        has_parameter_expressions: false,
                         has_simple_params: true,
                         is_simple_catch_scope: false,
                         indirect_bindings: None,
@@ -7799,6 +7800,39 @@ impl Interpreter {
                         let value = match self.iterator_value(&awaited_result) {
                             Ok(v) => v,
                             Err(e) => {
+                                // IteratorValue threw — route through try/catch stack
+                                // per spec §15.5.5 step 7.c.ix: ? IteratorValue(innerReturnResult)
+                                // Route through the state machine's try/catch handling
+                                let has_catch = try_stack.iter().rev().any(|tc| {
+                                    !tc.entered_catch
+                                        && !tc.entered_finally
+                                        && tc.catch_state.is_some()
+                                });
+                                if has_catch {
+                                    obj_rc.borrow_mut().iterator_state =
+                                        Some(IteratorState::StateMachineAsyncGenerator {
+                                            state_machine: state_machine.clone(),
+                                            func_env: func_env.clone(),
+                                            is_strict,
+                                            execution_state:
+                                                StateMachineExecutionState::SuspendedAtState {
+                                                    state_id: resume_state,
+                                                },
+                                            _sent_value: JsValue::Undefined,
+                                            try_stack: try_stack.clone(),
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: Some(e),
+                                            pending_return: None,
+                                        });
+                                    return self.async_generator_next_state_machine_with_promise(
+                                        this,
+                                        JsValue::Undefined,
+                                        promise,
+                                        resolve_fn,
+                                        reject_fn,
+                                    );
+                                }
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -7872,6 +7906,7 @@ impl Interpreter {
                     }
                     Ok(None) => {
                         // No .return() method — complete the generator
+                        // §15.5.5 step 7.c.iii.1: Await(received.[[Value]])
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -7963,6 +7998,38 @@ impl Interpreter {
                         let value = match self.iterator_value(&awaited_result) {
                             Ok(v) => v,
                             Err(e) => {
+                                // IteratorValue threw — route through try/catch stack
+                                // per spec §15.5.5 step 7.b.ii.7: ? IteratorValue(innerResult)
+                                let has_catch = try_stack.iter().rev().any(|tc| {
+                                    !tc.entered_catch
+                                        && !tc.entered_finally
+                                        && tc.catch_state.is_some()
+                                });
+                                if has_catch {
+                                    obj_rc.borrow_mut().iterator_state =
+                                        Some(IteratorState::StateMachineAsyncGenerator {
+                                            state_machine: state_machine.clone(),
+                                            func_env: func_env.clone(),
+                                            is_strict,
+                                            execution_state:
+                                                StateMachineExecutionState::SuspendedAtState {
+                                                    state_id: resume_state,
+                                                },
+                                            _sent_value: JsValue::Undefined,
+                                            try_stack: try_stack.clone(),
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: Some(e),
+                                            pending_return: None,
+                                        });
+                                    return self.async_generator_next_state_machine_with_promise(
+                                        this,
+                                        JsValue::Undefined,
+                                        promise,
+                                        resolve_fn,
+                                        reject_fn,
+                                    );
+                                }
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -10891,16 +10958,40 @@ impl Interpreter {
                                     deletable: false,
                                 },
                             );
+                            let is_simple_ag =
+                                params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+                            let env_strict_ag = func_env.borrow().strict;
+                            let use_mapped_ag = is_simple_ag && !is_strict && !env_strict_ag;
+                            let param_names_ag: Vec<String> = if use_mapped_ag {
+                                params
+                                    .iter()
+                                    .filter_map(|p| {
+                                        if let Pattern::Identifier(name) = p {
+                                            Some(name.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
+                            let mapped_env_ag = if use_mapped_ag { Some(&func_env) } else { None };
                             let arguments_obj = self.create_arguments_object(
                                 args,
-                                JsValue::Undefined,
+                                func_val.clone(),
                                 is_strict,
-                                None,
-                                &[],
+                                mapped_env_ag,
+                                &param_names_ag,
                             );
                             func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
-                            func_env.borrow_mut().arguments_immutable = true;
+                            if is_strict || !is_simple_ag {
+                                func_env.borrow_mut().arguments_immutable = true;
+                            }
+                            if !is_simple_ag {
+                                func_env.borrow_mut().has_parameter_expressions = true;
+                            }
                             // §14.5.10 step 1: FunctionDeclarationInstantiation (bind params)
                             for (i, param) in params.iter().enumerate() {
                                 if let Pattern::Rest(inner) = param {
@@ -11036,16 +11127,40 @@ impl Interpreter {
                                     deletable: false,
                                 },
                             );
+                            let is_simple_g =
+                                params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+                            let env_strict_g = func_env.borrow().strict;
+                            let use_mapped_g = is_simple_g && !is_strict && !env_strict_g;
+                            let param_names_g: Vec<String> = if use_mapped_g {
+                                params
+                                    .iter()
+                                    .filter_map(|p| {
+                                        if let Pattern::Identifier(name) = p {
+                                            Some(name.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect()
+                            } else {
+                                Vec::new()
+                            };
+                            let mapped_env_g = if use_mapped_g { Some(&func_env) } else { None };
                             let arguments_obj = self.create_arguments_object(
                                 args,
-                                JsValue::Undefined,
+                                func_val.clone(),
                                 is_strict,
-                                None,
-                                &[],
+                                mapped_env_g,
+                                &param_names_g,
                             );
                             func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
-                            func_env.borrow_mut().arguments_immutable = true;
+                            if is_strict || !is_simple_g {
+                                func_env.borrow_mut().arguments_immutable = true;
+                            }
+                            if !is_simple_g {
+                                func_env.borrow_mut().has_parameter_expressions = true;
+                            }
                             // §14.4.10 step 1: FunctionDeclarationInstantiation (bind params)
                             for (i, param) in params.iter().enumerate() {
                                 if let Pattern::Rest(inner) = param {
@@ -11235,6 +11350,9 @@ impl Interpreter {
                             if has_arguments_param {
                                 func_env.borrow_mut().arguments_immutable = true;
                             }
+                        }
+                        if !is_simple {
+                            func_env.borrow_mut().has_parameter_expressions = true;
                         }
                         // Bind parameters (after this so default exprs can access this)
                         for (i, param) in params.iter().enumerate() {
@@ -11891,15 +12009,12 @@ impl Interpreter {
         }
 
         // §19.2.1.3 / §10.2.11: eval in parameter initializers of non-simple-param functions.
-        // Per spec, VariableEnvironment is set to the body scope before parameter binding,
-        // so EvalDeclarationInstantiation walks from the parameter scope and detects conflicts.
-        // We detect this case: direct eval where caller_env IS the var_env (function scope)
-        // and the function has non-simple params (arguments_immutable is set).
+        // When eval runs in parameter defaults, var declarations must not conflict with params.
         if direct
             && !is_global
             && !strict
             && Rc::ptr_eq(caller_env, var_env)
-            && var_env.borrow().arguments_immutable
+            && var_env.borrow().has_parameter_expressions
         {
             let all_names: Vec<String> = declared_func_names
                 .iter()
@@ -16526,6 +16641,12 @@ impl Interpreter {
             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
             if is_strict || !is_simple {
                 func_env.borrow_mut().arguments_immutable = true;
+            }
+        }
+        {
+            let is_simple_p = params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+            if !is_simple_p {
+                func_env.borrow_mut().has_parameter_expressions = true;
             }
         }
         for (i, param) in params.iter().enumerate() {

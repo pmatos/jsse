@@ -1230,6 +1230,7 @@ impl<'a> Parser<'a> {
                             ImportSpecifier::Named { local, .. } => local,
                             ImportSpecifier::Namespace(n) => n,
                             ImportSpecifier::DeferredNamespace(n) => n,
+                            ImportSpecifier::SourcePhase(n) => n,
                         };
                         // §13.1.1: import binding cannot be "arguments" or "eval" (strict mode)
                         if name == "arguments" || name == "eval" {
