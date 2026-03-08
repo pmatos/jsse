@@ -129,6 +129,7 @@ struct TransformContext {
     try_stack: Vec<TryInfo>,
     temp_vars: Vec<String>,
     is_async: bool,
+    detect_for_await: bool,
     with_scopes: Vec<String>,
 }
 
@@ -153,6 +154,7 @@ impl TransformContext {
             try_stack: Vec::new(),
             temp_vars: Vec::new(),
             is_async,
+            detect_for_await: false,
             with_scopes: Vec::new(),
         }
     }
@@ -210,18 +212,34 @@ fn transform_generator_inner(
     params: &[Pattern],
     is_async: bool,
 ) -> GeneratorStateMachine {
+    transform_generator_inner_opts(body, params, is_async, false)
+}
+
+fn transform_generator_inner_opts(
+    body: &[Statement],
+    params: &[Pattern],
+    is_async: bool,
+    detect_for_await: bool,
+) -> GeneratorStateMachine {
     let analysis = analyze_generator_body(body, params);
 
     if analysis.yield_points.is_empty() && !is_async {
         return create_simple_machine(body, params, &analysis);
     }
 
-    // For async generators, also check for await expressions
-    if is_async && analysis.yield_points.is_empty() && !body.iter().any(contains_suspension) {
+    // For async generators/functions, also check for await expressions, for-await-of,
+    // and return statements (which need Return(None) vs Return(Some) distinction for tick counting)
+    if is_async
+        && analysis.yield_points.is_empty()
+        && !body.iter().any(contains_suspension)
+        && !(detect_for_await && body.iter().any(|s| stmt_contains_for_await(s)))
+        && !body.iter().any(stmt_contains_return)
+    {
         return create_simple_machine(body, params, &analysis);
     }
 
     let mut ctx = TransformContext::new(analysis.clone(), is_async);
+    ctx.detect_for_await = detect_for_await;
 
     let start_state = ctx.new_state();
     ctx.current_state_id = start_state;
@@ -266,7 +284,82 @@ fn create_simple_machine(
     }
 }
 
-fn stmt_has_suspension(stmt: &Statement, is_async: bool) -> bool {
+fn stmt_contains_for_await(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::ForOf(f) => f.is_await,
+        Statement::Block(stmts) => stmts.iter().any(stmt_contains_for_await),
+        Statement::If(i) => {
+            stmt_contains_for_await(&i.consequent)
+                || i.alternate
+                    .as_ref()
+                    .is_some_and(|s| stmt_contains_for_await(s))
+        }
+        Statement::While(w) => stmt_contains_for_await(&w.body),
+        Statement::DoWhile(d) => stmt_contains_for_await(&d.body),
+        Statement::For(f) => stmt_contains_for_await(&f.body),
+        Statement::ForIn(f) => stmt_contains_for_await(&f.body),
+        Statement::Try(t) => {
+            t.block.iter().any(stmt_contains_for_await)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| h.body.iter().any(stmt_contains_for_await))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| f.iter().any(stmt_contains_for_await))
+        }
+        Statement::Switch(s) => s
+            .cases
+            .iter()
+            .any(|c| c.consequent.iter().any(stmt_contains_for_await)),
+        Statement::Labeled(_, inner) => stmt_contains_for_await(inner),
+        Statement::With(_, s) => stmt_contains_for_await(s),
+        _ => false,
+    }
+}
+
+fn stmt_contains_return(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::Return(_) => true,
+        Statement::Block(stmts) => stmts.iter().any(stmt_contains_return),
+        Statement::If(i) => {
+            stmt_contains_return(&i.consequent)
+                || i.alternate
+                    .as_ref()
+                    .is_some_and(|s| stmt_contains_return(s))
+        }
+        Statement::While(w) => stmt_contains_return(&w.body),
+        Statement::DoWhile(d) => stmt_contains_return(&d.body),
+        Statement::For(f) => stmt_contains_return(&f.body),
+        Statement::ForIn(f) => stmt_contains_return(&f.body),
+        Statement::ForOf(f) => stmt_contains_return(&f.body),
+        Statement::Try(t) => {
+            t.block.iter().any(stmt_contains_return)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| h.body.iter().any(stmt_contains_return))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| f.iter().any(stmt_contains_return))
+        }
+        Statement::Switch(s) => s
+            .cases
+            .iter()
+            .any(|c| c.consequent.iter().any(stmt_contains_return)),
+        Statement::Labeled(_, inner) => stmt_contains_return(inner),
+        Statement::With(_, s) => stmt_contains_return(s),
+        // Don't recurse into function/class boundaries
+        _ => false,
+    }
+}
+
+fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool) -> bool {
+    if detect_for_await {
+        if let Statement::ForOf(f) = stmt {
+            if f.is_await {
+                return true;
+            }
+        }
+    }
     if is_async {
         contains_suspension(stmt)
     } else {
@@ -287,7 +380,11 @@ fn transform_statements(stmts: &[Statement], ctx: &mut TransformContext, after_s
         let is_last = i == stmts.len() - 1;
         let next_after = if is_last { after_state } else { usize::MAX };
 
-        if stmt_has_suspension(stmt, ctx.is_async) {
+        if stmt_has_suspension(stmt, ctx.is_async, ctx.detect_for_await) {
+            transform_yielding_statement(stmt, ctx, next_after);
+        } else if ctx.is_async && matches!(stmt, Statement::Return(_)) {
+            // Return statements in async generators need Return terminators
+            // for proper Return(None) vs Return(Some) tick distinction
             transform_yielding_statement(stmt, ctx, next_after);
         } else {
             ctx.emit_statement(stmt.clone());
@@ -391,7 +488,7 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                     Box::new(expr.clone()),
                 )));
             }
-            if stmt_has_suspension(inner, ctx.is_async) {
+            if stmt_has_suspension(inner, ctx.is_async, ctx.detect_for_await) {
                 let with_body_state = ctx.new_state();
                 ctx.finalize_current_state(StateTerminator::Goto(with_body_state));
                 ctx.current_state_id = with_body_state;
@@ -1162,7 +1259,15 @@ fn transform_variable_declaration(
         if let Some(init) = &declarator.init {
             if expr_has_suspension(init, ctx.is_async) {
                 let binding = match &declarator.pattern {
-                    Pattern::Identifier(name) => SentValueBindingKind::Variable(name.clone()),
+                    Pattern::Identifier(name) => {
+                        // Ensure the variable is declared as a temp var so it exists
+                        // in strict mode (the original let/const/var decl is replaced
+                        // by a plain assignment)
+                        if !ctx.temp_vars.contains(name) {
+                            ctx.temp_vars.push(name.clone());
+                        }
+                        SentValueBindingKind::Variable(name.clone())
+                    }
                     pat => SentValueBindingKind::Pattern(pat.clone()),
                 };
                 transform_yielding_expression(init, ctx, usize::MAX, Some(binding));
@@ -1209,7 +1314,7 @@ fn transform_if_statement(if_stmt: &IfStatement, ctx: &mut TransformContext, aft
         });
 
         ctx.current_state_id = true_state;
-        if stmt_has_suspension(&if_stmt.consequent, ctx.is_async) {
+        if stmt_has_suspension(&if_stmt.consequent, ctx.is_async, ctx.detect_for_await) {
             transform_yielding_statement(&if_stmt.consequent, ctx, after_if);
         } else {
             ctx.emit_statement(*if_stmt.consequent.clone());
@@ -1218,7 +1323,7 @@ fn transform_if_statement(if_stmt: &IfStatement, ctx: &mut TransformContext, aft
 
         if let Some(alt) = &if_stmt.alternate {
             ctx.current_state_id = false_state;
-            if stmt_has_suspension(alt, ctx.is_async) {
+            if stmt_has_suspension(alt, ctx.is_async, ctx.detect_for_await) {
                 transform_yielding_statement(alt, ctx, after_if);
             } else {
                 ctx.emit_statement(*alt.clone());
@@ -1242,7 +1347,7 @@ fn transform_if_statement(if_stmt: &IfStatement, ctx: &mut TransformContext, aft
         });
 
         ctx.current_state_id = true_state;
-        if stmt_has_suspension(&if_stmt.consequent, ctx.is_async) {
+        if stmt_has_suspension(&if_stmt.consequent, ctx.is_async, ctx.detect_for_await) {
             transform_yielding_statement(&if_stmt.consequent, ctx, after_if);
         } else {
             ctx.emit_statement(*if_stmt.consequent.clone());
@@ -1251,7 +1356,7 @@ fn transform_if_statement(if_stmt: &IfStatement, ctx: &mut TransformContext, aft
 
         if let Some(alt) = &if_stmt.alternate {
             ctx.current_state_id = false_state;
-            if stmt_has_suspension(alt, ctx.is_async) {
+            if stmt_has_suspension(alt, ctx.is_async, ctx.detect_for_await) {
                 transform_yielding_statement(alt, ctx, after_if);
             } else {
                 ctx.emit_statement(*alt.clone());
@@ -1302,7 +1407,7 @@ fn transform_while_statement(
     }
 
     ctx.current_state_id = body_state;
-    if stmt_has_suspension(&while_stmt.body, ctx.is_async) {
+    if stmt_has_suspension(&while_stmt.body, ctx.is_async, ctx.detect_for_await) {
         transform_yielding_statement(&while_stmt.body, ctx, test_state);
     } else {
         ctx.emit_statement(*while_stmt.body.clone());
@@ -1335,7 +1440,7 @@ fn transform_do_while_statement(
     ctx.continue_targets.insert(None, test_state);
 
     ctx.current_state_id = body_state;
-    if stmt_has_suspension(&do_while_stmt.body, ctx.is_async) {
+    if stmt_has_suspension(&do_while_stmt.body, ctx.is_async, ctx.detect_for_await) {
         transform_yielding_statement(&do_while_stmt.body, ctx, test_state);
     } else {
         ctx.emit_statement(*do_while_stmt.body.clone());
@@ -1434,7 +1539,7 @@ fn transform_for_statement(
     }
 
     ctx.current_state_id = body_state;
-    if stmt_has_suspension(&for_stmt.body, ctx.is_async) {
+    if stmt_has_suspension(&for_stmt.body, ctx.is_async, ctx.detect_for_await) {
         transform_yielding_statement(&for_stmt.body, ctx, update_state);
     } else {
         ctx.emit_statement(*for_stmt.body.clone());
@@ -1508,7 +1613,7 @@ fn transform_for_of_statement(
     });
 
     ctx.current_state_id = body_state;
-    if stmt_has_suspension(&for_of_stmt.body, ctx.is_async) {
+    if stmt_has_suspension(&for_of_stmt.body, ctx.is_async, ctx.detect_for_await) {
         transform_yielding_statement(&for_of_stmt.body, ctx, head_state);
     } else {
         ctx.emit_statement(*for_of_stmt.body.clone());
@@ -1670,7 +1775,7 @@ fn transform_switch_statement(
         if case
             .consequent
             .iter()
-            .any(|s| stmt_has_suspension(s, ctx.is_async))
+            .any(|s| stmt_has_suspension(s, ctx.is_async, ctx.detect_for_await))
         {
             transform_statements(&case.consequent, ctx, next_state);
         } else {
@@ -1700,7 +1805,7 @@ fn transform_labeled_statement(
     ctx.break_targets
         .insert(Some(label.to_string()), after_labeled);
 
-    if stmt_has_suspension(stmt, ctx.is_async) {
+    if stmt_has_suspension(stmt, ctx.is_async, ctx.detect_for_await) {
         transform_yielding_statement(stmt, ctx, after_labeled);
     } else {
         ctx.emit_statement(stmt.clone());
@@ -1713,7 +1818,7 @@ fn transform_labeled_statement(
 
 pub fn transform_async_function(body: &[Statement], params: &[Pattern]) -> GeneratorStateMachine {
     let rewritten = rewrite_stmts_await_to_yield(body);
-    let mut machine = transform_generator(&rewritten, params);
+    let mut machine = transform_generator_inner_opts(&rewritten, params, true, true);
     rewrite_terminators_yield_to_await(&mut machine);
     machine
 }

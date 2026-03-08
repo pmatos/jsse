@@ -203,6 +203,7 @@ pub struct AsyncFunctionState {
     pub saved_finally_exception: Option<JsValue>,
     pub resolve_fn: JsValue,
     pub reject_fn: JsValue,
+    pub for_of_stack: Vec<(String, usize, usize)>,
 }
 
 #[derive(Debug, Clone)]

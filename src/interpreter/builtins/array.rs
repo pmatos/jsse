@@ -133,6 +133,38 @@ fn obj_set_throw(
                 }
             }
         }
+        // TypedArray [[Set]]: must call ToNumber/ToBigInt before writing (§10.4.5.5)
+        {
+            let ta_info = interp.get_object(obj_ref.id).and_then(|obj| {
+                let b = obj.borrow();
+                b.typed_array_info
+                    .as_ref()
+                    .map(|ta| (ta.kind.is_bigint(), ta.kind))
+            });
+            if let Some((is_bigint, _kind)) = ta_info {
+                if let Some(index) = canonical_numeric_index_string(key) {
+                    let num_val = if is_bigint {
+                        match interp.to_bigint_value(&value) {
+                            Ok(v) => v,
+                            Err(e) => return Err(e),
+                        }
+                    } else {
+                        match interp.to_number_value(&value) {
+                            Ok(n) => JsValue::Number(n),
+                            Err(e) => return Err(e),
+                        }
+                    };
+                    if let Some(obj) = interp.get_object(obj_ref.id) {
+                        if let Some(ref ta) = obj.borrow().typed_array_info {
+                            if is_valid_integer_index(ta, index) {
+                                typed_array_set_index(ta, index as usize, &num_val);
+                            }
+                        }
+                    }
+                    return Ok(());
+                }
+            }
+        }
         // Normal set
         if let Some(obj) = interp.get_object(obj_ref.id) {
             let mut borrow = obj.borrow_mut();
