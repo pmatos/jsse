@@ -297,6 +297,394 @@ fn close_async_iterator(interp: &mut Interpreter, iterator: &JsValue) {
     }
 }
 
+// --- Array.fromAsync continuation-passing machinery ---
+// Shared state threaded through non-blocking continuations.
+struct FromAsyncState {
+    iterator: JsValue,
+    arr: JsValue,
+    k: u64,
+    has_map: bool,
+    map_fn: JsValue,
+    this_arg: JsValue,
+    resolve_fn: JsValue,
+    reject_fn: JsValue,
+    is_array_like: bool,
+    array_like: JsValue,
+    len: u64,
+    gc_roots: Vec<u64>,
+}
+
+fn from_async_gc_root(interp: &mut Interpreter, state: &Rc<RefCell<FromAsyncState>>) {
+    let mut roots = Vec::new();
+    let s = state.borrow();
+    for val in [
+        &s.iterator,
+        &s.arr,
+        &s.map_fn,
+        &s.this_arg,
+        &s.resolve_fn,
+        &s.reject_fn,
+        &s.array_like,
+    ] {
+        if let JsValue::Object(o) = val {
+            interp.gc_temp_roots.push(o.id);
+            roots.push(o.id);
+        }
+    }
+    drop(s);
+    state.borrow_mut().gc_roots = roots;
+}
+
+fn from_async_gc_unroot(interp: &mut Interpreter, state: &Rc<RefCell<FromAsyncState>>) {
+    let s = state.borrow();
+    for &id in &s.gc_roots {
+        if let Some(pos) = interp.gc_temp_roots.iter().rposition(|&rid| rid == id) {
+            interp.gc_temp_roots.remove(pos);
+        }
+    }
+}
+
+fn from_async_collect_roots(state: &Rc<RefCell<FromAsyncState>>) -> Vec<JsValue> {
+    let s = state.borrow();
+    let mut roots = Vec::new();
+    for val in [
+        &s.iterator,
+        &s.arr,
+        &s.map_fn,
+        &s.this_arg,
+        &s.resolve_fn,
+        &s.reject_fn,
+        &s.array_like,
+    ] {
+        if matches!(val, JsValue::Object(_)) {
+            roots.push(val.clone());
+        }
+    }
+    roots
+}
+
+fn from_async_reject(
+    interp: &mut Interpreter,
+    state: &Rc<RefCell<FromAsyncState>>,
+    error: JsValue,
+    close_iter: bool,
+) {
+    let s = state.borrow();
+    let iterator = s.iterator.clone();
+    let reject_fn = s.reject_fn.clone();
+    let is_array_like = s.is_array_like;
+    drop(s);
+    if close_iter && !is_array_like {
+        close_async_iterator(interp, &iterator);
+    }
+    from_async_gc_unroot(interp, state);
+    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[error]);
+}
+
+fn from_async_resolve(interp: &mut Interpreter, state: &Rc<RefCell<FromAsyncState>>) {
+    let s = state.borrow();
+    let arr = s.arr.clone();
+    let k = s.k;
+    let resolve_fn = s.resolve_fn.clone();
+    drop(s);
+    if let Err(e) = set_length_throw(interp, &arr, k as usize) {
+        from_async_gc_unroot(interp, state);
+        let _ = interp.call_function(&state.borrow().reject_fn.clone(), &JsValue::Undefined, &[e]);
+        return;
+    }
+    from_async_gc_unroot(interp, state);
+    let _ = interp.call_function(&resolve_fn, &JsValue::Undefined, &[arr]);
+}
+
+// Non-blocking Await: wraps value in a promise, then schedules the continuation.
+fn from_async_attach_await(
+    interp: &mut Interpreter,
+    value: &JsValue,
+    state: Rc<RefCell<FromAsyncState>>,
+    on_fulfill: fn(&mut Interpreter, JsValue, Rc<RefCell<FromAsyncState>>),
+    close_iter_on_reject: bool,
+) {
+    let promise = interp.promise_resolve_value(value);
+    let promise_id = if let JsValue::Object(ref o) = promise {
+        o.id
+    } else {
+        0
+    };
+
+    let pstate = interp.get_promise_state(promise_id);
+    match pstate {
+        Some(PromiseState::Fulfilled(v)) => {
+            let value = v.clone();
+            let state_c = state.clone();
+            let roots = from_async_collect_roots(&state);
+            interp.microtask_queue.push((
+                roots,
+                Box::new(move |interp| {
+                    on_fulfill(interp, value, state_c);
+                    Completion::Normal(JsValue::Undefined)
+                }),
+            ));
+        }
+        Some(PromiseState::Rejected(e)) => {
+            let err = e.clone();
+            from_async_reject(interp, &state, err, close_iter_on_reject);
+        }
+        Some(PromiseState::Pending) => {
+            let state_f = state.clone();
+            let state_r = state.clone();
+            let close = close_iter_on_reject;
+
+            let fulfill_handler = interp.create_function(JsFunction::native(
+                "fromAsyncFulfill".to_string(),
+                1,
+                move |interp, _this, args| {
+                    let v = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    on_fulfill(interp, v, state_f.clone());
+                    Completion::Normal(JsValue::Undefined)
+                },
+            ));
+
+            let reject_handler = interp.create_function(JsFunction::native(
+                "fromAsyncReject".to_string(),
+                1,
+                move |interp, _this, args| {
+                    let e = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    from_async_reject(interp, &state_r, e, close);
+                    Completion::Normal(JsValue::Undefined)
+                },
+            ));
+
+            if let Some(obj) = interp.get_object(promise_id) {
+                let mut ob = obj.borrow_mut();
+                if let Some(ref mut pd) = ob.promise_data {
+                    pd.is_handled = true;
+                    pd.fulfill_reactions.push(PromiseReaction {
+                        handler: Some(fulfill_handler),
+                        promise_id: None,
+                        resolve: JsValue::Undefined,
+                        reject: JsValue::Undefined,
+                        reaction_type: PromiseReactionType::Fulfill,
+                    });
+                    pd.reject_reactions.push(PromiseReaction {
+                        handler: Some(reject_handler),
+                        promise_id: None,
+                        resolve: JsValue::Undefined,
+                        reject: JsValue::Undefined,
+                        reaction_type: PromiseReactionType::Reject,
+                    });
+                }
+            }
+        }
+        None => {
+            // Not a promise — treat as immediately fulfilled
+            on_fulfill(interp, value.clone(), state);
+        }
+    }
+}
+
+// Iterator path: call .next() synchronously, then Await the result non-blockingly.
+fn from_async_iter_step(interp: &mut Interpreter, state: Rc<RefCell<FromAsyncState>>) {
+    {
+        let s = state.borrow();
+        if s.k >= 0x1FFFFFFFFFFFFF {
+            let iterator = s.iterator.clone();
+            let reject_fn = s.reject_fn.clone();
+            drop(s);
+            let err = interp.create_type_error("Array.fromAsync: too many elements");
+            close_async_iterator(interp, &iterator);
+            from_async_gc_unroot(interp, &state);
+            let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[err]);
+            return;
+        }
+    }
+    let iterator = state.borrow().iterator.clone();
+
+    let next_fn = if let JsValue::Object(ref io) = iterator {
+        match interp.get_object_property(io.id, "next", &iterator) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => {
+                from_async_reject(interp, &state, e, false);
+                return;
+            }
+            _ => JsValue::Undefined,
+        }
+    } else {
+        JsValue::Undefined
+    };
+
+    let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
+        Completion::Normal(v) => v,
+        Completion::Throw(e) => {
+            from_async_reject(interp, &state, e, false);
+            return;
+        }
+        _ => JsValue::Undefined,
+    };
+
+    from_async_attach_await(interp, &next_result, state, from_async_process_next, true);
+}
+
+// Process the awaited iterator result: check done, extract value, apply mapFn.
+fn from_async_process_next(
+    interp: &mut Interpreter,
+    next_result: JsValue,
+    state: Rc<RefCell<FromAsyncState>>,
+) {
+    let done = if let JsValue::Object(ref o) = next_result {
+        match interp.get_object_property(o.id, "done", &next_result) {
+            Completion::Normal(v) => interp.to_boolean_val(&v),
+            _ => false,
+        }
+    } else {
+        false
+    };
+
+    if done {
+        from_async_resolve(interp, &state);
+        return;
+    }
+
+    let value = if let JsValue::Object(ref o) = next_result {
+        match interp.get_object_property(o.id, "value", &next_result) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => {
+                from_async_reject(interp, &state, e, true);
+                return;
+            }
+            _ => JsValue::Undefined,
+        }
+    } else {
+        JsValue::Undefined
+    };
+
+    let has_map = state.borrow().has_map;
+    if has_map {
+        let s = state.borrow();
+        let map_fn = s.map_fn.clone();
+        let this_arg = s.this_arg.clone();
+        let k = s.k;
+        drop(s);
+
+        let mapped =
+            match interp.call_function(&map_fn, &this_arg, &[value, JsValue::Number(k as f64)]) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => {
+                    from_async_reject(interp, &state, e, true);
+                    return;
+                }
+                _ => JsValue::Undefined,
+            };
+        from_async_attach_await(
+            interp,
+            &mapped,
+            state,
+            from_async_store_iter_and_continue,
+            true,
+        );
+    } else {
+        from_async_store_iter_and_continue(interp, value, state);
+    }
+}
+
+// Store value in result array and proceed to next iteration.
+fn from_async_store_iter_and_continue(
+    interp: &mut Interpreter,
+    value: JsValue,
+    state: Rc<RefCell<FromAsyncState>>,
+) {
+    let k = state.borrow().k;
+    let arr = state.borrow().arr.clone();
+    let key_str = k.to_string();
+    if let Err(e) = create_data_property_or_throw(interp, &arr, &key_str, value) {
+        from_async_reject(interp, &state, e, true);
+        return;
+    }
+    state.borrow_mut().k += 1;
+    from_async_iter_step(interp, state);
+}
+
+// Array-like path: get property k, Await it.
+fn from_async_arraylike_step(interp: &mut Interpreter, state: Rc<RefCell<FromAsyncState>>) {
+    let s = state.borrow();
+    let k = s.k;
+    let len = s.len;
+    if k >= len {
+        drop(s);
+        from_async_resolve(interp, &state);
+        return;
+    }
+    let array_like = s.array_like.clone();
+    drop(s);
+
+    let key_str = k.to_string();
+    let value = if let JsValue::Object(ref o) = array_like {
+        match interp.get_object_property(o.id, &key_str, &array_like) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => {
+                from_async_reject(interp, &state, e, false);
+                return;
+            }
+            _ => JsValue::Undefined,
+        }
+    } else {
+        JsValue::Undefined
+    };
+
+    from_async_attach_await(interp, &value, state, from_async_arraylike_process, false);
+}
+
+// Process the awaited array-like element value.
+fn from_async_arraylike_process(
+    interp: &mut Interpreter,
+    value: JsValue,
+    state: Rc<RefCell<FromAsyncState>>,
+) {
+    let has_map = state.borrow().has_map;
+    if has_map {
+        let s = state.borrow();
+        let map_fn = s.map_fn.clone();
+        let this_arg = s.this_arg.clone();
+        let k = s.k;
+        drop(s);
+
+        let mapped =
+            match interp.call_function(&map_fn, &this_arg, &[value, JsValue::Number(k as f64)]) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => {
+                    from_async_reject(interp, &state, e, false);
+                    return;
+                }
+                _ => JsValue::Undefined,
+            };
+        from_async_attach_await(
+            interp,
+            &mapped,
+            state,
+            from_async_store_arraylike_and_continue,
+            false,
+        );
+    } else {
+        from_async_store_arraylike_and_continue(interp, value, state);
+    }
+}
+
+// Store value for array-like path and advance to next index.
+fn from_async_store_arraylike_and_continue(
+    interp: &mut Interpreter,
+    value: JsValue,
+    state: Rc<RefCell<FromAsyncState>>,
+) {
+    let k = state.borrow().k;
+    let arr = state.borrow().arr.clone();
+    let key_str = k.to_string();
+    if let Err(e) = create_data_property_or_throw(interp, &arr, &key_str, value) {
+        from_async_reject(interp, &state, e, false);
+        return;
+    }
+    state.borrow_mut().k += 1;
+    from_async_arraylike_step(interp, state);
+}
+
 fn obj_delete(interp: &mut Interpreter, o: &JsValue, key: &str) {
     if let Some(obj) = get_obj(interp, o) {
         let mut borrow = obj.borrow_mut();
@@ -3295,110 +3683,23 @@ impl Interpreter {
                         interp.create_array(vec![])
                     };
 
-                    // Iterate
-                    let mut k: u64 = 0;
-                    loop {
-                        if k >= 0x1FFFFFFFFFFFFF {
-                            let err = interp.create_type_error("Array.fromAsync: too many elements");
-                            let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[err]);
-                            return Completion::Normal(promise);
-                        }
-                        // Call iterator.next()
-                        let next_fn = if let JsValue::Object(ref io) = iterator {
-                            match interp.get_object_property(io.id, "next", &iterator) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                    return Completion::Normal(promise);
-                                }
-                                _ => JsValue::Undefined,
-                            }
-                        } else {
-                            JsValue::Undefined
-                        };
-                        let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                return Completion::Normal(promise);
-                            }
-                            _ => JsValue::Undefined,
-                        };
-                        // Await the next result — if the promise rejects, close the iterator
-                        let next_result = match interp.await_value(&next_result) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                close_async_iterator(interp, &iterator);
-                                let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                return Completion::Normal(promise);
-                            }
-                            _ => JsValue::Undefined,
-                        };
-                        // Check done
-                        let done = if let JsValue::Object(ref o) = next_result {
-                            match interp.get_object_property(o.id, "done", &next_result) {
-                                Completion::Normal(v) => interp.to_boolean_val(&v),
-                                _ => false,
-                            }
-                        } else {
-                            false
-                        };
-                        if done {
-                            // Set(A, "length", k, true)
-                            if let Err(e) = set_length_throw(interp, &arr, k as usize) {
-                                let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                return Completion::Normal(promise);
-                            }
-                            let _ = interp.call_function(&resolve_fn, &JsValue::Undefined, &[arr]);
-                            return Completion::Normal(promise);
-                        }
-                        // Get value
-                        let mut value = if let JsValue::Object(ref o) = next_result {
-                            match interp.get_object_property(o.id, "value", &next_result) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                    return Completion::Normal(promise);
-                                }
-                                _ => JsValue::Undefined,
-                            }
-                        } else {
-                            JsValue::Undefined
-                        };
-                        // For async iterables, do NOT await the raw value — spec only awaits
-                        // the iterator result (the promise from next()), not the value inside.
-                        // Apply mapFn if present
-                        if has_map {
-                            value = match interp.call_function(&map_fn, &this_arg, &[value, JsValue::Number(k as f64)]) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    // IfAbruptCloseAsyncIterator — close iterator then reject
-                                    close_async_iterator(interp, &iterator);
-                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                    return Completion::Normal(promise);
-                                }
-                                _ => JsValue::Undefined,
-                            };
-                            // Await mapped value (spec step 6.c: mappedValue = Await(mappedValue))
-                            value = match interp.await_value(&value) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    close_async_iterator(interp, &iterator);
-                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                    return Completion::Normal(promise);
-                                }
-                                _ => JsValue::Undefined,
-                            };
-                        }
-                        // CreateDataPropertyOrThrow(A, Pk, mappedValue)
-                        let key_str = k.to_string();
-                        if let Err(e) = create_data_property_or_throw(interp, &arr, &key_str, value) {
-                            close_async_iterator(interp, &iterator);
-                            let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                            return Completion::Normal(promise);
-                        }
-                        k += 1;
-                    }
+                    let state = Rc::new(RefCell::new(FromAsyncState {
+                        iterator,
+                        arr,
+                        k: 0,
+                        has_map,
+                        map_fn,
+                        this_arg,
+                        resolve_fn,
+                        reject_fn,
+                        is_array_like: false,
+                        array_like: JsValue::Undefined,
+                        len: 0,
+                        gc_roots: Vec::new(),
+                    }));
+                    from_async_gc_root(interp, &state);
+                    from_async_iter_step(interp, state);
+                    Completion::Normal(promise)
                 } else {
                     // Array-like path
                     let array_like = match interp.to_object(&async_items) {
@@ -3413,7 +3714,6 @@ impl Interpreter {
                             return Completion::Normal(promise);
                         }
                     };
-                    // LengthOfArrayLike(arrayLike) — throws for BigInt, etc.
                     let len = match length_of_array_like(interp, &array_like) {
                         Ok(n) => n as u64,
                         Err(Completion::Throw(e)) => {
@@ -3423,7 +3723,6 @@ impl Interpreter {
                         Err(_) => 0u64,
                     };
 
-                    // spec: Construct(C, [len]) for array-like path; ArrayCreate(len) otherwise
                     let is_constructor = interp.is_constructor(this);
                     let arr = if is_constructor {
                         match interp.construct(this, &[JsValue::Number(len as f64)]) {
@@ -3443,59 +3742,22 @@ impl Interpreter {
                         interp.create_array(vec![])
                     };
 
-                    for k in 0..len {
-                        let key_str = k.to_string();
-                        let mut value = if let JsValue::Object(ref o) = array_like {
-                            match interp.get_object_property(o.id, &key_str, &array_like) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                    return Completion::Normal(promise);
-                                }
-                                _ => JsValue::Undefined,
-                            }
-                        } else {
-                            JsValue::Undefined
-                        };
-                        // Await the value (array-like path does await each element)
-                        value = match interp.await_value(&value) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => {
-                                let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                return Completion::Normal(promise);
-                            }
-                            _ => JsValue::Undefined,
-                        };
-                        if has_map {
-                            value = match interp.call_function(&map_fn, &this_arg, &[value, JsValue::Number(k as f64)]) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                    return Completion::Normal(promise);
-                                }
-                                _ => JsValue::Undefined,
-                            };
-                            value = match interp.await_value(&value) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                                    return Completion::Normal(promise);
-                                }
-                                _ => JsValue::Undefined,
-                            };
-                        }
-                        // CreateDataPropertyOrThrow(A, Pk, mappedValue)
-                        if let Err(e) = create_data_property_or_throw(interp, &arr, &key_str, value) {
-                            let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                            return Completion::Normal(promise);
-                        }
-                    }
-                    // Set(A, "length", len, true)
-                    if let Err(e) = set_length_throw(interp, &arr, len as usize) {
-                        let _ = interp.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                        return Completion::Normal(promise);
-                    }
-                    let _ = interp.call_function(&resolve_fn, &JsValue::Undefined, &[arr]);
+                    let state = Rc::new(RefCell::new(FromAsyncState {
+                        iterator: JsValue::Undefined,
+                        arr,
+                        k: 0,
+                        has_map,
+                        map_fn,
+                        this_arg,
+                        resolve_fn,
+                        reject_fn,
+                        is_array_like: true,
+                        array_like,
+                        len,
+                        gc_roots: Vec::new(),
+                    }));
+                    from_async_gc_root(interp, &state);
+                    from_async_arraylike_step(interp, state);
                     Completion::Normal(promise)
                 }
             },
