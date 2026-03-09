@@ -1962,8 +1962,6 @@ impl Interpreter {
         let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
         if let Some(existing) = self.module_registry.get(&canon_path) {
-            // Don't propagate evaluation errors during load — the error will be
-            // re-thrown when the module is actually evaluated (e.g. via deferred namespace access).
             return Ok(existing.clone());
         }
 
