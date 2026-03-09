@@ -8724,6 +8724,18 @@ impl Interpreter {
                         return interp.create_rejected_promise(err);
                     }
                 };
+                let resolved_canon = module_path.canonicalize().unwrap_or(module_path.clone());
+                let mut stack = vec![];
+                if let Err(_) = interp.inner_module_evaluation(&resolved_canon, &mut stack, 0) {
+                    interp.current_realm_id = old_realm;
+                    let err = interp.create_error_in_realm(
+                        caller_realm_id,
+                        "TypeError",
+                        "ShadowRealm importValue: module evaluation error",
+                    );
+                    return interp.create_rejected_promise(err);
+                }
+                interp.drain_microtasks();
                 interp.current_realm_id = old_realm;
 
                 // Get the named export

@@ -85,6 +85,8 @@ pub struct Interpreter {
     next_async_function_id: u64,
     pub(crate) pending_async_dispose_await: bool,
     pub(crate) static_module_load_depth: u32,
+    module_async_evaluation_count: u64,
+    module_async_info: HashMap<u64, PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -119,6 +121,13 @@ pub struct LoadedModule {
     pub has_tla: bool,
     pub deferred_only: bool, // loaded via load_module_no_eval, not yet fully loaded
     pub program_ast: Option<crate::ast::Program>,
+    pub async_evaluation_order: Option<u64>,
+    pub pending_async_dependencies: u32,
+    pub async_parent_modules: Vec<PathBuf>,
+    pub cycle_root: Option<PathBuf>,
+    pub top_level_capability: Option<(JsValue, JsValue, JsValue)>,
+    pub dfs_index: Option<u32>,
+    pub dfs_ancestor_index: Option<u32>,
 }
 
 impl Interpreter {
@@ -202,6 +211,8 @@ impl Interpreter {
             next_async_function_id: 0,
             pending_async_dispose_await: false,
             static_module_load_depth: 0,
+            module_async_evaluation_count: 0,
+            module_async_info: HashMap::new(),
         };
         interp.setup_globals();
         interp
@@ -1313,15 +1324,20 @@ impl Interpreter {
             deferred_only: false,
             has_tla: has_tla_entry,
             program_ast: Some(program.clone()),
+            async_evaluation_order: None,
+            pending_async_dependencies: 0,
+            async_parent_modules: Vec::new(),
+            cycle_root: None,
+            top_level_capability: None,
+            dfs_index: None,
+            dfs_ancestor_index: None,
         }));
         if let Some(ref path) = module_path {
             let canon_path = path.canonicalize().unwrap_or_else(|_| path.clone());
             self.module_registry
                 .insert(canon_path, loaded_module.clone());
         }
-        // Mark as evaluating immediately to prevent circular evaluate_module calls
-        // from re-executing this module before imports are linked.
-        loaded_module.borrow_mut().is_evaluating = true;
+        // Note: is_evaluating is managed by inner_module_evaluation
 
         // Collect export names and bindings first (before processing imports) for namespace objects
         for item in &program.module_items {
@@ -1436,44 +1452,35 @@ impl Interpreter {
             }
         }
 
-        // Fourth pass: execute statements
-        for item in &program.module_items {
-            match item {
-                ModuleItem::Statement(stmt) => {
-                    let result = self.exec_statement(stmt, &module_env);
-                    if result.is_abrupt() {
-                        let mut m = loaded_module.borrow_mut();
-                        m.is_evaluating = false;
-                        m.evaluated = true;
-                        drop(m);
-                        self.current_module_path = prev_module_path;
-                        return result;
+        // Fourth pass: evaluate via inner_module_evaluation (Tarjan SCC + async protocol)
+        let mut stack = vec![];
+        if let Err(ref e) = self.inner_module_evaluation(&canon_path_entry, &mut stack, 0) {
+            // Per spec §16.2.1.5.3 step 9: mark all modules on stack as evaluated with error
+            for m_path in &stack {
+                if let Some(m) = self.module_registry.get(m_path) {
+                    let mut mb = m.borrow_mut();
+                    mb.evaluated = true;
+                    mb.is_evaluating = false;
+                    if mb.error.is_none() {
+                        mb.error = Some(e.clone());
                     }
                 }
-                ModuleItem::ImportDeclaration(_) => {
-                    // Already processed
-                }
-                ModuleItem::ExportDeclaration(export) => {
-                    let result = self.exec_export_declaration(export, &module_env);
-                    if result.is_abrupt() {
-                        let mut m = loaded_module.borrow_mut();
-                        m.is_evaluating = false;
-                        m.evaluated = true;
-                        drop(m);
-                        self.current_module_path = prev_module_path;
-                        return result;
-                    }
-                    // Collect exports for entry-point module
-                    self.collect_exports(export, &module_env, &loaded_module);
-                }
+            }
+            self.current_module_path = prev_module_path;
+            return Completion::Throw(e.clone());
+        }
+
+        // Drain microtasks to complete TLA module evaluation
+        self.drain_microtasks();
+
+        // Check if the entry module has an error (e.g. from rejected TLA await)
+        if let Some(module) = self.module_registry.get(&canon_path_entry).cloned() {
+            if let Some(err) = module.borrow().error.clone() {
+                self.current_module_path = prev_module_path;
+                return Completion::Throw(err);
             }
         }
 
-        {
-            let mut m = loaded_module.borrow_mut();
-            m.is_evaluating = false;
-            m.evaluated = true;
-        }
         self.current_module_path = prev_module_path;
         Completion::Normal(JsValue::Undefined)
     }
@@ -1722,7 +1729,6 @@ impl Interpreter {
             // since this is a non-deferred import
             if existing.borrow().deferred_only {
                 existing.borrow_mut().deferred_only = false;
-                self.evaluate_module(&existing)?;
             }
             return Ok(existing);
         }
@@ -1772,6 +1778,13 @@ impl Interpreter {
                 deferred_only: false,
                 has_tla: false,
                 program_ast: None,
+                async_evaluation_order: None,
+                pending_async_dependencies: 0,
+                async_parent_modules: Vec::new(),
+                cycle_root: None,
+                top_level_capability: None,
+                dfs_index: None,
+                dfs_ancestor_index: None,
             }));
             module_env
                 .borrow_mut()
@@ -1836,6 +1849,13 @@ impl Interpreter {
             deferred_only: false,
             has_tla: false,
             program_ast: None,
+            async_evaluation_order: None,
+            pending_async_dependencies: 0,
+            async_parent_modules: Vec::new(),
+            cycle_root: None,
+            top_level_capability: None,
+            dfs_index: None,
+            dfs_ancestor_index: None,
         }));
         self.module_registry
             .insert(canon_path.clone(), loaded_module.clone());
@@ -1958,8 +1978,7 @@ impl Interpreter {
             }
         }
 
-        // Fourth pass: execute statements
-        self.evaluate_module(&loaded_module)?;
+        // No evaluation — handled by inner_module_evaluation
 
         self.current_module_path = prev_path;
         Ok(loaded_module)
@@ -2030,6 +2049,13 @@ impl Interpreter {
             deferred_only: true,
             has_tla,
             program_ast: Some(program.clone()),
+            async_evaluation_order: None,
+            pending_async_dependencies: 0,
+            async_parent_modules: Vec::new(),
+            cycle_root: None,
+            top_level_capability: None,
+            dfs_index: None,
+            dfs_ancestor_index: None,
         }));
         self.module_registry
             .insert(canon_path.clone(), loaded_module.clone());
@@ -2151,118 +2177,486 @@ impl Interpreter {
             }
         }
 
-        // Eagerly evaluate async transitive dependencies (GatherAsynchronousTransitiveDependencies)
-        self.evaluate_async_transitive_deps(&canon_path);
+        // Async transitive deps are evaluated by inner_module_evaluation, not here
 
         self.loading_deferred = prev_loading_deferred;
         self.current_module_path = prev_path;
         Ok(loaded_module)
     }
 
-    /// Evaluate a loaded module's body. No-op if already evaluated or currently evaluating.
-    fn evaluate_module(&mut self, module: &Rc<RefCell<LoadedModule>>) -> Result<(), JsValue> {
-        {
-            let m = module.borrow();
-            if m.evaluated {
-                if let Some(ref err) = m.error {
-                    return Err(err.clone());
-                }
-                return Ok(());
-            }
-            if m.is_evaluating {
-                return Ok(());
-            }
-        }
-
-        module.borrow_mut().is_evaluating = true;
-
+    /// Execute a module's body synchronously (no DFS into dependencies).
+    fn execute_module_body_sync(&mut self, module_path: &Path) -> Result<(), JsValue> {
+        let module = match self.module_registry.get(module_path).cloned() {
+            Some(m) => m,
+            None => return Ok(()),
+        };
         let program = match module.borrow().program_ast.clone() {
             Some(p) => p,
-            None => {
-                module.borrow_mut().is_evaluating = false;
-                return Ok(());
-            }
+            None => return Ok(()),
         };
-
         let module_env = module.borrow().env.clone();
-        let canon_path = module.borrow().path.clone();
+        let prev_path = self.current_module_path.take();
+        self.current_module_path = Some(module_path.to_path_buf());
+        self.static_module_load_depth += 1;
 
-        // Ensure non-deferred dependencies are evaluated first
-        for item in &program.module_items {
-            match item {
-                ModuleItem::ImportDeclaration(import) => {
-                    let is_defer = import
-                        .specifiers
-                        .iter()
-                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    if !is_defer
-                        && let Ok(resolved) =
-                            self.resolve_module_specifier(&import.source, Some(&canon_path))
-                    {
-                        let resolved_canon =
-                            resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
-                        if let Some(dep) = self.module_registry.get(&resolved_canon).cloned()
-                            && !dep.borrow().evaluated
-                        {
-                            self.evaluate_module(&dep)?;
-                        }
-                    }
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. })
-                | ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(source),
-                    ..
-                }) => {
-                    if let Ok(resolved) = self.resolve_module_specifier(source, Some(&canon_path)) {
-                        let resolved_canon =
-                            resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
-                        if let Some(dep) = self.module_registry.get(&resolved_canon).cloned()
-                            && !dep.borrow().evaluated
-                        {
-                            self.evaluate_module(&dep)?;
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-
+        let mut err = None;
         for item in &program.module_items {
             match item {
                 ModuleItem::Statement(stmt) => {
                     let result = self.exec_statement(stmt, &module_env);
                     if let Completion::Throw(e) = result {
-                        let mut m = module.borrow_mut();
-                        m.error = Some(e.clone());
-                        m.is_evaluating = false;
-                        m.evaluated = true;
-                        drop(m);
-                        return Err(e);
+                        module.borrow_mut().error = Some(e.clone());
+                        err = Some(e);
+                        break;
                     }
                 }
                 ModuleItem::ImportDeclaration(_) => {}
                 ModuleItem::ExportDeclaration(export) => {
                     let result = self.exec_export_declaration(export, &module_env);
                     if let Completion::Throw(e) = result {
-                        let mut m = module.borrow_mut();
-                        m.error = Some(e.clone());
-                        m.is_evaluating = false;
-                        m.evaluated = true;
-                        drop(m);
-                        return Err(e);
+                        module.borrow_mut().error = Some(e.clone());
+                        err = Some(e);
+                        break;
                     }
-                    self.collect_exports(export, &module_env, module);
+                    self.collect_exports(export, &module_env, &module);
                 }
             }
         }
+        module.borrow_mut().program_ast = None;
+        self.static_module_load_depth -= 1;
+        self.current_module_path = prev_path;
+        match err {
+            Some(e) => Err(e),
+            None => Ok(()),
+        }
+    }
 
+    fn collect_all_exports(&mut self, module_path: &Path) {
+        let module = match self.module_registry.get(module_path).cloned() {
+            Some(m) => m,
+            None => return,
+        };
+        let program = match module.borrow().program_ast.clone() {
+            Some(p) => p,
+            None => return,
+        };
+        let module_env = module.borrow().env.clone();
+        let prev_path = self.current_module_path.take();
+        self.current_module_path = Some(module_path.to_path_buf());
+        for item in &program.module_items {
+            if let ModuleItem::ExportDeclaration(export) = item {
+                self.collect_exports(export, &module_env, &module);
+            }
+        }
+        self.current_module_path = prev_path;
+    }
+
+    fn module_items_to_statements(program: &crate::ast::Program) -> Vec<crate::ast::Statement> {
+        use crate::ast::*;
+        let mut stmts = Vec::new();
+        for item in &program.module_items {
+            match item {
+                ModuleItem::Statement(s) => stmts.push(s.clone()),
+                ModuleItem::ImportDeclaration(_) => {}
+                ModuleItem::ExportDeclaration(export) => match export {
+                    ExportDeclaration::Named {
+                        declaration: Some(decl),
+                        ..
+                    } => {
+                        stmts.push(*decl.clone());
+                    }
+                    ExportDeclaration::Default(expr) => {
+                        stmts.push(Statement::Variable(VariableDeclaration {
+                            kind: VarKind::Let,
+                            declarations: vec![VariableDeclarator {
+                                pattern: Pattern::Identifier("*default*".to_string()),
+                                init: Some(*expr.clone()),
+                            }],
+                        }));
+                    }
+                    ExportDeclaration::DefaultClass(c) => {
+                        stmts.push(Statement::ClassDeclaration(c.clone()));
+                    }
+                    _ => {}
+                },
+            }
+        }
+        stmts
+    }
+
+    fn execute_async_module(&mut self, module_path: &Path) {
+        let module = match self.module_registry.get(module_path).cloned() {
+            Some(m) => m,
+            None => return,
+        };
+        let program = match module.borrow().program_ast.clone() {
+            Some(p) => p,
+            None => return,
+        };
+        let module_env = module.borrow().env.clone();
+        let stmts = Self::module_items_to_statements(&program);
+        let sm =
+            Rc::new(crate::interpreter::generator_transform::transform_async_function(&stmts, &[]));
+        for tv in &sm.temp_vars {
+            if !module_env.borrow().bindings.contains_key(tv) {
+                module_env.borrow_mut().declare(tv, BindingKind::Var);
+            }
+        }
+        for lv in &sm.local_vars {
+            if !module_env.borrow().bindings.contains_key(&lv.name) {
+                let bk = match lv.kind {
+                    crate::ast::VarKind::Let
+                    | crate::ast::VarKind::Const
+                    | crate::ast::VarKind::Using
+                    | crate::ast::VarKind::AwaitUsing => BindingKind::Let,
+                    _ => BindingKind::Var,
+                };
+                module_env.borrow_mut().declare(&lv.name, bk);
+            }
+        }
+        let path_for_resolve = module_path.to_path_buf();
+        let path_for_reject = module_path.to_path_buf();
+        let resolve_fn = self.create_function(JsFunction::native(
+            "asyncModuleResolve".to_string(),
+            0,
+            move |interp, _this, _args| {
+                let prev = interp.current_module_path.take();
+                interp.current_module_path = Some(path_for_resolve.clone());
+                interp.async_module_execution_fulfilled(&path_for_resolve.clone());
+                interp.current_module_path = prev;
+                Completion::Normal(JsValue::Undefined)
+            },
+        ));
+        let reject_fn = self.create_function(JsFunction::native(
+            "asyncModuleReject".to_string(),
+            1,
+            move |interp, _this, args| {
+                let error = args.first().cloned().unwrap_or(JsValue::Undefined);
+                interp.async_module_execution_rejected(&path_for_reject.clone(), &error);
+                Completion::Normal(JsValue::Undefined)
+            },
+        ));
+        let async_id = self.next_async_function_id;
+        self.next_async_function_id += 1;
+        self.module_async_info
+            .insert(async_id, module_path.to_path_buf());
+        self.async_function_states.insert(
+            async_id,
+            AsyncFunctionState {
+                state_machine: sm,
+                func_env: module_env,
+                is_strict: true,
+                current_state: 0,
+                try_stack: vec![],
+                pending_binding: None,
+                pending_return: None,
+                saved_finally_exception: None,
+                resolve_fn,
+                reject_fn,
+                for_of_stack: vec![],
+                for_of_iter_env: None,
+                module_path: Some(module_path.to_path_buf()),
+            },
+        );
+        let prev_path = self.current_module_path.take();
+        self.current_module_path = Some(module_path.to_path_buf());
+        self.static_module_load_depth += 1;
+        self.async_function_resume(async_id, JsValue::Undefined, false);
+        self.static_module_load_depth -= 1;
+        self.current_module_path = prev_path;
+    }
+
+    fn inner_module_evaluation(
+        &mut self,
+        module_path: &Path,
+        stack: &mut Vec<PathBuf>,
+        index: u32,
+    ) -> Result<u32, JsValue> {
+        let canon = module_path
+            .canonicalize()
+            .unwrap_or_else(|_| module_path.to_path_buf());
+        let module = match self.module_registry.get(&canon).cloned() {
+            Some(m) => m,
+            None => return Ok(index),
+        };
+        {
+            let m = module.borrow();
+            if m.evaluated && !m.is_evaluating {
+                if let Some(ref err) = m.error {
+                    return Err(err.clone());
+                }
+                return Ok(index);
+            }
+            if m.is_evaluating {
+                return Ok(index);
+            }
+        }
+        let mut idx = index;
         {
             let mut m = module.borrow_mut();
-            m.is_evaluating = false;
-            m.evaluated = true;
-            m.program_ast = None;
+            m.is_evaluating = true;
+            m.dfs_index = Some(idx);
+            m.dfs_ancestor_index = Some(idx);
+            m.pending_async_dependencies = 0;
         }
-        Ok(())
+        idx += 1;
+        stack.push(canon.clone());
+
+        // Build evaluationList per spec §16.2.1.5.3.1 step 7
+        let dep_paths = self.get_module_dep_paths(&canon);
+        let mut evaluation_list: Vec<PathBuf> = Vec::new();
+        for (dep_canon, is_deferred) in &dep_paths {
+            if *is_deferred {
+                let mut to_eval = Vec::new();
+                let mut seen = std::collections::HashSet::new();
+                self.gather_async_transitive_deps(dep_canon, &mut to_eval, &mut seen);
+                for async_dep in to_eval {
+                    if !evaluation_list.contains(&async_dep) {
+                        evaluation_list.push(async_dep);
+                    }
+                }
+            } else if !evaluation_list.contains(dep_canon) {
+                evaluation_list.push(dep_canon.clone());
+            }
+        }
+
+        // Evaluate each dep and set up async parent relationships (spec §16.2.1.5.3.1 step 11)
+        for dep_canon in evaluation_list.into_iter() {
+            idx = self.inner_module_evaluation(&dep_canon, stack, idx)?;
+            let dep_mod = match self.module_registry.get(&dep_canon).cloned() {
+                Some(m) => m,
+                None => continue,
+            };
+            let dep = dep_mod.borrow();
+            let dep_on_stack = stack.contains(&dep_canon);
+
+            // Step 11.c.iii/iv: determine requiredModule for step v
+            let (req_path, req_mod) = if dep_on_stack {
+                // iii: on stack → update dfs_ancestor_index, requiredModule stays as dep
+                let dep_ancestor = dep.dfs_ancestor_index.unwrap_or(u32::MAX);
+                drop(dep);
+                let mut m = module.borrow_mut();
+                let my_ancestor = m.dfs_ancestor_index.unwrap_or(u32::MAX);
+                m.dfs_ancestor_index = Some(my_ancestor.min(dep_ancestor));
+                drop(m);
+                (dep_canon.clone(), dep_mod.clone())
+            } else {
+                // iv: not on stack → requiredModule = cycleRoot
+                let cycle_root_path = dep.cycle_root.clone().unwrap_or_else(|| dep_canon.clone());
+                drop(dep);
+                let root_mod = self
+                    .module_registry
+                    .get(&cycle_root_path)
+                    .cloned()
+                    .unwrap_or_else(|| dep_mod.clone());
+                let root = root_mod.borrow();
+                if let Some(ref err) = root.error {
+                    return Err(err.clone());
+                }
+                drop(root);
+                (cycle_root_path, root_mod)
+            };
+
+            // Step 11.c.v: if requiredModule has AsyncEvaluationOrder, track as pending dep
+            let req = req_mod.borrow();
+            if req.async_evaluation_order.is_some() && !req.evaluated {
+                drop(req);
+                module.borrow_mut().pending_async_dependencies += 1;
+                req_mod
+                    .borrow_mut()
+                    .async_parent_modules
+                    .push(canon.clone());
+            }
+        }
+
+        let has_tla = module.borrow().has_tla;
+        let pending = module.borrow().pending_async_dependencies;
+        if has_tla || pending > 0 {
+            let order = self.module_async_evaluation_count;
+            self.module_async_evaluation_count += 1;
+            module.borrow_mut().async_evaluation_order = Some(order);
+            if pending == 0 {
+                self.execute_async_module(&canon);
+            }
+        } else {
+            if let Err(e) = self.execute_module_body_sync(&canon) {
+                return Err(e);
+            }
+        }
+
+        let my_dfs = module.borrow().dfs_index.unwrap_or(0);
+        let my_ancestor = module.borrow().dfs_ancestor_index.unwrap_or(0);
+        if my_dfs == my_ancestor {
+            let has_async = module.borrow().async_evaluation_order.is_some();
+            loop {
+                let popped = match stack.pop() {
+                    Some(p) => p,
+                    None => break,
+                };
+                if let Some(popped_mod) = self.module_registry.get(&popped).cloned() {
+                    popped_mod.borrow_mut().cycle_root = Some(canon.clone());
+                    if !has_async {
+                        let mut pm = popped_mod.borrow_mut();
+                        pm.evaluated = true;
+                        pm.is_evaluating = false;
+                    }
+                }
+                if popped == canon {
+                    break;
+                }
+            }
+        }
+        Ok(idx)
+    }
+
+    fn get_module_dep_paths(&self, canon_path: &Path) -> Vec<(PathBuf, bool)> {
+        let module = match self.module_registry.get(canon_path) {
+            Some(m) => m.clone(),
+            None => return Vec::new(),
+        };
+        let program = match module.borrow().program_ast.clone() {
+            Some(p) => p,
+            None => return Vec::new(),
+        };
+        let mut deps = Vec::new();
+        for item in &program.module_items {
+            let (specifier, is_deferred) = match item {
+                ModuleItem::ImportDeclaration(import) => {
+                    let is_defer = import
+                        .specifiers
+                        .iter()
+                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
+                    (Some(import.source.as_str()), is_defer)
+                }
+                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
+                    (Some(source.as_str()), false)
+                }
+                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                    source: Some(source),
+                    ..
+                }) => (Some(source.as_str()), false),
+                _ => (None, false),
+            };
+            if let Some(spec) = specifier
+                && let Ok(resolved) = self.resolve_module_specifier_pure(spec, Some(canon_path))
+            {
+                deps.push((resolved, is_deferred));
+            }
+        }
+        deps
+    }
+
+    fn gather_available_ancestors(&mut self, module_path: &Path) -> Vec<PathBuf> {
+        let parents = match self.module_registry.get(module_path) {
+            Some(m) => m.borrow().async_parent_modules.clone(),
+            None => return Vec::new(),
+        };
+        let mut result = Vec::new();
+        for parent_path in parents {
+            let parent = match self.module_registry.get(&parent_path).cloned() {
+                Some(m) => m,
+                None => continue,
+            };
+            let should_add = {
+                let mut pm = parent.borrow_mut();
+                pm.pending_async_dependencies = pm.pending_async_dependencies.saturating_sub(1);
+                pm.pending_async_dependencies == 0
+                    && pm.async_evaluation_order.is_some()
+                    && pm.error.is_none()
+            };
+            if should_add {
+                result.push(parent_path);
+            }
+        }
+        result.sort_by_key(|p| {
+            self.module_registry
+                .get(p)
+                .and_then(|m| m.borrow().async_evaluation_order)
+                .unwrap_or(u64::MAX)
+        });
+        result
+    }
+
+    fn async_module_execution_rejected(&mut self, module_path: &Path, error: &JsValue) {
+        let module = match self.module_registry.get(module_path).cloned() {
+            Some(m) => m,
+            None => return,
+        };
+        if module.borrow().error.is_some() {
+            return;
+        }
+        {
+            let mut m = module.borrow_mut();
+            m.error = Some(error.clone());
+            m.evaluated = true;
+            m.is_evaluating = false;
+        }
+        if let Some((_promise, _resolve, reject)) = module.borrow().top_level_capability.clone() {
+            let _ = self.call_function(&reject, &JsValue::Undefined, &[error.clone()]);
+        }
+        let parents = module.borrow().async_parent_modules.clone();
+        for parent in parents {
+            self.async_module_execution_rejected(&parent, error);
+        }
+    }
+
+    fn async_module_execution_fulfilled(&mut self, module_path: &Path) {
+        let module = match self.module_registry.get(module_path).cloned() {
+            Some(m) => m,
+            None => return,
+        };
+        if module.borrow().error.is_some() {
+            return;
+        }
+        {
+            let mut m = module.borrow_mut();
+            m.evaluated = true;
+            m.is_evaluating = false;
+        }
+        self.collect_all_exports(module_path);
+        if let Some((_promise, resolve, _reject)) = module.borrow().top_level_capability.clone() {
+            let _ = self.call_function(&resolve, &JsValue::Undefined, &[JsValue::Undefined]);
+        }
+        let mut exec_list = self.gather_available_ancestors(module_path);
+        let mut i = 0;
+        while i < exec_list.len() {
+            let ancestor = exec_list[i].clone();
+            i += 1;
+            let ancestor_has_tla = self
+                .module_registry
+                .get(&ancestor)
+                .map(|m| m.borrow().has_tla)
+                .unwrap_or(false);
+            if ancestor_has_tla {
+                self.execute_async_module(&ancestor);
+            } else {
+                match self.execute_module_body_sync(&ancestor) {
+                    Ok(()) => {
+                        if let Some(m) = self.module_registry.get(&ancestor) {
+                            let mut mb = m.borrow_mut();
+                            mb.evaluated = true;
+                            mb.is_evaluating = false;
+                        }
+                        if let Some(m) = self.module_registry.get(&ancestor).cloned() {
+                            if let Some((_p, resolve, _r)) = m.borrow().top_level_capability.clone()
+                            {
+                                let _ = self.call_function(
+                                    &resolve,
+                                    &JsValue::Undefined,
+                                    &[JsValue::Undefined],
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        self.async_module_execution_rejected(&ancestor, &e);
+                        continue;
+                    }
+                }
+                let more = self.gather_available_ancestors(&ancestor);
+                exec_list.extend(more);
+            }
+        }
     }
 
     /// Detect if a module has top-level await
@@ -2441,10 +2835,8 @@ impl Interpreter {
             if let Some(module) = self.module_registry.get(&path).cloned()
                 && !module.borrow().evaluated
             {
-                let prev_path = self.current_module_path.take();
-                self.current_module_path = Some(path.clone());
-                let _ = self.evaluate_module(&module);
-                self.current_module_path = prev_path;
+                let mut stack = vec![];
+                let _ = self.inner_module_evaluation(&path, &mut stack, 0);
             }
         }
     }

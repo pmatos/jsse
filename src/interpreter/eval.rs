@@ -1065,6 +1065,7 @@ impl Interpreter {
                     Err(e) => return self.create_rejected_promise(e),
                 };
                 // import.defer() loads module without evaluation, returns deferred namespace
+                // but eagerly evaluates async transitive deps (spec ContinueDynamicImport step 25)
                 let module_path = self.current_module_path.clone();
                 let resolved = match self.resolve_module_specifier(&source, module_path.as_deref())
                 {
@@ -1073,6 +1074,9 @@ impl Interpreter {
                 };
                 match self.load_module_no_eval(&resolved) {
                     Ok(module) => {
+                        let resolved_canon = resolved.canonicalize().unwrap_or(resolved.clone());
+                        self.evaluate_async_transitive_deps(&resolved_canon);
+                        self.drain_microtasks();
                         let ns = self.create_deferred_module_namespace(&module);
                         self.create_resolved_promise(ns)
                     }
@@ -5775,7 +5779,16 @@ impl Interpreter {
                             use crate::interpreter::generator_transform::SentValueBindingKind;
                             match &bind.kind {
                                 SentValueBindingKind::Variable(name) => {
-                                    func_env.borrow_mut().set(name, value.clone()).ok();
+                                    let mut env = func_env.borrow_mut();
+                                    let needs_init = env
+                                        .bindings
+                                        .get(name.as_str())
+                                        .is_some_and(|b| !b.initialized);
+                                    if needs_init {
+                                        env.initialize_binding(name, value.clone());
+                                    } else {
+                                        env.set(name, value.clone()).ok();
+                                    }
                                 }
                                 SentValueBindingKind::Pattern(pattern) => {
                                     let _ = self.bind_pattern(
@@ -5888,7 +5901,16 @@ impl Interpreter {
         if let Some(binding) = pending_binding {
             match &binding.kind {
                 SentValueBindingKind::Variable(name) => {
-                    func_env.borrow_mut().set(name, sent_value.clone()).ok();
+                    let mut env = func_env.borrow_mut();
+                    let needs_init = env
+                        .bindings
+                        .get(name.as_str())
+                        .is_some_and(|b| !b.initialized);
+                    if needs_init {
+                        env.initialize_binding(name, sent_value.clone());
+                    } else {
+                        env.set(name, sent_value.clone()).ok();
+                    }
                 }
                 SentValueBindingKind::Pattern(pattern) => {
                     let _ =
@@ -8889,7 +8911,16 @@ impl Interpreter {
                             use crate::interpreter::generator_transform::SentValueBindingKind;
                             match &bind.kind {
                                 SentValueBindingKind::Variable(name) => {
-                                    func_env.borrow_mut().set(name, value.clone()).ok();
+                                    let mut env = func_env.borrow_mut();
+                                    let needs_init = env
+                                        .bindings
+                                        .get(name.as_str())
+                                        .is_some_and(|b| !b.initialized);
+                                    if needs_init {
+                                        env.initialize_binding(name, value.clone());
+                                    } else {
+                                        env.set(name, value.clone()).ok();
+                                    }
                                 }
                                 SentValueBindingKind::Pattern(pattern) => {
                                     let _ = self.bind_pattern(
@@ -9016,7 +9047,16 @@ impl Interpreter {
         if let Some(binding) = pending_binding {
             match &binding.kind {
                 SentValueBindingKind::Variable(name) => {
-                    func_env.borrow_mut().set(name, sent_value.clone()).ok();
+                    let mut env = func_env.borrow_mut();
+                    let needs_init = env
+                        .bindings
+                        .get(name.as_str())
+                        .is_some_and(|b| !b.initialized);
+                    if needs_init {
+                        env.initialize_binding(name, sent_value.clone());
+                    } else {
+                        env.set(name, sent_value.clone()).ok();
+                    }
                 }
                 SentValueBindingKind::Pattern(pattern) => {
                     let _ =
@@ -14136,11 +14176,12 @@ impl Interpreter {
         // Save and set current_module_path for evaluation
         let prev_path = self.current_module_path.take();
         self.current_module_path = Some(module_path.clone());
-        let result = self.evaluate_module(&module);
+        let mut stack = vec![];
+        let result = self.inner_module_evaluation(&module_path, &mut stack, 0);
         self.current_module_path = prev_path;
 
         match result {
-            Ok(()) => {
+            Ok(_) => {
                 if let Some(obj) = self.get_object(obj_id)
                     && let Some(ref mut ns) = obj.borrow_mut().module_namespace
                 {
@@ -14148,7 +14189,20 @@ impl Interpreter {
                 }
                 Ok(())
             }
-            Err(e) => Err(e),
+            Err(ref e) => {
+                // Per spec §16.2.1.5.3 step 9: mark all modules on stack as evaluated with error
+                for m_path in &stack {
+                    if let Some(m) = self.module_registry.get(m_path) {
+                        let mut mb = m.borrow_mut();
+                        mb.evaluated = true;
+                        mb.is_evaluating = false;
+                        if mb.error.is_none() {
+                            mb.error = Some(e.clone());
+                        }
+                    }
+                }
+                Err(e.clone())
+            }
         }
     }
 
@@ -17336,6 +17390,8 @@ impl Interpreter {
                 resolve_fn,
                 reject_fn,
                 for_of_stack: vec![],
+                for_of_iter_env: None,
+                module_path: None,
             },
         );
 
@@ -17345,7 +17401,12 @@ impl Interpreter {
         Completion::Normal(promise)
     }
 
-    fn async_function_resume(&mut self, async_id: u64, sent_value: JsValue, is_error: bool) {
+    pub(crate) fn async_function_resume(
+        &mut self,
+        async_id: u64,
+        sent_value: JsValue,
+        is_error: bool,
+    ) {
         use crate::interpreter::generator_transform::{SentValueBindingKind, StateTerminator};
 
         let Some(state) = self.async_function_states.remove(&async_id) else {
@@ -17364,12 +17425,27 @@ impl Interpreter {
             resolve_fn,
             reject_fn,
             for_of_stack: saved_for_of_stack,
+            for_of_iter_env: saved_for_of_iter_env,
+            module_path: async_module_path,
         } = state;
+
+        if let Some(ref mp) = async_module_path {
+            self.current_module_path = Some(mp.clone());
+        }
 
         if let Some(binding) = pending_binding {
             match &binding.kind {
                 SentValueBindingKind::Variable(name) => {
-                    func_env.borrow_mut().set(name, sent_value.clone()).ok();
+                    let mut env = func_env.borrow_mut();
+                    let needs_init = env
+                        .bindings
+                        .get(name.as_str())
+                        .is_some_and(|b| !b.initialized);
+                    if needs_init {
+                        env.initialize_binding(name, sent_value.clone());
+                    } else {
+                        env.set(name, sent_value.clone()).ok();
+                    }
                 }
                 SentValueBindingKind::Pattern(pattern) => {
                     let _ =
@@ -17397,6 +17473,8 @@ impl Interpreter {
                 resolve_fn: resolve_fn.clone(),
                 reject_fn: reject_fn.clone(),
                 for_of_stack: saved_for_of_stack.clone(),
+                for_of_iter_env: saved_for_of_iter_env.clone(),
+                module_path: async_module_path.clone(),
             },
         );
 
@@ -17408,6 +17486,7 @@ impl Interpreter {
         let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
         // Stack tracking active for-of loops for break/continue/return iterator close
         let mut for_of_stack: Vec<(String, usize, usize)> = saved_for_of_stack; // (iter_var, head_state, after_state)
+        let mut for_of_iter_env: Option<Rc<RefCell<Environment>>> = saved_for_of_iter_env;
 
         // Helper: route a return through finally blocks in try_stack
         macro_rules! route_return {
@@ -17462,6 +17541,7 @@ impl Interpreter {
                     &reject_fn,
                     &JsValue::Undefined,
                     &for_of_stack,
+                    for_of_iter_env.clone(),
                 );
                 return;
             }
@@ -17518,7 +17598,8 @@ impl Interpreter {
             }
 
             self.in_state_machine = true;
-            let mut stmt_result = self.exec_statements(statements, &func_env);
+            let exec_env = for_of_iter_env.as_ref().unwrap_or(&func_env);
+            let mut stmt_result = self.exec_statements(statements, exec_env);
             self.in_state_machine = saved_in_state_machine;
 
             // Execute tail calls inline — async functions don't use PTC, but
@@ -17635,17 +17716,19 @@ impl Interpreter {
                     &reject_fn,
                     &yield_val,
                     &for_of_stack,
+                    for_of_iter_env.clone(),
                 );
                 return;
             }
 
+            let term_env = for_of_iter_env.as_ref().unwrap_or(&func_env).clone();
             match terminator {
                 StateTerminator::Await {
                     value,
                     resume_state,
                     sent_value_binding,
                 } => {
-                    let await_val = match self.eval_expr(&value, &func_env) {
+                    let await_val = match self.eval_expr(&value, &term_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             pending_exception = Some(e);
@@ -17666,6 +17749,7 @@ impl Interpreter {
                                 &reject_fn,
                                 &v,
                                 &for_of_stack,
+                                for_of_iter_env.clone(),
                             );
                             return;
                         }
@@ -17686,13 +17770,14 @@ impl Interpreter {
                         &reject_fn,
                         &await_val,
                         &for_of_stack,
+                        for_of_iter_env.clone(),
                     );
                     return;
                 }
 
                 StateTerminator::Return(ref expr) => {
                     let ret_val = if let Some(e) = expr {
-                        let mut result = self.eval_expr(e, &func_env);
+                        let mut result = self.eval_expr(e, &term_env);
                         while let Completion::TailCall { func, this, args } = result {
                             result = self.call_function(&func, &this, &args);
                         }
@@ -17713,7 +17798,7 @@ impl Interpreter {
                 }
 
                 StateTerminator::Throw(ref expr) => {
-                    let throw_val = match self.eval_expr(expr, &func_env) {
+                    let throw_val = match self.eval_expr(expr, &term_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => e,
                         _ => JsValue::Undefined,
@@ -17731,7 +17816,7 @@ impl Interpreter {
                     true_state,
                     false_state,
                 } => {
-                    let cond_val = match self.eval_expr(condition, &func_env) {
+                    let cond_val = match self.eval_expr(condition, &term_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             pending_exception = Some(e);
@@ -17789,7 +17874,7 @@ impl Interpreter {
                     }
                     let exc_val = pending_exception.take().unwrap_or(JsValue::Undefined);
                     if let Some(pattern) = param {
-                        let _ = self.bind_pattern(pattern, exc_val, BindingKind::Let, &func_env);
+                        let _ = self.bind_pattern(pattern, exc_val, BindingKind::Let, &term_env);
                     }
                     current_id = body_state;
                 }
@@ -17809,7 +17894,7 @@ impl Interpreter {
                     default_state,
                     after_state,
                 } => {
-                    let disc_val = match self.eval_expr(discriminant, &func_env) {
+                    let disc_val = match self.eval_expr(discriminant, &term_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             pending_exception = Some(e);
@@ -17819,7 +17904,7 @@ impl Interpreter {
                     };
                     let mut matched = false;
                     for case in cases {
-                        let case_val = match self.eval_expr(&case.test, &func_env) {
+                        let case_val = match self.eval_expr(&case.test, &term_env) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
                                 pending_exception = Some(e);
@@ -17967,7 +18052,8 @@ impl Interpreter {
                     ..
                 } => {
                     // Dispose resources from previous iteration (for using/await using)
-                    let disp = self.dispose_resources(&func_env, Completion::Empty);
+                    let disp_env = for_of_iter_env.take().unwrap_or_else(|| func_env.clone());
+                    let disp = self.dispose_resources(&disp_env, Completion::Empty);
                     if let Completion::Throw(e) = disp {
                         pending_exception = Some(e);
                         continue;
@@ -18024,6 +18110,7 @@ impl Interpreter {
                                 &reject_fn,
                                 &raw_result,
                                 &for_of_stack,
+                                for_of_iter_env.clone(),
                             );
                             self.in_state_machine = saved_in_state_machine;
                             return;
@@ -18074,6 +18161,14 @@ impl Interpreter {
                                 continue;
                             }
                         };
+                        let needs_iter_env = matches!(left, ForInOfLeft::Variable(decl) if !matches!(decl.kind, VarKind::Var));
+                        let bind_env = if needs_iter_env {
+                            let ie = Environment::new(Some(func_env.clone()));
+                            for_of_iter_env = Some(ie.clone());
+                            ie
+                        } else {
+                            func_env.clone()
+                        };
                         let bind_result = match left {
                             ForInOfLeft::Variable(decl) => {
                                 let is_using =
@@ -18085,7 +18180,7 @@ impl Interpreter {
                                         crate::interpreter::types::DisposeHint::Sync
                                     };
                                     if let Err(e) =
-                                        self.add_disposable_resource(&func_env, &value, hint)
+                                        self.add_disposable_resource(&bind_env, &value, hint)
                                     {
                                         pending_exception = Some(e);
                                         continue;
@@ -18102,7 +18197,7 @@ impl Interpreter {
                                             | VarKind::Using
                                             | VarKind::AwaitUsing => BindingKind::Const,
                                         },
-                                        &func_env,
+                                        &bind_env,
                                     )
                                 } else {
                                     Ok(())
@@ -18171,6 +18266,7 @@ impl Interpreter {
         reject_fn: &JsValue,
         await_val: &JsValue,
         for_of_stack: &[(String, usize, usize)],
+        for_of_iter_env: Option<Rc<RefCell<Environment>>>,
     ) {
         let promise = self.promise_resolve_value(await_val);
         let promise_id = if let JsValue::Object(ref o) = promise {
@@ -18194,6 +18290,8 @@ impl Interpreter {
                 resolve_fn: resolve_fn.clone(),
                 reject_fn: reject_fn.clone(),
                 for_of_stack: for_of_stack.to_vec(),
+                for_of_iter_env,
+                module_path: self.module_async_info.get(&async_id).cloned(),
             },
         );
 
@@ -18479,6 +18577,27 @@ impl Interpreter {
                     return self.create_rejected_promise(e);
                 }
             };
+            let resolved_canon = resolved.canonicalize().unwrap_or(resolved.clone());
+            let mut stack = vec![];
+            if let Err(ref e) = self.inner_module_evaluation(&resolved_canon, &mut stack, 0) {
+                for m_path in &stack {
+                    if let Some(m) = self.module_registry.get(m_path) {
+                        let mut mb = m.borrow_mut();
+                        mb.evaluated = true;
+                        mb.is_evaluating = false;
+                        if mb.error.is_none() {
+                            mb.error = Some(e.clone());
+                        }
+                    }
+                }
+                return self.create_rejected_promise(e.clone());
+            }
+            // Drain microtasks to complete TLA module evaluation
+            self.drain_microtasks();
+            // Check if module evaluation failed (e.g. await rejected)
+            if let Some(err) = module.borrow().error.clone() {
+                return self.create_rejected_promise(err);
+            }
             let ns = self.create_module_namespace(&module);
             return self.create_resolved_promise(ns);
         }
@@ -18499,6 +18618,31 @@ impl Interpreter {
             Box::new(move |interp: &mut Interpreter| {
                 match interp.load_module(&resolved_path) {
                     Ok(m) => {
+                        let resolved_canon = resolved_path
+                            .canonicalize()
+                            .unwrap_or(resolved_path.clone());
+                        let mut stack = vec![];
+                        if let Err(ref e) =
+                            interp.inner_module_evaluation(&resolved_canon, &mut stack, 0)
+                        {
+                            for m_path in &stack {
+                                if let Some(m) = interp.module_registry.get(m_path) {
+                                    let mut mb = m.borrow_mut();
+                                    mb.evaluated = true;
+                                    mb.is_evaluating = false;
+                                    if mb.error.is_none() {
+                                        mb.error = Some(e.clone());
+                                    }
+                                }
+                            }
+                            interp.reject_promise(pid, e.clone());
+                            return Completion::Normal(JsValue::Undefined);
+                        }
+                        interp.drain_microtasks();
+                        if let Some(err) = m.borrow().error.clone() {
+                            interp.reject_promise(pid, err);
+                            return Completion::Normal(JsValue::Undefined);
+                        }
                         let ns = interp.create_module_namespace(&m);
                         interp.fulfill_promise(pid, ns);
                     }

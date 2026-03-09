@@ -368,6 +368,23 @@ fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool)
     }
 }
 
+fn stmt_has_break_or_continue(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::Break(_) | Statement::Continue(_) => true,
+        Statement::Block(stmts) => stmts.iter().any(stmt_has_break_or_continue),
+        Statement::If(if_stmt) => {
+            stmt_has_break_or_continue(&if_stmt.consequent)
+                || if_stmt
+                    .alternate
+                    .as_ref()
+                    .is_some_and(|a| stmt_has_break_or_continue(a))
+        }
+        Statement::Labeled(_, inner) => stmt_has_break_or_continue(inner),
+        // Don't recurse into nested loops/switch — their break/continue targets are separate
+        _ => false,
+    }
+}
+
 fn expr_has_suspension(expr: &Expression, is_async: bool) -> bool {
     if is_async {
         expr_contains_suspension(expr)
@@ -388,6 +405,10 @@ fn transform_statements(stmts: &[Statement], ctx: &mut TransformContext, after_s
             // for proper Return(None) vs Return(Some) tick distinction
             transform_yielding_statement(stmt, ctx, next_after);
         } else if ctx.is_async && has_block_with_await_using(stmt) {
+            transform_yielding_statement(stmt, ctx, next_after);
+        } else if matches!(stmt, Statement::Break(_) | Statement::Continue(_))
+            && !ctx.break_targets.is_empty()
+        {
             transform_yielding_statement(stmt, ctx, next_after);
         } else {
             ctx.emit_statement(stmt.clone());
@@ -521,6 +542,32 @@ fn transform_yielding_statement(stmt: &Statement, ctx: &mut TransformContext, af
                     Expression::Identifier(with_var),
                     Box::new(*inner.clone()),
                 ));
+            }
+        }
+
+        Statement::Break(label) => {
+            let target = label
+                .as_ref()
+                .and_then(|l| ctx.break_targets.get(&Some(l.clone())).copied())
+                .or_else(|| ctx.break_targets.get(&None).copied());
+            if let Some(target_state) = target {
+                ctx.finalize_current_state(StateTerminator::Goto(target_state));
+                ctx.current_state_id = ctx.new_state();
+            } else {
+                ctx.emit_statement(stmt.clone());
+            }
+        }
+
+        Statement::Continue(label) => {
+            let target = label
+                .as_ref()
+                .and_then(|l| ctx.continue_targets.get(&Some(l.clone())).copied())
+                .or_else(|| ctx.continue_targets.get(&None).copied());
+            if let Some(target_state) = target {
+                ctx.finalize_current_state(StateTerminator::Goto(target_state));
+                ctx.current_state_id = ctx.new_state();
+            } else {
+                ctx.emit_statement(stmt.clone());
             }
         }
 
@@ -819,21 +866,10 @@ fn transform_yielding_expression(
                 );
                 emit_expression_with_binding(&combined, &binding, ctx);
             } else if expr_has_suspension(left, ctx.is_async) {
-                // Yield in LHS (e.g. destructuring defaults like [x = yield] = vals)
-                // Evaluate RHS to temp, emit assignment as statement (yield propagates at runtime)
-                let temp_var = ctx.new_temp_var("assign_rhs");
-                ctx.emit_statement(Statement::Variable(crate::ast::VariableDeclaration {
-                    kind: crate::ast::VarKind::Var,
-                    declarations: vec![crate::ast::VariableDeclarator {
-                        pattern: Pattern::Identifier(temp_var.clone()),
-                        init: Some(*right.clone()),
-                    }],
-                }));
-                let combined = Expression::Assign(
-                    *op,
-                    left.clone(),
-                    Box::new(Expression::Identifier(temp_var)),
-                );
+                // LHS has suspension (e.g. c[await 9] = 1, or destructuring [x = yield] = vals)
+                // Pre-evaluate suspension points in LHS member expressions
+                let new_left = extract_lhs_suspensions(left, ctx);
+                let combined = Expression::Assign(*op, Box::new(new_left), right.clone());
                 emit_expression_with_binding(&combined, &binding, ctx);
             }
         }
@@ -1271,6 +1307,43 @@ fn emit_expression_with_binding(
     }
 }
 
+/// Extract suspension points from assignment LHS expressions (e.g. `c[await 9]`).
+/// Transforms `await` sub-expressions into temp vars via state machine yields,
+/// returning a clean LHS expression without suspensions.
+fn extract_lhs_suspensions(expr: &Expression, ctx: &mut TransformContext) -> Expression {
+    match expr {
+        Expression::Member(obj, prop) => {
+            let new_obj = if expr_has_suspension(obj, ctx.is_async) {
+                let temp = ctx.new_temp_var("lhs_obj");
+                transform_yielding_expression(
+                    obj,
+                    ctx,
+                    usize::MAX,
+                    Some(SentValueBindingKind::Variable(temp.clone())),
+                );
+                Expression::Identifier(temp)
+            } else {
+                *obj.clone()
+            };
+            let new_prop = match prop {
+                MemberProperty::Computed(e) if expr_has_suspension(e, ctx.is_async) => {
+                    let temp = ctx.new_temp_var("lhs_comp");
+                    transform_yielding_expression(
+                        e,
+                        ctx,
+                        usize::MAX,
+                        Some(SentValueBindingKind::Variable(temp.clone())),
+                    );
+                    MemberProperty::Computed(Box::new(Expression::Identifier(temp)))
+                }
+                other => other.clone(),
+            };
+            Expression::Member(Box::new(new_obj), new_prop)
+        }
+        _ => expr.clone(),
+    }
+}
+
 fn transform_variable_declaration(
     decl: &VariableDeclaration,
     ctx: &mut TransformContext,
@@ -1428,7 +1501,9 @@ fn transform_while_statement(
     }
 
     ctx.current_state_id = body_state;
-    if stmt_has_suspension(&while_stmt.body, ctx.is_async, ctx.detect_for_await) {
+    if stmt_has_suspension(&while_stmt.body, ctx.is_async, ctx.detect_for_await)
+        || stmt_has_break_or_continue(&while_stmt.body)
+    {
         transform_yielding_statement(&while_stmt.body, ctx, test_state);
     } else {
         ctx.emit_statement(*while_stmt.body.clone());
@@ -1461,7 +1536,9 @@ fn transform_do_while_statement(
     ctx.continue_targets.insert(None, test_state);
 
     ctx.current_state_id = body_state;
-    if stmt_has_suspension(&do_while_stmt.body, ctx.is_async, ctx.detect_for_await) {
+    if stmt_has_suspension(&do_while_stmt.body, ctx.is_async, ctx.detect_for_await)
+        || stmt_has_break_or_continue(&do_while_stmt.body)
+    {
         transform_yielding_statement(&do_while_stmt.body, ctx, test_state);
     } else {
         ctx.emit_statement(*do_while_stmt.body.clone());
@@ -1560,7 +1637,9 @@ fn transform_for_statement(
     }
 
     ctx.current_state_id = body_state;
-    if stmt_has_suspension(&for_stmt.body, ctx.is_async, ctx.detect_for_await) {
+    if stmt_has_suspension(&for_stmt.body, ctx.is_async, ctx.detect_for_await)
+        || stmt_has_break_or_continue(&for_stmt.body)
+    {
         transform_yielding_statement(&for_stmt.body, ctx, update_state);
     } else {
         ctx.emit_statement(*for_stmt.body.clone());
@@ -1613,8 +1692,18 @@ fn transform_for_of_statement(
     ctx.break_targets.insert(None, after_loop);
     ctx.continue_targets.insert(None, head_state);
 
+    // If the iterable expression contains a suspension point, evaluate it first
+    let iterable_expr = if expr_has_suspension(&for_of_stmt.right, ctx.is_async) {
+        let temp_var = ctx.new_temp_var("forof_iterable");
+        let iterable_binding = SentValueBindingKind::Variable(temp_var.clone());
+        transform_yielding_expression(&for_of_stmt.right, ctx, usize::MAX, Some(iterable_binding));
+        Expression::Identifier(temp_var)
+    } else {
+        for_of_stmt.right.clone()
+    };
+
     ctx.finalize_current_state(StateTerminator::ForOfInit {
-        iterable: for_of_stmt.right.clone(),
+        iterable: iterable_expr,
         iter_var: iter_var.clone(),
         next_var: next_var.clone(),
         left: for_of_stmt.left.clone(),

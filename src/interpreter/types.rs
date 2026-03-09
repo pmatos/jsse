@@ -204,6 +204,8 @@ pub struct AsyncFunctionState {
     pub resolve_fn: JsValue,
     pub reject_fn: JsValue,
     pub for_of_stack: Vec<(String, usize, usize)>,
+    pub for_of_iter_env: Option<EnvRef>,
+    pub module_path: Option<std::path::PathBuf>,
 }
 
 #[derive(Debug, Clone)]
