@@ -2160,6 +2160,19 @@ pub(super) fn translate_js_pattern_ex(
                         } else {
                             result.push_str("[^A-Za-z0-9_]");
                         }
+                    } else if next == 'b' {
+                        if unicode && icase_base && !icase {
+                            // Inside (?-i:...) with /ui flags: \b must use ASCII-only word chars
+                            result.push_str("(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))");
+                        } else {
+                            result.push_str("\\b");
+                        }
+                    } else if next == 'B' {
+                        if unicode && icase_base && !icase {
+                            result.push_str("(?:(?<=[A-Za-z0-9_])(?=[A-Za-z0-9_])|(?<![A-Za-z0-9_])(?![A-Za-z0-9_]))");
+                        } else {
+                            result.push_str("\\B");
+                        }
                     } else {
                         result.push('\\');
                         result.push(next);
@@ -4750,7 +4763,9 @@ fn lookbehind_needs_custom_rtl(source: &str) -> bool {
             let mut depth = 1;
             let mut j = content_start;
             let mut has_backref = false;
+            let mut has_quantified_capture = false;
             let mut in_cc2 = false;
+            let mut capturing_stack: Vec<bool> = Vec::new();
             while j < len && depth > 0 {
                 if chars[j] == '[' && !in_cc2 {
                     in_cc2 = true;
@@ -4763,19 +4778,35 @@ fn lookbehind_needs_custom_rtl(source: &str) -> bool {
                     }
                 } else if chars[j] == '(' && !in_cc2 {
                     depth += 1;
+                    let is_cap = if j + 1 < len && chars[j + 1] == '?' {
+                        j + 2 < len
+                            && chars[j + 2] == '<'
+                            && j + 3 < len
+                            && chars[j + 3] != '='
+                            && chars[j + 3] != '!'
+                    } else {
+                        true
+                    };
+                    capturing_stack.push(is_cap);
                 } else if chars[j] == ')' && !in_cc2 {
                     depth -= 1;
+                    if depth > 0 {
+                        let was_cap = capturing_stack.pop().unwrap_or(false);
+                        if was_cap && j + 1 < len {
+                            // Only flag variable-width quantifiers (+ and *).
+                            // Fixed-count {n} and optional ? are handled correctly by fancy-regex.
+                            if matches!(chars[j + 1], '+' | '*') {
+                                has_quantified_capture = true;
+                            }
+                        }
+                    }
                 }
                 if depth > 0 {
                     j += 1;
                 }
             }
 
-            // Only force custom RTL for backrefs in lookbehinds.
-            // Lookaheads inside lookbehinds are handled by fancy-regex for
-            // fixed-length lookbehinds; variable-length ones fail compilation
-            // and fall back to the custom path via build_regex_ex.
-            if has_backref {
+            if has_backref || has_quantified_capture {
                 return true;
             }
         }
@@ -5147,17 +5178,260 @@ fn find_matching_close(chars: &[char], open: usize) -> Option<usize> {
     None
 }
 
+/// Per spec §22.2.2.6.1 step 2.b: when a nullable group body (one that can
+/// match the empty string) is quantified with `*` or `+`, an iteration that
+/// matches empty must fail.  fancy-regex stops the loop instead of
+/// backtracking, so we convert lazy min-0 quantifiers (`??`, `*?`) inside
+/// nullable bodies to greedy, forcing them to consume characters.
+fn fix_nullable_quantifiers(source: &str) -> String {
+    if !source.contains("??") && !source.contains("*?") {
+        return source.to_string();
+    }
+
+    let chars: Vec<char> = source.chars().collect();
+    let len = chars.len();
+
+    // Build matching-paren map
+    let mut close_of = vec![0usize; len];
+    let mut stack: Vec<usize> = Vec::new();
+    let mut i = 0;
+    let mut in_cc = false;
+    while i < len {
+        match chars[i] {
+            '\\' if !in_cc && i + 1 < len => {
+                i += 2;
+                continue;
+            }
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '(' if !in_cc => stack.push(i),
+            ')' if !in_cc => {
+                if let Some(open) = stack.pop() {
+                    close_of[open] = i;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+
+    let mut remove = vec![false; len];
+
+    for open_pos in 0..len {
+        if chars[open_pos] != '(' || close_of[open_pos] == 0 {
+            continue;
+        }
+        let close = close_of[open_pos];
+        let after = close + 1;
+        if after >= len || !matches!(chars[after], '*' | '+') {
+            continue;
+        }
+        // Find body start (skip group type prefix)
+        let body_start = nq_body_start(&chars, open_pos);
+        if body_start >= close {
+            continue;
+        }
+        if nq_is_nullable(&chars, body_start, close, &close_of) {
+            nq_mark_lazy(&chars, body_start, close, &close_of, &mut remove);
+        }
+    }
+
+    if !remove.iter().any(|&r| r) {
+        return source.to_string();
+    }
+    let mut result = String::with_capacity(len);
+    for i in 0..len {
+        if !remove[i] {
+            result.push(chars[i]);
+        }
+    }
+    result
+}
+
+fn nq_body_start(chars: &[char], open: usize) -> usize {
+    let len = chars.len();
+    if open + 1 < len && chars[open + 1] == '?' {
+        if open + 2 < len && chars[open + 2] == ':' {
+            return open + 3;
+        }
+        if open + 2 < len
+            && chars[open + 2] == '<'
+            && open + 3 < len
+            && chars[open + 3] != '='
+            && chars[open + 3] != '!'
+        {
+            for j in (open + 3)..len {
+                if chars[j] == '>' {
+                    return j + 1;
+                }
+            }
+        }
+        // Other group types (assertions, modifiers) — don't rewrite
+        return len;
+    }
+    open + 1
+}
+
+/// Check whether the regex segment chars[start..end] can match the empty string.
+fn nq_is_nullable(chars: &[char], start: usize, end: usize, close_of: &[usize]) -> bool {
+    let mut i = start;
+    while i < end {
+        match chars[i] {
+            '|' => {
+                // Left alternative was all nullable (we got here without returning false).
+                // If ANY alternative is nullable, the whole alternation is nullable.
+                // Skip right side — it's nullable if left side was.
+                return true;
+            }
+            '\\' if i + 1 < end => {
+                let atom_end = i + 2;
+                if !nq_has_min0(chars, atom_end, end) {
+                    return false;
+                }
+                i = nq_skip_quant(chars, atom_end, end);
+            }
+            '[' => {
+                let mut j = i + 1;
+                while j < end && chars[j] != ']' {
+                    if chars[j] == '\\' && j + 1 < end {
+                        j += 1;
+                    }
+                    j += 1;
+                }
+                let atom_end = if j < end { j + 1 } else { j };
+                if !nq_has_min0(chars, atom_end, end) {
+                    return false;
+                }
+                i = nq_skip_quant(chars, atom_end, end);
+            }
+            '(' => {
+                let close = close_of[i];
+                if close == 0 || close >= end {
+                    return false;
+                }
+                let atom_end = close + 1;
+                if !nq_has_min0(chars, atom_end, end) {
+                    return false;
+                }
+                i = nq_skip_quant(chars, atom_end, end);
+            }
+            '^' | '$' => {
+                i += 1;
+            }
+            _ => {
+                let atom_end = i + 1;
+                if !nq_has_min0(chars, atom_end, end) {
+                    return false;
+                }
+                i = nq_skip_quant(chars, atom_end, end);
+            }
+        }
+    }
+    true
+}
+
+fn nq_has_min0(chars: &[char], pos: usize, end: usize) -> bool {
+    if pos >= end {
+        return false;
+    }
+    match chars[pos] {
+        '?' | '*' => true,
+        '{' => {
+            // {0,...}
+            pos + 1 < end && chars[pos + 1] == '0'
+        }
+        _ => false,
+    }
+}
+
+fn nq_skip_quant(chars: &[char], pos: usize, end: usize) -> usize {
+    if pos >= end {
+        return pos;
+    }
+    let mut p = pos;
+    match chars[p] {
+        '?' | '*' | '+' => {
+            p += 1;
+            if p < end && chars[p] == '?' {
+                p += 1;
+            }
+        }
+        '{' => {
+            while p < end && chars[p] != '}' {
+                p += 1;
+            }
+            if p < end {
+                p += 1;
+            }
+            if p < end && chars[p] == '?' {
+                p += 1;
+            }
+        }
+        _ => {}
+    }
+    p
+}
+
+/// Mark lazy modifiers (`?` after `?` or `*`) for removal in nullable bodies.
+fn nq_mark_lazy(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    close_of: &[usize],
+    remove: &mut Vec<bool>,
+) {
+    let mut i = start;
+    while i < end {
+        let atom_end = match chars[i] {
+            '\\' if i + 1 < end => i + 2,
+            '[' => {
+                let mut j = i + 1;
+                while j < end && chars[j] != ']' {
+                    if chars[j] == '\\' && j + 1 < end {
+                        j += 1;
+                    }
+                    j += 1;
+                }
+                if j < end { j + 1 } else { j }
+            }
+            '(' => {
+                let close = close_of[i];
+                if close > 0 && close < end {
+                    close + 1
+                } else {
+                    i += 1;
+                    continue;
+                }
+            }
+            '^' | '$' | '|' => {
+                i += 1;
+                continue;
+            }
+            _ => i + 1,
+        };
+        // Check for lazy min-0 quantifier after this atom
+        if atom_end < end && matches!(chars[atom_end], '?' | '*') {
+            let lazy_pos = atom_end + 1;
+            if lazy_pos < end && chars[lazy_pos] == '?' {
+                remove[lazy_pos] = true;
+            }
+        }
+        i = nq_skip_quant(chars, atom_end, end);
+    }
+}
+
 fn build_regex_ex(
     source: &str,
     flags: &str,
 ) -> Result<(CompiledRegex, DupGroupMap, Vec<String>), String> {
-    let tr = translate_js_pattern_ex(source, flags)?;
+    let source = fix_nullable_quantifiers(source);
+    let tr = translate_js_pattern_ex(&source, flags)?;
     let dup_map = tr.dup_group_map;
     let name_order = tr.group_name_order;
     // Check if lookbehind needs custom RTL handling (has backrefs inside lookbehind)
-    if lookbehind_needs_custom_rtl(source)
+    if lookbehind_needs_custom_rtl(&source)
         && let Some(result) =
-            try_build_custom_lookbehind(source, flags, dup_map.clone(), name_order.clone())
+            try_build_custom_lookbehind(&source, flags, dup_map.clone(), name_order.clone())
     {
         return Ok(result);
     }
@@ -5179,7 +5453,7 @@ fn build_regex_ex(
             // If fancy-regex fails and the pattern has lookbehinds, try custom path
             if (source.contains("(?<=") || source.contains("(?<!"))
                 && let Some(result) =
-                    try_build_custom_lookbehind(source, flags, dup_map.clone(), name_order.clone())
+                    try_build_custom_lookbehind(&source, flags, dup_map.clone(), name_order.clone())
             {
                 return Ok(result);
             }
@@ -5225,6 +5499,51 @@ fn count_capture_groups(source: &str) -> usize {
 
 fn regex_captures(re: &CompiledRegex, text: &str) -> Option<RegexCaptures> {
     regex_captures_at(re, text, 0)
+}
+
+/// Extract named groups from a lookbehind content string.
+/// Returns (1-based capture index within the lookbehind, name).
+fn extract_named_groups_from_content(content: &str) -> Vec<(usize, String)> {
+    let chars: Vec<char> = content.chars().collect();
+    let len = chars.len();
+    let mut result = Vec::new();
+    let mut capture_count = 0usize;
+    let mut i = 0;
+    let mut in_cc = false;
+    while i < len {
+        match chars[i] {
+            '\\' if i + 1 < len => {
+                i += 2;
+                continue;
+            }
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '(' if !in_cc => {
+                if i + 1 < len && chars[i + 1] == '?' {
+                    if i + 2 < len
+                        && chars[i + 2] == '<'
+                        && i + 3 < len
+                        && chars[i + 3] != '='
+                        && chars[i + 3] != '!'
+                    {
+                        capture_count += 1;
+                        let name_start = i + 3;
+                        let mut name_end = name_start;
+                        while name_end < len && chars[name_end] != '>' {
+                            name_end += 1;
+                        }
+                        let name: String = chars[name_start..name_end].iter().collect();
+                        result.push((capture_count, name));
+                    }
+                } else {
+                    capture_count += 1;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    result
 }
 
 fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<RegexCaptures> {
@@ -5305,10 +5624,22 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
                 )?
             };
 
-            let names: Vec<Option<String>> = outer_regex
+            let mut names: Vec<Option<String>> = outer_regex
                 .capture_names()
                 .map(|n| n.map(|s| s.to_string()))
                 .collect();
+
+            // Add named groups from lookbehind captures
+            for lb in lookbehinds {
+                let lb_names = extract_named_groups_from_content(&lb.content);
+                for (offset, name) in lb_names {
+                    let global_idx = lb.capture_offset as usize + offset;
+                    while names.len() <= global_idx {
+                        names.push(None);
+                    }
+                    names[global_idx] = Some(name);
+                }
+            }
 
             let mut groups: Vec<Option<RegexMatch>> = Vec::new();
             for cap in &result {
@@ -5324,15 +5655,11 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
                 groups.push(None);
             }
 
-            let mut padded_names = names;
-            while padded_names.len() < groups.len() {
-                padded_names.push(None);
+            while names.len() < groups.len() {
+                names.push(None);
             }
 
-            Some(RegexCaptures {
-                groups,
-                names: padded_names,
-            })
+            Some(RegexCaptures { groups, names })
         }
     }
 }

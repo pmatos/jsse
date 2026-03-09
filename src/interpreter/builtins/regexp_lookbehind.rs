@@ -175,6 +175,34 @@ fn parse_group(chars: &[char], start: usize, gc: &mut u32, flags: &LbFlags) -> (
                         e,
                     );
                 }
+                '<' => {
+                    // Check if named capture (?<name>...) vs lookbehind (?<= or ?<!)
+                    if i + 1 < chars.len() && (chars[i + 1] == '=' || chars[i + 1] == '!') {
+                        // Lookbehind assertion — treat as non-capturing
+                        let positive = chars[i + 1] == '=';
+                        i += 2;
+                        let (c, e) = parse_seq(chars, i, gc, flags);
+                        return (
+                            LbAtom::Lookahead {
+                                positive,
+                                content: c,
+                            },
+                            e,
+                        );
+                    }
+                    // Named capture group (?<name>...)
+                    i += 1;
+                    while i < chars.len() && chars[i] != '>' {
+                        i += 1;
+                    }
+                    if i < chars.len() {
+                        i += 1; // skip '>'
+                    }
+                    *gc += 1;
+                    let num = *gc;
+                    let (content, end) = parse_seq(chars, i, gc, flags);
+                    return (LbAtom::CaptureGroup { num, content }, end);
+                }
                 _ => {
                     let (c, e) = parse_seq(chars, i, gc, flags);
                     return (LbAtom::NonCaptureGroup { content: c }, e);
@@ -1615,13 +1643,18 @@ pub fn match_with_lookbehind(
 
             for lb in lookbehinds {
                 let mut lb_caps: Vec<Option<(usize, usize)>> = Vec::new();
+
+                // If the marker group wasn't captured, this match came from
+                // an alternative that doesn't include the lookbehind — skip.
+                let marker_match = caps.get(lb.marker_group as usize);
+                if marker_match.is_none() {
+                    lb_cap_results.push(lb_caps);
+                    continue;
+                }
+
                 let atoms = parse_lb_atoms(&lb.content, &lb_flags, lb.capture_offset);
 
-                // Read marker group position to determine where to check the lookbehind
-                let marker_byte_pos = caps
-                    .get(lb.marker_group as usize)
-                    .map(|m| m.start())
-                    .unwrap_or(match_start);
+                let marker_byte_pos = marker_match.map(|m| m.start()).unwrap_or(match_start);
                 let check_pos = text[..marker_byte_pos].chars().count();
 
                 let found = match_rtl(
