@@ -18471,15 +18471,46 @@ impl Interpreter {
                 }
             };
 
-        let module = match self.load_module(&resolved) {
-            Ok(m) => m,
-            Err(e) => {
-                return self.create_rejected_promise(e);
-            }
-        };
+        // If we're NOT inside a static module load, load synchronously
+        if self.static_module_load_depth == 0 {
+            let module = match self.load_module(&resolved) {
+                Ok(m) => m,
+                Err(e) => {
+                    return self.create_rejected_promise(e);
+                }
+            };
+            let ns = self.create_module_namespace(&module);
+            return self.create_resolved_promise(ns);
+        }
 
-        let ns = self.create_module_namespace(&module);
-        self.create_resolved_promise(ns)
+        // Inside static module evaluation — defer to microtask so we don't
+        // preempt the current module's DFS evaluation order
+        let promise = self.create_promise_object();
+        let pid = if let JsValue::Object(ref o) = promise {
+            o.id
+        } else {
+            0
+        };
+        let resolved_path = resolved.clone();
+        let promise_root = promise.clone();
+
+        self.microtask_queue.push((
+            vec![promise_root],
+            Box::new(move |interp: &mut Interpreter| {
+                match interp.load_module(&resolved_path) {
+                    Ok(m) => {
+                        let ns = interp.create_module_namespace(&m);
+                        interp.fulfill_promise(pid, ns);
+                    }
+                    Err(e) => {
+                        interp.reject_promise(pid, e);
+                    }
+                }
+                Completion::Normal(JsValue::Undefined)
+            }),
+        ));
+
+        Completion::Normal(promise)
     }
 
     pub(crate) fn create_error_in_realm(

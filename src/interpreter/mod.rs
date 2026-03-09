@@ -84,6 +84,7 @@ pub struct Interpreter {
     pub(crate) async_function_states: HashMap<u64, AsyncFunctionState>,
     next_async_function_id: u64,
     pub(crate) pending_async_dispose_await: bool,
+    pub(crate) static_module_load_depth: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -200,6 +201,7 @@ impl Interpreter {
             async_function_states: HashMap::new(),
             next_async_function_id: 0,
             pending_async_dispose_await: false,
+            static_module_load_depth: 0,
         };
         interp.setup_globals();
         interp
@@ -1701,6 +1703,13 @@ impl Interpreter {
     }
 
     fn load_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        self.static_module_load_depth += 1;
+        let result = self.load_module_inner(path);
+        self.static_module_load_depth -= 1;
+        result
+    }
+
+    fn load_module_inner(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
         let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
         // Check if module is already loaded
