@@ -1474,11 +1474,11 @@ impl Interpreter {
         self.drain_microtasks();
 
         // Check if the entry module has an error (e.g. from rejected TLA await)
-        if let Some(module) = self.module_registry.get(&canon_path_entry).cloned() {
-            if let Some(err) = module.borrow().error.clone() {
-                self.current_module_path = prev_module_path;
-                return Completion::Throw(err);
-            }
+        if let Some(module) = self.module_registry.get(&canon_path_entry).cloned()
+            && let Some(err) = module.borrow().error.clone()
+        {
+            self.current_module_path = prev_module_path;
+            return Completion::Throw(err);
         }
 
         self.current_module_path = prev_module_path;
@@ -2431,7 +2431,7 @@ impl Interpreter {
             let dep_on_stack = stack.contains(&dep_canon);
 
             // Step 11.c.iii/iv: determine requiredModule for step v
-            let (req_path, req_mod) = if dep_on_stack {
+            let (_req_path, req_mod) = if dep_on_stack {
                 // iii: on stack → update dfs_ancestor_index, requiredModule stays as dep
                 let dep_ancestor = dep.dfs_ancestor_index.unwrap_or(u32::MAX);
                 drop(dep);
@@ -2478,21 +2478,15 @@ impl Interpreter {
             if pending == 0 {
                 self.execute_async_module(&canon);
             }
-        } else {
-            if let Err(e) = self.execute_module_body_sync(&canon) {
-                return Err(e);
-            }
+        } else if let Err(e) = self.execute_module_body_sync(&canon) {
+            return Err(e);
         }
 
         let my_dfs = module.borrow().dfs_index.unwrap_or(0);
         let my_ancestor = module.borrow().dfs_ancestor_index.unwrap_or(0);
         if my_dfs == my_ancestor {
             let has_async = module.borrow().async_evaluation_order.is_some();
-            loop {
-                let popped = match stack.pop() {
-                    Some(p) => p,
-                    None => break,
-                };
+            while let Some(popped) = stack.pop() {
                 if let Some(popped_mod) = self.module_registry.get(&popped).cloned() {
                     popped_mod.borrow_mut().cycle_root = Some(canon.clone());
                     if !has_async {
@@ -2592,7 +2586,7 @@ impl Interpreter {
             m.is_evaluating = false;
         }
         if let Some((_promise, _resolve, reject)) = module.borrow().top_level_capability.clone() {
-            let _ = self.call_function(&reject, &JsValue::Undefined, &[error.clone()]);
+            let _ = self.call_function(&reject, &JsValue::Undefined, std::slice::from_ref(error));
         }
         let parents = module.borrow().async_parent_modules.clone();
         for parent in parents {
@@ -2637,15 +2631,14 @@ impl Interpreter {
                             mb.evaluated = true;
                             mb.is_evaluating = false;
                         }
-                        if let Some(m) = self.module_registry.get(&ancestor).cloned() {
-                            if let Some((_p, resolve, _r)) = m.borrow().top_level_capability.clone()
-                            {
-                                let _ = self.call_function(
-                                    &resolve,
-                                    &JsValue::Undefined,
-                                    &[JsValue::Undefined],
-                                );
-                            }
+                        if let Some(m) = self.module_registry.get(&ancestor).cloned()
+                            && let Some((_p, resolve, _r)) = m.borrow().top_level_capability.clone()
+                        {
+                            let _ = self.call_function(
+                                &resolve,
+                                &JsValue::Undefined,
+                                &[JsValue::Undefined],
+                            );
                         }
                     }
                     Err(e) => {

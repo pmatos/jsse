@@ -4414,10 +4414,9 @@ fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
         }
         if let (Some(child_match), Some(parent_match)) =
             (&caps.groups[child_idx], &caps.groups[parent_idx])
+            && (child_match.start < parent_match.start || child_match.end > parent_match.end)
         {
-            if child_match.start < parent_match.start || child_match.end > parent_match.end {
-                caps.groups[child_idx] = None;
-            }
+            caps.groups[child_idx] = None;
         }
     }
     // Handle zero-width quantified non-capturing groups with min=0:
@@ -4487,11 +4486,7 @@ fn build_quantified_parent_map(source: &str) -> (Vec<(usize, usize)>, Vec<usize>
         }
 
         if chars[i] == '(' {
-            let is_capturing = if i + 1 < len && chars[i + 1] == '?' {
-                false
-            } else {
-                true
-            };
+            let is_capturing = !(i + 1 < len && chars[i + 1] == '?');
             let cap_idx = if is_capturing {
                 capture_count += 1;
                 Some(capture_count)
@@ -5119,14 +5114,14 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
                     return false;
                 }
                 // Non-capturing group (?:...) — check recursively
-                if c2 == ':' {
-                    if let Some(close) = find_matching_close(&chars[..len], i) {
-                        if !is_assertion_only_content(chars, i + 3, close) {
-                            return false;
-                        }
-                        i = close + 1;
-                        continue;
+                if c2 == ':'
+                    && let Some(close) = find_matching_close(&chars[..len], i)
+                {
+                    if !is_assertion_only_content(chars, i + 3, close) {
+                        return false;
                     }
+                    i = close + 1;
+                    continue;
                 }
                 return false;
             }
@@ -5260,8 +5255,8 @@ fn nq_body_start(chars: &[char], open: usize) -> usize {
             && chars[open + 3] != '='
             && chars[open + 3] != '!'
         {
-            for j in (open + 3)..len {
-                if chars[j] == '>' {
+            for (j, &ch) in chars.iter().enumerate().take(len).skip(open + 3) {
+                if ch == '>' {
                     return j + 1;
                 }
             }
@@ -5373,13 +5368,7 @@ fn nq_skip_quant(chars: &[char], pos: usize, end: usize) -> usize {
 }
 
 /// Mark lazy modifiers (`?` after `?` or `*`) for removal in nullable bodies.
-fn nq_mark_lazy(
-    chars: &[char],
-    start: usize,
-    end: usize,
-    close_of: &[usize],
-    remove: &mut Vec<bool>,
-) {
+fn nq_mark_lazy(chars: &[char], start: usize, end: usize, close_of: &[usize], remove: &mut [bool]) {
     let mut i = start;
     while i < end {
         let atom_end = match chars[i] {
@@ -5443,10 +5432,10 @@ fn build_regex_ex(
             let err_str = e.to_string();
             if err_str.contains("Target of repeat operator") {
                 let fixed = fix_assertion_only_quantified_groups(&tr.pattern);
-                if fixed != tr.pattern {
-                    if let Ok(r) = fancy_regex::Regex::new(&fixed) {
-                        return Ok((CompiledRegex::Fancy(r), dup_map, name_order));
-                    }
+                if fixed != tr.pattern
+                    && let Ok(r) = fancy_regex::Regex::new(&fixed)
+                {
+                    return Ok((CompiledRegex::Fancy(r), dup_map, name_order));
                 }
             }
 

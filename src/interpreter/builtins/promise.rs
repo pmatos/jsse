@@ -1149,10 +1149,10 @@ impl Interpreter {
             match self.get_object_property(o.id, "constructor", value) {
                 Completion::Normal(ctor) => {
                     let promise_ctor = self.realm().global_env.borrow().get("Promise");
-                    if let Some(ref pc) = promise_ctor {
-                        if strict_equality(&ctor, pc) {
-                            return value.clone();
-                        }
+                    if let Some(ref pc) = promise_ctor
+                        && strict_equality(&ctor, pc)
+                    {
+                        return value.clone();
                     }
                 }
                 Completion::Throw(e) => {

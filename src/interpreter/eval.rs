@@ -9089,7 +9089,7 @@ impl Interpreter {
         let mut inline_yield_sent: Option<JsValue> = initial_inline_yield_sent;
         let mut inline_yield_prev_sent: Option<Vec<JsValue>> = initial_inline_yield_prev_sent;
         let mut check_abrupt_on_resume = check_abrupt_on_resume;
-        'state_loop: loop {
+        loop {
             if check_abrupt_on_resume {
                 check_abrupt_on_resume = false;
                 // Check pending_exception before executing state (handles .throw() with no try/catch)
@@ -17940,58 +17940,61 @@ impl Interpreter {
                     // before evaluating the iterable expression
                     let mut tdz_names: Vec<String> = Vec::new();
                     let mut tdz_saved: Vec<(String, Option<(JsValue, bool)>)> = Vec::new();
-                    if let ForInOfLeft::Variable(decl) = left {
-                        if !matches!(decl.kind, VarKind::Var) {
-                            if let Some(d) = decl.declarations.first() {
-                                fn collect_pattern_names(p: &Pattern, out: &mut Vec<String>) {
-                                    match p {
-                                        Pattern::Identifier(n) => out.push(n.clone()),
-                                        Pattern::Object(props) => {
-                                            for prop in props {
-                                                match prop {
-                                                    crate::ast::ObjectPatternProperty::KeyValue(_, p) => {
-                                                        collect_pattern_names(p, out);
-                                                    }
-                                                    crate::ast::ObjectPatternProperty::Shorthand(n) => {
-                                                        out.push(n.clone());
-                                                    }
-                                                    crate::ast::ObjectPatternProperty::Rest(p) => {
-                                                        collect_pattern_names(p, out);
-                                                    }
+                    if let ForInOfLeft::Variable(decl) = left
+                        && !matches!(decl.kind, VarKind::Var)
+                    {
+                        if let Some(d) = decl.declarations.first() {
+                            fn collect_pattern_names(p: &Pattern, out: &mut Vec<String>) {
+                                match p {
+                                    Pattern::Identifier(n) => out.push(n.clone()),
+                                    Pattern::Object(props) => {
+                                        for prop in props {
+                                            match prop {
+                                                crate::ast::ObjectPatternProperty::KeyValue(
+                                                    _,
+                                                    p,
+                                                ) => {
+                                                    collect_pattern_names(p, out);
+                                                }
+                                                crate::ast::ObjectPatternProperty::Shorthand(n) => {
+                                                    out.push(n.clone());
+                                                }
+                                                crate::ast::ObjectPatternProperty::Rest(p) => {
+                                                    collect_pattern_names(p, out);
                                                 }
                                             }
                                         }
-                                        Pattern::Array(elems) => {
-                                            for elem in elems {
-                                                if let Some(e) = elem {
-                                                    match e {
-                                                        crate::ast::ArrayPatternElement::Pattern(p) => collect_pattern_names(p, out),
-                                                        crate::ast::ArrayPatternElement::Rest(p) => collect_pattern_names(p, out),
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        Pattern::Assign(inner, _) => {
-                                            collect_pattern_names(inner, out)
-                                        }
-                                        Pattern::Rest(inner) => collect_pattern_names(inner, out),
-                                        Pattern::MemberExpression(_) => {}
                                     }
+                                    Pattern::Array(elems) => {
+                                        for e in elems.iter().flatten() {
+                                            match e {
+                                                crate::ast::ArrayPatternElement::Pattern(p) => {
+                                                    collect_pattern_names(p, out)
+                                                }
+                                                crate::ast::ArrayPatternElement::Rest(p) => {
+                                                    collect_pattern_names(p, out)
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Pattern::Assign(inner, _) => collect_pattern_names(inner, out),
+                                    Pattern::Rest(inner) => collect_pattern_names(inner, out),
+                                    Pattern::MemberExpression(_) => {}
                                 }
-                                collect_pattern_names(&d.pattern, &mut tdz_names);
                             }
-                            // Save current binding state, then declare as uninitialized
-                            for name in &tdz_names {
-                                let saved = {
-                                    let env = func_env.borrow();
-                                    env.bindings
-                                        .get(name)
-                                        .map(|b| (b.value.clone(), b.initialized))
-                                };
-                                tdz_saved.push((name.clone(), saved));
-                                func_env.borrow_mut().declare(name, BindingKind::Let);
-                                // declare sets initialized=false for Let, creating TDZ
-                            }
+                            collect_pattern_names(&d.pattern, &mut tdz_names);
+                        }
+                        // Save current binding state, then declare as uninitialized
+                        for name in &tdz_names {
+                            let saved = {
+                                let env = func_env.borrow();
+                                env.bindings
+                                    .get(name)
+                                    .map(|b| (b.value.clone(), b.initialized))
+                            };
+                            tdz_saved.push((name.clone(), saved));
+                            func_env.borrow_mut().declare(name, BindingKind::Let);
+                            // declare sets initialized=false for Let, creating TDZ
                         }
                     }
 

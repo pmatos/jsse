@@ -232,7 +232,7 @@ fn transform_generator_inner_opts(
     if is_async
         && analysis.yield_points.is_empty()
         && !body.iter().any(contains_suspension)
-        && !(detect_for_await && body.iter().any(|s| stmt_contains_for_await(s)))
+        && (!detect_for_await || !body.iter().any(stmt_contains_for_await))
         && !body.iter().any(stmt_contains_return)
         && !body.iter().any(has_block_with_await_using)
     {
@@ -354,12 +354,11 @@ fn stmt_contains_return(stmt: &Statement) -> bool {
 }
 
 fn stmt_has_suspension(stmt: &Statement, is_async: bool, detect_for_await: bool) -> bool {
-    if detect_for_await {
-        if let Statement::ForOf(f) = stmt {
-            if f.is_await {
-                return true;
-            }
-        }
+    if detect_for_await
+        && let Statement::ForOf(f) = stmt
+        && f.is_await
+    {
+        return true;
     }
     if is_async {
         contains_suspension(stmt)
@@ -404,10 +403,9 @@ fn transform_statements(stmts: &[Statement], ctx: &mut TransformContext, after_s
             // Return statements in async generators need Return terminators
             // for proper Return(None) vs Return(Some) tick distinction
             transform_yielding_statement(stmt, ctx, next_after);
-        } else if ctx.is_async && has_block_with_await_using(stmt) {
-            transform_yielding_statement(stmt, ctx, next_after);
-        } else if matches!(stmt, Statement::Break(_) | Statement::Continue(_))
-            && !ctx.break_targets.is_empty()
+        } else if (ctx.is_async && has_block_with_await_using(stmt))
+            || (matches!(stmt, Statement::Break(_) | Statement::Continue(_))
+                && !ctx.break_targets.is_empty())
         {
             transform_yielding_statement(stmt, ctx, next_after);
         } else {

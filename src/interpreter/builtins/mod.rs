@@ -8726,7 +8726,10 @@ impl Interpreter {
                 };
                 let resolved_canon = module_path.canonicalize().unwrap_or(module_path.clone());
                 let mut stack = vec![];
-                if let Err(_) = interp.inner_module_evaluation(&resolved_canon, &mut stack, 0) {
+                if interp
+                    .inner_module_evaluation(&resolved_canon, &mut stack, 0)
+                    .is_err()
+                {
                     interp.current_realm_id = old_realm;
                     let err = interp.create_error_in_realm(
                         caller_realm_id,

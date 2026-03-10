@@ -1416,16 +1416,16 @@ impl Interpreter {
                                 };
 
                                 // Step 4: If v undefined and initializer present, evaluate
-                                if v.is_undefined() {
-                                    if let Some(dflt) = default_expr {
-                                        v = match self.eval_expr(dflt, env) {
-                                            Completion::Normal(v) => v,
-                                            Completion::Throw(e) => return Err(e),
-                                            _ => JsValue::Undefined,
-                                        };
-                                        if dflt.is_anonymous_function_definition() {
-                                            self.set_function_name(&v, binding_name);
-                                        }
+                                if v.is_undefined()
+                                    && let Some(dflt) = default_expr
+                                {
+                                    v = match self.eval_expr(dflt, env) {
+                                        Completion::Normal(v) => v,
+                                        Completion::Throw(e) => return Err(e),
+                                        _ => JsValue::Undefined,
+                                    };
+                                    if dflt.is_anonymous_function_definition() {
+                                        self.set_function_name(&v, binding_name);
                                     }
                                 }
 
