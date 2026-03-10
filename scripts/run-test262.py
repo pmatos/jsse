@@ -522,7 +522,7 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
 
     test_dir = test262_dir / "test"
     tests = []
-    for subdir in ("language", "built-ins", "annexB"):
+    for subdir in ("language", "built-ins", "annexB", "intl402", "staging"):
         d = test_dir / subdir
         if d.is_dir():
             tests.extend(f for f in d.rglob("*.js") if not _is_fixture(f))
