@@ -24,6 +24,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from abc import ABC, abstractmethod
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
@@ -133,7 +134,8 @@ class JsseAdapter(EngineAdapter):
 
 class NodeAdapter(EngineAdapter):
     def build_command(self, test_file, tmp_path, harness_files, is_module, flags=None):
-        return [self.binary, tmp_path]
+        prelude = Path(__file__).parent / "node-test262-prelude.js"
+        return [self.binary, "--expose-gc", "--require", str(prelude), tmp_path]
 
     def needs_harness_in_source(self, is_module):
         return True
@@ -143,6 +145,11 @@ class NodeAdapter(EngineAdapter):
 
     def skip_module(self):
         return True
+
+    def setup_preexec(self):
+        mem_limit = 4 * 1024 * 1024 * 1024  # 4 GB — V8 needs ~2GB to start
+        resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
+        _set_pdeathsig()
 
 
 class BoaAdapter(EngineAdapter):
@@ -319,12 +326,12 @@ def build_test_source(
 
 def run_single_test(
     args: tuple[str, str, str, int, str, str, str],
-) -> tuple[str, bool, str]:
+) -> tuple[str, bool, str, float]:
     """Run a single test scenario.
 
     Args tuple: (scenario_id, test_file_str, mode, timeout, test262_dir_str,
                   engine_name, engine_binary)
-    Returns: (scenario_id, passed, skip_reason)
+    Returns: (scenario_id, passed, skip_reason, duration_secs)
     """
     scenario_id, test_file_str, mode, timeout, test262_dir_str, engine_name, engine_binary = args
     test_file = Path(test_file_str)
@@ -336,7 +343,7 @@ def run_single_test(
         with open(test_file, encoding="utf-8", errors="replace", newline="") as f:
             head = f.read(8192)
     except OSError:
-        return (scenario_id, False, "read_error")
+        return (scenario_id, False, "read_error", 0.0)
 
     metadata = parse_frontmatter(head)
     flags = metadata.get("flags", [])
@@ -346,7 +353,7 @@ def run_single_test(
     negative = metadata.get("negative")
 
     if is_module and adapter.skip_module():
-        return (scenario_id, False, "skip_module")
+        return (scenario_id, False, "skip_module", 0.0)
 
     harness_files = get_harness_files(metadata, test262_dir, is_module, is_async)
     concat_harness = adapter.needs_harness_in_source(is_module)
@@ -356,7 +363,7 @@ def run_single_test(
         try:
             combined = build_test_source(test_file, metadata, test262_dir, mode)
         except OSError:
-            return (scenario_id, False, "harness_error")
+            return (scenario_id, False, "harness_error", 0.0)
 
         with tempfile.NamedTemporaryFile(
             mode="w", suffix=".js", delete=False, encoding="utf-8",
@@ -367,6 +374,7 @@ def run_single_test(
 
     cmd = adapter.build_command(test_file, tmp_path, harness_files, is_module, flags)
 
+    t0 = time.perf_counter()
     try:
         result = subprocess.run(
             cmd,
@@ -374,21 +382,24 @@ def run_single_test(
             capture_output=True,
             preexec_fn=adapter.setup_preexec,
         )
+        duration = time.perf_counter() - t0
         exit_code = result.returncode
     except subprocess.TimeoutExpired:
+        duration = time.perf_counter() - t0
         if tmp_path:
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-        return (scenario_id, False, "timeout")
+        return (scenario_id, False, "timeout", duration)
     except OSError:
+        duration = time.perf_counter() - t0
         if tmp_path:
             try:
                 os.unlink(tmp_path)
             except OSError:
                 pass
-        return (scenario_id, False, "exec_error")
+        return (scenario_id, False, "exec_error", duration)
     finally:
         if tmp_path:
             try:
@@ -415,7 +426,7 @@ def run_single_test(
     else:
         passed = exit_code == 0
 
-    return (scenario_id, passed, "")
+    return (scenario_id, passed, "", duration)
 
 
 # ---------------------------------------------------------------------------
@@ -617,6 +628,7 @@ def main():
     done = 0
     pass_list: list[str] = []
     fail_list: list[str] = []
+    timings: dict[str, float] = {}
 
     work = [
         (
@@ -634,7 +646,7 @@ def main():
     with ProcessPoolExecutor(max_workers=args.jobs, initializer=_worker_init) as pool:
         futures = {pool.submit(run_single_test, w): w for w in work}
         for future in as_completed(futures):
-            scenario_id, test_passed, skip_reason = future.result()
+            scenario_id, test_passed, skip_reason, duration = future.result()
             done += 1
             if skip_reason.startswith("skip_"):
                 skipped += 1
@@ -644,6 +656,8 @@ def main():
             else:
                 failed += 1
                 fail_list.append(scenario_id)
+            if not skip_reason.startswith("skip_"):
+                timings[scenario_id] = round(duration, 3)
             if done % 1000 == 0:
                 run = passed + failed
                 pct = (passed / run * 100) if run else 0
@@ -703,6 +717,18 @@ def main():
 
     fail_list.sort()
     fail_file.write_text("\n".join(fail_list) + "\n")
+
+    # Print 10 slowest tests
+    if timings:
+        slowest = sorted(timings.items(), key=lambda x: x[1], reverse=True)[:10]
+        print("\n--- 10 Slowest Tests ---")
+        for sid, dur in slowest:
+            print(f"  {dur:7.3f}s  {sid}")
+
+    # Write timing JSON
+    timing_file = Path(f"/tmp/timing-{engine_name}.json")
+    timing_file.write_text(json.dumps(timings, indent=2) + "\n")
+    print(f"\nTiming data written to {timing_file}")
 
     print()
     json_obj = {

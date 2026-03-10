@@ -99,12 +99,83 @@ cargo build --release
 uv run python scripts/run-test262.py
 ```
 
-Options: `-j <n>` for parallelism (default: nproc), `--timeout <s>` (default: 120).
+Options: `-j <n>` for parallelism (default: nproc/2), `--timeout <s>` (default: 120).
 
 The runner supports multiple engines via `--engine`:
 
 ```bash
-uv run python scripts/run-test262.py --engine node     # test node
-uv run python scripts/run-test262.py --engine boa       # test boa
 uv run python scripts/run-test262.py --engine jsse      # default
+uv run python scripts/run-test262.py --engine node --binary /path/to/node
+uv run python scripts/run-test262.py --engine boa --binary /path/to/boa
 ```
+
+Per-test timing data is written to `/tmp/timing-{engine}.json` after each run.
+
+## Engine Comparison (test262)
+
+Benchmark run on 2026-03-10 using `scripts/run-test262.py -j 64 --timeout 120` on a 128-core machine. All three engines ran the same test262 checkout (commit at `test262/`) with the same harness, timeout, and scenario expansion.
+
+| Engine | Version | Scenarios | Run | Skip | Pass | Fail | Rate |
+|--------|---------|-----------|-----|------|------|------|------|
+| **JSSE** | latest (commit 29a72a7) | 91,986 | 91,986 | 0 | 91,986 | 0 | **100.00%** |
+| **Boa** | v0.21 | 91,986 | 91,986 | 0 | 83,260 | 8,726 | **90.51%** |
+| **Node** | v25.8.0 | 91,986 | 91,187 | 799 | 79,201 | 11,986 | **86.86%** |
+
+### Failure breakdown
+
+| Category | Node v25.8.0 | Boa v0.21 |
+|----------|-------------|-----------|
+| Temporal | 8,980 | 0 |
+| Atomics/agent | 236 | 0 |
+| Dynamic import | 162 | 594 |
+| RegExp property escapes | — | 284 |
+| Class elements/destructuring | — | 960+ |
+| AssignmentTargetType | — | 608 |
+
+### Caveats
+
+- **Node**: 75% of its failures are Temporal (not shipped in Node 25). Module tests (799 scenarios) are skipped — the adapter can't run ES modules via Node. Some Atomics agent tests time out due to the basic `$262.agent` prelude. Node runs under a 4GB `RLIMIT_AS` (V8 requires ~2GB to start).
+- **Boa**: Main gaps are parser-level (assignment target validation, class destructuring, regexp property escapes). Temporal and Atomics tests pass (Boa handles them internally).
+- **JSSE**: Full pass across all categories including Temporal, Atomics, modules, and staging tests.
+
+### Reproducing the comparison
+
+**Prerequisites:**
+- Rust nightly toolchain
+- Python 3.10+ with [uv](https://github.com/astral-sh/uv)
+- `test262/` submodule initialized (`git submodule update --init`)
+
+**1. Build JSSE:**
+```bash
+cargo build --release
+```
+
+**2. Download Node.js v25.8.0:**
+```bash
+curl -sL "https://nodejs.org/dist/v25.8.0/node-v25.8.0-linux-x64.tar.xz" \
+  | tar -xJ -C /tmp/
+# Binary: /tmp/node-v25.8.0-linux-x64/bin/node
+```
+
+**3. Download Boa v0.21:**
+```bash
+curl -sL "https://github.com/boa-dev/boa/releases/download/v0.21/boa-x86_64-unknown-linux-gnu" \
+  -o /tmp/boa-v0.21
+chmod +x /tmp/boa-v0.21
+```
+
+**4. Run each engine** (sequentially to avoid resource contention):
+```bash
+# JSSE (~15-20 min at -j 64)
+uv run python scripts/run-test262.py -j 64
+
+# Node v25.8.0 (~10 min at -j 64)
+uv run python scripts/run-test262.py --engine node \
+  --binary /tmp/node-v25.8.0-linux-x64/bin/node -j 64
+
+# Boa v0.21 (~5 min at -j 64)
+uv run python scripts/run-test262.py --engine boa \
+  --binary /tmp/boa-v0.21 -j 64
+```
+
+Results are printed to stdout. Per-test timing JSON is written to `/tmp/timing-{engine}.json`. Pass/fail lists are written to `test262-pass-{engine}.txt` and `/tmp/test262-fail-{engine}.txt`.
