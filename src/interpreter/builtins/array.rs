@@ -1488,7 +1488,10 @@ impl Interpreter {
                         n += 1;
                     }
                 }
-                set_length(interp, &a, n);
+                if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::Number(n as f64)) {
+                    interp.gc_unroot_value(&a);
+                    return Completion::Throw(e);
+                }
                 interp.gc_unroot_value(&a);
                 Completion::Normal(a)
             },
@@ -1573,7 +1576,10 @@ impl Interpreter {
                     }
                     n += 1;
                 }
-                set_length(interp, &a, n);
+                if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::Number(n as f64)) {
+                    interp.gc_unroot_value(&a);
+                    return Completion::Throw(e);
+                }
                 interp.gc_unroot_value(&a);
                 Completion::Normal(a)
             },
@@ -1794,7 +1800,10 @@ impl Interpreter {
                         _ => {}
                     }
                 }
-                set_length(interp, &a, len);
+                if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::Number(len as f64)) {
+                    interp.gc_unroot_value(&a);
+                    return Completion::Throw(e);
+                }
                 interp.gc_unroot_value(&a);
                 Completion::Normal(a)
             },
@@ -1870,7 +1879,10 @@ impl Interpreter {
                         _ => {}
                     }
                 }
-                set_length(interp, &a, to);
+                if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::Number(to as f64)) {
+                    interp.gc_unroot_value(&a);
+                    return Completion::Throw(e);
+                }
                 interp.gc_unroot_value(&a);
                 Completion::Normal(a)
             },
@@ -2730,10 +2742,14 @@ impl Interpreter {
                 }
                 // Write back
                 for (i, v) in items.iter().enumerate() {
-                    obj_set(interp, &o, &i.to_string(), v.clone());
+                    if let Err(e) = obj_set_throw(interp, &o, &i.to_string(), v.clone()) {
+                        return Completion::Throw(e);
+                    }
                 }
                 for i in items.len()..len {
-                    obj_delete(interp, &o, &i.to_string());
+                    if let Err(e) = obj_delete_throw(interp, &o, &i.to_string()) {
+                        return Completion::Throw(e);
+                    }
                 }
                 Completion::Normal(o)
             },

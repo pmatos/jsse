@@ -947,6 +947,7 @@ impl Interpreter {
                             has_parameter_expressions: false,
                             has_simple_params: true,
                             is_simple_catch_scope: false,
+                            is_derived_constructor_scope: false,
                             indirect_bindings: None,
                             module_path: None,
                         }));
@@ -1015,6 +1016,7 @@ impl Interpreter {
             Statement::ClassDeclaration(cd) => {
                 let class_val = self.eval_class(
                     &cd.name,
+                    &cd.name,
                     &cd.super_class,
                     &cd.body,
                     env,
@@ -1073,6 +1075,7 @@ impl Interpreter {
                 {
                     match self.eval_class(
                         name,
+                        "",
                         &ce.super_class,
                         &ce.body,
                         env,

@@ -966,21 +966,17 @@ impl Interpreter {
                             }
                             let (len, val) = if let Some(arr_obj) = interp.get_object(array_id) {
                                 let borrowed = arr_obj.borrow();
-                                let len = borrowed
-                                    .array_elements
-                                    .as_ref()
-                                    .map(|e| e.len())
-                                    .unwrap_or_else(|| {
-                                        if let Some(ref ta) = borrowed.typed_array_info {
-                                            typed_array_length(ta)
-                                        } else if let Some(JsValue::Number(n)) =
-                                            borrowed.get_property_value("length")
-                                        {
-                                            n as usize
-                                        } else {
-                                            0
-                                        }
-                                    });
+                                let len = if let Some(ref ta) = borrowed.typed_array_info {
+                                    typed_array_length(ta)
+                                } else if let Some(JsValue::Number(n)) =
+                                    borrowed.get_property_value("length")
+                                {
+                                    n as usize
+                                } else if let Some(ref elems) = borrowed.array_elements {
+                                    elems.len()
+                                } else {
+                                    0
+                                };
                                 if index >= len {
                                     (len, None)
                                 } else {
@@ -1468,10 +1464,7 @@ impl Interpreter {
                             counter += 1.0;
                         }
                         Ok(None) => break,
-                        Err(e) => {
-                            let _ = iterator_close_getter(interp, &iter);
-                            return Completion::Throw(e);
-                        }
+                        Err(e) => return Completion::Throw(e),
                     }
                 }
                 Completion::Normal(JsValue::Undefined)
@@ -1528,10 +1521,7 @@ impl Interpreter {
                             counter += 1.0;
                         }
                         Ok(None) => return Completion::Normal(JsValue::Boolean(false)),
-                        Err(e) => {
-                            let _ = iterator_close_getter(interp, &iter);
-                            return Completion::Throw(e);
-                        }
+                        Err(e) => return Completion::Throw(e),
                     }
                 }
             },
@@ -1586,10 +1576,7 @@ impl Interpreter {
                             counter += 1.0;
                         }
                         Ok(None) => return Completion::Normal(JsValue::Boolean(true)),
-                        Err(e) => {
-                            let _ = iterator_close_getter(interp, &iter);
-                            return Completion::Throw(e);
-                        }
+                        Err(e) => return Completion::Throw(e),
                     }
                 }
             },
@@ -1644,10 +1631,7 @@ impl Interpreter {
                             counter += 1.0;
                         }
                         Ok(None) => return Completion::Normal(JsValue::Undefined),
-                        Err(e) => {
-                            let _ = iterator_close_getter(interp, &iter);
-                            return Completion::Throw(e);
-                        }
+                        Err(e) => return Completion::Throw(e),
                     }
                 }
             },
@@ -1691,10 +1675,7 @@ impl Interpreter {
                                 interp.create_type_error("Reduce of empty iterator with no initial value");
                             return Completion::Throw(err);
                         }
-                        Err(e) => {
-                            let _ = iterator_close_getter(interp, &iter);
-                            return Completion::Throw(e);
-                        }
+                        Err(e) => return Completion::Throw(e),
                     }
                 }
                 loop {
@@ -1719,10 +1700,7 @@ impl Interpreter {
                             counter += 1.0;
                         }
                         Ok(None) => return Completion::Normal(accumulator),
-                        Err(e) => {
-                            let _ = iterator_close_getter(interp, &iter);
-                            return Completion::Throw(e);
-                        }
+                        Err(e) => return Completion::Throw(e),
                     }
                 }
             },
@@ -3736,18 +3714,7 @@ impl Interpreter {
             PropertyDescriptor::data(throw_fn, true, false, true),
         );
 
-        // Symbol.iterator returns this
-        let iter_self_fn = self.create_function(JsFunction::native(
-            "[Symbol.iterator]".to_string(),
-            0,
-            |_interp, this, _args| Completion::Normal(this.clone()),
-        ));
-        if let Some(key) = self.get_symbol_iterator_key() {
-            gen_proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(iter_self_fn, true, false, true),
-            );
-        }
+        // @@iterator is inherited from %IteratorPrototype%
 
         // Symbol.toStringTag
         gen_proto.borrow_mut().insert_property(

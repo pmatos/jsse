@@ -1052,6 +1052,21 @@ impl<'a> Parser<'a> {
                             is_await,
                         }));
                     }
+                    // Duplicate lexical bindings: for (let [z, z] = ...; ...)
+                    {
+                        let mut names = Vec::new();
+                        for d in &decls {
+                            Self::collect_bound_names(&d.pattern, &mut names);
+                        }
+                        let mut seen = std::collections::HashSet::new();
+                        for name in &names {
+                            if !seen.insert(name.clone()) {
+                                return Err(self.error(&format!(
+                                    "Identifier '{name}' has already been declared"
+                                )));
+                            }
+                        }
+                    }
                     Some(ForInit::Variable(VariableDeclaration {
                         kind,
                         declarations: decls,
@@ -1111,6 +1126,28 @@ impl<'a> Parser<'a> {
                         body,
                         is_await,
                     }));
+                }
+                // §14.3.1.1: const declarations must have initializers
+                if kind == VarKind::Const {
+                    for d in &decls {
+                        if d.init.is_none() {
+                            return Err(self.error("Missing initializer in const declaration"));
+                        }
+                    }
+                }
+                // Duplicate lexical bindings: for (let [z, z] = ...; ...)
+                {
+                    let mut names = Vec::new();
+                    for d in &decls {
+                        Self::collect_bound_names(&d.pattern, &mut names);
+                    }
+                    let mut seen = std::collections::HashSet::new();
+                    for name in &names {
+                        if !seen.insert(name.clone()) {
+                            return Err(self
+                                .error(&format!("Identifier '{name}' has already been declared")));
+                        }
+                    }
                 }
                 Some(ForInit::Variable(VariableDeclaration {
                     kind,

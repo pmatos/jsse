@@ -1,7 +1,7 @@
 use super::super::*;
 use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
 
-fn is_ecma_whitespace(ch: char) -> bool {
+pub(crate) fn is_ecma_whitespace(ch: char) -> bool {
     matches!(
         ch,
         '\u{0009}'
@@ -1175,7 +1175,7 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let source = if args.is_empty() {
+                    let source = if matches!(regexp, JsValue::Undefined) {
                         String::new()
                     } else {
                         match to_str(interp, &regexp) {

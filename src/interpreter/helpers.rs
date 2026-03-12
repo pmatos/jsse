@@ -617,6 +617,12 @@ pub(crate) fn enumerable_own_keys(
                 result.push(i.to_string());
             }
         }
+        // TypedArray [[OwnPropertyKeys]]: virtual indexed properties are enumerable
+        if let Some(ref ta) = b.typed_array_info {
+            for i in 0..ta.array_length {
+                result.push(i.to_string());
+            }
+        }
         let is_string_wrapper = matches!(b.primitive_value, Some(JsValue::String(_)));
         let keys: Vec<String> = b
             .property_order
@@ -635,7 +641,7 @@ pub(crate) fn enumerable_own_keys(
             })
             .cloned()
             .collect();
-        if is_string_wrapper {
+        if !result.is_empty() {
             result.extend(sort_own_keys(keys));
             return Ok(result);
         }
@@ -1052,11 +1058,17 @@ fn json_parse_value_inner(
         let unescaped = json_unescape_string(inner);
         return Completion::Normal(JsValue::String(JsString::from_str(&unescaped)));
     }
-    if let Ok(n) = s.parse::<f64>() {
-        return Completion::Normal(JsValue::Number(n));
+    if json_is_valid_number(s) {
+        if let Ok(n) = s.parse::<f64>() {
+            return Completion::Normal(JsValue::Number(n));
+        }
     }
     if s.starts_with('[') && s.ends_with(']') {
         let inner = &s[1..s.len() - 1];
+        if json_has_invalid_comma(inner) {
+            let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
+            return Completion::Throw(err);
+        }
         let items = json_split_items(inner);
         let mut parsed_items: Vec<(JsValue, String)> = Vec::new();
         for item in &items {
@@ -1082,6 +1094,10 @@ fn json_parse_value_inner(
     }
     if s.starts_with('{') && s.ends_with('}') {
         let inner = &s[1..s.len() - 1];
+        if json_has_invalid_comma(inner) {
+            let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
+            return Completion::Throw(err);
+        }
         let pairs = json_split_items(inner);
         let obj = interp.create_object();
         let obj_id = obj.borrow().id.unwrap();
@@ -1090,34 +1106,37 @@ fn json_parse_value_inner(
             if pair.is_empty() {
                 continue;
             }
-            if let Some(colon_pos) = find_json_colon(pair) {
-                let key_str = pair[..colon_pos].trim();
-                let val_str = pair[colon_pos + 1..].trim();
-                let key =
-                    if key_str.starts_with('"') && key_str.ends_with('"') && key_str.len() >= 2 {
-                        let inner = &key_str[1..key_str.len() - 1];
-                        if json_validate_string(inner).is_err() {
-                            let err =
-                                interp.create_error("SyntaxError", "Unexpected token in JSON");
-                            return Completion::Throw(err);
-                        }
-                        json_unescape_string(inner)
-                    } else {
-                        let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
-                        return Completion::Throw(err);
-                    };
-                let val_src = json_trim(val_str).to_string();
-                match json_parse_value_inner(interp, val_str, source_map.as_deref_mut()) {
-                    Completion::Normal(v) => {
-                        if let Some(ref mut smap) = source_map
-                            && is_json_primitive(&v)
-                        {
-                            smap.insert((obj_id, key.clone()), val_src);
-                        }
-                        obj.borrow_mut().insert_value(key, v);
-                    }
-                    other => return other,
+            let colon_pos = match find_json_colon(pair) {
+                Some(pos) => pos,
+                None => {
+                    let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
+                    return Completion::Throw(err);
                 }
+            };
+            let key_str = pair[..colon_pos].trim();
+            let val_str = pair[colon_pos + 1..].trim();
+            let key = if key_str.starts_with('"') && key_str.ends_with('"') && key_str.len() >= 2 {
+                let inner = &key_str[1..key_str.len() - 1];
+                if json_validate_string(inner).is_err() {
+                    let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
+                    return Completion::Throw(err);
+                }
+                json_unescape_string(inner)
+            } else {
+                let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
+                return Completion::Throw(err);
+            };
+            let val_src = json_trim(val_str).to_string();
+            match json_parse_value_inner(interp, val_str, source_map.as_deref_mut()) {
+                Completion::Normal(v) => {
+                    if let Some(ref mut smap) = source_map
+                        && is_json_primitive(&v)
+                    {
+                        smap.insert((obj_id, key.clone()), val_src);
+                    }
+                    obj.borrow_mut().insert_value(key, v);
+                }
+                other => return other,
             }
         }
         return Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }));
@@ -1286,6 +1305,15 @@ fn json_internalize_apply(
         if let JsValue::Undefined = &new_val {
             obj.borrow_mut().properties.remove(key);
             obj.borrow_mut().property_order.retain(|k| k != key);
+            // Also clear dense array storage so get_property doesn't find stale values
+            if let Ok(idx) = key.parse::<usize>() {
+                let mut b = obj.borrow_mut();
+                if let Some(ref mut elems) = b.array_elements {
+                    if idx < elems.len() {
+                        elems[idx] = JsValue::Undefined;
+                    }
+                }
+            }
         } else {
             obj.borrow_mut().insert_value(key.to_string(), new_val);
         }
@@ -1400,6 +1428,105 @@ pub(crate) fn json_internalize(
     };
     let key_val = JsValue::String(JsString::from_str(name));
     interp.call_function(reviver, holder, &[key_val, walked, context])
+}
+
+fn json_is_valid_number(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return false;
+    }
+    let mut i = 0;
+    if bytes[i] == b'-' {
+        i += 1;
+        if i >= bytes.len() {
+            return false;
+        }
+    }
+    if bytes[i] == b'0' {
+        i += 1;
+        // Leading zeros: "01", "00" etc. are invalid JSON
+        if i < bytes.len() && bytes[i].is_ascii_digit() {
+            return false;
+        }
+    } else if bytes[i].is_ascii_digit() {
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+    } else {
+        return false;
+    }
+    if i < bytes.len() && bytes[i] == b'.' {
+        i += 1;
+        if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+            return false;
+        }
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+        i += 1;
+        if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+            i += 1;
+        }
+        if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+            return false;
+        }
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    i == bytes.len()
+}
+
+fn json_has_invalid_comma(inner: &str) -> bool {
+    let trimmed = json_trim(inner);
+    if trimmed.is_empty() {
+        return false;
+    }
+    let mut depth = 0i32;
+    let mut in_string = false;
+    let mut escape = false;
+    let mut prev_was_comma = true; // true initially to detect leading comma
+    for ch in inner.chars() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if ch == '\\' && in_string {
+            escape = true;
+            continue;
+        }
+        if ch == '"' {
+            in_string = !in_string;
+            prev_was_comma = false;
+            continue;
+        }
+        if in_string {
+            continue;
+        }
+        match ch {
+            '[' | '{' => {
+                depth += 1;
+                prev_was_comma = false;
+            }
+            ']' | '}' => {
+                depth -= 1;
+                prev_was_comma = false;
+            }
+            ',' if depth == 0 => {
+                if prev_was_comma {
+                    return true; // double comma or leading comma
+                }
+                prev_was_comma = true;
+            }
+            ' ' | '\t' | '\n' | '\r' => {}
+            _ => {
+                prev_was_comma = false;
+            }
+        }
+    }
+    prev_was_comma // trailing comma
 }
 
 pub(crate) fn json_split_items(s: &str) -> Vec<String> {
@@ -1560,19 +1687,19 @@ pub(crate) fn week_day(t: f64) -> f64 {
 }
 
 pub(crate) fn hour_from_time(t: f64) -> f64 {
-    (time_within_day(t) / 3_600_000.0).floor().rem_euclid(24.0)
+    (time_within_day(t) / 3_600_000.0).floor().rem_euclid(24.0) + 0.0
 }
 
 pub(crate) fn min_from_time(t: f64) -> f64 {
-    (time_within_day(t) / 60_000.0).floor().rem_euclid(60.0)
+    (time_within_day(t) / 60_000.0).floor().rem_euclid(60.0) + 0.0
 }
 
 pub(crate) fn sec_from_time(t: f64) -> f64 {
-    (time_within_day(t) / 1000.0).floor().rem_euclid(60.0)
+    (time_within_day(t) / 1000.0).floor().rem_euclid(60.0) + 0.0
 }
 
 pub(crate) fn ms_from_time(t: f64) -> f64 {
-    time_within_day(t).rem_euclid(1000.0)
+    time_within_day(t).rem_euclid(1000.0) + 0.0
 }
 
 pub(crate) fn make_time(hour: f64, min: f64, sec: f64, ms: f64) -> f64 {

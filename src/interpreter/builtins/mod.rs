@@ -10,7 +10,7 @@ mod number;
 mod promise;
 pub(crate) mod regexp;
 mod regexp_lookbehind;
-mod string;
+pub(crate) mod string;
 mod temporal;
 mod typedarray;
 
@@ -517,6 +517,17 @@ impl Interpreter {
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 }),
             );
+            // Mark Error constructor as deferred_construct so construct_with_new_target
+            // doesn't do an early prototype lookup (the constructor body handles it via
+            // get_prototype_from_new_target_realm, per spec §20.5.1.1 step 2).
+            let env = self.realm().global_env.borrow();
+            if let Some(error_val) = env.get("Error")
+                && let JsValue::Object(o) = &error_val
+                && let Some(func_obj) = self.get_object(o.id)
+            {
+                func_obj.borrow_mut().deferred_construct = true;
+            }
+            drop(env);
         }
 
         // Get Error.prototype for inheritance
@@ -822,6 +833,7 @@ impl Interpreter {
                             false,
                         ),
                     );
+                    ctor_obj.borrow_mut().deferred_construct = true;
                 }
             }
         }
@@ -1582,7 +1594,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let mut radix = crate::interpreter::types::to_int32_modular(radix_num);
-                let s = s.trim();
+                let s = s.trim_matches(crate::interpreter::builtins::string::is_ecma_whitespace);
                 let (negative, s) = if let Some(rest) = s.strip_prefix('-') {
                     (true, rest)
                 } else if let Some(rest) = s.strip_prefix('+') {
@@ -1642,7 +1654,7 @@ impl Interpreter {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
-                let s = s.trim();
+                let s = s.trim_matches(crate::interpreter::builtins::string::is_ecma_whitespace);
                 if s.is_empty() {
                     return Completion::Normal(JsValue::Number(f64::NAN));
                 }
@@ -1967,8 +1979,8 @@ impl Interpreter {
             let fn_val = self.create_function(JsFunction::native(
                 name.to_string(),
                 1,
-                move |_interp, _this, args| {
-                    let x = args.first().map(to_number).unwrap_or(f64::NAN);
+                move |interp, _this, args| {
+                    let x = interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined));
                     Completion::Normal(JsValue::Number(op(x)))
                 },
             ));
@@ -1980,8 +1992,8 @@ impl Interpreter {
         let round_fn = self.create_function(JsFunction::native(
             "round".to_string(),
             1,
-            |_interp, _this, args| {
-                let x = args.first().map(to_number).unwrap_or(f64::NAN);
+            |interp, _this, args| {
+                let x = interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined));
                 let result = if x.is_nan() || x.is_infinite() || x == 0.0 {
                     x
                 } else if (-0.5..0.0).contains(&x) {
@@ -2075,9 +2087,9 @@ impl Interpreter {
         let pow_fn = self.create_function(JsFunction::native(
             "pow".to_string(),
             2,
-            |_interp, _this, args| {
-                let base = args.first().map(to_number).unwrap_or(f64::NAN);
-                let exp = args.get(1).map(to_number).unwrap_or(f64::NAN);
+            |interp, _this, args| {
+                let base = interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined));
+                let exp = interp.to_number_coerce(args.get(1).unwrap_or(&JsValue::Undefined));
                 Completion::Normal(JsValue::Number(number_ops::exponentiate(base, exp)))
             },
         ));
@@ -2099,9 +2111,9 @@ impl Interpreter {
         let atan2_fn = self.create_function(JsFunction::native(
             "atan2".to_string(),
             2,
-            |_interp, _this, args| {
-                let y = args.first().map(to_number).unwrap_or(f64::NAN);
-                let x = args.get(1).map(to_number).unwrap_or(f64::NAN);
+            |interp, _this, args| {
+                let y = interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined));
+                let x = interp.to_number_coerce(args.get(1).unwrap_or(&JsValue::Undefined));
                 Completion::Normal(JsValue::Number(y.atan2(x)))
             },
         ));
@@ -2176,8 +2188,8 @@ impl Interpreter {
         let fround_fn = self.create_function(JsFunction::native(
             "fround".to_string(),
             1,
-            |_interp, _this, args| {
-                let x = args.first().map(to_number).unwrap_or(f64::NAN);
+            |interp, _this, args| {
+                let x = interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined));
                 Completion::Normal(JsValue::Number((x as f32) as f64))
             },
         ));
@@ -2189,8 +2201,8 @@ impl Interpreter {
         let clz32_fn = self.create_function(JsFunction::native(
             "clz32".to_string(),
             1,
-            |_interp, _this, args| {
-                let x = args.first().map(to_number).unwrap_or(0.0);
+            |interp, _this, args| {
+                let x = interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined));
                 let n = number_ops::to_uint32(x);
                 Completion::Normal(JsValue::Number(n.leading_zeros() as f64))
             },
@@ -2231,8 +2243,8 @@ impl Interpreter {
             let fn_val = self.create_function(JsFunction::native(
                 name.to_string(),
                 1,
-                move |_interp, _this, args| {
-                    let x = args.first().map(to_number).unwrap_or(f64::NAN);
+                move |interp, _this, args| {
+                    let x = interp.to_number_coerce(args.first().unwrap_or(&JsValue::Undefined));
                     Completion::Normal(JsValue::Number(op(x)))
                 },
             ));
@@ -2496,6 +2508,12 @@ impl Interpreter {
                     }
                 },
             ));
+            // Parse-before-getprototype: body is parsed before prototype lookup
+            if let JsValue::Object(ref fo) = fn_ctor_fn
+                && let Some(func_obj) = self.get_object(fo.id)
+            {
+                func_obj.borrow_mut().deferred_construct = true;
+            }
             let global_env = self.realm().global_env.clone();
             global_env
                 .borrow_mut()
@@ -2952,6 +2970,8 @@ impl Interpreter {
             if let JsValue::Object(af_obj) = &af_ctor
                 && let Some(af) = self.get_object(af_obj.id)
             {
+                // Parse-before-getprototype: body is parsed before prototype lookup
+                af.borrow_mut().deferred_construct = true;
                 // §27.7.1 %AsyncFunction% inherits from %Function%
                 let function_ctor = self
                     .realm()
@@ -3084,6 +3104,7 @@ impl Interpreter {
             if let JsValue::Object(gf_obj) = &gf_ctor
                 && let Some(gf) = self.get_object(gf_obj.id)
             {
+                gf.borrow_mut().deferred_construct = true;
                 // §27.3.1 %GeneratorFunction% inherits from %Function%
                 let function_ctor = self
                     .realm()
@@ -3218,6 +3239,7 @@ impl Interpreter {
             if let JsValue::Object(agf_obj) = &agf_ctor
                 && let Some(agf) = self.get_object(agf_obj.id)
             {
+                agf.borrow_mut().deferred_construct = true;
                 // §27.4.1 %AsyncGeneratorFunction% inherits from %Function%
                 let function_ctor = self
                     .realm()
@@ -3524,10 +3546,14 @@ impl Interpreter {
                                     interp.create_range_error(&format!("Invalid code point {cp}")),
                                 );
                             }
-                            if let Some(c) = char::from_u32(cp as u32) {
+                            let cp = cp as u32;
+                            if let Some(c) = char::from_u32(cp) {
                                 let mut buf = [0u16; 2];
                                 let encoded = c.encode_utf16(&mut buf);
                                 code_units.extend_from_slice(encoded);
+                            } else {
+                                // Lone surrogate: push directly as a code unit
+                                code_units.push(cp as u16);
                             }
                         }
                         Completion::Normal(JsValue::String(JsString { code_units }))
@@ -4445,13 +4471,9 @@ impl Interpreter {
                         ));
                     }
                     let key_raw = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    let key = if matches!(key_raw, JsValue::Symbol(_)) {
-                        to_property_key_string(&key_raw)
-                    } else {
-                        match interp.to_string_value(&key_raw) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
-                        }
+                    let key = match interp.to_property_key(&key_raw) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
                     };
                     let desc_val = args.get(2).cloned().unwrap_or(JsValue::Undefined);
                     if let JsValue::Object(ref o) = target
@@ -4468,7 +4490,13 @@ impl Interpreter {
                         let obj = interp.get_object(o.id).unwrap();
                         // Proxy defineProperty trap
                         let res = { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked }; if res {
-                            match interp.proxy_define_own_property(o.id, key, &desc_val) {
+                            // Re-parse descriptor so proxy trap gets a fresh copy with coerced booleans
+                            let reparsed_desc = match interp.to_property_descriptor(&desc_val) {
+                                Ok(pd) => interp.from_property_descriptor(&pd),
+                                Err(Some(e)) => return Completion::Throw(e),
+                                Err(None) => desc_val.clone(),
+                            };
+                            match interp.proxy_define_own_property(o.id, key, &reparsed_desc) {
                                 Ok(success) => {
                                     if !success {
                                         return Completion::Throw(interp.create_type_error(
@@ -4556,13 +4584,9 @@ impl Interpreter {
                         _ => return Completion::Normal(JsValue::Undefined),
                     };
                     let key_raw = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    let key = if matches!(key_raw, JsValue::Symbol(_)) {
-                        to_property_key_string(&key_raw)
-                    } else {
-                        match interp.to_string_value(&key_raw) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
-                        }
+                    let key = match interp.to_property_key(&key_raw) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
                     };
                     if let JsValue::Object(ref o) = target {
                         // Deferred namespace: trigger evaluation on [[GetOwnProperty]] with non-symbol-like key
@@ -4679,37 +4703,52 @@ impl Interpreter {
                         for k in &extra_str_keys {
                             result.push(JsValue::String(JsString::from_str(k)));
                         }
-                        let mut int_keys: Vec<(u64, String)> = Vec::new();
-                        let mut str_keys: Vec<String> = Vec::new();
-                        for kv in &all_keys {
-                            if let JsValue::String(s) = kv {
-                                let k = s.to_rust_string();
-                                if extra_str_keys.contains(&k) {
-                                    continue;
+                        let is_proxy = interp
+                            .get_object(obj_id)
+                            .map_or(false, |ob| ob.borrow().is_proxy());
+                        if is_proxy {
+                            // Proxy: preserve ownKeys trap order (spec §10.5.11)
+                            for kv in &all_keys {
+                                if let JsValue::String(s) = kv {
+                                    let k = s.to_rust_string();
+                                    if !k.starts_with("Symbol(") && !extra_str_keys.contains(&k) {
+                                        result.push(JsValue::String(JsString::from_str(&k)));
+                                    }
                                 }
-                                if k.starts_with("Symbol(") {
-                                    continue;
-                                }
-                                if let Ok(n) = k.parse::<u64>() {
-                                    if n.to_string() == k {
-                                        int_keys.push((n, k));
+                            }
+                        } else {
+                            let mut int_keys: Vec<(u64, String)> = Vec::new();
+                            let mut str_keys: Vec<String> = Vec::new();
+                            for kv in &all_keys {
+                                if let JsValue::String(s) = kv {
+                                    let k = s.to_rust_string();
+                                    if extra_str_keys.contains(&k) {
+                                        continue;
+                                    }
+                                    if k.starts_with("Symbol(") {
+                                        continue;
+                                    }
+                                    if let Ok(n) = k.parse::<u64>() {
+                                        if n.to_string() == k {
+                                            int_keys.push((n, k));
+                                        } else {
+                                            str_keys.push(k);
+                                        }
                                     } else {
                                         str_keys.push(k);
                                     }
-                                } else {
-                                    str_keys.push(k);
                                 }
                             }
+                            int_keys.sort_by_key(|(n, _)| *n);
+                            for (_, k) in int_keys {
+                                result.push(JsValue::String(JsString::from_str(&k)));
+                            }
+                            result.extend(
+                                str_keys
+                                    .iter()
+                                    .map(|k| JsValue::String(JsString::from_str(k))),
+                            );
                         }
-                        int_keys.sort_by_key(|(n, _)| *n);
-                        for (_, k) in int_keys {
-                            result.push(JsValue::String(JsString::from_str(&k)));
-                        }
-                        result.extend(
-                            str_keys
-                                .iter()
-                                .map(|k| JsValue::String(JsString::from_str(k))),
-                        );
                         // For each string key call [[GetOwnProperty]] and filter enumerable
                         let mut enum_keys: Vec<JsValue> = Vec::new();
                         // Extra char index keys are always enumerable (string exotic)
@@ -6150,30 +6189,18 @@ impl Interpreter {
                                 Err(None) => {}
                             }
                         }
-                        // Apply all descriptors
+                        // Apply all descriptors via proxy-aware defineOwnProperty
                         for (key, desc) in descriptors {
-                            let is_array = if let Some(target_obj) = interp.get_object(t.id) {
-                                target_obj.borrow().class_name == "Array"
-                            } else {
-                                false
-                            };
-
-                            if is_array {
-                                match interp.array_define_own_property(t.id as usize, &key, desc) {
-                                    Ok(true) => {}
-                                    Ok(false) => {
-                                        return Completion::Throw(interp.create_type_error(
-                                            "Cannot define property, object is not extensible or property is non-configurable",
-                                        ));
-                                    }
-                                    Err(e) => return Completion::Throw(e),
-                                }
-                            } else if let Some(target_obj) = interp.get_object(t.id)
-                                && !target_obj.borrow_mut().define_own_property(key, desc) {
+                            let desc_val = interp.from_property_descriptor(&desc);
+                            match interp.proxy_define_own_property(t.id, key, &desc_val) {
+                                Ok(true) => {}
+                                Ok(false) => {
                                     return Completion::Throw(interp.create_type_error(
                                         "Cannot define property, object is not extensible or property is non-configurable",
                                     ));
                                 }
+                                Err(e) => return Completion::Throw(e),
+                            }
                         }
                     }
                     Completion::Normal(target)
@@ -7098,7 +7125,7 @@ impl Interpreter {
             Completion::Throw(e) => return Err(e),
             _ => JsValue::Undefined,
         };
-        let n = to_number(&len_val);
+        let n = self.to_number_value(&len_val)?;
         let len = if n.is_nan() || n <= 0.0 {
             0u64
         } else {
@@ -7226,7 +7253,13 @@ impl Interpreter {
                         _b.is_proxy() || _b.proxy_revoked
                     };
                     if res {
-                        match interp.proxy_define_own_property(o.id, key, &desc_val) {
+                        // Re-parse descriptor so proxy trap gets a fresh copy with coerced booleans
+                        let reparsed_desc = match interp.to_property_descriptor(&desc_val) {
+                            Ok(pd) => interp.from_property_descriptor(&pd),
+                            Err(Some(e)) => return Completion::Throw(e),
+                            Err(None) => desc_val.clone(),
+                        };
+                        match interp.proxy_define_own_property(o.id, key, &reparsed_desc) {
                             Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
                         }
@@ -7330,6 +7363,15 @@ impl Interpreter {
                     }
                     obj_mut.properties.remove(&key);
                     obj_mut.property_order.retain(|k| k != &key);
+                    if let Some(ref mut map) = obj_mut.parameter_map {
+                        map.remove(&key);
+                    }
+                    if let Ok(idx) = key.parse::<usize>()
+                        && let Some(ref mut elems) = obj_mut.array_elements
+                        && idx < elems.len()
+                    {
+                        elems[idx] = JsValue::Undefined;
+                    }
                     return Completion::Normal(JsValue::Boolean(true));
                 }
                 Completion::Normal(JsValue::Boolean(false))
@@ -8417,10 +8459,40 @@ impl Interpreter {
                 let func = this_val.clone();
 
                 // Spec §20.2.3.2: HasOwnProperty(Target, "length"), then Get, then type check
-                let target_length_f64: f64 = if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let has_own_length = obj.borrow().get_own_property("length").is_some();
+                // For proxy targets, use invoke_proxy_trap to trigger getOwnPropertyDescriptor
+                let target_length_f64: f64 = if let JsValue::Object(o) = this_val {
+                    let is_proxy = interp
+                        .get_object(o.id)
+                        .map_or(false, |obj| obj.borrow().is_proxy());
+                    let has_own_length = if is_proxy {
+                        match interp.invoke_proxy_trap(
+                            o.id,
+                            "getOwnPropertyDescriptor",
+                            vec![
+                                interp.get_proxy_target_val(o.id),
+                                JsValue::String(crate::types::JsString {
+                                    code_units: "length".encode_utf16().collect(),
+                                }),
+                            ],
+                        ) {
+                            Ok(Some(v)) => !matches!(v, JsValue::Undefined),
+                            Ok(None) => {
+                                let target_val = interp.get_proxy_target_val(o.id);
+                                if let JsValue::Object(t) = &target_val
+                                    && let Some(target_obj) = interp.get_object(t.id)
+                                {
+                                    target_obj.borrow().get_own_property("length").is_some()
+                                } else {
+                                    false
+                                }
+                            }
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else if let Some(obj) = interp.get_object(o.id) {
+                        obj.borrow().get_own_property("length").is_some()
+                    } else {
+                        false
+                    };
                     if has_own_length {
                         match interp.get_object_property(o.id, "length", this_val) {
                             Completion::Normal(JsValue::Number(n)) => {
@@ -8496,6 +8568,12 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = result
                     && let Some(obj) = interp.get_object(o.id)
                 {
+                    // §20.2.3.2 step 4-5: Set bound function's [[Prototype]] to target's [[Prototype]]
+                    if let JsValue::Object(target_o) = this_val
+                        && let Some(target_obj) = interp.get_object(target_o.id)
+                    {
+                        obj.borrow_mut().prototype = target_obj.borrow().prototype.clone();
+                    }
                     // Per spec, bound functions do not have own .prototype property
                     obj.borrow_mut().properties.remove("prototype");
                     obj.borrow_mut().property_order.retain(|k| k != "prototype");

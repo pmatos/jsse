@@ -1228,7 +1228,18 @@ impl Interpreter {
                         interp.create_range_error("Date outside valid ISO range"),
                     );
                 }
-                create_plain_year_month_result(interp, y, m, rd, &cal)
+                let result = create_plain_year_month_result(interp, y, m, rd, &cal);
+                if let Completion::Normal(JsValue::Object(ref o)) = result {
+                    let dp = interp
+                        .realm()
+                        .temporal_plain_year_month_prototype
+                        .as_ref()
+                        .and_then(|p| p.borrow().id);
+                    interp.apply_new_target_prototype(o.id, dp, |r| {
+                        r.temporal_plain_year_month_prototype.clone()
+                    });
+                }
+                result
             },
         ));
 

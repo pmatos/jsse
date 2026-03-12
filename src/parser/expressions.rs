@@ -500,6 +500,7 @@ impl<'a> Parser<'a> {
                     | Expression::Typeof(_)
                     | Expression::Void(_)
                     | Expression::Delete(_)
+                    | Expression::Await(_)
             );
             let is_parenthesized = self.source.as_bytes().get(start) == Some(&b'(');
             if is_unary && !is_parenthesized {
@@ -658,6 +659,11 @@ impl<'a> Parser<'a> {
                     expr = Expression::Member(Box::new(expr), prop);
                 }
                 Token::LeftBracket => {
+                    // In class field initializers, [ after a line terminator starts a new
+                    // class element (ASI inserts ; before the [)
+                    if self.in_class_field_initializer && self.prev_line_terminator {
+                        break;
+                    }
                     self.advance()?;
                     let prop = self.parse_expression()?;
                     self.eat(&Token::RightBracket)?;
@@ -1172,6 +1178,9 @@ impl<'a> Parser<'a> {
                 let s = s.clone();
                 self.last_string_literal_has_escape = self.lexer.last_string_has_escape;
                 self.last_string_literal_has_legacy_octal = self.lexer.last_string_has_legacy_octal;
+                if self.strict && self.lexer.last_string_has_legacy_octal {
+                    return Err(self.error("Octal escape sequences are not allowed in strict mode"));
+                }
                 self.advance()?;
                 Ok(Expression::Literal(Literal::String(s)))
             }
@@ -1510,6 +1519,7 @@ impl<'a> Parser<'a> {
                         | Token::NumericLiteral(_)
                         | Token::LegacyOctalLiteral(_)
                         | Token::NonOctalDecimalLiteral(_)
+                        | Token::BigIntLiteral(_)
                         | Token::LeftBracket
                         | Token::Keyword(_)
                         | Token::PrivateName(_)
@@ -1529,13 +1539,13 @@ impl<'a> Parser<'a> {
                     }
                     self.in_static_block = false;
                     self.allow_super_property = true;
+                    self.in_non_arrow_function += 1;
                     let params = self.parse_formal_parameters()?;
                     self.in_async = prev_async;
                     self.in_generator = prev_generator;
                     self.in_static_block = prev_static_block;
                     self.allow_super_property = prev_super_property;
                     self.set_function_param_names(&params);
-                    self.in_non_arrow_function += 1;
                     let (body, body_strict) =
                         self.parse_function_body_inner(is_generator, true, true, false)?;
                     self.in_non_arrow_function -= 1;
@@ -1584,6 +1594,7 @@ impl<'a> Parser<'a> {
                             | Token::NumericLiteral(_)
                             | Token::LegacyOctalLiteral(_)
                             | Token::NonOctalDecimalLiteral(_)
+                            | Token::BigIntLiteral(_)
                             | Token::LeftBracket
                             | Token::Keyword(_)
                             | Token::PrivateName(_)
@@ -1610,12 +1621,12 @@ impl<'a> Parser<'a> {
             self.in_generator = true;
             self.in_static_block = false;
             self.allow_super_property = true;
+            self.in_non_arrow_function += 1;
             let params = self.parse_formal_parameters()?;
             self.in_generator = prev_generator;
             self.in_static_block = prev_static_block;
             self.allow_super_property = prev_super_property;
             self.set_function_param_names(&params);
-            self.in_non_arrow_function += 1;
             let (body, body_strict) = self.parse_function_body_inner(true, false, true, false)?;
             self.in_non_arrow_function -= 1;
             if body_strict && !Self::is_simple_parameter_list(&params) {
@@ -1667,6 +1678,7 @@ impl<'a> Parser<'a> {
                     | Token::NumericLiteral(_)
                     | Token::LegacyOctalLiteral(_)
                     | Token::NonOctalDecimalLiteral(_)
+                    | Token::BigIntLiteral(_)
                     | Token::LeftBracket
                     | Token::Keyword(_)
                     | Token::PrivateName(_)
@@ -1680,16 +1692,23 @@ impl<'a> Parser<'a> {
                 }
                 let prev_static_block = self.in_static_block;
                 self.in_static_block = false;
+                self.in_non_arrow_function += 1;
                 let params = self.parse_formal_parameters()?;
                 self.in_static_block = prev_static_block;
                 if saved_kind == PropertyKind::Get && !params.is_empty() {
                     return Err(self.error("Getter must not have any formal parameters"));
                 }
-                if saved_kind == PropertyKind::Set && params.len() != 1 {
-                    return Err(self.error("Setter must have exactly one formal parameter"));
+                if saved_kind == PropertyKind::Set {
+                    if params.len() != 1 {
+                        return Err(self.error("Setter must have exactly one formal parameter"));
+                    }
+                    if matches!(params[0], Pattern::Rest(_)) {
+                        return Err(
+                            self.error("Setter function argument must not be a rest parameter")
+                        );
+                    }
                 }
                 self.set_function_param_names(&params);
-                self.in_non_arrow_function += 1;
                 let (body, body_strict) =
                     self.parse_function_body_inner(false, false, true, false)?;
                 self.in_non_arrow_function -= 1;
@@ -1739,6 +1758,7 @@ impl<'a> Parser<'a> {
                     | Token::NumericLiteral(_)
                     | Token::LegacyOctalLiteral(_)
                     | Token::NonOctalDecimalLiteral(_)
+                    | Token::BigIntLiteral(_)
                     | Token::LeftBracket
                     | Token::Keyword(_)
                     | Token::PrivateName(_)
@@ -1867,11 +1887,11 @@ impl<'a> Parser<'a> {
             let prev_super_property = self.allow_super_property;
             self.in_static_block = false;
             self.allow_super_property = true;
+            self.in_non_arrow_function += 1;
             let params = self.parse_formal_parameters()?;
             self.in_static_block = prev_static_block;
             self.allow_super_property = prev_super_property;
             self.set_function_param_names(&params);
-            self.in_non_arrow_function += 1;
             let (body, body_strict) = self.parse_function_body_inner(false, false, true, false)?;
             self.in_non_arrow_function -= 1;
             if body_strict && !Self::is_simple_parameter_list(&params) {
@@ -1932,11 +1952,14 @@ impl<'a> Parser<'a> {
             None
         };
         self.in_generator = is_generator;
+        self.in_non_arrow_function += 1;
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
         self.in_static_block = prev_static_block;
         self.set_function_param_names(&params);
-        let (body, body_strict) = self.parse_function_body_with_context(is_generator, false)?;
+        let (body, body_strict) =
+            self.parse_function_body_inner(is_generator, false, false, false)?;
+        self.in_non_arrow_function -= 1;
         if body_strict && !Self::is_simple_parameter_list(&params) {
             return Err(self.error(
                 "Illegal 'use strict' directive in function with non-simple parameter list",
@@ -1986,11 +2009,14 @@ impl<'a> Parser<'a> {
         } else {
             None
         };
+        self.in_non_arrow_function += 1;
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
         self.in_async = prev_async;
         self.set_function_param_names(&params);
-        let (body, body_strict) = self.parse_function_body_with_context(is_generator, true)?;
+        let (body, body_strict) =
+            self.parse_function_body_inner(is_generator, true, false, false)?;
+        self.in_non_arrow_function -= 1;
         if body_strict && !Self::is_simple_parameter_list(&params) {
             return Err(self.error(
                 "Illegal 'use strict' directive in function with non-simple parameter list",

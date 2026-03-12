@@ -529,13 +529,16 @@ impl<'a> Lexer<'a> {
                         return Err(self.error("Invalid Unicode escape"));
                     }
                     if (0xD800..=0xDFFF).contains(&val) {
-                        return Err(self.error("Invalid Unicode code point"));
-                    }
-                    let c = char::from_u32(val)
-                        .ok_or_else(|| self.error("Invalid Unicode code point"))?;
-                    let mut buf = [0u16; 2];
-                    for cu in c.encode_utf16(&mut buf).iter() {
-                        out.push(*cu);
+                        // Lone surrogates are valid in string literals — they
+                        // become lone surrogate code units.
+                        out.push(val as u16);
+                    } else {
+                        let c = char::from_u32(val)
+                            .ok_or_else(|| self.error("Invalid Unicode code point"))?;
+                        let mut buf = [0u16; 2];
+                        for cu in c.encode_utf16(&mut buf).iter() {
+                            out.push(*cu);
+                        }
                     }
                     return Ok(());
                 }
@@ -1084,7 +1087,9 @@ impl<'a> Lexer<'a> {
         self.column = state.3;
         self.token_start = state.4;
         self.had_line_terminator = state.5;
-        self.chars = self.source[self.offset..].chars();
+        // self.current holds the char at self.offset, so chars must start AFTER it
+        let skip = self.current.map_or(0, |c| c.len_utf8());
+        self.chars = self.source[self.offset + skip..].chars();
     }
 
     pub fn next_token(&mut self) -> Result<Token, LexError> {

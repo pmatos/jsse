@@ -1892,13 +1892,12 @@ impl Interpreter {
                             }
                         } else { false };
                         if done { break; }
+                        // Per IteratorStepValue, if accessing .value throws, the error
+                        // propagates directly without closing the iterator.
                         let value = if let JsValue::Object(ro) = &next_result {
                             match interp.get_object_property(ro.id, "value", &next_result) {
                                 Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    interp.iterator_close(&iterator, e.clone());
-                                    return Completion::Throw(e);
-                                }
+                                Completion::Throw(e) => return Completion::Throw(e),
                                 other => return other,
                             }
                         } else { JsValue::Undefined };
@@ -2289,23 +2288,25 @@ impl Interpreter {
                             other => return other,
                         };
 
+                        // IteratorStep: access .done via getter-aware Get (not raw get_property)
+                        // Per spec, if accessing .done throws, the error propagates directly
+                        // without closing the iterator.
                         let done = if let JsValue::Object(ro) = &next_result {
-                            if let Some(result_obj) = interp.get_object(ro.id) {
-                                let d = result_obj.borrow().get_property("done");
-                                matches!(d, JsValue::Boolean(true))
-                            } else { false }
+                            match interp.get_object_property(ro.id, "done", &next_result) {
+                                Completion::Normal(d) => interp.to_boolean_val(&d),
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => false,
+                            }
                         } else { false };
 
                         if done { break; }
 
-                        // §24.3.1.1 step 9d: Get value via Get (invokes getters)
+                        // §24.3.1.1 step 9d: Get value via Get (invokes getters).
+                        // If accessing .value throws, the error propagates without closing the iterator.
                         let value = if let JsValue::Object(ro) = &next_result {
                             match interp.get_object_property(ro.id, "value", &next_result) {
                                 Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    let e2 = interp.iterator_close(&iterator, e);
-                                    return Completion::Throw(e2);
-                                }
+                                Completion::Throw(e) => return Completion::Throw(e),
                                 other => return other,
                             }
                         } else { JsValue::Undefined };
@@ -2567,17 +2568,26 @@ impl Interpreter {
                             other => return other,
                         };
 
-                        let (done, _) = extract_iter_result(interp, &next_result);
+                        if !matches!(next_result, JsValue::Object(_)) {
+                            return Completion::Throw(interp.create_type_error("Iterator result is not an object"));
+                        }
+
+                        // Use getter-aware property access for done/value.
+                        // Per IteratorStepValue, errors from .done/.value propagate
+                        // directly without closing the iterator.
+                        let done = if let JsValue::Object(ro) = &next_result {
+                            match interp.get_object_property(ro.id, "done", &next_result) {
+                                Completion::Normal(d) => interp.to_boolean_val(&d),
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => false,
+                            }
+                        } else { false };
                         if done { break; }
 
-                        // §24.4.1.1 step 9d: Get value via Get (invokes getters)
                         let value = if let JsValue::Object(ro) = &next_result {
                             match interp.get_object_property(ro.id, "value", &next_result) {
                                 Completion::Normal(v) => v,
-                                Completion::Throw(e) => {
-                                    let e2 = interp.iterator_close(&iterator, e);
-                                    return Completion::Throw(e2);
-                                }
+                                Completion::Throw(e) => return Completion::Throw(e),
                                 other => return other,
                             }
                         } else {

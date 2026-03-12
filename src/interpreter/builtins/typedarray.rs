@@ -3629,8 +3629,18 @@ impl Interpreter {
                     false
                 };
 
+                // Step 5: Let arrayLike be ! ToObject(source).
+                let source_obj = match interp.to_object(&source) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Completion::Throw(e),
+                    _ => {
+                        return Completion::Throw(
+                            interp.create_type_error("Cannot convert undefined or null to object"),
+                        );
+                    }
+                };
                 // Collect source values (iterable or array-like)
-                let values = interp.collect_iterable_or_arraylike(&source);
+                let values = interp.collect_iterable_or_arraylike(&source_obj);
                 let values = match values {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -4852,6 +4862,11 @@ impl Interpreter {
                         Completion::Throw(e) => return Err(Completion::Throw(e)),
                         _ => break,
                     };
+                    if !matches!(result, JsValue::Object(_)) {
+                        return Err(Completion::Throw(
+                            self.create_type_error("Iterator result is not an object"),
+                        ));
+                    }
                     if let JsValue::Object(ro) = &result {
                         let done = match self.get_object_property(ro.id, "done", &result) {
                             Completion::Normal(v) => self.to_boolean_val(&v),

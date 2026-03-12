@@ -2285,7 +2285,19 @@ impl Interpreter {
                         interp.create_range_error("DateTime outside valid ISO range"),
                     );
                 }
-                create_plain_date_time_result(interp, y, m, d, h, mi, s, ms, us, ns, &cal)
+                let result =
+                    create_plain_date_time_result(interp, y, m, d, h, mi, s, ms, us, ns, &cal);
+                if let Completion::Normal(JsValue::Object(ref o)) = result {
+                    let dp = interp
+                        .realm()
+                        .temporal_plain_date_time_prototype
+                        .as_ref()
+                        .and_then(|p| p.borrow().id);
+                    interp.apply_new_target_prototype(o.id, dp, |r| {
+                        r.temporal_plain_date_time_prototype.clone()
+                    });
+                }
+                result
             },
         ));
 

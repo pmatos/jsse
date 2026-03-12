@@ -244,14 +244,65 @@ fn escape_regexp_pattern_code_units(code_units: &[u16]) -> JsString {
         return JsString::from_str("(?:)");
     }
     let mut result: Vec<u16> = Vec::with_capacity(code_units.len());
-    for &cu in code_units {
+    let mut i = 0;
+    let len = code_units.len();
+    let mut in_char_class = false;
+    while i < len {
+        let cu = code_units[i];
         match cu {
-            0x002F => result.extend_from_slice(&[0x005C, 0x002F]), // / -> \/
-            0x000A => result.extend_from_slice(&[0x005C, 0x006E]), // LF -> \n
-            0x000D => result.extend_from_slice(&[0x005C, 0x0072]), // CR -> \r
-            0x2028 => result.extend_from_slice(&[0x005C, 0x0075, 0x0032, 0x0030, 0x0032, 0x0038]),
-            0x2029 => result.extend_from_slice(&[0x005C, 0x0075, 0x0032, 0x0030, 0x0032, 0x0039]),
-            _ => result.push(cu),
+            0x005C => {
+                result.push(cu);
+                i += 1;
+                if i < len {
+                    let next = code_units[i];
+                    match next {
+                        0x000A => result.extend_from_slice(&[0x006E]),
+                        0x000D => result.extend_from_slice(&[0x0072]),
+                        0x2028 => {
+                            result.extend_from_slice(&[0x0075, 0x0032, 0x0030, 0x0032, 0x0038])
+                        }
+                        0x2029 => {
+                            result.extend_from_slice(&[0x0075, 0x0032, 0x0030, 0x0032, 0x0039])
+                        }
+                        _ => result.push(next),
+                    }
+                    i += 1;
+                }
+            }
+            0x005B if !in_char_class => {
+                in_char_class = true;
+                result.push(cu);
+                i += 1;
+            }
+            0x005D if in_char_class => {
+                in_char_class = false;
+                result.push(cu);
+                i += 1;
+            }
+            0x002F if !in_char_class => {
+                result.extend_from_slice(&[0x005C, 0x002F]);
+                i += 1;
+            }
+            0x000A => {
+                result.extend_from_slice(&[0x005C, 0x006E]);
+                i += 1;
+            }
+            0x000D => {
+                result.extend_from_slice(&[0x005C, 0x0072]);
+                i += 1;
+            }
+            0x2028 => {
+                result.extend_from_slice(&[0x005C, 0x0075, 0x0032, 0x0030, 0x0032, 0x0038]);
+                i += 1;
+            }
+            0x2029 => {
+                result.extend_from_slice(&[0x005C, 0x0075, 0x0032, 0x0030, 0x0032, 0x0039]);
+                i += 1;
+            }
+            _ => {
+                result.push(cu);
+                i += 1;
+            }
         }
     }
     JsString { code_units: result }
@@ -2128,7 +2179,8 @@ pub(super) fn translate_js_pattern_ex(
                     } else if next == 'S' {
                         let js_ws = "\\x{09}\\x{0A}\\x{0B}\\x{0C}\\x{0D}\\x{20}\\x{A0}\\x{1680}\\x{2000}-\\x{200A}\\x{2028}\\x{2029}\\x{202F}\\x{205F}\\x{3000}\\x{FEFF}";
                         if in_char_class {
-                            result.push_str("\\S");
+                            // Complement of JS whitespace as explicit ranges
+                            result.push_str("\\x{00}-\\x{08}\\x{0E}-\\x{1F}\\x{21}-\\x{9F}\\x{A1}-\\x{167F}\\x{1681}-\\x{1FFF}\\x{200B}-\\x{2027}\\x{202A}-\\x{202E}\\x{2030}-\\x{205E}\\x{2060}-\\x{2FFF}\\x{3001}-\\x{FEFE}\\x{FF00}-\\x{10FFFF}");
                         } else {
                             result.push_str("[^");
                             result.push_str(js_ws);
@@ -2756,12 +2808,10 @@ fn expand_property_to_char_class(
     };
 
     if in_char_class {
-        // Inside a [...], just insert ranges inline
         for &(lo, hi) in ranges_to_use {
             append_unicode_range(result, lo, hi);
         }
     } else {
-        // Outside a char class, wrap in [...]
         result.push('[');
         for &(lo, hi) in ranges_to_use {
             append_unicode_range(result, lo, hi);
@@ -4404,7 +4454,8 @@ fn strip_renamed_qi_captures(caps: &mut RegexCaptures) {
 /// When a quantified group iterates multiple times, captures from inner groups that don't
 /// participate in the final iteration must be reset to undefined.
 fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
-    let (parent_map, zero_width_clears) = build_quantified_parent_map(source);
+    let (parent_map, zero_width_clears, self_quantified_min_zero, nc_quantified_branches) =
+        build_quantified_parent_map(source);
     // Handle standard case: child capture outside parent capture bounds
     for (child_group, parent_group) in &parent_map {
         let child_idx = *child_group;
@@ -4419,6 +4470,38 @@ fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
             caps.groups[child_idx] = None;
         }
     }
+    // Handle non-capturing quantified groups with alternation.
+    // Per spec §22.2.2.5.1 RepeatMatcher: captures are cleared at the start of each iteration.
+    // The Rust regex engine doesn't do this, so we detect which alternation branch matched
+    // in the last iteration and clear captures from all other branches.
+    for branches in &nc_quantified_branches {
+        // Find which branch has the highest max_end → that branch matched in the last iteration
+        let mut best_branch_idx = None;
+        let mut best_max_end: usize = 0;
+        for (bi, branch) in branches.iter().enumerate() {
+            for &ci in branch {
+                if ci < caps.groups.len() {
+                    if let Some(ref m) = caps.groups[ci] {
+                        if m.end > best_max_end {
+                            best_max_end = m.end;
+                            best_branch_idx = Some(bi);
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(best_bi) = best_branch_idx {
+            for (bi, branch) in branches.iter().enumerate() {
+                if bi != best_bi {
+                    for &ci in branch {
+                        if ci < caps.groups.len() {
+                            caps.groups[ci] = None;
+                        }
+                    }
+                }
+            }
+        }
+    }
     // Handle zero-width quantified non-capturing groups with min=0:
     // Per spec §22.2.2.5.1 RepeatMatcher step 2.b, when min=0 and the iteration
     // matches empty string, it returns failure. For groups containing only
@@ -4427,6 +4510,20 @@ fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
     for child_idx in &zero_width_clears {
         if *child_idx < caps.groups.len() {
             caps.groups[*child_idx] = None;
+        }
+    }
+    // Handle self-quantified capturing groups with min=0 that matched empty.
+    // Per spec §22.2.2.5.1 RepeatMatcher step 2.b: when min=0 and the atom
+    // matched empty, the quantifier succeeds without consuming and the capture
+    // should be undefined. The regex crate reports these as Some("") matches
+    // but ES spec requires undefined.
+    for cap_idx in &self_quantified_min_zero {
+        if *cap_idx < caps.groups.len() {
+            if let Some(ref m) = caps.groups[*cap_idx] {
+                if m.start == m.end {
+                    caps.groups[*cap_idx] = None;
+                }
+            }
         }
     }
 }
@@ -4438,11 +4535,20 @@ fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
 /// - parent_map: Vec<(child_capture, parent_capture)> for bounds-based clearing
 /// - zero_width_clears: Vec<child_capture> for captures inside zero-width
 ///   quantified groups with min=0 that must always be cleared
-fn build_quantified_parent_map(source: &str) -> (Vec<(usize, usize)>, Vec<usize>) {
+fn build_quantified_parent_map(
+    source: &str,
+) -> (
+    Vec<(usize, usize)>,
+    Vec<usize>,
+    Vec<usize>,
+    Vec<Vec<Vec<usize>>>,
+) {
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
     let mut result = Vec::new();
     let mut zero_width_clears: Vec<usize> = Vec::new();
+    let mut self_quantified_min_zero: Vec<usize> = Vec::new();
+    let mut nc_quantified_branches: Vec<Vec<Vec<usize>>> = Vec::new();
 
     // First pass: identify all groups (capturing and non-capturing), their nesting, and which are quantified
     #[derive(Clone)]
@@ -4717,7 +4823,155 @@ fn build_quantified_parent_map(source: &str) -> (Vec<(usize, usize)>, Vec<usize>
         );
     }
 
-    (result, zero_width_clears)
+    // Collect self-quantified capturing groups with min=0.
+    // e.g., (x)? or (x)* — the capturing group itself is quantified.
+    for g in &groups_info {
+        if let Some(cap_idx) = g.capture_index {
+            if g.is_quantified && g.quantifier_min_zero {
+                self_quantified_min_zero.push(cap_idx);
+            }
+        }
+    }
+
+    // Collect alternation branches of non-capturing quantified groups.
+    // Per spec, captures are cleared at the start of each quantifier iteration.
+    // We detect alternation branches and clear captures from non-last-matching branches.
+    fn collect_all_capturing_children(idx: usize, groups_info: &[GroupInfo], out: &mut Vec<usize>) {
+        if let Some(ci) = groups_info[idx].capture_index {
+            out.push(ci);
+        }
+        for &child in &groups_info[idx].children {
+            collect_all_capturing_children(child, groups_info, out);
+        }
+    }
+    fn find_top_level_pipes(chars: &[char], group_start: usize, group_end: usize) -> Vec<usize> {
+        let mut i = group_start + 1; // skip '('
+        // Skip group prefix (?:, (?=, etc.)
+        if i < group_end && chars[i] == '?' {
+            i += 1;
+            if i < group_end {
+                match chars[i] {
+                    ':' | '=' | '!' => i += 1,
+                    '<' if i + 1 < group_end && (chars[i + 1] == '=' || chars[i + 1] == '!') => {
+                        i += 2
+                    }
+                    '<' => {
+                        while i < group_end && chars[i] != '>' {
+                            i += 1;
+                        }
+                        if i < group_end {
+                            i += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let mut pipes = Vec::new();
+        let mut depth = 0;
+        let mut in_cc = false;
+        while i < group_end {
+            if in_cc {
+                if chars[i] == '\\' && i + 1 < group_end {
+                    i += 2;
+                    continue;
+                }
+                if chars[i] == ']' {
+                    in_cc = false;
+                }
+                i += 1;
+                continue;
+            }
+            if chars[i] == '\\' && i + 1 < group_end {
+                i += 2;
+                continue;
+            }
+            if chars[i] == '[' {
+                in_cc = true;
+                i += 1;
+                continue;
+            }
+            if chars[i] == '(' {
+                depth += 1;
+                i += 1;
+                continue;
+            }
+            if chars[i] == ')' {
+                depth -= 1;
+                i += 1;
+                continue;
+            }
+            if chars[i] == '|' && depth == 0 {
+                pipes.push(i);
+            }
+            i += 1;
+        }
+        pipes
+    }
+    for g in &groups_info {
+        if g.capture_index.is_none() && g.is_quantified {
+            let pipes = find_top_level_pipes(&chars, g.start_pos, g.end_pos);
+            if pipes.is_empty() {
+                continue; // No alternation — regex engine overwrites correctly
+            }
+            // Build branch boundaries
+            let content_start = {
+                let mut s = g.start_pos + 1;
+                if s < g.end_pos && chars[s] == '?' {
+                    s += 1;
+                    if s < g.end_pos {
+                        match chars[s] {
+                            ':' | '=' | '!' => s += 1,
+                            '<' if s + 1 < g.end_pos
+                                && (chars[s + 1] == '=' || chars[s + 1] == '!') =>
+                            {
+                                s += 2
+                            }
+                            '<' => {
+                                while s < g.end_pos && chars[s] != '>' {
+                                    s += 1;
+                                }
+                                if s < g.end_pos {
+                                    s += 1;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                s
+            };
+            let mut branch_starts = vec![content_start];
+            for &p in &pipes {
+                branch_starts.push(p + 1);
+            }
+            let mut branch_ends: Vec<usize> = pipes.clone();
+            branch_ends.push(g.end_pos);
+
+            let mut branches: Vec<Vec<usize>> = Vec::new();
+            for bi in 0..branch_starts.len() {
+                let bs = branch_starts[bi];
+                let be = branch_ends[bi];
+                let mut branch_caps = Vec::new();
+                for &child_idx in &g.children {
+                    if groups_info[child_idx].start_pos >= bs
+                        && groups_info[child_idx].end_pos <= be
+                    {
+                        collect_all_capturing_children(child_idx, &groups_info, &mut branch_caps);
+                    }
+                }
+                branches.push(branch_caps);
+            }
+            nc_quantified_branches.push(branches);
+        }
+    }
+
+    (
+        result,
+        zero_width_clears,
+        self_quantified_min_zero,
+        nc_quantified_branches,
+    )
 }
 
 fn build_regex(source: &str, flags: &str) -> Result<CompiledRegex, String> {
@@ -5874,38 +6128,37 @@ fn get_substitution(
 ) -> Result<String, JsValue> {
     let tail_pos = position + matched.len();
     let mut result = String::new();
-    let bytes = replacement.as_bytes();
-    let len = bytes.len();
+    let rchars: Vec<char> = replacement.chars().collect();
+    let len = rchars.len();
     let mut i = 0;
     let m = captures.len();
     while i < len {
-        if bytes[i] == b'$' && i + 1 < len {
-            match bytes[i + 1] {
-                b'$' => {
+        if rchars[i] == '$' && i + 1 < len {
+            match rchars[i + 1] {
+                '$' => {
                     result.push('$');
                     i += 2;
                 }
-                b'&' => {
+                '&' => {
                     result.push_str(matched);
                     i += 2;
                 }
-                b'`' => {
+                '`' => {
                     if position > 0 && position <= s.len() {
                         result.push_str(&s[..position]);
                     }
                     i += 2;
                 }
-                b'\'' => {
+                '\'' => {
                     if tail_pos < s.len() {
                         result.push_str(&s[tail_pos..]);
                     }
                     i += 2;
                 }
                 c if c.is_ascii_digit() => {
-                    let d1 = (c - b'0') as usize;
-                    // Try two-digit reference first
-                    if i + 2 < len && bytes[i + 2].is_ascii_digit() {
-                        let d2 = (bytes[i + 2] - b'0') as usize;
+                    let d1 = (c as u32 - '0' as u32) as usize;
+                    if i + 2 < len && rchars[i + 2].is_ascii_digit() {
+                        let d2 = (rchars[i + 2] as u32 - '0' as u32) as usize;
                         let nn = d1 * 10 + d2;
                         if nn >= 1 && nn <= m {
                             let cap = &captures[nn - 1];
@@ -5917,7 +6170,6 @@ fn get_substitution(
                             continue;
                         }
                     }
-                    // Single-digit reference
                     if d1 >= 1 && d1 <= m {
                         let cap = &captures[d1 - 1];
                         if !cap.is_undefined() {
@@ -5926,19 +6178,23 @@ fn get_substitution(
                         }
                     } else {
                         result.push('$');
-                        result.push(c as char);
+                        result.push(c);
                     }
                     i += 2;
                 }
-                b'<' => {
+                '<' => {
                     if matches!(named_captures, JsValue::Undefined) {
                         result.push('$');
                         result.push('<');
                         i += 2;
                     } else {
                         let start = i + 2;
-                        if let Some(end_pos) = replacement[start..].find('>') {
-                            let group_name = &replacement[start..start + end_pos];
+                        let rest: String = rchars[start..].iter().collect();
+                        if let Some(end_pos) = rest.find('>') {
+                            let group_name: String = rchars
+                                [start..start + rest[..end_pos].chars().count()]
+                                .iter()
+                                .collect();
                             let nc_obj = match named_captures {
                                 JsValue::Object(o) => o.id,
                                 _ => {
@@ -5950,7 +6206,7 @@ fn get_substitution(
                             };
                             let capture = match interp.get_object_property(
                                 nc_obj,
-                                group_name,
+                                &group_name,
                                 named_captures,
                             ) {
                                 Completion::Normal(v) => v,
@@ -5961,7 +6217,7 @@ fn get_substitution(
                                 let cap_str = interp.to_string_value(&capture)?;
                                 result.push_str(&cap_str);
                             }
-                            i = start + end_pos + 1;
+                            i = start + rest[..end_pos].chars().count() + 1;
                         } else {
                             result.push('$');
                             result.push('<');
@@ -5975,7 +6231,7 @@ fn get_substitution(
                 }
             }
         } else {
-            result.push(bytes[i] as char);
+            result.push(rchars[i]);
             i += 1;
         }
     }
@@ -8025,9 +8281,45 @@ impl Interpreter {
                 }
 
                 // Handle RegExp/RegExp-like argument: extract source/flags
+                // §22.2.3.1 step 3a: If pattern has [[RegExpMatcher]], use internal slots
+                let has_regexp_matcher = if let JsValue::Object(ref o) = pattern_arg {
+                    interp
+                        .get_object(o.id)
+                        .is_some_and(|obj| obj.borrow().class_name == "RegExp")
+                } else {
+                    false
+                };
                 let (pattern_str, flags_str) =
-                    if is_regexp_obj && let JsValue::Object(ref o) = pattern_arg {
-                        // Use Get() for observable property access
+                    if has_regexp_matcher && let JsValue::Object(ref o) = pattern_arg {
+                        // Use [[OriginalSource]] and [[OriginalFlags]] directly
+                        let src = interp
+                            .get_object(o.id)
+                            .and_then(|obj| {
+                                obj.borrow()
+                                    .regexp_original_source
+                                    .as_ref()
+                                    .map(|s| s.to_string())
+                            })
+                            .unwrap_or_default();
+                        let flg = if matches!(flags_arg, JsValue::Undefined) {
+                            interp
+                                .get_object(o.id)
+                                .and_then(|obj| {
+                                    obj.borrow()
+                                        .regexp_original_flags
+                                        .as_ref()
+                                        .map(|s| s.to_string())
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            match interp.to_string_value(&flags_arg) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            }
+                        };
+                        (src, flg)
+                    } else if is_regexp_obj && let JsValue::Object(ref o) = pattern_arg {
+                        // RegExp-like (no [[RegExpMatcher]]): use Get()
                         let src = match interp.get_object_property(o.id, "source", &pattern_arg) {
                             Completion::Normal(v) => match interp.to_string_value(&v) {
                                 Ok(s) => s,

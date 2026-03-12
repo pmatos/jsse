@@ -548,6 +548,8 @@ impl Interpreter {
                             if n > 0.0 { "Infinity" } else { "-Infinity" },
                         )));
                     }
+                    // Step 2: If x is -0, set x to +0
+                    let n = if n == 0.0 { 0.0 } else { n };
                     if n.abs() >= 1e21 {
                         return Completion::Normal(JsValue::String(JsString::from_str(
                             &to_js_string(&JsValue::Number(n)),

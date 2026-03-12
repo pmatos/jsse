@@ -731,10 +731,10 @@ impl Interpreter {
 
             macro_rules! check_field {
                 ($field:expr, $key:expr, $assign:expr) => {
-                    let has = self
-                        .get_object(obj_id)
-                        .map(|o| o.borrow().has_property($key))
-                        .unwrap_or(false);
+                    let has = match self.proxy_has_property(obj_id, $key) {
+                        Ok(b) => b,
+                        Err(e) => return Err(Some(e)),
+                    };
                     if has {
                         match self.get_object_property(obj_id, $key, val) {
                             Completion::Normal(v) => {
@@ -747,12 +747,13 @@ impl Interpreter {
                 };
             }
 
-            check_field!(desc, "value", |v: JsValue| desc.value = Some(v));
-            check_field!(desc, "writable", |v: JsValue| desc.writable =
-                Some(self.to_boolean_val(&v)));
+            // §6.2.6.5 ToPropertyDescriptor — spec-mandated order
             check_field!(desc, "enumerable", |v: JsValue| desc.enumerable =
                 Some(self.to_boolean_val(&v)));
             check_field!(desc, "configurable", |v: JsValue| desc.configurable =
+                Some(self.to_boolean_val(&v)));
+            check_field!(desc, "value", |v: JsValue| desc.value = Some(v));
+            check_field!(desc, "writable", |v: JsValue| desc.writable =
                 Some(self.to_boolean_val(&v)));
             check_field!(desc, "get", |v: JsValue| desc.get = Some(v));
             check_field!(desc, "set", |v: JsValue| desc.set = Some(v));
@@ -805,25 +806,20 @@ impl Interpreter {
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn from_property_descriptor(&mut self, desc: &PropertyDescriptor) -> JsValue {
         let result = self.create_object();
-        let is_accessor = desc.get.is_some() || desc.set.is_some();
         {
             let mut r = result.borrow_mut();
-            if is_accessor {
-                r.insert_value(
-                    "get".to_string(),
-                    desc.get.clone().unwrap_or(JsValue::Undefined),
-                );
-                r.insert_value(
-                    "set".to_string(),
-                    desc.set.clone().unwrap_or(JsValue::Undefined),
-                );
-            } else {
-                if let Some(ref val) = desc.value {
-                    r.insert_value("value".to_string(), val.clone());
-                }
-                if let Some(w) = desc.writable {
-                    r.insert_value("writable".to_string(), JsValue::Boolean(w));
-                }
+            // §6.2.6.4 FromPropertyDescriptor — only include fields that are present
+            if let Some(ref val) = desc.value {
+                r.insert_value("value".to_string(), val.clone());
+            }
+            if let Some(w) = desc.writable {
+                r.insert_value("writable".to_string(), JsValue::Boolean(w));
+            }
+            if let Some(ref getter) = desc.get {
+                r.insert_value("get".to_string(), getter.clone());
+            }
+            if let Some(ref setter) = desc.set {
+                r.insert_value("set".to_string(), setter.clone());
             }
             if let Some(e) = desc.enumerable {
                 r.insert_value("enumerable".to_string(), JsValue::Boolean(e));
@@ -967,8 +963,6 @@ impl Interpreter {
         );
         // Annex B: sloppy non-arrow, non-generator, non-async functions get
         // own caller/arguments to shadow the ThrowTypeError accessor.
-        // We use undefined here (not null) so that code checking `caller === undefined`
-        // correctly identifies the "not supported" case (legacy feature, Annex B.3.5).
         if let Some(JsFunction::User {
             is_strict,
             is_arrow,
@@ -983,7 +977,7 @@ impl Interpreter {
         {
             obj_data.insert_property(
                 "caller".to_string(),
-                PropertyDescriptor::data(JsValue::Undefined, false, false, true),
+                PropertyDescriptor::data(JsValue::Null, false, false, true),
             );
             obj_data.insert_property(
                 "arguments".to_string(),
@@ -3785,6 +3779,7 @@ impl Interpreter {
                 {
                     match self.eval_class(
                         "default",
+                        "",
                         &ce.super_class,
                         &ce.body,
                         env,
@@ -3845,6 +3840,7 @@ impl Interpreter {
                 };
                 let class_val = match self.eval_class(
                     &name,
+                    &class.name,
                     &class.super_class,
                     &class.body,
                     env,

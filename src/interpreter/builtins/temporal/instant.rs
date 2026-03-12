@@ -583,7 +583,18 @@ impl Interpreter {
                 if !is_valid_epoch_ns(&epoch_ns) {
                     return Completion::Throw(interp.create_range_error("Instant out of range"));
                 }
-                create_instant_result(interp, epoch_ns)
+                let result = create_instant_result(interp, epoch_ns);
+                if let Completion::Normal(JsValue::Object(ref o)) = result {
+                    let dp = interp
+                        .realm()
+                        .temporal_instant_prototype
+                        .as_ref()
+                        .and_then(|p| p.borrow().id);
+                    interp.apply_new_target_prototype(o.id, dp, |r| {
+                        r.temporal_instant_prototype.clone()
+                    });
+                }
+                result
             },
         ));
 

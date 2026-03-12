@@ -1,5 +1,19 @@
 use super::*;
 
+fn bigint_literal_to_decimal(s: &str) -> String {
+    use num_bigint::BigInt;
+    let value = if let Some(hex) = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")) {
+        BigInt::parse_bytes(hex.as_bytes(), 16).unwrap_or_default()
+    } else if let Some(oct) = s.strip_prefix("0o").or_else(|| s.strip_prefix("0O")) {
+        BigInt::parse_bytes(oct.as_bytes(), 8).unwrap_or_default()
+    } else if let Some(bin) = s.strip_prefix("0b").or_else(|| s.strip_prefix("0B")) {
+        BigInt::parse_bytes(bin.as_bytes(), 2).unwrap_or_default()
+    } else {
+        s.parse::<BigInt>().unwrap_or_default()
+    };
+    value.to_string()
+}
+
 impl<'a> Parser<'a> {
     pub(super) fn parse_variable_statement(&mut self) -> Result<Statement, ParseError> {
         self.advance()?; // var
@@ -209,7 +223,7 @@ impl<'a> Parser<'a> {
                 Ok(PropertyKey::Identifier("null".to_string()))
             }
             Token::BigIntLiteral(s) => {
-                let name = s.clone();
+                let name = bigint_literal_to_decimal(s);
                 self.advance()?;
                 Ok(PropertyKey::String(name))
             }
@@ -237,11 +251,14 @@ impl<'a> Parser<'a> {
         let prev_async = self.in_async;
         self.in_generator = is_generator;
         self.in_async = is_async;
+        self.in_non_arrow_function += 1;
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
         self.in_async = prev_async;
         self.set_function_param_names(&params);
-        let (body, body_strict) = self.parse_function_body_with_context(is_generator, is_async)?;
+        let (body, body_strict) =
+            self.parse_function_body_inner(is_generator, is_async, false, false)?;
+        self.in_non_arrow_function -= 1;
         if body_strict && !Self::is_simple_parameter_list(&params) {
             return Err(self.error(
                 "Illegal 'use strict' directive in function with non-simple parameter list",
@@ -705,7 +722,7 @@ impl<'a> Parser<'a> {
             {
                 let value = if self.current == Token::Assign {
                     self.advance()?;
-                    Some(self.parse_assignment_expression()?)
+                    Some(self.parse_field_initializer_value()?)
                 } else {
                     None
                 };
@@ -810,7 +827,7 @@ impl<'a> Parser<'a> {
                 // field named 'async': class { async = value; }
                 let value = if self.current == Token::Assign {
                     self.advance()?;
-                    Some(self.parse_assignment_expression()?)
+                    Some(self.parse_field_initializer_value()?)
                 } else {
                     None
                 };
@@ -848,7 +865,7 @@ impl<'a> Parser<'a> {
             }
             let value = if self.current == Token::Assign {
                 self.advance()?;
-                Some(self.parse_assignment_expression()?)
+                Some(self.parse_field_initializer_value()?)
             } else {
                 None
             };
@@ -877,7 +894,7 @@ impl<'a> Parser<'a> {
                 let (key, computed) = self.parse_property_name()?;
                 let value = if self.current == Token::Assign {
                     self.advance()?;
-                    let expr = self.parse_assignment_expression()?;
+                    let expr = self.parse_field_initializer_value()?;
                     if Self::contains_arguments(&expr) {
                         return Err(
                             self.error("Class field initializer cannot reference 'arguments'")
@@ -911,7 +928,7 @@ impl<'a> Parser<'a> {
             // field named "accessor" (followed by =, ;, or })
             let value = if self.current == Token::Assign {
                 self.advance()?;
-                let expr = self.parse_assignment_expression()?;
+                let expr = self.parse_field_initializer_value()?;
                 if Self::contains_arguments(&expr) {
                     return Err(self.error("Class field initializer cannot reference 'arguments'"));
                 }
@@ -1010,8 +1027,13 @@ impl<'a> Parser<'a> {
             if kind == ClassMethodKind::Get && !func.params.is_empty() {
                 return Err(self.error("Getter must not have any formal parameters"));
             }
-            if kind == ClassMethodKind::Set && func.params.len() != 1 {
-                return Err(self.error("Setter must have exactly one formal parameter"));
+            if kind == ClassMethodKind::Set {
+                if func.params.len() != 1 {
+                    return Err(self.error("Setter must have exactly one formal parameter"));
+                }
+                if matches!(func.params[0], Pattern::Rest(_)) {
+                    return Err(self.error("Setter function argument must not be a rest parameter"));
+                }
             }
             let method_kind = if is_constructor {
                 ClassMethodKind::Constructor
@@ -1028,7 +1050,7 @@ impl<'a> Parser<'a> {
         } else {
             let value = if self.current == Token::Assign {
                 self.advance()?;
-                let expr = self.parse_assignment_expression()?;
+                let expr = self.parse_field_initializer_value()?;
                 // Class field initializers cannot contain 'arguments'
                 if Self::contains_arguments(&expr) {
                     return Err(self.error("Class field initializer cannot reference 'arguments'"));
@@ -1045,6 +1067,21 @@ impl<'a> Parser<'a> {
                 computed,
             }))
         }
+    }
+
+    /// Parse field initializer value with ~Await, ~Yield parameters per spec §15.7.
+    fn parse_field_initializer_value(&mut self) -> Result<Expression, ParseError> {
+        let prev_async = self.in_async;
+        let prev_gen = self.in_generator;
+        let prev_class_field = self.in_class_field_initializer;
+        self.in_async = false;
+        self.in_generator = false;
+        self.in_class_field_initializer = true;
+        let result = self.parse_assignment_expression();
+        self.in_async = prev_async;
+        self.in_generator = prev_gen;
+        self.in_class_field_initializer = prev_class_field;
+        result
     }
 
     pub(super) fn parse_property_name(&mut self) -> Result<(PropertyKey, bool), ParseError> {
@@ -1083,7 +1120,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
             Ok((PropertyKey::Number(n), false))
         } else if let Token::BigIntLiteral(ref s) = self.current {
-            let name = s.clone();
+            let name = bigint_literal_to_decimal(s);
             self.advance()?;
             Ok((PropertyKey::String(name), false))
         } else if let Token::Keyword(kw) = &self.current {
@@ -1120,12 +1157,12 @@ impl<'a> Parser<'a> {
             self.in_async = true;
         }
         self.in_static_block = false;
+        self.in_non_arrow_function += 1;
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
         self.in_async = prev_async;
         self.in_static_block = prev_static_block;
         self.set_function_param_names(&params);
-        self.in_non_arrow_function += 1;
         let (body, body_strict) =
             self.parse_function_body_inner(is_generator, is_async, true, is_constructor)?;
         self.in_non_arrow_function -= 1;
@@ -1348,8 +1385,10 @@ impl<'a> Parser<'a> {
         is_async: bool,
         params: &[Pattern],
     ) -> Result<(Vec<Statement>, bool), ParseError> {
+        let outer_param_names = self.function_param_names.take();
         self.set_function_param_names(params);
         let (stmts, body_strict) = self.parse_arrow_function_body(is_async)?;
+        self.function_param_names = outer_param_names;
         if body_strict && !Self::is_simple_parameter_list(params) {
             return Err(self.error(
                 "Illegal 'use strict' directive in function with non-simple parameter list",

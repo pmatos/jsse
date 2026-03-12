@@ -3401,7 +3401,18 @@ impl Interpreter {
                     Err(c) => return c,
                 };
 
-                create_zdt(interp, ns_bigint, tz, cal)
+                let result = create_zdt(interp, ns_bigint, tz, cal);
+                if let Completion::Normal(JsValue::Object(ref o)) = result {
+                    let dp = interp
+                        .realm()
+                        .temporal_zoned_date_time_prototype
+                        .as_ref()
+                        .and_then(|p| p.borrow().id);
+                    interp.apply_new_target_prototype(o.id, dp, |r| {
+                        r.temporal_zoned_date_time_prototype.clone()
+                    });
+                }
+                result
             },
         ));
 

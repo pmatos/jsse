@@ -2555,7 +2555,7 @@ impl Interpreter {
                     );
                 }
 
-                create_duration_result(
+                let result = create_duration_result(
                     interp,
                     years,
                     months,
@@ -2567,7 +2567,18 @@ impl Interpreter {
                     milliseconds,
                     microseconds,
                     nanoseconds,
-                )
+                );
+                if let Completion::Normal(JsValue::Object(ref o)) = result {
+                    let dp = interp
+                        .realm()
+                        .temporal_duration_prototype
+                        .as_ref()
+                        .and_then(|p| p.borrow().id);
+                    interp.apply_new_target_prototype(o.id, dp, |r| {
+                        r.temporal_duration_prototype.clone()
+                    });
+                }
+                result
             },
         ));
 

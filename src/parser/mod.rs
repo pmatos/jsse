@@ -64,6 +64,7 @@ pub struct Parser<'a> {
     eval_new_target_allowed: bool,
     last_expr_parenthesized: bool,
     last_obj_had_proto_dup: bool,
+    in_class_field_initializer: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -113,6 +114,7 @@ impl<'a> Parser<'a> {
             eval_new_target_allowed: false,
             last_expr_parenthesized: false,
             last_obj_had_proto_dup: false,
+            in_class_field_initializer: false,
         })
     }
 

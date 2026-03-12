@@ -530,6 +530,7 @@ pub struct Environment {
     pub(crate) has_parameter_expressions: bool,
     pub(crate) has_simple_params: bool,
     pub(crate) is_simple_catch_scope: bool,
+    pub(crate) is_derived_constructor_scope: bool,
     // §9.1.1.5.5 CreateImportBinding: indirect bindings for module imports
     pub(crate) indirect_bindings: Option<HashMap<String, (EnvRef, String)>>,
     // Module path for import.meta resolution (§16.2.1.5.2 GetActiveScriptOrModule)
@@ -622,6 +623,7 @@ impl Environment {
             has_parameter_expressions: false,
             has_simple_params: true,
             is_simple_catch_scope: false,
+            is_derived_constructor_scope: false,
             indirect_bindings: None,
             module_path: None,
         }))
@@ -645,6 +647,7 @@ impl Environment {
             has_parameter_expressions: false,
             has_simple_params: true,
             is_simple_catch_scope: false,
+            is_derived_constructor_scope: false,
             indirect_bindings: None,
             module_path: None,
         }))
@@ -870,9 +873,17 @@ impl Environment {
             if binding.kind == BindingKind::Var
                 && let Some(ref global_obj) = self.global_object
             {
-                global_obj
+                let ok = global_obj
                     .borrow_mut()
                     .set_property_value(name, value.clone());
+                if !ok {
+                    if self.strict {
+                        return Err(JsValue::String(JsString::from_str(&format!(
+                            "Cannot assign to read only property '{name}' of object '#<Object>'"
+                        ))));
+                    }
+                    return Ok(());
+                }
             }
             binding.value = value;
             binding.initialized = true;
@@ -883,9 +894,12 @@ impl Environment {
             // Global implicit declaration (sloppy mode)
             if let Some(ref global_obj) = self.global_object {
                 let already_on_global = global_obj.borrow().has_own_property(name);
-                global_obj
+                let ok = global_obj
                     .borrow_mut()
                     .set_property_value(name, value.clone());
+                if !ok {
+                    return Ok(());
+                }
                 if already_on_global {
                     return Ok(());
                 }
@@ -1721,6 +1735,15 @@ impl JsObjectData {
             {
                 d.value = Some(val);
             }
+            // OrdinaryGetOwnProperty: complete accessor descriptors
+            if d.is_accessor_descriptor() {
+                if d.get.is_none() {
+                    d.get = Some(JsValue::Undefined);
+                }
+                if d.set.is_none() {
+                    d.set = Some(JsValue::Undefined);
+                }
+            }
             return Some(d);
         }
         if let Some(ref elems) = self.array_elements
@@ -1897,6 +1920,15 @@ impl JsObjectData {
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
                 d.value = Some(val);
+            }
+            // OrdinaryGetOwnProperty: complete accessor descriptors
+            if d.is_accessor_descriptor() {
+                if d.get.is_none() {
+                    d.get = Some(JsValue::Undefined);
+                }
+                if d.set.is_none() {
+                    d.set = Some(JsValue::Undefined);
+                }
             }
             return Some(d);
         }

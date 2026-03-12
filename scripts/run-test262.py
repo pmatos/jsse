@@ -194,6 +194,22 @@ def make_adapter(engine_name: str, binary: str | None = None) -> EngineAdapter:
 # Frontmatter parsing
 # ---------------------------------------------------------------------------
 
+YAML_LIST_RE = re.compile(r"^(\w+):\s*\n((?:\s+-\s+\S+.*\n?)+)", re.MULTILINE)
+
+
+def _parse_yaml_list(fm: str, field: str) -> list[str] | None:
+    """Parse YAML list format like:
+    field:
+      - value1
+      - value2
+    """
+    for m in YAML_LIST_RE.finditer(fm):
+        if m.group(1) == field:
+            items = re.findall(r"^\s+-\s+(.+)$", m.group(2), re.MULTILINE)
+            return [item.strip() for item in items if item.strip()]
+    return None
+
+
 def parse_frontmatter(text: str) -> dict:
     # Normalize line endings for frontmatter regex matching
     normalized = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -207,12 +223,20 @@ def parse_frontmatter(text: str) -> dict:
     flags_m = FLAGS_RE.search(fm)
     if flags_m:
         result["flags"] = [f.strip() for f in flags_m.group(1).split(",") if f.strip()]
+    else:
+        yaml_flags = _parse_yaml_list(fm, "flags")
+        if yaml_flags:
+            result["flags"] = yaml_flags
 
     includes_m = INCLUDES_RE.search(fm)
     if includes_m:
         result["includes"] = [
             i.strip() for i in includes_m.group(1).split(",") if i.strip()
         ]
+    else:
+        yaml_includes = _parse_yaml_list(fm, "includes")
+        if yaml_includes:
+            result["includes"] = yaml_includes
 
     neg_m = NEGATIVE_PHASE_RE.search(fm)
     if neg_m:
@@ -225,6 +249,10 @@ def parse_frontmatter(text: str) -> dict:
         result["features"] = [
             f.strip() for f in features_m.group(1).split(",") if f.strip()
         ]
+    else:
+        yaml_features = _parse_yaml_list(fm, "features")
+        if yaml_features:
+            result["features"] = yaml_features
 
     return result
 
