@@ -34,9 +34,9 @@ jobs:
           source <(cargo llvm-cov show-env --export-prefix)
           cargo llvm-cov clean --workspace
           cargo build --release
-          cargo test
+          cargo test --release
           uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262
-          cargo llvm-cov report --lcov --output-path lcov.info
+          cargo llvm-cov report --release --lcov --output-path lcov.info
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5
