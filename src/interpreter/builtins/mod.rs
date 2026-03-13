@@ -2658,6 +2658,86 @@ impl Interpreter {
                         );
                     }
 
+                    // Sloppy function .caller getter (Annex B)
+                    {
+                        let caller_getter = self.create_function(JsFunction::native(
+                            "get caller".to_string(),
+                            0,
+                            |interp: &mut Interpreter, this_val: &JsValue, _args: &[JsValue]| {
+                                let this_id = match this_val {
+                                    JsValue::Object(o) => o.id,
+                                    _ => return Completion::Normal(JsValue::Null),
+                                };
+                                // Walk call_stack_frames from top to find this function's activation
+                                let mut found_idx = None;
+                                for i in (0..interp.call_stack_frames.len()).rev() {
+                                    if interp.call_stack_frames[i].func_obj_id == this_id {
+                                        found_idx = Some(i);
+                                        break;
+                                    }
+                                }
+                                let idx = match found_idx {
+                                    Some(i) => i,
+                                    None => return Completion::Normal(JsValue::Null),
+                                };
+                                // Scan backwards from idx, skipping eval frames
+                                if idx == 0 {
+                                    return Completion::Normal(JsValue::Null);
+                                }
+                                for i in (0..idx).rev() {
+                                    let frame = &interp.call_stack_frames[i];
+                                    if frame.is_eval {
+                                        continue;
+                                    }
+                                    if frame.func_obj_id == 0 {
+                                        continue;
+                                    }
+                                    // Check if the caller is strict — return null for strict callers
+                                    if let Some(obj) = interp.get_object(frame.func_obj_id) {
+                                        if let Some(JsFunction::User { is_strict, .. }) =
+                                            &obj.borrow().callable
+                                        {
+                                            if *is_strict {
+                                                return Completion::Normal(JsValue::Null);
+                                            }
+                                        }
+                                    }
+                                    return Completion::Normal(JsValue::Object(
+                                        crate::types::JsObject {
+                                            id: frame.func_obj_id,
+                                        },
+                                    ));
+                                }
+                                Completion::Normal(JsValue::Null)
+                            },
+                        ));
+                        self.realm_mut().sloppy_caller_getter = Some(caller_getter);
+                    }
+
+                    // Sloppy function .arguments getter (Annex B)
+                    {
+                        let args_getter = self.create_function(JsFunction::native(
+                            "get arguments".to_string(),
+                            0,
+                            |interp: &mut Interpreter, this_val: &JsValue, _args: &[JsValue]| {
+                                let this_id = match this_val {
+                                    JsValue::Object(o) => o.id,
+                                    _ => return Completion::Normal(JsValue::Null),
+                                };
+                                // Walk call_stack_frames from top to find this function's activation
+                                for i in (0..interp.call_stack_frames.len()).rev() {
+                                    if interp.call_stack_frames[i].func_obj_id == this_id {
+                                        return Completion::Normal(
+                                            interp.call_stack_frames[i].arguments_obj.clone(),
+                                        );
+                                    }
+                                }
+                                Completion::Normal(JsValue::Null)
+                            },
+                        ));
+                        self.realm_mut().sloppy_arguments_getter = Some(args_getter);
+                    }
+
                     // Retroactively fix [[Prototype]] of all functions created before
                     // Function was registered. Walk global bindings 3 levels deep:
                     // global → Constructor → prototype → method

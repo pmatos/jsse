@@ -12337,6 +12337,7 @@ impl Interpreter {
                             func_env.borrow_mut().is_arrow_scope = true;
                         }
                         let is_simple = params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+                        let mut call_frame_args = JsValue::Null;
                         if !is_arrow {
                             if self.constructing_derived {
                                 // Derived constructor: this is in TDZ until super() is called
@@ -12404,6 +12405,7 @@ impl Interpreter {
                                 mapped_env,
                                 &param_names,
                             );
+                            call_frame_args = arguments_obj.clone();
                             func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             let _ = func_env.borrow_mut().set("arguments", arguments_obj);
                             if is_strict || !is_simple {
@@ -12467,10 +12469,16 @@ impl Interpreter {
                             func_env.clone()
                         };
                         exec_env.borrow_mut().strict = is_strict;
+                        self.call_stack_frames.push(CallFrame {
+                            func_obj_id: o.id,
+                            arguments_obj: call_frame_args,
+                            is_eval: false,
+                        });
                         self.call_stack_envs.push(exec_env.clone());
                         self.in_tail_position = false;
                         let result = self.exec_statements(&body, &exec_env);
                         self.call_stack_envs.pop();
+                        self.call_stack_frames.pop();
                         let result = self.dispose_resources(&exec_env, result);
                         self.last_call_this_value = func_env.borrow().get("this");
                         self.current_realm_id = caller_realm;
@@ -12923,6 +12931,11 @@ impl Interpreter {
         }
 
         // Execute statements in lex_env
+        self.call_stack_frames.push(CallFrame {
+            func_obj_id: 0,
+            arguments_obj: JsValue::Null,
+            is_eval: true,
+        });
         self.call_stack_envs.push(lex_env.clone());
         let mut last = Completion::Empty;
         for stmt in &program.body {
@@ -12932,11 +12945,13 @@ impl Interpreter {
                 Completion::Empty => {}
                 other => {
                     self.call_stack_envs.pop();
+                    self.call_stack_frames.pop();
                     return other;
                 }
             }
         }
         self.call_stack_envs.pop();
+        self.call_stack_frames.pop();
         last.update_empty(JsValue::Undefined)
     }
 

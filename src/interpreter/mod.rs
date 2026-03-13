@@ -52,6 +52,7 @@ pub struct Interpreter {
     constructing_derived: bool,
     calling_as_construct: bool,
     pub(crate) call_stack_envs: Vec<EnvRef>,
+    pub(crate) call_stack_frames: Vec<CallFrame>,
     pub(crate) gc_temp_roots: Vec<u64>,
     // microtask roots are now stored inline in the microtask_queue tuples
     pub(crate) class_private_names: Vec<std::collections::HashMap<String, String>>,
@@ -87,6 +88,12 @@ pub struct Interpreter {
     pub(crate) static_module_load_depth: u32,
     module_async_evaluation_count: u64,
     module_async_info: HashMap<u64, PathBuf>,
+}
+
+pub(crate) struct CallFrame {
+    pub func_obj_id: u64,
+    pub arguments_obj: JsValue,
+    pub is_eval: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -179,6 +186,7 @@ impl Interpreter {
             constructing_derived: false,
             calling_as_construct: false,
             call_stack_envs: Vec::new(),
+            call_stack_frames: Vec::new(),
             gc_temp_roots: Vec::new(),
             class_private_names: Vec::new(),
             next_class_brand_id: 0,
@@ -975,14 +983,28 @@ impl Interpreter {
             && !*is_generator
             && !*is_async
         {
-            obj_data.insert_property(
-                "caller".to_string(),
-                PropertyDescriptor::data(JsValue::Null, false, false, true),
-            );
-            obj_data.insert_property(
-                "arguments".to_string(),
-                PropertyDescriptor::data(JsValue::Null, false, false, true),
-            );
+            if let Some(ref getter) = self.realm().sloppy_caller_getter.clone() {
+                obj_data.insert_property(
+                    "caller".to_string(),
+                    PropertyDescriptor::accessor(Some(getter.clone()), None, false, true),
+                );
+            } else {
+                obj_data.insert_property(
+                    "caller".to_string(),
+                    PropertyDescriptor::data(JsValue::Null, false, false, true),
+                );
+            }
+            if let Some(ref getter) = self.realm().sloppy_arguments_getter.clone() {
+                obj_data.insert_property(
+                    "arguments".to_string(),
+                    PropertyDescriptor::accessor(Some(getter.clone()), None, false, true),
+                );
+            } else {
+                obj_data.insert_property(
+                    "arguments".to_string(),
+                    PropertyDescriptor::data(JsValue::Null, false, false, true),
+                );
+            }
         }
         let is_constructable = match &obj_data.callable {
             Some(JsFunction::User {

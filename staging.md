@@ -1,6 +1,6 @@
 # Staging Test Failures Plan
 
-**Baseline:** 100,965 / 101,269 (99.70%) — 304 failing scenarios, 177 unique files
+**Baseline:** 100,978 / 101,269 (99.71%) — 291 failing scenarios
 
 ---
 
@@ -17,22 +17,9 @@ Fixed nested for-of/while/for loops in generator state machine transform:
 - `staging/sm/TypedArray/slice-bitwise-same.js` — **NOW PASSING**
 - `staging/sm/TypedArray/sort-negative-nan.js` — still failing (unrelated: missing `anyTypedArrayConstructors` harness)
 
-### A2. Function.caller / arguments.callee.caller not implemented (12 tests, MEDIUM)
+### ~~A2. Function.caller / arguments.callee.caller not implemented (12 tests, MEDIUM)~~ DONE
 
-Returns `null` instead of the calling function. Requires adding call stack tracking.
-
-- `language/arguments-object/10.6-13-a-2.js`
-- `language/arguments-object/10.6-13-a-3.js`
-- `staging/sm/extensions/arguments-property-access-in-function.js`
-- `staging/sm/extensions/function-caller-skips-eval-frames.js`
-- `staging/sm/extensions/function-properties.js`
-- `staging/sm/regress/regress-577648-1.js`
-- `staging/sm/regress/regress-577648-2.js`
-- `staging/sm/regress/regress-584355.js`
-- `staging/sm/regress/regress-586482-1.js`
-- `staging/sm/regress/regress-586482-2.js`
-- `staging/sm/regress/regress-586482-3.js`
-- `staging/sm/regress/regress-586482-4.js`
+Implemented call stack tracking with `CallFrame` vec and accessor property getters. All 12 tests (13 scenarios) now pass.
 
 ### A3. Annex B block-scoped function semantics (6 tests, HARD)
 

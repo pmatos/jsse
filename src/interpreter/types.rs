@@ -308,6 +308,8 @@ pub struct Realm {
     pub(crate) suppressed_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) shadow_realm_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) object_prototype_tostring: Option<JsValue>,
+    pub(crate) sloppy_caller_getter: Option<JsValue>,
+    pub(crate) sloppy_arguments_getter: Option<JsValue>,
 }
 
 impl Realm {
@@ -400,6 +402,8 @@ impl Realm {
             suppressed_error_prototype: None,
             shadow_realm_prototype: None,
             object_prototype_tostring: None,
+            sloppy_caller_getter: None,
+            sloppy_arguments_getter: None,
         }
     }
 
@@ -500,6 +504,12 @@ impl Realm {
             worklist.push(o.id);
         }
         if let Some(JsValue::Object(o)) = &self.object_prototype_tostring {
+            worklist.push(o.id);
+        }
+        if let Some(JsValue::Object(o)) = &self.sloppy_caller_getter {
+            worklist.push(o.id);
+        }
+        if let Some(JsValue::Object(o)) = &self.sloppy_arguments_getter {
             worklist.push(o.id);
         }
         if let Some(ref go) = self.global_object

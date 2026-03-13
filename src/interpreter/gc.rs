@@ -43,6 +43,12 @@ impl Interpreter {
         for env in &self.call_stack_envs {
             Self::collect_env_roots(env, &mut worklist);
         }
+        for frame in &self.call_stack_frames {
+            if frame.func_obj_id != 0 {
+                worklist.push(frame.func_obj_id);
+            }
+            Self::collect_value_roots(&frame.arguments_obj, &mut worklist);
+        }
         // Temporary roots (iterators, etc.)
         worklist.extend_from_slice(&self.gc_temp_roots);
         // Root values captured in pending microtask closures
