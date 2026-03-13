@@ -23,6 +23,8 @@ mod exec;
 mod gc;
 pub(crate) mod generator_analysis;
 pub(crate) mod generator_transform;
+#[cfg(test)]
+mod tests;
 
 #[allow(clippy::type_complexity)]
 pub struct Interpreter {
