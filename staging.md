@@ -1,0 +1,428 @@
+# Staging Test Failures Plan
+
+**Baseline:** 100,965 / 101,269 (99.70%) — 304 failing scenarios, 177 unique files
+
+---
+
+## A. Structural / Hard Changes
+
+### A1. ~~Nested for-of in generators → infinite loop~~ (DONE, +2 passes)
+
+Fixed nested for-of/while/for loops in generator state machine transform:
+- Unique temp var names via separate `temp_counter` (was reusing `yield_counter`)
+- Conditional post-body finalization to prevent clobbering inner loop terminators
+- Save/restore break/continue targets for proper nesting
+- Route break/continue inside if-statements through state machine transform
+
+- `staging/sm/TypedArray/slice-bitwise-same.js` — **NOW PASSING**
+- `staging/sm/TypedArray/sort-negative-nan.js` — still failing (unrelated: missing `anyTypedArrayConstructors` harness)
+
+### A2. Function.caller / arguments.callee.caller not implemented (12 tests, MEDIUM)
+
+Returns `null` instead of the calling function. Requires adding call stack tracking.
+
+- `language/arguments-object/10.6-13-a-2.js`
+- `language/arguments-object/10.6-13-a-3.js`
+- `staging/sm/extensions/arguments-property-access-in-function.js`
+- `staging/sm/extensions/function-caller-skips-eval-frames.js`
+- `staging/sm/extensions/function-properties.js`
+- `staging/sm/regress/regress-577648-1.js`
+- `staging/sm/regress/regress-577648-2.js`
+- `staging/sm/regress/regress-584355.js`
+- `staging/sm/regress/regress-586482-1.js`
+- `staging/sm/regress/regress-586482-2.js`
+- `staging/sm/regress/regress-586482-3.js`
+- `staging/sm/regress/regress-586482-4.js`
+
+### A3. Annex B block-scoped function semantics (6 tests, HARD)
+
+Annex B.3.3: block-level function declarations in sloppy mode should hoist a `var` binding to the enclosing function scope. Missing for labeled statements, `with` blocks, `arguments` override, eval+catch.
+
+- `staging/sm/lexical-environment/block-scoped-functions-annex-b-arguments.js`
+- `staging/sm/lexical-environment/block-scoped-functions-annex-b-label.js`
+- `staging/sm/lexical-environment/block-scoped-functions-annex-b-with.js`
+- `staging/sm/lexical-environment/var-in-catch-body-annex-b-eval.js`
+- `staging/sm/regress/regress-602621.js`
+- `staging/sm/Function/arguments-parameter-shadowing.js`
+
+### A4. Intl402 non-ISO calendar support (13 tests, VERY HARD)
+
+Chinese, dangi, Japanese era, Buddhist calendar formatting. Missing `relatedYear`/`yearName` format parts. Major Intl infrastructure.
+
+- `intl402/DateTimeFormat/prototype/format/related-year-zh.js`
+- `intl402/DateTimeFormat/prototype/formatRangeToParts/chinese-calendar-dates.js`
+- `intl402/DateTimeFormat/prototype/formatRangeToParts/dangi-calendar-dates.js`
+- `intl402/DateTimeFormat/prototype/formatRangeToParts/pattern-on-calendar.js`
+- `intl402/DateTimeFormat/prototype/formatToParts/chinese-calendar-dates.js`
+- `intl402/DateTimeFormat/prototype/formatToParts/compare-to-temporal-lunisolar.js`
+- `intl402/DateTimeFormat/prototype/formatToParts/compare-to-temporal.js`
+- `intl402/DateTimeFormat/prototype/formatToParts/dangi-calendar-dates.js`
+- `intl402/DateTimeFormat/prototype/formatToParts/era.js`
+- `intl402/DateTimeFormat/prototype/formatToParts/lunisolar-leap-months.js`
+- `intl402/DateTimeFormat/prototype/formatToParts/pattern-on-calendar.js`
+- `intl402/DateTimeFormat/prototype/formatToParts/related-year-zh.js`
+- `intl402/DateTimeFormat/prototype/formatToParts/related-year.js`
+
+### A5. Temporal ZonedDateTime DST handling (6 tests, HARD)
+
+Duration rounding across DST boundaries wrong (`PT23H` vs `P1D`). Disambiguation at spring-forward/fall-back incorrect.
+
+- `staging/Intl402/Temporal/old/dst-math.js`
+- `staging/Intl402/Temporal/old/duration-round.js`
+- `staging/Intl402/Temporal/old/property-bags.js`
+- `staging/Intl402/Temporal/old/zdt-tostring.js`
+- `staging/Intl402/Temporal/old/zdt-with.js`
+- `staging/Intl402/Temporal/old/tzdb-string-parsing.js`
+
+### A6. Proxy [[Set]] redundant internal lookups (1 test, MEDIUM)
+
+Proxy set path validates property descriptors twice, producing extra trap calls.
+
+- `staging/sm/Iterator/prototype/map/proxy-accesses.js`
+
+---
+
+## B. Medium Impact — Good ROI
+
+### B1. Class field ASI parsing bug (6 tests, MEDIUM)
+
+`x = obj` followed by `['lol']` on next line — parser incorrectly inserts ASI. Single parser fix.
+
+- `language/expressions/class/elements/fields-asi-1.js`
+- `language/expressions/class/elements/fields-asi-2.js`
+- `language/expressions/class/elements/fields-asi-3.js`
+- `language/statements/class/elements/fields-asi-1.js`
+- `language/statements/class/elements/fields-asi-2.js`
+- `language/statements/class/elements/fields-asi-3.js`
+
+### B2. Strict mode SM tests — harness incompatibility (13 tests, EASY)
+
+NOT engine bugs. `testLenientAndStrict()` helper from `sm/non262-strict-shell.js` is incompatible with the test runner's `:strict` variant. Fix: detect `sm/non262-strict-shell.js` include → auto-treat as `noStrict`.
+
+- `staging/sm/strict/10.4.2.js`
+- `staging/sm/strict/10.6.js`
+- `staging/sm/strict/12.10.1.js`
+- `staging/sm/strict/15.10.7.js`
+- `staging/sm/strict/15.3.5.1.js`
+- `staging/sm/strict/15.3.5.2.js`
+- `staging/sm/strict/15.5.5.1.js`
+- `staging/sm/strict/15.5.5.2.js`
+- `staging/sm/strict/8.12.5.js`
+- `staging/sm/strict/8.12.7-2.js`
+- `staging/sm/strict/8.12.7.js`
+- `staging/sm/strict/8.7.2.js`
+- `staging/sm/strict/eval-variable-environment.js`
+
+### B3. RegExp: template literal lone surrogate escapes (3 tests, EASY)
+
+Parser rejects `\uDC38` etc. in template literals. Only `\u{XXXX}` surrogates should be rejected.
+
+- `staging/sm/RegExp/split-trace.js`
+- `staging/sm/RegExp/unicode-raw.js`
+- `staging/sm/RegExp/unicode-class-raw.js`
+
+### B4. RegExp: `\u{NN}` without /u flag (1 test, EASY)
+
+`/\u{41}/` (no `/u`) should be `\u` + `{41}` quantifier, not Unicode escape.
+
+- `staging/sm/RegExp/unicode-braced.js`
+
+### B5. RegExp: AdvanceStringIndex lone surrogate off-by-one (2 tests, EASY)
+
+Advance by 1 (not 2) when lead surrogate is at string end with no trail.
+
+- `staging/sm/RegExp/match-trace.js`
+- `staging/sm/RegExp/replace-trace.js`
+
+### B6. RegExp: Rust panic on multi-byte replace (1 test, EASY — critical bug)
+
+Byte vs char index at `regexp.rs:6154`. Crash bug affecting real usage.
+
+- `staging/sm/RegExp/replace-twoBytes.js`
+
+### B7. RegExp: `\-` in char class with `/u` (1 test, EASY)
+
+`[A\-Z]` with `/u` should be `{A, -, Z}`, not range `[A-Z]`.
+
+- `staging/sm/RegExp/unicode-disallow-extended.js`
+
+### B8. RegExp: `\W`/`[^\W]` negation broken with `/iu` (1 test, MEDIUM)
+
+Negation logic for `\W` and `[^\w]` with unicode+ignoreCase doesn't account for expanded word character set.
+
+- `staging/sm/RegExp/unicode-ignoreCase-escape.js`
+
+### B9. RegExp: `\b` word boundary too broad with `/i` alone (1 test, MEDIUM)
+
+Without `/u`, U+017F should not be a word character even with `/i`.
+
+- `staging/sm/RegExp/unicode-ignoreCase-word-boundary.js`
+
+### B10. RegExp: Symbol.match infinite loop with RegExp subclass (1 test, MEDIUM)
+
+DuckRegExp with overridden `exec` causes infinite loop in `Symbol.match`.
+
+- `staging/sm/RegExp/lastIndex-match-or-replace.js`
+
+### B11. RegExp: `compile()` side-effect not honored during exec (2 tests, MEDIUM)
+
+When `compile()` is called as side-effect of `ToLength(lastIndex)`, recompilation not applied.
+
+- `staging/sm/RegExp/match-local-tolength-recompilation.js`
+- `staging/sm/RegExp/replace-local-tolength-recompilation.js`
+
+### B12. RegExp: constructor reads source/flags after new.target.prototype getter (1 test, MEDIUM)
+
+Should read `[[OriginalSource]]`/`[[OriginalFlags]]` before `OrdinaryCreateFromConstructor`.
+
+- `staging/sm/RegExp/constructor-ordering.js`
+
+### B13. RegExp: capture groups not reset in quantified group (1 test, MEDIUM)
+
+`/(?:^(a)|\1(a)|(ab)){2}/` — group 1 should reset between iterations.
+
+- `staging/sm/RegExp/regress-613820-3.js`
+
+### B14. RegExp: Unicode char class range + property escapes ignore lone surrogates (3 tests, MEDIUM)
+
+Lone surrogates not treated as matchable code points in unicode mode.
+
+- `staging/sm/RegExp/unicode-class-braced.js`
+- `built-ins/RegExp/property-escapes/generated/General_Category_-_Private_Use.js`
+- `built-ins/RegExp/property-escapes/generated/General_Category_-_Surrogate.js`
+
+### B15. Iterator.from: double Symbol.iterator + missing getPrototypeOf (3 tests, MEDIUM)
+
+Reads `Symbol.iterator` twice, doesn't check prototype chain per spec.
+
+- `staging/sm/Iterator/from/proxy-not-wrapped.js`
+- `staging/sm/Iterator/from/proxy-wrap-next.js`
+- `staging/sm/Iterator/from/proxy-wrap-return.js`
+
+### B16. Iterator.from: wrapper edge cases (3 tests, LOW)
+
+return() re-read after first call, object check on next result, cross-realm brand.
+
+- `staging/sm/Iterator/from/modify-return.js`
+- `staging/sm/Iterator/from/wrap-next-not-object-throws.js`
+- `staging/sm/Iterator/from/wrap-functions-on-other-global.js`
+
+### B17. Iterator flatMap: missing IfAbruptCloseIterator (1 test, LOW)
+
+Outer iterator not closed when inner value getter throws.
+
+- `staging/sm/Iterator/prototype/flatMap/close-iterator-when-inner-value-throws.js`
+
+### B18. Iterator helpers cross-realm prototype (1 test, MEDIUM)
+
+Methods stored on instances instead of shared `%IteratorHelperPrototype%`.
+
+- `staging/sm/Iterator/prototype/iterator-helpers-from-other-global.js`
+
+### B19. TypedArray seal/freeze semantics (3 tests, LOW-MEDIUM)
+
+Non-empty: should throw TypeError. Detached: should succeed.
+
+- `staging/sm/TypedArray/seal-and-freeze.js`
+- `staging/sm/TypedArray/test-integrity-level.js`
+- `staging/sm/TypedArray/test-integrity-level-detached.js`
+
+### B20. TypedArray constructor/from evaluation order (2 tests, MEDIUM)
+
+AllocateTypedArray before ToIndex(byteOffset); construct before reading elements.
+
+- `staging/sm/TypedArray/constructor-buffer-sequence.js`
+- `staging/sm/TypedArray/from_errors.js`
+
+### B21. Cross-realm TypedArray from/of (2 tests, MEDIUM)
+
+Prototype chain not set to other realm's TypedArray prototype.
+
+- `staging/sm/TypedArray/from_realms.js`
+- `staging/sm/TypedArray/of.js`
+
+### B22. Temporal non-ISO calendar IDs rejected (7 tests, MEDIUM)
+
+PlainMonthDay/PlainYearMonth reject `islamic-civil`, `hebrew`, etc. Should accept and canonicalize.
+
+- `intl402/Temporal/PlainMonthDay/from/canonicalize-calendar.js`
+- `intl402/Temporal/PlainMonthDay/from/reference-date-noniso-calendar.js`
+- `intl402/Temporal/PlainMonthDay/prototype/equals/canonicalize-calendar.js`
+- `intl402/Temporal/PlainYearMonth/from/canonicalize-calendar.js`
+- `intl402/Temporal/PlainYearMonth/prototype/equals/canonicalize-calendar.js`
+- `intl402/Temporal/PlainYearMonth/prototype/since/canonicalize-calendar.js`
+- `intl402/Temporal/PlainYearMonth/prototype/until/canonicalize-calendar.js`
+
+### B23. Temporal offset string parsing (4 tests, EASY)
+
+Rejects `-040000`, `+010000.0` — should accept no-colon offsets with optional fractional seconds.
+
+- `staging/Temporal/Regex/old/instant.js`
+- `staging/Temporal/Regex/old/plaindatetime.js`
+- `staging/Temporal/Regex/old/plainmonthday.js`
+- `staging/Temporal/Regex/old/plaintime.js`
+
+### B24. Intl realm/toStringTag wiring (5 tests, EASY)
+
+DisplayNames/Segmenter cross-realm: `[object Object]` instead of proper tag. Also Collator sort order and PluralRules categories.
+
+- `intl402/Collator/usage-de.js`
+- `intl402/DisplayNames/proto-from-ctor-realm.js`
+- `intl402/PluralRules/prototype/resolvedOptions/plural-categories-order.js`
+- `intl402/Segmenter/constructor/constructor/proto-from-ctor-realm.js`
+- `intl402/Segmenter/proto-from-ctor-realm.js`
+
+### B25. Temporal toLocaleString formatting (5 tests, MEDIUM)
+
+Leading zeros on hours, wrong locale date formats.
+
+- `staging/Intl402/Temporal/old/date-time-format.js`
+- `staging/Intl402/Temporal/old/date-toLocaleString.js`
+- `staging/Intl402/Temporal/old/datetime-toLocaleString.js`
+- `staging/Intl402/Temporal/old/instant-toLocaleString.js`
+- `staging/Intl402/Temporal/old/monthday-toLocaleString.js`
+
+### B26. Set intersection/union/symmetricDifference (3 tests, MEDIUM)
+
+Wrong deduplication/size with SetLike objects.
+
+- `staging/sm/Set/intersection.js`
+- `staging/sm/Set/symmetric-difference.js`
+- `staging/sm/Set/union.js`
+
+### B27. Generator edge cases (4 tests, MEDIUM)
+
+yield* send value forwarding, return in finally, syntax edge cases, iterator close.
+
+- `staging/sm/generators/iteration.js`
+- `staging/sm/generators/return-finally.js`
+- `staging/sm/generators/syntax.js`
+- `staging/sm/generators/yield-iterator-close.js`
+
+### B28. Class inner binding / super / eval (3 tests, MEDIUM)
+
+Class name reassignment should throw TypeError. Super in eval in nested non-method function should be SyntaxError. Super property proxy receiver incorrect.
+
+- `staging/sm/class/innerBinding.js`
+- `staging/sm/class/superPropEvalInsideNested.js`
+- `staging/sm/class/superPropProxies.js`
+
+### B29. Async function/await parsing edge cases (4 tests, MEDIUM)
+
+Unicode escape in `async` keyword, `await` in arrow/async function parameters.
+
+- `staging/sm/async-functions/async-contains-unicode-escape.js`
+- `staging/sm/async-functions/async-property-name-error.js`
+- `staging/sm/async-functions/await-in-arrow-parameters.js`
+- `staging/sm/async-functions/await-in-parameters-of-async-func.js`
+
+### B30. using/await using in switch cases (3 tests, MEDIUM)
+
+Parser rejects `using`/`await using` in switch case blocks where they should be valid.
+
+- `staging/explicit-resource-management/await-using-in-switch-case-block.js`
+- `staging/explicit-resource-management/call-dispose-methods.js`
+- `staging/explicit-resource-management/await-using-in-async-function-call-without-await.js`
+
+---
+
+## C. Low Impact / One-offs
+
+### C1. Temporal removed methods still present (1 test, TRIVIAL)
+
+Delete deprecated methods (`getISOFields`, `getCalendar`, `getTimeZone`, `fromEpochSeconds`, etc.).
+
+- `staging/Temporal/removed-methods.js`
+
+### C2. Decorators / auto-accessor (1 test, HARD)
+
+Full decorator runtime semantics needed for `accessor` keyword.
+
+- `staging/decorators/public-auto-accessor.js`
+
+### C3. Float16Array (1 test, HIGH)
+
+Entirely new typed array type not implemented.
+
+- `staging/sm/TypedArray/toString.js`
+
+### C4. Source phase imports (1 test, HARD)
+
+`import.source` not fully implemented.
+
+- `staging/source-phase-imports/import-source-source-text-module.js`
+
+### C5. RegExp duplicate named groups (1 test, MEDIUM)
+
+Capture slot layout wrong across alternation branches with backreferences.
+
+- `staging/built-ins/RegExp/named-groups/duplicate-named-groups.js`
+
+### C6. Variable-length TypedArray operations (3 tests, MEDIUM)
+
+preventExtensions/seal on resizable buffer TypedArrays should throw/return false when out-of-bounds.
+
+- `staging/built-ins/Object/preventExtensions/preventExtensions-variable-length-typed-arrays.js`
+- `staging/built-ins/Object/seal/seal-variable-length-typed-arrays.js`
+- `staging/built-ins/Reflect/preventExtensions/preventExtensions-variable-length-typed-arrays.js`
+
+### C7. Strict/syntax validation gaps (4 tests, MEDIUM)
+
+Future reserved words, parenthesized destructuring patterns, optional chain eval, Function() parameter boundary exploits.
+
+- `staging/sm/misc/future-reserved-words.js`
+- `staging/sm/expressions/destructuring-pattern-parenthesized.js`
+- `staging/sm/expressions/optional-chain.js`
+- `staging/sm/Function/invalid-parameter-list.js`
+
+### C8. Prototype writability / Reflect.set (2 tests, MEDIUM)
+
+Property descriptor transitions and Reflect.set with distinct receiver.
+
+- `staging/sm/object/proto-property-change-writability-set.js`
+- `staging/sm/Reflect/set.js`
+
+### C9. Proxy invariant checking (2 tests, MEDIUM)
+
+getOwnPropertyDescriptor enumerable invariant; global-as-proxy property resolution.
+
+- `staging/sm/regress/regress-1383630.js`
+- `staging/sm/Proxy/global-receiver.js`
+
+### C10. Miscellaneous one-offs (~17 tests, VARIED)
+
+- **Stack overflow**: `staging/sm/extensions/recursion.js` — Rust stack overflow instead of JS RangeError
+- **Timeouts**: `staging/sm/regress/regress-1507322-deep-weakmap.js`, `staging/sm/String/replace-math.js`
+- **BigInt OOM**: `staging/sm/BigInt/large-bit-length.js` — should throw RangeError not abort
+- **Destructuring**: `staging/sm/regress/regress-469625-02.js` — holes don't inherit from `Array.prototype`
+- **eval var**: `staging/sm/regress/regress-694306.js` — `eval("var {if}")` leaks binding
+- **eval var getter**: `staging/sm/global/bug-320887.js` — `eval("var x")` calls global getter
+- **Destructuring syntax**: `staging/sm/destructuring/bug1396261.js` — `{a = 0}.x` should be SyntaxError
+- **Reflect.apply**: `staging/sm/Reflect/apply.js` — wrong error type for non-callable
+- **String internal**: `staging/sm/String/internalUsage.js` — Symbol.split override affects Intl
+- **String case**: `staging/sm/String/string-upper-lower-mapping.js` — U+A7CF case mapping wrong
+- **Error.stack**: `staging/sm/Math/acosh-approx.js`, `staging/sm/Math/atanh-approx.js` — `Error().stack` is undefined
+- **JSON.rawJSON**: `staging/sm/JSON/parse-with-source.js` — wrong enumerable keys
+- **Atomics**: `staging/sm/Atomics/detached-buffers.js` — no TypeError on detach during valueOf
+- **Date parsing**: `staging/sm/Date/non-iso.js` — space-separated date-time not parsed
+- **Array.from**: `staging/sm/Array/from-iterator-close.js` — iterator not closed on error
+- **Array species**: `staging/sm/Array/species.js` — extra proxy log entry for filter
+- **Array toLocaleString**: `staging/sm/Array/toLocaleString.js` — wrong `this` type in strict
+- **Array unscopables**: `staging/sm/Array/unscopables.js` — `groupBy` in unscopables
+- **Function.apply**: `staging/sm/Function/15.3.4.3-01.js` — valueOf not called during ToUint32
+- **Function name**: `staging/sm/Function/function-name-for.js` — no name for for-in anonymous fn
+- **Function.toString**: `staging/sm/Function/function-toString-builtin-name.js` — Symbol.split not shown
+- `staging/sm/fields/await-identifier-module-3.js`
+
+### C11. Tests that pass individually — flaky under load (~8 tests, N/A)
+
+These pass when run in isolation but fail under the full suite (resource contention):
+
+- `staging/sm/expressions/destructuring-array-default-call.js` (strict only)
+- `staging/sm/expressions/destructuring-array-default-class.js` (strict only)
+- `staging/sm/expressions/destructuring-array-default-function-nested.js` (strict only)
+- `staging/sm/expressions/destructuring-array-default-function.js` (strict only)
+- `staging/sm/expressions/destructuring-array-default-simple.js` (strict only)
+- `staging/sm/expressions/destructuring-array-default-yield.js` (strict only)
+- `staging/sm/JSON/parse-mega-huge-array.js`
+- `staging/sm/regress/regress-610026.js`
