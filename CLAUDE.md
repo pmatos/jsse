@@ -3,6 +3,8 @@
 ## Project Overview
 A from-scratch JavaScript engine implemented in Rust. No JS parser/engine libraries allowed as dependencies — every detail must be implemented by us. Utility crates (parsing combinators, math, etc.) are fine.
 
+**GitHub repo: `pmatos/jsse`** — always use this owner/repo for GitHub MCP calls.
+
 **Ultimate goal: 100% test262 pass rate.**
 
 ## Repository Layout
