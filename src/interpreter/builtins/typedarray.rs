@@ -5,6 +5,22 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
+fn buffer_len(buf: &Rc<RefCell<BufferData>>) -> usize {
+    (*buf.borrow()).len()
+}
+
+fn buffer_bytes(buf: &Rc<RefCell<BufferData>>) -> Vec<u8> {
+    (*buf.borrow()).to_vec()
+}
+
+fn with_buffer_read<R>(buf: &Rc<RefCell<BufferData>>, f: impl FnOnce(&[u8]) -> R) -> R {
+    (*buf.borrow()).with_read(f)
+}
+
+fn with_buffer_write<R>(buf: &Rc<RefCell<BufferData>>, f: impl FnOnce(&mut [u8]) -> R) -> R {
+    (*buf.borrow_mut()).with_write(f)
+}
+
 fn to_int32_modular(n: f64) -> i32 {
     if n.is_nan() || n.is_infinite() || n == 0.0 {
         return 0;
@@ -54,7 +70,7 @@ impl Interpreter {
                         {
                             return Completion::Normal(JsValue::Number(0.0));
                         }
-                        let len = buf_data.borrow().len();
+                        let len = buffer_len(buf_data);
                         return Completion::Normal(JsValue::Number(len as f64));
                     }
                 }
@@ -165,7 +181,7 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Number(0.0));
                         }
                         let max = obj_ref.arraybuffer_max_byte_length.unwrap_or_else(|| {
-                            obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len()
+                            buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
                         });
                         return Completion::Normal(JsValue::Number(max as f64));
                     }
@@ -216,7 +232,7 @@ impl Interpreter {
                         }
                         let buf_len = {
                             let obj_ref = obj.borrow();
-                            obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len()
+                            buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
                         };
                         let len = buf_len as f64;
                         let start_arg = if let Some(a) = args.first() {
@@ -318,7 +334,7 @@ impl Interpreter {
                             let new_rc = interp.get_object(new_id).unwrap();
                             let new_ref = new_rc.borrow();
                             let new_byte_len =
-                                new_ref.arraybuffer_data.as_ref().unwrap().borrow().len();
+                                buffer_len(new_ref.arraybuffer_data.as_ref().unwrap());
                             if new_byte_len < new_len {
                                 return Completion::Throw(interp.create_type_error(
                                     "species constructor returned an ArrayBuffer that is too small",
@@ -335,16 +351,17 @@ impl Interpreter {
                                     interp.create_type_error("ArrayBuffer is detached"),
                                 );
                             }
-                            obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
+                            buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
                         };
                         // Copy data
                         if new_len > 0 {
                             let new_obj = interp.get_object(new_id).unwrap();
                             let new_ref = new_obj.borrow();
                             let new_buf = new_ref.arraybuffer_data.as_ref().unwrap();
-                            let mut new_buf_ref = new_buf.borrow_mut();
-                            new_buf_ref[..new_len]
-                                .copy_from_slice(&buf_data[start..start + new_len]);
+                            with_buffer_write(new_buf, |new_buf_ref| {
+                                new_buf_ref[..new_len]
+                                    .copy_from_slice(&buf_data[start..start + new_len]);
+                            });
                         }
                         return Completion::Normal(new_val);
                     }
@@ -382,7 +399,7 @@ impl Interpreter {
                     let new_len_arg = args.first().unwrap_or(&JsValue::Undefined);
                     let old_len = {
                         let obj_ref = obj.borrow();
-                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len()
+                        buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
                     let new_len = if matches!(new_len_arg, JsValue::Undefined) {
                         old_len
@@ -429,7 +446,7 @@ impl Interpreter {
                     }
                     let old_data = {
                         let obj_ref = obj.borrow();
-                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
+                        buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
                     let mut new_data = vec![0u8; new_len];
                     let copy_len = old_len.min(new_len);
@@ -478,7 +495,7 @@ impl Interpreter {
                     }
                     let old_len = {
                         let obj_ref = obj.borrow();
-                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len()
+                        buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
                     let new_len_arg = args.first().unwrap_or(&JsValue::Undefined);
                     let new_len = if matches!(new_len_arg, JsValue::Undefined) {
@@ -511,7 +528,7 @@ impl Interpreter {
                     }
                     let old_data = {
                         let obj_ref = obj.borrow();
-                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
+                        buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
                     let mut new_data = vec![0u8; new_len];
                     let copy_len = old_len.min(new_len);
@@ -560,7 +577,7 @@ impl Interpreter {
                     }
                     let old_len = {
                         let obj_ref = obj.borrow();
-                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len()
+                        buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
                     let new_len_arg = args.first().unwrap_or(&JsValue::Undefined);
                     let new_len = if matches!(new_len_arg, JsValue::Undefined) {
@@ -592,7 +609,7 @@ impl Interpreter {
                     }
                     let old_data = {
                         let obj_ref = obj.borrow();
-                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
+                        buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
                     let mut new_data = vec![0u8; new_len];
                     let copy_len = old_len.min(new_len);
@@ -911,7 +928,7 @@ impl Interpreter {
                     if obj_ref.arraybuffer_is_shared
                         && let Some(ref buf) = obj_ref.arraybuffer_data
                     {
-                        return Completion::Normal(JsValue::Number(buf.borrow().len() as f64));
+                        return Completion::Normal(JsValue::Number(buffer_len(buf) as f64));
                     }
                 }
                 Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
@@ -943,7 +960,7 @@ impl Interpreter {
                     {
                         let max = obj_ref
                             .arraybuffer_max_byte_length
-                            .unwrap_or_else(|| buf.borrow().len());
+                            .unwrap_or_else(|| buffer_len(buf));
                         return Completion::Normal(JsValue::Number(max as f64));
                     }
                 }
@@ -1033,7 +1050,7 @@ impl Interpreter {
                     }
                     let obj_ref = obj.borrow();
                     let buf = obj_ref.arraybuffer_data.as_ref().unwrap();
-                    let current_len = buf.borrow().len();
+                    let current_len = buffer_len(buf);
                     if new_len < current_len {
                         return Completion::Throw(
                             interp.create_error("RangeError", "SharedArrayBuffer cannot shrink"),
@@ -1065,7 +1082,7 @@ impl Interpreter {
                             );
                         }
                         if let Some(ref buf) = obj_ref.arraybuffer_data {
-                            buf.borrow().len()
+                            buffer_len(buf)
                         } else {
                             return Completion::Throw(
                                 interp.create_type_error("not a SharedArrayBuffer"),
@@ -1153,7 +1170,7 @@ impl Interpreter {
                     {
                         let new_rc = interp.get_object(new_id).unwrap();
                         let new_ref = new_rc.borrow();
-                        let new_byte_len = new_ref.arraybuffer_data.as_ref().unwrap().borrow().len();
+                        let new_byte_len = buffer_len(new_ref.arraybuffer_data.as_ref().unwrap());
                         if new_byte_len < new_len {
                             return Completion::Throw(
                                 interp.create_type_error("species constructor returned a SharedArrayBuffer that is too small"),
@@ -1164,14 +1181,15 @@ impl Interpreter {
                     if new_len > 0 {
                         let buf_data = {
                             let obj_ref = obj.borrow();
-                            obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
+                            buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
                         };
                         let new_obj = interp.get_object(new_id).unwrap();
                         let new_ref = new_obj.borrow();
                         let new_buf = new_ref.arraybuffer_data.as_ref().unwrap();
-                        let mut new_buf_ref = new_buf.borrow_mut();
-                        new_buf_ref[..new_len]
-                            .copy_from_slice(&buf_data[start..start + new_len]);
+                        with_buffer_write(new_buf, |new_buf_ref| {
+                            new_buf_ref[..new_len]
+                                .copy_from_slice(&buf_data[start..start + new_len]);
+                        });
                     }
                     return Completion::Normal(new_val);
                 }
@@ -1582,19 +1600,21 @@ impl Interpreter {
                                 let byte_count = src_len * bpe;
                                 if same_buffer {
                                     // Clone source bytes first to handle overlap
-                                    let src_bytes: Vec<u8> = {
-                                        let buf = ta.buffer.borrow();
+                                    let src_bytes = with_buffer_read(&ta.buffer, |buf| {
                                         buf[src_start..src_start + byte_count].to_vec()
-                                    };
-                                    let mut buf = ta.buffer.borrow_mut();
-                                    buf[dst_start..dst_start + byte_count]
-                                        .copy_from_slice(&src_bytes);
+                                    });
+                                    with_buffer_write(&ta.buffer, |buf| {
+                                        buf[dst_start..dst_start + byte_count]
+                                            .copy_from_slice(&src_bytes);
+                                    });
                                 } else {
-                                    let src_buf = src_ta.buffer.borrow();
-                                    let mut dst_buf = ta.buffer.borrow_mut();
-                                    dst_buf[dst_start..dst_start + byte_count].copy_from_slice(
-                                        &src_buf[src_start..src_start + byte_count],
-                                    );
+                                    let src_bytes = with_buffer_read(&src_ta.buffer, |buf| {
+                                        buf[src_start..src_start + byte_count].to_vec()
+                                    });
+                                    with_buffer_write(&ta.buffer, |buf| {
+                                        buf[dst_start..dst_start + byte_count]
+                                            .copy_from_slice(&src_bytes);
+                                    });
                                 }
                             } else if same_buffer {
                                 // Clone all source values first
@@ -1849,25 +1869,26 @@ impl Interpreter {
                                 let byte_count = count * bpe;
                                 let same_buf = Rc::ptr_eq(&ta.buffer, &new_ta.buffer);
                                 if same_buf {
-                                    let mut buf = ta.buffer.borrow_mut();
-                                    if src_start + byte_count <= buf.len()
-                                        && dst_start + byte_count <= buf.len()
-                                    {
-                                        // Spec: copy byte-by-byte in forward order (overlapping-write semantics)
-                                        for j in 0..byte_count {
-                                            buf[dst_start + j] = buf[src_start + j];
+                                    with_buffer_write(&ta.buffer, |buf| {
+                                        if src_start + byte_count <= buf.len()
+                                            && dst_start + byte_count <= buf.len()
+                                        {
+                                            let src =
+                                                buf[src_start..src_start + byte_count].to_vec();
+                                            buf[dst_start..dst_start + byte_count]
+                                                .copy_from_slice(&src);
                                         }
-                                    }
+                                    });
                                 } else {
-                                    let src_buf = ta.buffer.borrow();
-                                    let mut dst_buf = new_ta.buffer.borrow_mut();
-                                    if src_start + byte_count <= src_buf.len()
-                                        && dst_start + byte_count <= dst_buf.len()
-                                    {
-                                        dst_buf[dst_start..dst_start + byte_count].copy_from_slice(
-                                            &src_buf[src_start..src_start + byte_count],
-                                        );
-                                    }
+                                    let src_bytes = with_buffer_read(&ta.buffer, |buf| {
+                                        buf[src_start..src_start + byte_count].to_vec()
+                                    });
+                                    with_buffer_write(&new_ta.buffer, |buf| {
+                                        if dst_start + byte_count <= buf.len() {
+                                            buf[dst_start..dst_start + byte_count]
+                                                .copy_from_slice(&src_bytes);
+                                        }
+                                    });
                                 }
                             } else {
                                 for i in 0..count {
@@ -1966,18 +1987,19 @@ impl Interpreter {
                     };
                     if count > 0 {
                         let bpe = ta.kind.bytes_per_element();
-                        let mut buf = ta.buffer.borrow_mut();
-                        let buf_len = buf.len();
-                        let src_byte_start = ta.byte_offset + start * bpe;
-                        let dst_byte_start = ta.byte_offset + target * bpe;
-                        let max_src_bytes = buf_len.saturating_sub(src_byte_start);
-                        let max_dst_bytes = buf_len.saturating_sub(dst_byte_start);
-                        let byte_count = (count * bpe).min(max_src_bytes).min(max_dst_bytes);
-                        if byte_count > 0 {
-                            let src: Vec<u8> =
-                                buf[src_byte_start..src_byte_start + byte_count].to_vec();
-                            buf[dst_byte_start..dst_byte_start + byte_count].copy_from_slice(&src);
-                        }
+                        with_buffer_write(&ta.buffer, |buf| {
+                            let buf_len = buf.len();
+                            let src_byte_start = ta.byte_offset + start * bpe;
+                            let dst_byte_start = ta.byte_offset + target * bpe;
+                            let max_src_bytes = buf_len.saturating_sub(src_byte_start);
+                            let max_dst_bytes = buf_len.saturating_sub(dst_byte_start);
+                            let byte_count = (count * bpe).min(max_src_bytes).min(max_dst_bytes);
+                            if byte_count > 0 {
+                                let src = buf[src_byte_start..src_byte_start + byte_count].to_vec();
+                                buf[dst_byte_start..dst_byte_start + byte_count]
+                                    .copy_from_slice(&src);
+                            }
+                        });
                     }
                     return Completion::Normal(this_val.clone());
                 }
@@ -3827,7 +3849,7 @@ impl Interpreter {
                                     let detached = src_ref.arraybuffer_detached.clone()
                                         .unwrap_or_else(|| Rc::new(Cell::new(false)));
                                     let is_resizable = src_ref.arraybuffer_max_byte_length.is_some();
-                                    let buf_len = buf_rc.borrow().len();
+                                    let buf_len = buffer_len(&buf_rc);
                                     drop(src_ref);
                                     let byte_offset = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
                                         let offset_val = match interp.to_index(&args[1]) {
@@ -4182,13 +4204,14 @@ impl Interpreter {
                     Ok(ta) => ta,
                     Err(c) => return c,
                 };
-                let buf = ta.buffer.borrow();
                 let start = ta.byte_offset;
                 let end = start + ta.byte_length;
                 let mut result = String::with_capacity(ta.byte_length * 2);
-                for &b in &buf[start..end] {
-                    result.push_str(&format!("{:02x}", b));
-                }
+                with_buffer_read(&ta.buffer, |buf| {
+                    for &b in &buf[start..end] {
+                        result.push_str(&format!("{:02x}", b));
+                    }
+                });
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -4216,12 +4239,11 @@ impl Interpreter {
                     return c;
                 }
 
-                let buf = ta.buffer.borrow();
                 let start = ta.byte_offset;
                 let end = start + ta.byte_length;
-                let data = &buf[start..end];
-
-                let result = encode_base64(data, &alphabet, omit_padding);
+                let result = with_buffer_read(&ta.buffer, |buf| {
+                    encode_base64(&buf[start..end], &alphabet, omit_padding)
+                });
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -4251,11 +4273,12 @@ impl Interpreter {
                 let result = decode_hex(&input_str, Some(max_bytes));
                 let written = result.bytes.len();
                 {
-                    let mut buf = ta.buffer.borrow_mut();
-                    let start = ta.byte_offset;
-                    for (idx, &b) in result.bytes.iter().enumerate() {
-                        buf[start + idx] = b;
-                    }
+                    with_buffer_write(&ta.buffer, |buf| {
+                        let start = ta.byte_offset;
+                        for (idx, &b) in result.bytes.iter().enumerate() {
+                            buf[start + idx] = b;
+                        }
+                    });
                 }
                 if let Some(msg) = result.error {
                     return Completion::Throw(interp.create_error("SyntaxError", &msg));
@@ -4299,11 +4322,12 @@ impl Interpreter {
                 let result = decode_base64(&input_str, &alphabet, &last_chunk, Some(max_bytes));
                 let written = result.bytes.len();
                 {
-                    let mut buf = ta.buffer.borrow_mut();
-                    let start = ta.byte_offset;
-                    for (idx, &b) in result.bytes.iter().enumerate() {
-                        buf[start + idx] = b;
-                    }
+                    with_buffer_write(&ta.buffer, |buf| {
+                        let start = ta.byte_offset;
+                        for (idx, &b) in result.bytes.iter().enumerate() {
+                            buf[start + idx] = b;
+                        }
+                    });
                 }
                 if let Some(msg) = result.error {
                     return Completion::Throw(interp.create_error("SyntaxError", &msg));
@@ -4759,7 +4783,7 @@ impl Interpreter {
                                 interp.create_type_error("DataView buffer is detached"),
                             );
                         }
-                        let buf_len = dv.buffer.borrow().len();
+                        let buf_len = buffer_len(&dv.buffer);
                         if dv.is_length_tracking {
                             if dv.byte_offset > buf_len {
                                 return Completion::Throw(
@@ -4803,7 +4827,7 @@ impl Interpreter {
                                 interp.create_type_error("DataView buffer is detached"),
                             );
                         }
-                        let buf_len = dv.buffer.borrow().len();
+                        let buf_len = buffer_len(&dv.buffer);
                         if dv.is_length_tracking {
                             if dv.byte_offset > buf_len {
                                 return Completion::Throw(
@@ -4883,7 +4907,7 @@ impl Interpreter {
                                     interp.create_type_error("DataView buffer is detached"),
                                 );
                             }
-                            let buf_len = dv.buffer.borrow().len();
+                            let buf_len = buffer_len(&dv.buffer);
                             let effective_byte_length = if dv.is_length_tracking {
                                 if dv.byte_offset > buf_len {
                                     return Completion::Throw(
@@ -4906,8 +4930,9 @@ impl Interpreter {
                                 ));
                             }
                             let idx = dv.byte_offset + byte_offset;
-                            let buf = dv.buffer.borrow();
-                            let result = $read_fn(&buf[idx..idx + $size], little_endian);
+                            let result = with_buffer_read(&dv.buffer, |buf| {
+                                $read_fn(&buf[idx..idx + $size], little_endian)
+                            });
                             return Completion::Normal(result);
                         }
                         Completion::Throw(interp.create_type_error("not a DataView"))
@@ -5072,7 +5097,7 @@ impl Interpreter {
                                     interp.create_type_error("DataView buffer is detached"),
                                 );
                             }
-                            let buf_len = dv.buffer.borrow().len();
+                            let buf_len = buffer_len(&dv.buffer);
                             let effective_byte_length = if dv.is_length_tracking {
                                 if dv.byte_offset > buf_len {
                                     return Completion::Throw(
@@ -5095,8 +5120,9 @@ impl Interpreter {
                                 ));
                             }
                             let idx = dv.byte_offset + byte_offset;
-                            let mut buf = dv.buffer.borrow_mut();
-                            $write_fn(&mut buf[idx..idx + $size], num_value, little_endian);
+                            with_buffer_write(&dv.buffer, |buf| {
+                                $write_fn(&mut buf[idx..idx + $size], num_value, little_endian);
+                            });
                             return Completion::Normal(JsValue::Undefined);
                         }
                         Completion::Throw(interp.create_type_error("not a DataView"))
@@ -5161,7 +5187,7 @@ impl Interpreter {
                                     interp.create_type_error("DataView buffer is detached"),
                                 );
                             }
-                            let buf_len = dv.buffer.borrow().len();
+                            let buf_len = buffer_len(&dv.buffer);
                             let effective_byte_length = if dv.is_length_tracking {
                                 if dv.byte_offset > buf_len {
                                     return Completion::Throw(
@@ -5184,8 +5210,9 @@ impl Interpreter {
                                 ));
                             }
                             let idx = dv.byte_offset + byte_offset;
-                            let mut buf = dv.buffer.borrow_mut();
-                            $write_fn(&mut buf[idx..idx + $size], &bigint_value, little_endian);
+                            with_buffer_write(&dv.buffer, |buf| {
+                                $write_fn(&mut buf[idx..idx + $size], &bigint_value, little_endian);
+                            });
                             return Completion::Normal(JsValue::Undefined);
                         }
                         Completion::Throw(interp.create_type_error("not a DataView"))
@@ -5350,7 +5377,7 @@ impl Interpreter {
                             .arraybuffer_detached
                             .clone()
                             .unwrap_or_else(|| Rc::new(Cell::new(false)));
-                        let len = buf.borrow().len();
+                        let len = buffer_len(&buf);
                         let resizable = obj_ref.arraybuffer_max_byte_length.is_some();
                         let immutable = obj_ref.arraybuffer_is_immutable;
                         (buf, det, len, resizable, immutable)
@@ -5411,7 +5438,7 @@ impl Interpreter {
                         let new_buf_len = obj_ref
                             .arraybuffer_data
                             .as_ref()
-                            .map(|b| b.borrow().len())
+                            .map(buffer_len)
                             .unwrap_or(0);
                         if byte_offset > new_buf_len {
                             return Completion::Throw(interp.create_error(
