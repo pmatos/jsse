@@ -1,7 +1,7 @@
 # Staging Test Failures Plan
 
-**Current:** 101,008 / 101,269 (99.74%) — 261 failing scenarios
-**Previous baseline:** 100,982 / 101,269 (99.72%) — 287 failing scenarios
+**Current:** 101,018 / 101,269 (99.75%) — 251 failing scenarios
+**Previous baseline:** 101,008 / 101,269 (99.74%) — 261 failing scenarios
 
 ---
 
@@ -53,16 +53,24 @@ Implemented full non-ISO calendar support for DateTimeFormat component-based for
 
 All 13 tests (26 scenarios) now pass, 0 regressions.
 
-### A5. Temporal ZonedDateTime DST handling (6 tests, HARD)
+### ~~A5. Temporal ZonedDateTime DST handling (6 tests, HARD)~~ PARTIAL (+10 passes)
 
-Duration rounding across DST boundaries wrong (`PT23H` vs `P1D`). Disambiguation at spring-forward/fall-back incorrect.
+Fixed DST handling in ZonedDateTime operations:
+- Added `resolve_local_to_epoch` helper for reject-aware disambiguation
+- `from()` property bag: restructured to use disambiguation when no offset present; exact matching (`sub_minute: true`) for bag offsets per spec
+- `with()`: wired up previously-unused `disambiguation` option; exact offset matching with `offset_match_or_reject`/`offset_match_candidates`
+- `until()`/`since()` day correction: replaced `get_tz_offset_ns(tz, BigInt::from(int_local))` (treating wall-clock as UTC) with `disambiguate_instant(tz, int_local, "compatible")`
+- `toString()` rounding: re-resolve through timezone after rounding to handle DST gaps
+- String parsing: fixed `"ignore"`/`"prefer"` fallback and no-offset `"reject"` paths
 
-- `staging/Intl402/Temporal/old/dst-math.js`
-- `staging/Intl402/Temporal/old/duration-round.js`
-- `staging/Intl402/Temporal/old/property-bags.js`
-- `staging/Intl402/Temporal/old/zdt-tostring.js`
-- `staging/Intl402/Temporal/old/zdt-with.js`
-- `staging/Intl402/Temporal/old/tzdb-string-parsing.js`
+5/6 tests (10/12 scenarios) now pass, 0 regressions. Remaining `duration-round.js` failure is in duration rounding code (separate issue).
+
+- `staging/Intl402/Temporal/old/dst-math.js` — **NOW PASSING**
+- `staging/Intl402/Temporal/old/duration-round.js` — still failing (duration rounding issue in `duration.rs`)
+- `staging/Intl402/Temporal/old/property-bags.js` — **NOW PASSING**
+- `staging/Intl402/Temporal/old/zdt-tostring.js` — **NOW PASSING**
+- `staging/Intl402/Temporal/old/zdt-with.js` — **NOW PASSING**
+- `staging/Intl402/Temporal/old/tzdb-string-parsing.js` — **NOW PASSING**
 
 ### A6. Proxy [[Set]] redundant internal lookups (1 test, MEDIUM)
 
