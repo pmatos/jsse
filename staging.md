@@ -1,7 +1,7 @@
 # Staging Test Failures Plan
 
-**Current:** 101,018 / 101,269 (99.75%) — 251 failing scenarios
-**Previous baseline:** 101,008 / 101,269 (99.74%) — 261 failing scenarios
+**Current:** 101,020 / 101,269 (99.75%) — 249 failing scenarios
+**Previous baseline:** 101,018 / 101,269 (99.75%) — 251 failing scenarios
 
 ---
 
@@ -72,11 +72,11 @@ Fixed DST handling in ZonedDateTime operations:
 - `staging/Intl402/Temporal/old/zdt-with.js` — **NOW PASSING**
 - `staging/Intl402/Temporal/old/tzdb-string-parsing.js` — **NOW PASSING**
 
-### A6. Proxy [[Set]] redundant internal lookups (1 test, MEDIUM)
+### ~~A6. Proxy [[Set]] redundant descriptor lookups (1 test, MEDIUM)~~ DONE (+2 passes)
 
-Proxy set path validates property descriptors twice, producing extra trap calls.
+Fixed `proxy_get_own_property_descriptor` to return a normalized descriptor (via `from_property_descriptor`) instead of the raw trap result object. This ensures `to_property_descriptor` runs exactly once inside GOPD for invariant checking, and callers that re-read the descriptor operate on a plain object with no proxy traps. Also propagates `to_property_descriptor` errors per spec step 15.
 
-- `staging/sm/Iterator/prototype/map/proxy-accesses.js`
+- `staging/sm/Iterator/prototype/map/proxy-accesses.js` — **NOW PASSING**
 
 ---
 

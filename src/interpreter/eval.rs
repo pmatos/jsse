@@ -15781,55 +15781,58 @@ impl Interpreter {
                                 }
                             }
                         } else if matches!(v, JsValue::Object(_)) {
-                            let trap_desc = self.to_property_descriptor(&v);
-                            if let Ok(ref result_desc) = trap_desc {
-                                // Step 22: If resultDesc.[[Configurable]] is false
-                                if result_desc.configurable == Some(false) {
-                                    // 22a: If targetDesc is undefined or targetDesc.[[Configurable]] is true
-                                    if target_desc.is_none()
-                                        || target_desc
-                                            .as_ref()
-                                            .is_some_and(|td| td.configurable == Some(true))
-                                    {
-                                        return Err(self.create_type_error(
+                            let result_desc = match self.to_property_descriptor(&v) {
+                                Ok(d) => d,
+                                Err(Some(e)) => return Err(e),
+                                Err(None) => return Ok(JsValue::Undefined),
+                            };
+                            // Step 22: If resultDesc.[[Configurable]] is false
+                            if result_desc.configurable == Some(false) {
+                                // 22a: If targetDesc is undefined or targetDesc.[[Configurable]] is true
+                                if target_desc.is_none()
+                                    || target_desc
+                                        .as_ref()
+                                        .is_some_and(|td| td.configurable == Some(true))
+                                {
+                                    return Err(self.create_type_error(
                                             "'getOwnPropertyDescriptor' on proxy: trap reported non-configurable for a property that is either non-existent or configurable in the proxy target",
                                         ));
-                                    }
-                                }
-
-                                if let Some(ref td) = target_desc {
-                                    if td.configurable == Some(false) {
-                                        // Step 21a: resultDesc configurable:true for non-configurable target
-                                        if result_desc.configurable == Some(true) {
-                                            return Err(self.create_type_error(
-                                                "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with configurable: true for non-configurable property in the proxy target",
-                                            ));
-                                        }
-                                        // Step 21b: writable:true for non-configurable non-writable target
-                                        if td.is_data_descriptor()
-                                            && td.writable == Some(false)
-                                            && result_desc.writable == Some(true)
-                                        {
-                                            return Err(self.create_type_error(
-                                                "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with writable: true for non-configurable non-writable property in the proxy target",
-                                            ));
-                                        }
-                                        // Step 21b: non-configurable non-writable result but writable target
-                                        if result_desc.is_data_descriptor()
-                                            && result_desc.writable == Some(false)
-                                            && td.writable == Some(true)
-                                        {
-                                            return Err(self.create_type_error(
-                                                "'getOwnPropertyDescriptor' on proxy: trap returned non-configurable non-writable descriptor for a configurable or writable property in the proxy target",
-                                            ));
-                                        }
-                                    }
-                                } else if !target_extensible {
-                                    return Err(self.create_type_error(
-                                        "'getOwnPropertyDescriptor' on proxy: trap returned descriptor for property which does not exist in the non-extensible proxy target",
-                                    ));
                                 }
                             }
+
+                            if let Some(ref td) = target_desc {
+                                if td.configurable == Some(false) {
+                                    // Step 21a: resultDesc configurable:true for non-configurable target
+                                    if result_desc.configurable == Some(true) {
+                                        return Err(self.create_type_error(
+                                                "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with configurable: true for non-configurable property in the proxy target",
+                                            ));
+                                    }
+                                    // Step 21b: writable:true for non-configurable non-writable target
+                                    if td.is_data_descriptor()
+                                        && td.writable == Some(false)
+                                        && result_desc.writable == Some(true)
+                                    {
+                                        return Err(self.create_type_error(
+                                                "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with writable: true for non-configurable non-writable property in the proxy target",
+                                            ));
+                                    }
+                                    // Step 21b: non-configurable non-writable result but writable target
+                                    if result_desc.is_data_descriptor()
+                                        && result_desc.writable == Some(false)
+                                        && td.writable == Some(true)
+                                    {
+                                        return Err(self.create_type_error(
+                                                "'getOwnPropertyDescriptor' on proxy: trap returned non-configurable non-writable descriptor for a configurable or writable property in the proxy target",
+                                            ));
+                                    }
+                                }
+                            } else if !target_extensible {
+                                return Err(self.create_type_error(
+                                        "'getOwnPropertyDescriptor' on proxy: trap returned descriptor for property which does not exist in the non-extensible proxy target",
+                                    ));
+                            }
+                            return Ok(self.from_property_descriptor(&result_desc));
                         }
                     }
                     Ok(v)
