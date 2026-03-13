@@ -458,6 +458,8 @@ pub(crate) struct CalendarFields {
     pub days_in_year: u16,
     pub months_in_year: u8,
     pub in_leap_year: bool,
+    pub cyclic_year: Option<u8>,
+    pub related_iso: Option<i32>,
 }
 
 pub(crate) fn iso_to_calendar_fields(
@@ -472,7 +474,7 @@ pub(crate) fn iso_to_calendar_fields(
     let d = iso_date.to_any().to_calendar(cal);
 
     let yi = d.year();
-    let (year, era, era_year) = if let Some(e) = yi.era() {
+    let (year, era, era_year, cyclic_year, related_iso) = if let Some(e) = yi.era() {
         let ext = yi.extended_year();
         // Japanese calendar: dates before 1873-01-01 use ce/bce instead of meiji etc.
         if calendar_id == "japanese"
@@ -480,15 +482,17 @@ pub(crate) fn iso_to_calendar_fields(
             && !matches!(e.era.to_string().as_str(), "ce" | "bce")
         {
             if ext >= 1 {
-                (ext, Some("ce".to_string()), Some(ext))
+                (ext, Some("ce".to_string()), Some(ext), None, None)
             } else {
-                (ext, Some("bce".to_string()), Some(1 - ext))
+                (ext, Some("bce".to_string()), Some(1 - ext), None, None)
             }
         } else {
-            (ext, Some(e.era.to_string()), Some(e.year))
+            (ext, Some(e.era.to_string()), Some(e.year), None, None)
         }
     } else {
-        (yi.era_year_or_related_iso(), None, None)
+        let related = yi.era_year_or_related_iso();
+        let cyclic = yi.cyclic().map(|c| c.year);
+        (related, None, None, cyclic, Some(related))
     };
 
     Some(CalendarFields {
@@ -503,6 +507,8 @@ pub(crate) fn iso_to_calendar_fields(
         days_in_year: d.days_in_year(),
         months_in_year: d.months_in_year(),
         in_leap_year: d.is_in_leap_year(),
+        cyclic_year,
+        related_iso,
     })
 }
 
@@ -587,6 +593,8 @@ pub(crate) fn iso_to_calendar_fields_from_year(
         days_in_year: d.days_in_year(),
         months_in_year: d.months_in_year(),
         in_leap_year: d.is_in_leap_year(),
+        cyclic_year: None,
+        related_iso: None,
     })
 }
 

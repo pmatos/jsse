@@ -12,9 +12,9 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 This includes all test262 directories: `language/`, `built-ins/`, `annexB/`, `intl402/`, and `staging/`.
 
-Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262/blob/main/INTERPRETING.md)), test files without `noStrict`, `onlyStrict`, `module`, or `raw` flags must be run **twice**: once in default (sloppy) mode and once with `"use strict";` prepended. Our test runner implements this dual-mode execution, expanding 52,735 test files into 101,450 scenarios.
+Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262/blob/main/INTERPRETING.md)), test files without `noStrict`, `onlyStrict`, `module`, or `raw` flags must be run **twice**: once in default (sloppy) mode and once with `"use strict";` prepended. Our test runner implements this dual-mode execution, expanding 52,735 test files into 101,269 scenarios.
 
-On the core suite (language + built-ins + annexB): **91,986 / 91,986 (100.00%)**.
+On the full suite: **101,008 / 101,269 (99.74%)**.
 
 *ES Modules now supported with dynamic `import()` and `import.meta`. Async tests run with Promise/async-await support.*
 
@@ -121,7 +121,7 @@ Benchmark run on 2026-03-10 using `scripts/run-test262.py -j 64 --timeout 120` o
 
 | Engine | Version | Scenarios | Run | Skip | Pass | Fail | Rate |
 |--------|---------|-----------|-----|------|------|------|------|
-| **JSSE** | latest (commit 29a72a7) | 91,986 | 91,986 | 0 | 91,986 | 0 | **100.00%** |
+| **JSSE** | latest | 101,269 | 101,269 | 0 | 101,008 | 261 | **99.74%** |
 | **Boa** | v0.21 | 91,986 | 91,986 | 0 | 83,260 | 8,726 | **90.51%** |
 | **Node** | v25.8.0 | 91,986 | 91,187 | 799 | 79,201 | 11,986 | **86.86%** |
 

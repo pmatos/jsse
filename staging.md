@@ -1,6 +1,7 @@
 # Staging Test Failures Plan
 
-**Baseline:** 100,982 / 101,269 (99.72%) — 287 failing scenarios
+**Current:** 101,008 / 101,269 (99.74%) — 261 failing scenarios
+**Previous baseline:** 100,982 / 101,269 (99.72%) — 287 failing scenarios
 
 ---
 
@@ -38,23 +39,19 @@ Fixed labeled function declarations, `with`-scope hoisting, eval var in catch, a
 - `staging/sm/regress/regress-602621.js` — **NOT FIXABLE** (contradicts spec)
 - `staging/sm/Function/arguments-parameter-shadowing.js` — **NOW PASSING**
 
-### A4. Intl402 non-ISO calendar support (13 tests, VERY HARD)
+### ~~A4. Intl402 non-ISO calendar support (13 tests, VERY HARD)~~ DONE (+26 passes)
 
-Chinese, dangi, Japanese era, Buddhist calendar formatting. Missing `relatedYear`/`yearName` format parts. Major Intl infrastructure.
+Implemented full non-ISO calendar support for DateTimeFormat component-based formatting:
+- Extended `CalendarFields` with cyclic year data (`cyclic_year`, `related_iso`)
+- `apply_calendar_conversion()` converts ISO dates to any calendar for all formatting paths (not just dateStyle)
+- Chinese/Dangi: emit `relatedYear`/`yearName` parts instead of `year`; `cyclic_year_name()` for sexagenary cycle
+- `format_era()` replaces Gregorian-only era functions; supports Japanese, ROC, Buddhist, Hebrew, Indian, Persian, Coptic, Ethiopian
+- Non-Gregorian era calendars always display `era_year` (not extended year)
+- Hebrew always uses month names even with `month: "numeric"`, D Month Y layout
+- Lunisolar leap months: "bis" suffix for Chinese/Dangi numeric months (e.g., "4bis" for M04L)
+- `month_code_number()` extracts standard month from month codes (handles leap months correctly)
 
-- `intl402/DateTimeFormat/prototype/format/related-year-zh.js`
-- `intl402/DateTimeFormat/prototype/formatRangeToParts/chinese-calendar-dates.js`
-- `intl402/DateTimeFormat/prototype/formatRangeToParts/dangi-calendar-dates.js`
-- `intl402/DateTimeFormat/prototype/formatRangeToParts/pattern-on-calendar.js`
-- `intl402/DateTimeFormat/prototype/formatToParts/chinese-calendar-dates.js`
-- `intl402/DateTimeFormat/prototype/formatToParts/compare-to-temporal-lunisolar.js`
-- `intl402/DateTimeFormat/prototype/formatToParts/compare-to-temporal.js`
-- `intl402/DateTimeFormat/prototype/formatToParts/dangi-calendar-dates.js`
-- `intl402/DateTimeFormat/prototype/formatToParts/era.js`
-- `intl402/DateTimeFormat/prototype/formatToParts/lunisolar-leap-months.js`
-- `intl402/DateTimeFormat/prototype/formatToParts/pattern-on-calendar.js`
-- `intl402/DateTimeFormat/prototype/formatToParts/related-year-zh.js`
-- `intl402/DateTimeFormat/prototype/formatToParts/related-year.js`
+All 13 tests (26 scenarios) now pass, 0 regressions.
 
 ### A5. Temporal ZonedDateTime DST handling (6 tests, HARD)
 
