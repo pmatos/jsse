@@ -1,7 +1,7 @@
 # Staging Test Failures Plan
 
-**Current:** 101,020 / 101,269 (99.75%) — 249 failing scenarios
-**Previous baseline:** 101,018 / 101,269 (99.75%) — 251 failing scenarios
+**Current:** 101,023 / 101,328 (99.70%) — 305 failing scenarios
+**Previous baseline:** 101,020 / 101,269 (99.75%) — 249 failing scenarios
 
 ---
 
@@ -338,11 +338,11 @@ Full decorator runtime semantics needed for `accessor` keyword.
 
 - `staging/decorators/public-auto-accessor.js`
 
-### C3. Float16Array (1 test, HIGH)
+### ~~C3. Float16Array (1 test, HIGH)~~ DONE (+53 passes)
 
-Entirely new typed array type not implemented.
+Implemented Float16Array as the 12th TypedArrayKind. Reused existing `dv_f16_to_f64`/`dv_f64_to_f16_bits` IEEE 754 binary16 helpers from DataView. Added Float16 variant to TypedArrayKind enum, Realm prototype fields, all constructor/prototype lookup match blocks, Atomics rejection, and globalThis property list. Total scenario count increased from 101,269 to 101,328 (new Float16Array test scenarios discovered).
 
-- `staging/sm/TypedArray/toString.js`
+- `staging/sm/TypedArray/toString.js` — **NOW PASSING**
 
 ### C4. Source phase imports (1 test, HARD)
 

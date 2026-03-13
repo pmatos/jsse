@@ -266,6 +266,7 @@ pub struct Realm {
     pub(crate) uint16array_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) int32array_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) uint32array_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    pub(crate) float16array_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) float32array_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) float64array_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) bigint64array_prototype: Option<Rc<RefCell<JsObjectData>>>,
@@ -360,6 +361,7 @@ impl Realm {
             uint16array_prototype: None,
             int32array_prototype: None,
             uint32array_prototype: None,
+            float16array_prototype: None,
             float32array_prototype: None,
             float64array_prototype: None,
             bigint64array_prototype: None,
@@ -448,6 +450,7 @@ impl Realm {
             &self.uint16array_prototype,
             &self.int32array_prototype,
             &self.uint32array_prototype,
+            &self.float16array_prototype,
             &self.float32array_prototype,
             &self.float64array_prototype,
             &self.bigint64array_prototype,
@@ -1292,6 +1295,7 @@ pub enum TypedArrayKind {
     Uint16,
     Int32,
     Uint32,
+    Float16,
     Float32,
     Float64,
     BigInt64,
@@ -1302,7 +1306,7 @@ impl TypedArrayKind {
     pub fn bytes_per_element(&self) -> usize {
         match self {
             TypedArrayKind::Int8 | TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => 1,
-            TypedArrayKind::Int16 | TypedArrayKind::Uint16 => 2,
+            TypedArrayKind::Int16 | TypedArrayKind::Uint16 | TypedArrayKind::Float16 => 2,
             TypedArrayKind::Int32 | TypedArrayKind::Uint32 | TypedArrayKind::Float32 => 4,
             TypedArrayKind::Float64 | TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64 => 8,
         }
@@ -1317,6 +1321,7 @@ impl TypedArrayKind {
             TypedArrayKind::Uint16 => "Uint16Array",
             TypedArrayKind::Int32 => "Int32Array",
             TypedArrayKind::Uint32 => "Uint32Array",
+            TypedArrayKind::Float16 => "Float16Array",
             TypedArrayKind::Float32 => "Float32Array",
             TypedArrayKind::Float64 => "Float64Array",
             TypedArrayKind::BigInt64 => "BigInt64Array",
@@ -2722,6 +2727,12 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
             let v = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
             JsValue::Number(v as f64)
         }
+        TypedArrayKind::Float16 => {
+            let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
+            JsValue::Number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
+                bits,
+            ))
+        }
         TypedArrayKind::Int32 => {
             let v = i32::from_ne_bytes([
                 buf[offset],
@@ -2797,6 +2808,11 @@ pub(crate) fn typed_array_set_index(ta: &TypedArrayInfo, idx: usize, value: &JsV
         TypedArrayKind::Uint16 => {
             let v = to_uint16(value);
             buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
+        }
+        TypedArrayKind::Float16 => {
+            let n = to_number(value);
+            let bits = crate::interpreter::builtins::typedarray::dv_f64_to_f16_bits(n);
+            buf[offset..offset + 2].copy_from_slice(&bits.to_ne_bytes());
         }
         TypedArrayKind::Int32 => {
             let v = to_int32(value);

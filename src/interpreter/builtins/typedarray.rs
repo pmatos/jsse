@@ -3584,6 +3584,7 @@ impl Interpreter {
             TypedArrayKind::Uint16,
             TypedArrayKind::Int32,
             TypedArrayKind::Uint32,
+            TypedArrayKind::Float16,
             TypedArrayKind::Float32,
             TypedArrayKind::Float64,
             TypedArrayKind::BigInt64,
@@ -3838,6 +3839,7 @@ impl Interpreter {
                             TypedArrayKind::Uint16 => realm.uint16array_prototype.clone(),
                             TypedArrayKind::Int32 => realm.int32array_prototype.clone(),
                             TypedArrayKind::Uint32 => realm.uint32array_prototype.clone(),
+                            TypedArrayKind::Float16 => realm.float16array_prototype.clone(),
                             TypedArrayKind::Float32 => realm.float32array_prototype.clone(),
                             TypedArrayKind::Float64 => realm.float64array_prototype.clone(),
                             TypedArrayKind::BigInt64 => realm.bigint64array_prototype.clone(),
@@ -4120,6 +4122,9 @@ impl Interpreter {
                 }
                 TypedArrayKind::Uint32 => {
                     self.realm_mut().uint32array_prototype = Some(type_proto.clone())
+                }
+                TypedArrayKind::Float16 => {
+                    self.realm_mut().float16array_prototype = Some(type_proto.clone())
                 }
                 TypedArrayKind::Float32 => {
                     self.realm_mut().float32array_prototype = Some(type_proto.clone())
@@ -4574,6 +4579,7 @@ impl Interpreter {
             TypedArrayKind::Uint16 => self.realm().uint16array_prototype.clone(),
             TypedArrayKind::Int32 => self.realm().int32array_prototype.clone(),
             TypedArrayKind::Uint32 => self.realm().uint32array_prototype.clone(),
+            TypedArrayKind::Float16 => self.realm().float16array_prototype.clone(),
             TypedArrayKind::Float32 => self.realm().float32array_prototype.clone(),
             TypedArrayKind::Float64 => self.realm().float64array_prototype.clone(),
             TypedArrayKind::BigInt64 => self.realm().bigint64array_prototype.clone(),
@@ -4608,6 +4614,7 @@ impl Interpreter {
                     "Uint16Array" => Some(TypedArrayKind::Uint16),
                     "Int32Array" => Some(TypedArrayKind::Int32),
                     "Uint32Array" => Some(TypedArrayKind::Uint32),
+                    "Float16Array" => Some(TypedArrayKind::Float16),
                     "Float32Array" => Some(TypedArrayKind::Float32),
                     "Float64Array" => Some(TypedArrayKind::Float64),
                     "BigInt64Array" => Some(TypedArrayKind::BigInt64),
@@ -4725,6 +4732,7 @@ impl Interpreter {
                     "Uint16Array" => Some(TypedArrayKind::Uint16),
                     "Int32Array" => Some(TypedArrayKind::Int32),
                     "Uint32Array" => Some(TypedArrayKind::Uint32),
+                    "Float16Array" => Some(TypedArrayKind::Float16),
                     "Float32Array" => Some(TypedArrayKind::Float32),
                     "Float64Array" => Some(TypedArrayKind::Float64),
                     "BigInt64Array" => Some(TypedArrayKind::BigInt64),
@@ -5731,7 +5739,7 @@ fn extract_ta_and_callback(
 }
 
 /// Convert IEEE 754 binary16 (half-precision) bits to f64.
-fn dv_f16_to_f64(bits: u16) -> f64 {
+pub(crate) fn dv_f16_to_f64(bits: u16) -> f64 {
     let sign = ((bits >> 15) & 1) as u64;
     let exp = ((bits >> 10) & 0x1F) as u64;
     let frac = (bits & 0x3FF) as u64;
@@ -5765,7 +5773,7 @@ fn dv_f16_to_f64(bits: u16) -> f64 {
 
 /// Convert f64 to IEEE 754 binary16 (half-precision) bits.
 /// Uses round-to-nearest-even (banker's rounding).
-fn dv_f64_to_f16_bits(val: f64) -> u16 {
+pub(crate) fn dv_f64_to_f16_bits(val: f64) -> u16 {
     if val.is_nan() {
         return 0x7E00; // NaN
     }

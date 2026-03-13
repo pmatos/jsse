@@ -1148,7 +1148,10 @@ fn validate_integer_typed_array(
                 }
             } else if matches!(
                 kind,
-                TypedArrayKind::Float32 | TypedArrayKind::Float64 | TypedArrayKind::Uint8Clamped
+                TypedArrayKind::Float16
+                    | TypedArrayKind::Float32
+                    | TypedArrayKind::Float64
+                    | TypedArrayKind::Uint8Clamped
             ) {
                 return Err(
                     interp.create_type_error("Atomics operations require integer typed arrays")
