@@ -179,18 +179,6 @@ pub(crate) fn get_set_record(
     Ok(SetRecord { has, keys, size })
 }
 
-pub(crate) fn extract_iter_result(interp: &Interpreter, result: &JsValue) -> (bool, JsValue) {
-    if let JsValue::Object(ro) = result
-        && let Some(result_obj) = interp.get_object(ro.id)
-    {
-        let borrowed = result_obj.borrow();
-        let done = matches!(borrowed.get_property("done"), JsValue::Boolean(true));
-        let value = borrowed.get_property("value");
-        return (done, value);
-    }
-    (true, JsValue::Undefined)
-}
-
 pub(crate) fn same_value(left: &JsValue, right: &JsValue) -> bool {
     match (left, right) {
         (JsValue::Number(a), JsValue::Number(b)) => {
@@ -1058,10 +1046,10 @@ fn json_parse_value_inner(
         let unescaped = json_unescape_string(inner);
         return Completion::Normal(JsValue::String(JsString::from_str(&unescaped)));
     }
-    if json_is_valid_number(s) {
-        if let Ok(n) = s.parse::<f64>() {
-            return Completion::Normal(JsValue::Number(n));
-        }
+    if json_is_valid_number(s)
+        && let Ok(n) = s.parse::<f64>()
+    {
+        return Completion::Normal(JsValue::Number(n));
     }
     if s.starts_with('[') && s.ends_with(']') {
         let inner = &s[1..s.len() - 1];
@@ -1308,10 +1296,10 @@ fn json_internalize_apply(
             // Also clear dense array storage so get_property doesn't find stale values
             if let Ok(idx) = key.parse::<usize>() {
                 let mut b = obj.borrow_mut();
-                if let Some(ref mut elems) = b.array_elements {
-                    if idx < elems.len() {
-                        elems[idx] = JsValue::Undefined;
-                    }
+                if let Some(ref mut elems) = b.array_elements
+                    && idx < elems.len()
+                {
+                    elems[idx] = JsValue::Undefined;
                 }
             }
         } else {

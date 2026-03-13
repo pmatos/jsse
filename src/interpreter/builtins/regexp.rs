@@ -4480,13 +4480,12 @@ fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
         let mut best_max_end: usize = 0;
         for (bi, branch) in branches.iter().enumerate() {
             for &ci in branch {
-                if ci < caps.groups.len() {
-                    if let Some(ref m) = caps.groups[ci] {
-                        if m.end > best_max_end {
-                            best_max_end = m.end;
-                            best_branch_idx = Some(bi);
-                        }
-                    }
+                if ci < caps.groups.len()
+                    && let Some(ref m) = caps.groups[ci]
+                    && m.end > best_max_end
+                {
+                    best_max_end = m.end;
+                    best_branch_idx = Some(bi);
                 }
             }
         }
@@ -4518,12 +4517,11 @@ fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
     // should be undefined. The regex crate reports these as Some("") matches
     // but ES spec requires undefined.
     for cap_idx in &self_quantified_min_zero {
-        if *cap_idx < caps.groups.len() {
-            if let Some(ref m) = caps.groups[*cap_idx] {
-                if m.start == m.end {
-                    caps.groups[*cap_idx] = None;
-                }
-            }
+        if *cap_idx < caps.groups.len()
+            && let Some(ref m) = caps.groups[*cap_idx]
+            && m.start == m.end
+        {
+            caps.groups[*cap_idx] = None;
         }
     }
 }
@@ -4826,10 +4824,11 @@ fn build_quantified_parent_map(
     // Collect self-quantified capturing groups with min=0.
     // e.g., (x)? or (x)* — the capturing group itself is quantified.
     for g in &groups_info {
-        if let Some(cap_idx) = g.capture_index {
-            if g.is_quantified && g.quantifier_min_zero {
-                self_quantified_min_zero.push(cap_idx);
-            }
+        if let Some(cap_idx) = g.capture_index
+            && g.is_quantified
+            && g.quantifier_min_zero
+        {
+            self_quantified_min_zero.push(cap_idx);
         }
     }
 

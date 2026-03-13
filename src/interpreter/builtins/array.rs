@@ -78,10 +78,6 @@ fn obj_get(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<JsValue, 
     }
 }
 
-fn obj_set(interp: &mut Interpreter, o: &JsValue, key: &str, value: JsValue) {
-    let _ = obj_set_throw(interp, o, key, value);
-}
-
 // Set(O, P, V, true) — invoke setters on prototype, check writable, throw on failure
 fn obj_set_throw(
     interp: &mut Interpreter,

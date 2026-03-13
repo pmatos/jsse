@@ -1061,7 +1061,7 @@ impl<'a> Parser<'a> {
                         let mut seen = std::collections::HashSet::new();
                         for name in &names {
                             if !seen.insert(name.clone()) {
-                                return Err(self.error(&format!(
+                                return Err(self.error(format!(
                                     "Identifier '{name}' has already been declared"
                                 )));
                             }
@@ -1145,7 +1145,7 @@ impl<'a> Parser<'a> {
                     for name in &names {
                         if !seen.insert(name.clone()) {
                             return Err(self
-                                .error(&format!("Identifier '{name}' has already been declared")));
+                                .error(format!("Identifier '{name}' has already been declared")));
                         }
                     }
                 }

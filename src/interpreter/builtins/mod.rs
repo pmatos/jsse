@@ -2693,14 +2693,12 @@ impl Interpreter {
                                         continue;
                                     }
                                     // Check if the caller is strict — return null for strict callers
-                                    if let Some(obj) = interp.get_object(frame.func_obj_id) {
-                                        if let Some(JsFunction::User { is_strict, .. }) =
+                                    if let Some(obj) = interp.get_object(frame.func_obj_id)
+                                        && let Some(JsFunction::User { is_strict, .. }) =
                                             &obj.borrow().callable
-                                        {
-                                            if *is_strict {
-                                                return Completion::Normal(JsValue::Null);
-                                            }
-                                        }
+                                        && *is_strict
+                                    {
+                                        return Completion::Normal(JsValue::Null);
                                     }
                                     return Completion::Normal(JsValue::Object(
                                         crate::types::JsObject {
@@ -4786,7 +4784,7 @@ impl Interpreter {
                         }
                         let is_proxy = interp
                             .get_object(obj_id)
-                            .map_or(false, |ob| ob.borrow().is_proxy());
+                            .is_some_and(|ob| ob.borrow().is_proxy());
                         if is_proxy {
                             // Proxy: preserve ownKeys trap order (spec §10.5.11)
                             for kv in &all_keys {
@@ -8544,7 +8542,7 @@ impl Interpreter {
                 let target_length_f64: f64 = if let JsValue::Object(o) = this_val {
                     let is_proxy = interp
                         .get_object(o.id)
-                        .map_or(false, |obj| obj.borrow().is_proxy());
+                        .is_some_and(|obj| obj.borrow().is_proxy());
                     let has_own_length = if is_proxy {
                         match interp.invoke_proxy_trap(
                             o.id,

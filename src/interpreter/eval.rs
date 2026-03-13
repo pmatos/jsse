@@ -1725,46 +1725,48 @@ impl Interpreter {
         } else {
             obj_val.clone()
         };
-        if let JsValue::Object(ref o) = obj_val {
-            if let Some(obj) = self.get_object(o.id) {
-                if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
-                    match self.proxy_delete_property(o.id, key) {
-                        Ok(false) => {
-                            if env.borrow().strict {
-                                return Completion::Throw(self.create_type_error(&format!(
-                                    "Cannot delete property '{key}' of object"
-                                )));
-                            }
-                            return Completion::Normal(JsValue::Boolean(false));
+        if let JsValue::Object(ref o) = obj_val
+            && let Some(obj) = self.get_object(o.id)
+        {
+            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+                match self.proxy_delete_property(o.id, key) {
+                    Ok(false) => {
+                        if env.borrow().strict {
+                            return Completion::Throw(self.create_type_error(&format!(
+                                "Cannot delete property '{key}' of object"
+                            )));
                         }
-                        Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
-                        Err(e) => return Completion::Throw(e),
+                        return Completion::Normal(JsValue::Boolean(false));
                     }
+                    Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
+                    Err(e) => return Completion::Throw(e),
                 }
-                let is_strict = env.borrow().strict;
-                let mut obj_mut = obj.borrow_mut();
-                if let Some(desc) = obj_mut.properties.get(key)
-                    && desc.configurable == Some(false)
-                {
-                    if is_strict {
-                        drop(obj_mut);
-                        return Completion::Throw(self.create_type_error(&format!(
+            }
+            let is_strict = env.borrow().strict;
+            let mut obj_mut = obj.borrow_mut();
+            if let Some(desc) = obj_mut.properties.get(key)
+                && desc.configurable == Some(false)
+            {
+                if is_strict {
+                    drop(obj_mut);
+                    return Completion::Throw(
+                        self.create_type_error(&format!(
                             "Cannot delete property '{key}' of object"
-                        )));
-                    }
-                    return Completion::Normal(JsValue::Boolean(false));
+                        )),
+                    );
                 }
-                obj_mut.properties.remove(key);
-                obj_mut.property_order.retain(|k| k != key);
-                if let Some(ref mut map) = obj_mut.parameter_map {
-                    map.remove(key);
-                }
-                if let Ok(idx) = key.parse::<usize>()
-                    && let Some(ref mut elems) = obj_mut.array_elements
-                    && idx < elems.len()
-                {
-                    elems[idx] = JsValue::Undefined;
-                }
+                return Completion::Normal(JsValue::Boolean(false));
+            }
+            obj_mut.properties.remove(key);
+            obj_mut.property_order.retain(|k| k != key);
+            if let Some(ref mut map) = obj_mut.parameter_map {
+                map.remove(key);
+            }
+            if let Ok(idx) = key.parse::<usize>()
+                && let Some(ref mut elems) = obj_mut.array_elements
+                && idx < elems.len()
+            {
+                elems[idx] = JsValue::Undefined;
             }
         }
         Completion::Normal(JsValue::Boolean(true))
@@ -5013,9 +5015,10 @@ impl Interpreter {
                                 }
                             }
                             Some(DestructLRef::Super(base_id, ref key, ref this_val, strict)) => {
-                                match self.super_set_property(base_id, key, arr, this_val, strict) {
-                                    Completion::Throw(e) => error = Some(e),
-                                    _ => {}
+                                if let Completion::Throw(e) =
+                                    self.super_set_property(base_id, key, arr, this_val, strict)
+                                {
+                                    error = Some(e)
                                 }
                             }
                             None => match self.put_value_to_target(inner, arr, env) {
@@ -5130,12 +5133,11 @@ impl Interpreter {
                             }
                         }
                         Some(DestructLRef::Super(base_id, ref key, ref this_val, strict)) => {
-                            match self.super_set_property(base_id, key, val, this_val, strict) {
-                                Completion::Throw(e) => {
-                                    error = Some(e);
-                                    break;
-                                }
-                                _ => {}
+                            if let Completion::Throw(e) =
+                                self.super_set_property(base_id, key, val, this_val, strict)
+                            {
+                                error = Some(e);
+                                break;
                             }
                         }
                         None => match self.put_value_to_target(target, val, env) {
@@ -5336,9 +5338,10 @@ impl Interpreter {
                                 }
                             }
                             DestructLRef::Super(base_id, ref key, ref this_val, strict) => {
-                                match self.super_set_property(base_id, key, val, this_val, strict) {
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    _ => {}
+                                if let Completion::Throw(e) =
+                                    self.super_set_property(base_id, key, val, this_val, strict)
+                                {
+                                    return Completion::Throw(e);
                                 }
                             }
                         }
