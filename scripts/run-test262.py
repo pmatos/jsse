@@ -609,7 +609,8 @@ def main():
         print(f"Error: test262 directory not found at {test262}", file=sys.stderr)
         sys.exit(2)
 
-    tests = find_tests(test262, args.paths if args.paths else None)
+    selected_paths = args.paths if args.paths else None
+    tests = find_tests(test262, selected_paths)
 
     is_sample_run = args.sample is not None
     if is_sample_run:
@@ -620,6 +621,11 @@ def main():
         tests = sample_tests(tests, rate, args.seed)
         print(
             f"Sampling {rate*100:.1f}% of tests (seed={args.seed}): {len(tests)} files selected.",
+            file=sys.stderr,
+        )
+    elif selected_paths:
+        print(
+            "Selected paths: " + ", ".join(selected_paths),
             file=sys.stderr,
         )
 
@@ -721,6 +727,8 @@ def main():
     print(f"Engine:  {engine_name} ({binary})")
     if is_sample_run:
         print(f"Sample:  {args.sample*100:.1f}% (seed={args.seed})")
+    elif selected_paths:
+        print(f"Paths:   {', '.join(selected_paths)}")
     print(f"Files:   {num_files}")
     print(f"Scenarios: {total}")
     print(f"Run:     {run_total}")
