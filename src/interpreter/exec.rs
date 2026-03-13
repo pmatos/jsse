@@ -74,6 +74,11 @@ impl Interpreter {
                     if is_param {
                         continue;
                     }
+                    // B.3.3.1 step 6.a.ii + step 22.f: "arguments" is in parameterNames,
+                    // so skip Annex B hoisting for functions named "arguments"
+                    if name == "arguments" && !is_global && env.borrow().is_function_scope {
+                        continue;
+                    }
                     // Annex B: skip if non-simple params and name matches a parent binding
                     if !env.borrow().has_simple_params {
                         let has_parent_binding = env
@@ -85,10 +90,6 @@ impl Interpreter {
                         if has_parent_binding {
                             continue;
                         }
-                    }
-                    // Annex B: skip "arguments" in function scope
-                    if name == "arguments" && !is_global && env.borrow().is_function_scope {
-                        continue;
                     }
                     if !env.borrow().bindings.contains_key(&name) {
                         if is_global {
@@ -654,7 +655,11 @@ impl Interpreter {
                     // Check function declarations in this block
                     // Only regular functions (not generators or async) per Annex B.3.3
                     for s in inner {
-                        if let Statement::FunctionDeclaration(f) = s
+                        let mut stmt = s;
+                        while let Statement::Labeled(_, inner_s) = stmt {
+                            stmt = inner_s;
+                        }
+                        if let Statement::FunctionDeclaration(f) = stmt
                             && !f.is_generator
                             && !f.is_async
                             && !names.contains(&f.name)
@@ -668,7 +673,11 @@ impl Interpreter {
                     let prev_len = blocked.len();
                     blocked.extend(block_lexicals);
                     for s in inner {
-                        if let Statement::FunctionDeclaration(f) = s
+                        let mut stmt = s;
+                        while let Statement::Labeled(_, inner_s) = stmt {
+                            stmt = inner_s;
+                        }
+                        if let Statement::FunctionDeclaration(f) = stmt
                             && !blocked.contains(&f.name)
                         {
                             blocked.push(f.name.clone());
@@ -760,6 +769,13 @@ impl Interpreter {
                         blocked,
                     );
                 }
+                Statement::With(_, inner) => {
+                    Self::collect_annexb_function_names(
+                        std::slice::from_ref(&**inner),
+                        names,
+                        blocked,
+                    );
+                }
                 Statement::Switch(s) => {
                     // Switch creates a single scope for all cases
                     let mut switch_lexicals = Vec::new();
@@ -785,7 +801,11 @@ impl Interpreter {
                     }
                     for case in &s.cases {
                         for cs in &case.consequent {
-                            if let Statement::FunctionDeclaration(f) = cs
+                            let mut stmt = cs;
+                            while let Statement::Labeled(_, inner_s) = stmt {
+                                stmt = inner_s;
+                            }
+                            if let Statement::FunctionDeclaration(f) = stmt
                                 && !f.is_generator
                                 && !f.is_async
                                 && !names.contains(&f.name)
@@ -2219,7 +2239,8 @@ impl Interpreter {
         // (only regular functions, not generators/async — those stay block-scoped)
         for case in &s.cases {
             for stmt in &case.consequent {
-                if let Statement::FunctionDeclaration(f) = stmt
+                let unwrapped = Self::unwrap_labeled_function(stmt);
+                if let Some(f) = unwrapped
                     && !f.is_generator
                     && !f.is_async
                 {

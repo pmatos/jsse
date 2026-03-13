@@ -12121,7 +12121,7 @@ impl Interpreter {
                                 }
                                 for name in &var_names {
                                     body_env.borrow_mut().declare(name, BindingKind::Var);
-                                    if param_names_set.contains(name) {
+                                    if param_names_set.contains(name) || name == "arguments" {
                                         let val = func_env
                                             .borrow()
                                             .get(name)
@@ -12290,7 +12290,7 @@ impl Interpreter {
                                 }
                                 for name in &var_names {
                                     body_env.borrow_mut().declare(name, BindingKind::Var);
-                                    if param_names_set.contains(name) {
+                                    if param_names_set.contains(name) || name == "arguments" {
                                         let val = func_env
                                             .borrow()
                                             .get(name)
@@ -12458,7 +12458,7 @@ impl Interpreter {
                             }
                             for name in &var_names {
                                 body_env.borrow_mut().declare(name, BindingKind::Var);
-                                if param_names.contains(name) {
+                                if param_names.contains(name) || name == "arguments" {
                                     let val =
                                         func_env.borrow().get(name).unwrap_or(JsValue::Undefined);
                                     let _ = body_env.borrow_mut().set(name, val);
@@ -13187,12 +13187,15 @@ impl Interpreter {
                     if Rc::ptr_eq(&env, var_env) {
                         break;
                     }
-                    for name in &all_names {
-                        if env.borrow().bindings.contains_key(name) {
-                            return Err(self.create_error(
-                                "SyntaxError",
-                                &format!("Identifier '{}' has already been declared", name),
-                            ));
+                    // B.3.5: simple catch scopes allow var redeclaration
+                    if !env.borrow().is_simple_catch_scope {
+                        for name in &all_names {
+                            if env.borrow().bindings.contains_key(name) {
+                                return Err(self.create_error(
+                                    "SyntaxError",
+                                    &format!("Identifier '{}' has already been declared", name),
+                                ));
+                            }
                         }
                     }
                     let next = env.borrow().parent.clone();

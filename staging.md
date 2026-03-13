@@ -1,6 +1,6 @@
 # Staging Test Failures Plan
 
-**Baseline:** 100,978 / 101,269 (99.71%) — 291 failing scenarios
+**Baseline:** 100,982 / 101,269 (99.72%) — 287 failing scenarios
 
 ---
 
@@ -21,16 +21,22 @@ Fixed nested for-of/while/for loops in generator state machine transform:
 
 Implemented call stack tracking with `CallFrame` vec and accessor property getters. All 12 tests (13 scenarios) now pass.
 
-### A3. Annex B block-scoped function semantics (6 tests, HARD)
+### ~~A3. Annex B block-scoped function semantics (6 tests, HARD)~~ PARTIAL (+4 passes)
 
-Annex B.3.3: block-level function declarations in sloppy mode should hoist a `var` binding to the enclosing function scope. Missing for labeled statements, `with` blocks, `arguments` override, eval+catch.
+Fixed labeled function declarations, `with`-scope hoisting, eval var in catch, and `var arguments` shadowing:
+- Unwrap `Statement::Labeled` in `collect_annexb_function_names` and `exec_switch` function hoisting
+- Added `Statement::With` case to `collect_annexb_function_names`
+- Skip `is_simple_catch_scope` in eval intermediate scope conflict check (B.3.5)
+- Copy `arguments` from func_env to body_env for non-simple params
 
-- `staging/sm/lexical-environment/block-scoped-functions-annex-b-arguments.js`
-- `staging/sm/lexical-environment/block-scoped-functions-annex-b-label.js`
-- `staging/sm/lexical-environment/block-scoped-functions-annex-b-with.js`
-- `staging/sm/lexical-environment/var-in-catch-body-annex-b-eval.js`
-- `staging/sm/regress/regress-602621.js`
-- `staging/sm/Function/arguments-parameter-shadowing.js`
+2 remaining: `arguments` override tests contradict spec-correct annexB test `block-decl-func-skip-arguments.js` (B.3.3.1 step 22.f adds "arguments" to parameterNames, blocking Annex B hoist).
+
+- `staging/sm/lexical-environment/block-scoped-functions-annex-b-arguments.js` — **NOT FIXABLE** (contradicts spec)
+- `staging/sm/lexical-environment/block-scoped-functions-annex-b-label.js` — **NOW PASSING**
+- `staging/sm/lexical-environment/block-scoped-functions-annex-b-with.js` — **NOW PASSING**
+- `staging/sm/lexical-environment/var-in-catch-body-annex-b-eval.js` — **NOW PASSING**
+- `staging/sm/regress/regress-602621.js` — **NOT FIXABLE** (contradicts spec)
+- `staging/sm/Function/arguments-parameter-shadowing.js` — **NOW PASSING**
 
 ### A4. Intl402 non-ISO calendar support (13 tests, VERY HARD)
 
