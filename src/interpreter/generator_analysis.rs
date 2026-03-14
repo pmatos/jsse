@@ -887,10 +887,6 @@ mod tests {
         Expression::Yield(None, delegate)
     }
 
-    fn make_yield_expr(expr: Expression, delegate: bool) -> Expression {
-        Expression::Yield(Some(Box::new(expr)), delegate)
-    }
-
     #[test]
     fn test_simple_yields() {
         let body = vec![
