@@ -1,7 +1,7 @@
 # Staging Test Failures Plan
 
-**Current:** 101,035 / 101,269 (99.77%) — 234 failing scenarios
-**Previous baseline:** 101,023 / 101,328 (99.70%) — 305 failing scenarios
+**Current:** 101,013 / 101,234 (99.78%) — 221 failing scenarios
+**Previous baseline:** 101,035 / 101,269 (99.77%) — 234 failing scenarios
 
 ---
 
@@ -93,23 +93,9 @@ Removed incorrect `in_class_field_initializer` flag that broke `[` continuation 
 - `language/statements/class/elements/fields-asi-2.js` — **NOW PASSING**
 - `language/statements/class/elements/fields-asi-3.js` — **NOW PASSING**
 
-### B2. Strict mode SM tests — harness incompatibility (13 tests, EASY)
+### B2. Strict mode SM tests — harness incompatibility (13 tests, FIXED)
 
-NOT engine bugs. `testLenientAndStrict()` helper from `sm/non262-strict-shell.js` is incompatible with the test runner's `:strict` variant. Fix: detect `sm/non262-strict-shell.js` include → auto-treat as `noStrict`.
-
-- `staging/sm/strict/10.4.2.js`
-- `staging/sm/strict/10.6.js`
-- `staging/sm/strict/12.10.1.js`
-- `staging/sm/strict/15.10.7.js`
-- `staging/sm/strict/15.3.5.1.js`
-- `staging/sm/strict/15.3.5.2.js`
-- `staging/sm/strict/15.5.5.1.js`
-- `staging/sm/strict/15.5.5.2.js`
-- `staging/sm/strict/8.12.5.js`
-- `staging/sm/strict/8.12.7-2.js`
-- `staging/sm/strict/8.12.7.js`
-- `staging/sm/strict/8.7.2.js`
-- `staging/sm/strict/eval-variable-environment.js`
+FIXED: Test runner now detects `sm/non262-strict-shell.js` in includes and skips the `:strict` scenario, since the harness manages strict/lenient mode internally via `testLenientAndStrict()`.
 
 ### B3. RegExp: template literal lone surrogate escapes (3 tests, EASY)
 

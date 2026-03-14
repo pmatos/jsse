@@ -278,6 +278,13 @@ def compute_scenarios(test_file: str, metadata: dict) -> list[tuple[str, str]]:
     if "noStrict" in flags:
         return [(test_file, "default")]
 
+    # SM strict tests include a harness that manages strict/lenient mode
+    # internally via testLenientAndStrict(). Running these with the runner's
+    # :strict variant double-wraps "use strict" and breaks lenient expectations.
+    includes = metadata.get("includes", [])
+    if "sm/non262-strict-shell.js" in includes:
+        return [(test_file, "default")]
+
     # Dual mode: run both default and strict
     return [(test_file, "default"), (test_file + ":strict", "strict")]
 
