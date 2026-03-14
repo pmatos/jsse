@@ -1,13 +1,13 @@
-# Plan: Zero test262 Failures (169 remaining)
+# Plan: Zero test262 Failures (153 remaining)
 
-Based on investigation of all failing tests. Phase 1 parser fixes completed 2026-03-14 (+26 passes, 0 regressions). Phase 2 interpreter property/prototype fixes completed 2026-03-14 (+12 passes, -1 regression). Phase 2 continued: generator/proxy/global/Reflect fixes completed 2026-03-14 (+9 passes, 0 regressions → 101,065 / 101,234 = 99.83%).
+Based on investigation of all failing tests. Phase 1 parser fixes completed 2026-03-14 (+26 passes, 0 regressions). Phase 2 interpreter property/prototype fixes completed 2026-03-14 (+12 passes, -1 regression). Phase 2 continued: generator/proxy/global/Reflect fixes completed 2026-03-14 (+9 passes, 0 regressions → 101,065 / 101,234 = 99.83%). Phase 3 RegExp engine fixes completed 2026-03-14 (+16 net passes, 0 regressions → 101,081 / 101,234 = 99.85%).
 
 ## Breakdown by Category (updated 2026-03-14)
 
 | Category | Failing Tests | Unique Files |
 |----------|:---:|:---:|
 | Intl402/Temporal | 36 | 18 |
-| RegExp (SM + built-ins) | 24 | 12 |
+| RegExp (SM + built-ins) | 8 | 5 |
 | Iterator helpers | 16 | 8 |
 | TypedArray (SM + built-ins) | 22 | 11 |
 | Generators | 3 | 2 |
@@ -18,7 +18,7 @@ Based on investigation of all failing tests. Phase 1 parser fixes completed 2026
 | Function | 3 | 2 |
 | Explicit resource management | 4 | 2 |
 | Other (Proxy, Reflect, JSON, etc.) | 49 | 28 |
-| **Total** | **~169** | **~89** |
+| **Total** | **~153** | **~82** |
 
 ---
 
@@ -128,56 +128,43 @@ Based on investigation of all failing tests. Phase 1 parser fixes completed 2026
 
 ---
 
-## Phase 3: RegExp Engine Fixes (~20 tests)
+## Phase 3: RegExp Engine Fixes ✅ COMPLETED (2026-03-14)
 
-### 3.1 `\b`/`\B` word boundary: ASCII-only vs Unicode — 2 tests
-**File:** `src/interpreter/builtins/regexp.rs`
-**Bug:** Always uses Unicode word boundary; should use ASCII-only except under `/iu`.
-**Tests:** `unicode-ignoreCase-word-boundary.js` (x2)
+**Result: +16 net passes (+26 new, 0 regressions). Includes bonus +10 from regexp-modifiers `\b`/`\w` fixes.**
 
-### 3.2 `[^\W]` / `[^\w]` with `/iu` — Unicode case-folding in negated classes — 2 tests
-**File:** `src/interpreter/builtins/regexp.rs`
-**Bug:** Negated `\W`/`\w` in char class doesn't include U+017F, U+212A under `/iu`.
-**Tests:** `unicode-ignoreCase-escape.js` (x2)
+### 3.1 `\b`/`\B` word boundary: ASCII-only vs Unicode — 2 tests ✅ DONE (+2, +10 bonus)
+**Fix:** Always emit custom ASCII lookaround for `\b`/`\B` instead of Rust's Unicode-aware `\b`. Under `/iu` (current modifier state), expand word char set to include U+017F/U+212A. Use `(?-i:...)` wrappers to prevent Unicode case folding from expanding char classes. Handle `\b` inside char class as backspace U+0008. Bonus: 10 previously-passing `regexp-modifiers` tests that test `(?i:\b)`/`(?-i:\b)`/`(?-i:\w)` now also pass.
 
-### 3.3 `\-` in char class with `/u` flag — 2 tests
-**File:** `src/interpreter/builtins/regexp.rs`
-**Bug:** `\-` not treated as literal dash, interpreted as range operator.
-**Tests:** `unicode-disallow-extended.js` (x2)
+### 3.2 `\w`/`\W` with `/iu` — Unicode case-folding includes U+017F, U+212A — 2 tests ✅ DONE (+2)
+**Fix:** When `unicode && icase` (current modifier), expand `\w` to `[A-Za-z0-9_\x{017F}\x{212A}]` and `\W` to its complement. Uses current `icase` state (not `icase_base`) so `(?-i:\w)` inside `/iu` correctly uses ASCII-only.
 
-### 3.4 `get_substitution` panics on multi-byte UTF-8 — 2 tests
-**File:** `src/interpreter/builtins/regexp.rs`
-**Bug:** Mixed byte/char indexing causes panic on CJK strings.
-**Tests:** `replace-twoBytes.js` (x2)
+### 3.3 `\-` in char class with `/u` flag — 2 tests ✅ DONE (+2)
+**Fix:** In identity escape handler, when `in_char_class && next == '-'`, emit `\\-` instead of calling `push_literal_char` (which didn't escape the dash).
 
-### 3.5 RegExp constructor reads source/flags after prototype access — 2 tests
-**File:** `src/interpreter/builtins/regexp.rs`
-**Bug:** Wrong spec step ordering — source/flags should be read before `new.target.prototype`.
-**Tests:** `constructor-ordering.js` (x2)
+### 3.4 `get_substitution` panics on multi-byte UTF-8 — 2 tests ✅ DONE (+2)
+**Fix:** Changed `get_substitution` to accept `tail_pos` (byte offset) instead of `match_length`. Call site computes `tail_pos` via `utf16_to_byte_offset(s_slice, position_utf16 + match_length_utf16)` ensuring char-boundary-safe slicing. Guarded `$`` and `$'` with `.get()` for safety.
 
-### 3.6 `RegExpBuiltinExec` doesn't re-read matcher after `ToLength(lastIndex)` side effects — 4 tests
-**File:** `src/interpreter/builtins/regexp.rs`
-**Bug:** `compile()` inside `lastIndex.valueOf()` doesn't affect current exec.
-**Tests:** `match-local-tolength-recompilation.js`, `replace-local-tolength-recompilation.js` (x2 each)
+### 3.5 RegExp constructor spec step ordering — 4 tests ✅ DONE (+4)
+**Fix:** Set `deferred_construct = true` on RegExp constructor. Restructured constructor body to match spec §22.2.3.1: (1) extract source from pattern, (2) `get_prototype_from_new_target_realm` (prototype lookup), (3) `ToString` flags. Uses `RawFlags` enum to defer flag stringification. Fixes both `constructor-ordering.js` (+2) and `constructor-ordering-2.js` (+2).
 
-### 3.7 Lone surrogates in `/u` mode char classes and `\P{...}` — 4 tests
-**File:** `src/interpreter/builtins/regexp.rs`
-**Bug:** Lone surrogates dropped/paired during UTF-8 encoding.
-**Tests:** `unicode-class-braced.js`, `General_Category_-_Private_Use.js`, `General_Category_-_Surrogate.js` (x2 each)
+### 3.6 `RegExpBuiltinExec` re-read after `ToLength(lastIndex)` side effects — 4 tests ✅ DONE (+4)
+**Fix:** In `regexp_exec_raw`, moved `ToLength(lastIndex)` before flag derivation. After ToLength, re-read `regexp_original_source` and `regexp_original_flags` from internal slots (may have changed via `compile()` in `lastIndex.valueOf()`). Re-derive `global`/`sticky`/`unicode`/`has_indices` from refreshed flags.
 
-### 3.8 Duplicate named groups share capture slots — 2 tests
-**File:** `src/interpreter/builtins/regexp.rs`
-**Bug:** Each `(?<a>...)` gets its own slot instead of sharing.
-**Tests:** `duplicate-named-groups.js` (x2)
+### 3.7 Lone surrogates in `/u` mode char classes and `\P{...}` — 4 tests ⏸️ DEFERRED
+**Reason:** Tests timeout (120s) due to enormous character ranges in property escape tests. The `unicode-class-braced.js` test creates a 2^24-character string that overwhelms the parser. Needs performance optimization, not correctness fix.
 
-### 3.9 Capture groups not reset in quantified alternation — 2 tests
-**File:** `src/interpreter/builtins/regexp.rs`
-**Bug:** `(?:^(a)|\1(a)|(ab)){2}` doesn't reset captures per iteration.
-**Tests:** `regress-613820-3.js` (x2)
+### 3.8 Duplicate named groups — unified capture slots — 2 tests ✅ DONE (+2)
+**Fix:** Modified `rename_groups_and_backrefs` to rename ALL capturing groups (named and unnamed) in earlier qi-expanded iterations with `__jsse_qi` prefix, not just dup-named ones. Unnamed groups `(...)` are converted to `(?<__jsse_qi{idx}_u{n}>...)`. This ensures `strip_renamed_qi_captures` removes all extra groups from unrolled iterations.
+
+### 3.9 Capture groups not reset in quantified alternation — 2 tests ⏸️ DEFERRED
+**Reason:** Fundamentally hard — `fancy_regex` doesn't implement per-iteration capture reset (spec §22.2.2.5.1). The match result itself depends on stale backreferences, so post-hoc correction is impossible. Would require pattern rewrite to unroll quantified groups with backreferences.
+
+### 3.10 `lastIndex-match-or-replace.js` timeout — 2 tests ⏸️ DEFERRED
+**Reason:** Infinite loop in `@@match` global loop with custom `exec` on DuckRegExp subclass. Separate investigation needed into lastIndex advancement logic.
 
 ---
 
-## Phase 4: Iterator Helpers (~16 tests)
+## Phase 4: Iterator Helpers (~16 tests) — NEXT UP
 
 ### 4.1 WrapForValidIteratorPrototype `.return()` alive-state tracking — 2 tests
 **File:** `src/interpreter/builtins/iterators.rs`
@@ -348,12 +335,13 @@ Based on investigation of all failing tests. Phase 1 parser fixes completed 2026
 | ~~1~~ | ~~2.1 try/finally bug~~ | ~~4+~~ | ~~DONE~~ |
 | ~~2~~ | ~~1.x parser fixes~~ | ~~+26~~ | ~~DONE~~ |
 | ~~3~~ | ~~2.x interpreter fixes~~ | ~~+21~~ | ~~DONE~~ |
-| 4 | 3.x RegExp fixes | ~20 | Medium-Hard |
+| ~~4~~ | ~~3.x RegExp fixes~~ | ~~+16~~ | ~~DONE~~ |
 | 5 | 4.x Iterator helpers | ~16 | Medium |
 | 6 | 5.x TypedArray | ~22 | Medium |
 | 7 | 6.x Set operations | ~6 | Medium |
 | 8 | 7.x Intl/Temporal | ~36 | Hard (locale data) |
 | 9 | 8.x Miscellaneous | ~16 | Mixed |
 | — | Test262 bugs (1.1) | 6 | N/A |
+| — | RegExp deferred (3.7-3.10) | 8 | Hard (perf/engine) |
 
-**Progress: 101,065 / 101,234 (99.83%). Remaining fixable: ~169 tests** (6 are test262 bugs, ~7 are OOM/timeout performance issues, ~6 are hard locale data issues).
+**Progress: 101,081 / 101,234 (99.85%). Remaining fixable: ~153 tests** (6 are test262 bugs, ~7 are OOM/timeout performance issues, ~8 are deferred RegExp engine/perf issues, ~6 are hard locale data issues).

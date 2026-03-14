@@ -1428,6 +1428,8 @@ fn anonymize_named_groups(chars: &[char]) -> String {
 /// Rename named groups and backreferences in a pattern body for a specific iteration.
 /// `(?<name>...)` → `(?<__jsse_qi{idx}__name>...)` and `\k<name>` → `\k<__jsse_qi{idx}__name>`
 /// for names in the duplicate set.
+/// Also renames ALL other capturing groups (named and unnamed) with `__jsse_qi` prefix
+/// so they are properly stripped from the result.
 fn rename_groups_and_backrefs(
     chars: &[char],
     dup_names: &std::collections::HashSet<String>,
@@ -1437,6 +1439,7 @@ fn rename_groups_and_backrefs(
     let mut result = String::new();
     let mut i = 0;
     let mut in_cc = false;
+    let mut unnamed_counter: u32 = 0;
     while i < len {
         match chars[i] {
             '[' if !in_cc => {
@@ -1478,23 +1481,24 @@ fn rename_groups_and_backrefs(
                 && chars[i + 3] != '='
                 && chars[i + 3] != '!' =>
             {
+                // Named group
                 let name_start = i + 3;
                 if let Some(end_off) = chars[name_start..].iter().position(|&c| c == '>') {
                     let name: String = chars[name_start..name_start + end_off].iter().collect();
-                    if dup_names.contains(&name) {
-                        result.push_str(&format!("(?<__jsse_qi{}__{}>", idx, name));
-                        i = name_start + end_off + 1;
-                        continue;
-                    } else {
-                        result.push_str("(?<");
-                        result.push_str(&name);
-                        result.push('>');
-                        i = name_start + end_off + 1;
-                        continue;
-                    }
+                    // Rename ALL named groups with __jsse_qi prefix (not just dup ones)
+                    result.push_str(&format!("(?<__jsse_qi{}__{}>", idx, name));
+                    i = name_start + end_off + 1;
+                    continue;
                 } else {
                     result.push(chars[i]);
                 }
+            }
+            '(' if !in_cc && (i + 1 >= len || chars[i + 1] != '?') => {
+                // Unnamed capturing group — rename to __jsse_qi named group for stripping
+                unnamed_counter += 1;
+                result.push_str(&format!("(?<__jsse_qi{}_u{}>", idx, unnamed_counter));
+                i += 1;
+                continue;
             }
             c => result.push(c),
         }
@@ -2182,29 +2186,50 @@ pub(super) fn translate_js_pattern_ex(
                         }
                     } else if next == 'w' {
                         // ES spec: \w = [A-Za-z0-9_] always
-                        if in_char_class {
+                        // Under unicode + ignoreCase (current modifier), include U+017F/U+212A
+                        if unicode && icase {
+                            if in_char_class {
+                                result.push_str("A-Za-z0-9_\\x{017F}\\x{212A}");
+                            } else {
+                                result.push_str("[A-Za-z0-9_\\x{017F}\\x{212A}]");
+                            }
+                        } else if in_char_class {
                             result.push_str("A-Za-z0-9_");
                         } else {
                             result.push_str("[A-Za-z0-9_]");
                         }
                     } else if next == 'W' {
-                        if in_char_class {
+                        if unicode && icase {
+                            if in_char_class {
+                                result.push_str("\\x{00}-\\x{2F}\\x{3A}-\\x{40}\\x{5B}-\\x{5E}\\x{60}\\x{7B}-\\x{017E}\\x{0180}-\\x{2129}\\x{212B}-\\x{10FFFF}");
+                            } else {
+                                result.push_str("[^A-Za-z0-9_\\x{017F}\\x{212A}]");
+                            }
+                        } else if in_char_class {
                             result.push_str("\\x{00}-\\x{2F}\\x{3A}-\\x{40}\\x{5B}-\\x{5E}\\x{60}\\x{7B}-\\x{10FFFF}");
                         } else {
                             result.push_str("[^A-Za-z0-9_]");
                         }
                     } else if next == 'b' {
-                        if unicode && icase_base && !icase {
-                            // Inside (?-i:...) with /ui flags: \b must use ASCII-only word chars
-                            result.push_str("(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))");
+                        if in_char_class {
+                            // \b inside character class means backspace (U+0008)
+                            result.push_str("\\x{08}");
+                        } else if unicode && icase {
+                            // Under unicode + ignoreCase (current modifier), include U+017F/U+212A
+                            result.push_str("(?:(?<=(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}]))(?!(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}]))|(?<!(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}]))(?=(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}])))");
                         } else {
-                            result.push_str("\\b");
+                            // JS \b always uses ASCII word chars [A-Za-z0-9_]
+                            // (Rust \b uses Unicode word boundaries which is wrong for JS)
+                            result.push_str("(?:(?<=(?-i:[A-Za-z0-9_]))(?!(?-i:[A-Za-z0-9_]))|(?<!(?-i:[A-Za-z0-9_]))(?=(?-i:[A-Za-z0-9_])))");
                         }
                     } else if next == 'B' {
-                        if unicode && icase_base && !icase {
-                            result.push_str("(?:(?<=[A-Za-z0-9_])(?=[A-Za-z0-9_])|(?<![A-Za-z0-9_])(?![A-Za-z0-9_]))");
+                        if in_char_class {
+                            // \B inside character class is literal B in non-unicode mode
+                            result.push('B');
+                        } else if unicode && icase {
+                            result.push_str("(?:(?<=(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}]))(?=(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}]))|(?<!(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}]))(?!(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}])))");
                         } else {
-                            result.push_str("\\B");
+                            result.push_str("(?:(?<=(?-i:[A-Za-z0-9_]))(?=(?-i:[A-Za-z0-9_]))|(?<!(?-i:[A-Za-z0-9_]))(?!(?-i:[A-Za-z0-9_])))");
                         }
                     } else {
                         result.push('\\');
@@ -2392,6 +2417,9 @@ pub(super) fn translate_js_pattern_ex(
                         && needs_case_fold_guard(next)
                     {
                         push_case_fold_guarded(&mut result, next, false);
+                    } else if in_char_class && next == '-' {
+                        // \- in char class: must escape dash to prevent range interpretation
+                        result.push_str("\\-");
                     } else {
                         // Identity escape: push the literal character
                         // (fancy_regex may interpret \< \> \A \Z etc. specially)
@@ -6063,11 +6091,12 @@ fn get_substitution(
     matched: &str,
     s: &str,
     position: usize,
+    tail_pos: usize,
     captures: &[JsValue],
     named_captures: &JsValue,
     replacement: &str,
 ) -> Result<String, JsValue> {
-    let tail_pos = position + matched.len();
+    let tail_pos = tail_pos.min(s.len());
     let mut result = String::new();
     let rchars: Vec<char> = replacement.chars().collect();
     let len = rchars.len();
@@ -6085,14 +6114,14 @@ fn get_substitution(
                     i += 2;
                 }
                 '`' => {
-                    if position > 0 && position <= s.len() {
-                        result.push_str(&s[..position]);
+                    if let Some(prefix) = s.get(..position) {
+                        result.push_str(prefix);
                     }
                     i += 2;
                 }
                 '\'' => {
-                    if tail_pos < s.len() {
-                        result.push_str(&s[tail_pos..]);
+                    if let Some(suffix) = s.get(tail_pos..) {
+                        result.push_str(suffix);
                     }
                     i += 2;
                 }
@@ -6202,20 +6231,9 @@ fn regexp_exec_raw(
     flags: &str,
     input: &str,
 ) -> Completion {
-    let global = flags.contains('g');
-    let sticky = flags.contains('y');
-    let has_indices = flags.contains('d');
-    let unicode = flags.contains('u') || flags.contains('v');
-
-    let non_unicode_input;
-    let input = if !unicode {
-        non_unicode_input = split_surrogates_for_non_unicode(input);
-        &non_unicode_input
-    } else {
-        input
-    };
-
     // Spec: Let lastIndex be ? ToLength(? Get(R, "lastIndex")).
+    // ToLength may trigger valueOf side effects that recompile the regexp,
+    // so we re-read source/flags from internal slots afterward.
     let this_val = JsValue::Object(crate::types::JsObject { id: this_id });
     let li_val = match interp.get_object_property(this_id, "lastIndex", &this_val) {
         Completion::Normal(v) => v,
@@ -6229,6 +6247,41 @@ fn regexp_exec_raw(
         0.0
     } else {
         li_num.min(9007199254740991.0).floor()
+    };
+
+    // Re-read source/flags from internal slots (may have changed via compile() side effect)
+    let (source_owned, flags_owned) = {
+        if let Some(obj) = interp.get_object(this_id) {
+            let b = obj.borrow();
+            let src = b
+                .regexp_original_source
+                .as_ref()
+                .map(|s| js_string_to_regex_input(&s.code_units))
+                .unwrap_or_else(|| source.to_string());
+            let fl = b
+                .regexp_original_flags
+                .as_ref()
+                .map(|s| s.to_rust_string())
+                .unwrap_or_else(|| flags.to_string());
+            (src, fl)
+        } else {
+            (source.to_string(), flags.to_string())
+        }
+    };
+    let source = &source_owned;
+    let flags = &flags_owned;
+
+    let global = flags.contains('g');
+    let sticky = flags.contains('y');
+    let has_indices = flags.contains('d');
+    let unicode = flags.contains('u') || flags.contains('v');
+
+    let non_unicode_input;
+    let input = if !unicode {
+        non_unicode_input = split_surrogates_for_non_unicode(input);
+        &non_unicode_input
+    } else {
+        input
     };
 
     // lastIndex is in UTF-16 code units; convert to byte offset for string slicing
@@ -6995,6 +7048,16 @@ impl Interpreter {
                     _ => s.clone(),
                 };
                 let length_s = s_slice.len();
+                let s_utf16_len: usize = s_slice
+                    .chars()
+                    .map(|c| {
+                        if pua_to_surrogate(c).is_some() {
+                            1
+                        } else {
+                            c.len_utf16()
+                        }
+                    })
+                    .sum();
 
                 // 5. Let functionalReplace be IsCallable(replaceValue).
                 let replace_value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -7175,12 +7238,10 @@ impl Interpreter {
                             return Completion::Throw(e);
                         }
                     };
-                    // Get match_length in byte offsets within the non-unicode PUA-mapped string
-                    let match_length = match &matched_val {
-                        JsValue::String(js) => {
-                            js_string_to_regex_input_non_unicode(&js.code_units).len()
-                        }
-                        _ => matched.len(),
+                    // Compute matchLength in UTF-16 code units for tail_pos calculation
+                    let match_length_utf16 = match &matched_val {
+                        JsValue::String(js) => js.code_units.len(),
+                        _ => matched.encode_utf16().count(),
                     };
 
                     // e. Let position be ? ToIntegerOrInfinity(? Get(result, "index")).
@@ -7293,11 +7354,16 @@ impl Interpreter {
                         } else {
                             JsValue::Undefined
                         };
+                        let tail_pos = utf16_to_byte_offset(
+                            &s_slice,
+                            (position_utf16 + match_length_utf16).min(s_utf16_len),
+                        );
                         match get_substitution(
                             interp,
                             &matched,
                             &s_slice,
                             position,
+                            tail_pos,
                             &captures,
                             &named_captures_obj,
                             template,
@@ -7311,10 +7377,14 @@ impl Interpreter {
                     };
 
                     // p. If position >= nextSourcePosition, then
+                    let tail_pos_final = utf16_to_byte_offset(
+                        &s_slice,
+                        (position_utf16 + match_length_utf16).min(s_utf16_len),
+                    );
                     if position >= next_source_position {
                         accumulated_result.push_str(&s_slice[next_source_position..position]);
                         accumulated_result.push_str(&replacement);
-                        next_source_position = position + match_length;
+                        next_source_position = tail_pos_final;
                     }
                 }
 
@@ -8244,8 +8314,9 @@ impl Interpreter {
                     }
                 }
 
-                // Handle RegExp/RegExp-like argument: extract source/flags
-                // §22.2.3.1 step 3a: If pattern has [[RegExpMatcher]], use internal slots
+                // §22.2.3.1 steps 3-4: Extract P and F from arguments.
+                // Source is extracted fully (freezing it before prototype lookup),
+                // but flags ToString is deferred until after RegExpAlloc (step 5).
                 let has_regexp_matcher = if let JsValue::Object(ref o) = pattern_arg {
                     interp
                         .get_object(o.id)
@@ -8253,10 +8324,13 @@ impl Interpreter {
                 } else {
                     false
                 };
-                // Get pattern and flags, preserving surrogate code units.
-                // `pattern_js` holds the exact JsString for storage;
-                // `pattern_str` is a PUA-encoded Rust String for validation.
-                let (pattern_js, pattern_str, flags_str) =
+
+                // Phase 1: Extract source and raw flags value
+                enum RawFlags {
+                    Resolved(String),
+                    NeedsToString(JsValue),
+                }
+                let (pattern_js, pattern_str, raw_flags) =
                     if has_regexp_matcher && let JsValue::Object(ref o) = pattern_arg {
                         let src_js = interp
                             .get_object(o.id)
@@ -8264,20 +8338,19 @@ impl Interpreter {
                             .unwrap_or_else(|| JsString::from_str(""));
                         let src = js_string_to_regex_input(&src_js.code_units);
                         let flg = if matches!(flags_arg, JsValue::Undefined) {
-                            interp
-                                .get_object(o.id)
-                                .and_then(|obj| {
-                                    obj.borrow()
-                                        .regexp_original_flags
-                                        .as_ref()
-                                        .map(|s| s.to_string())
-                                })
-                                .unwrap_or_default()
+                            RawFlags::Resolved(
+                                interp
+                                    .get_object(o.id)
+                                    .and_then(|obj| {
+                                        obj.borrow()
+                                            .regexp_original_flags
+                                            .as_ref()
+                                            .map(|s| s.to_string())
+                                    })
+                                    .unwrap_or_default(),
+                            )
                         } else {
-                            match interp.to_string_value(&flags_arg) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            }
+                            RawFlags::NeedsToString(flags_arg.clone())
                         };
                         (src_js, src, flg)
                     } else if is_regexp_obj && let JsValue::Object(ref o) = pattern_arg {
@@ -8291,19 +8364,14 @@ impl Interpreter {
                         };
                         let src_str = js_string_to_regex_input(&src.code_units);
                         let flg = if matches!(flags_arg, JsValue::Undefined) {
-                            match interp.get_object_property(o.id, "flags", &pattern_arg) {
-                                Completion::Normal(v) => match interp.to_string_value(&v) {
-                                    Ok(s) => s,
-                                    Err(e) => return Completion::Throw(e),
-                                },
+                            let f = match interp.get_object_property(o.id, "flags", &pattern_arg) {
+                                Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
-                                _ => String::new(),
-                            }
+                                _ => JsValue::Undefined,
+                            };
+                            RawFlags::NeedsToString(f)
                         } else {
-                            match interp.to_string_value(&flags_arg) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            }
+                            RawFlags::NeedsToString(flags_arg.clone())
                         };
                         (src, src_str, flg)
                     } else {
@@ -8316,16 +8384,30 @@ impl Interpreter {
                             }
                         };
                         let p_str = js_string_to_regex_input(&p_js.code_units);
-                        let f = if matches!(flags_arg, JsValue::Undefined) {
-                            String::new()
+                        let flg = if matches!(flags_arg, JsValue::Undefined) {
+                            RawFlags::Resolved(String::new())
                         } else {
-                            match interp.to_string_value(&flags_arg) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            }
+                            RawFlags::NeedsToString(flags_arg.clone())
                         };
-                        (p_js, p_str, f)
+                        (p_js, p_str, flg)
                     };
+
+                // §22.2.3.1 step 5: RegExpAlloc — get prototype from new target
+                let proto = match interp
+                    .get_prototype_from_new_target_realm(|realm| realm.regexp_prototype.clone())
+                {
+                    Ok(p) => p,
+                    Err(e) => return Completion::Throw(e),
+                };
+
+                // Phase 2: Now ToString flags (after prototype lookup)
+                let flags_str = match raw_flags {
+                    RawFlags::Resolved(s) => s,
+                    RawFlags::NeedsToString(v) => match interp.to_string_value(&v) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    },
+                };
 
                 // Validate flags: only dgimsuy allowed, no duplicates
                 let valid_flags = "dgimsuyv";
@@ -8367,12 +8449,6 @@ impl Interpreter {
                     pattern_js
                 };
 
-                let proto = match interp
-                    .get_prototype_from_new_target_realm(|realm| realm.regexp_prototype.clone())
-                {
-                    Ok(p) => p,
-                    Err(e) => return Completion::Throw(e),
-                };
                 let mut obj = JsObjectData::new();
                 obj.prototype = proto.or(Some(regexp_proto_rc.clone()));
                 obj.class_name = "RegExp".to_string();
@@ -8453,6 +8529,7 @@ impl Interpreter {
         if let JsValue::Object(ref o) = regexp_ctor
             && let Some(obj) = self.get_object(o.id)
         {
+            obj.borrow_mut().deferred_construct = true;
             obj.borrow_mut().insert_builtin(
                 "prototype".to_string(),
                 JsValue::Object(crate::types::JsObject {
