@@ -8096,7 +8096,9 @@ impl Interpreter {
                 });
                 // If accessor descriptor
                 if own_desc.get.is_some() || own_desc.set.is_some() {
-                    if let Some(ref setter) = own_desc.set {
+                    if let Some(ref setter) = own_desc.set
+                        && !matches!(setter, JsValue::Undefined)
+                    {
                         let setter = setter.clone();
                         return match interp.call_function(&setter, &receiver, &[value]) {
                             Completion::Normal(_) => Completion::Normal(JsValue::Boolean(true)),

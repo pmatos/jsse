@@ -3166,6 +3166,9 @@ impl Interpreter {
                             "Cannot assign to read only property '{key}'"
                         )));
                     }
+                    if success {
+                        self.sync_global_object_binding(o.id, &key, &final_val);
+                    }
                     return Completion::Normal(final_val);
                 }
                 // Primitive base: ToObject(base).[[Set]](key, val, primitiveBase)
@@ -5796,6 +5799,23 @@ impl Interpreter {
                 return disp;
             }
             if let Completion::Return(v) = stmt_result {
+                // Check try_stack for enclosing finally blocks before completing
+                let mut ret_val_opt = Some(v);
+                for i in (0..current_try_stack.len()).rev() {
+                    if !current_try_stack[i].entered_finally
+                        && current_try_stack[i].finally_state.is_some()
+                    {
+                        pending_return = ret_val_opt.take();
+                        let finally_state = current_try_stack[i].finally_state.unwrap();
+                        current_try_stack = current_try_stack[..i].to_vec();
+                        current_id = finally_state;
+                        break;
+                    }
+                }
+                if ret_val_opt.is_none() {
+                    continue;
+                }
+                let v = ret_val_opt.unwrap();
                 // §27.5.3.3: DisposeResources when generator returns
                 let disp = self.dispose_resources(&func_env, Completion::Return(v));
                 let ret_val = match disp {
@@ -6142,6 +6162,11 @@ impl Interpreter {
                         }
                     }
 
+                    // Save any iterators that need IteratorClose if generator.return() is called
+                    let pending = std::mem::take(&mut self.pending_iter_close);
+                    if !pending.is_empty() {
+                        self.generator_inline_iters.insert(o.id, pending);
+                    }
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineGenerator {
                             state_machine,
@@ -6192,6 +6217,24 @@ impl Interpreter {
                     } else {
                         JsValue::Undefined
                     };
+
+                    // Check try_stack for enclosing finally blocks before completing
+                    let mut ret_val_opt = Some(ret_val);
+                    for i in (0..current_try_stack.len()).rev() {
+                        if !current_try_stack[i].entered_finally
+                            && current_try_stack[i].finally_state.is_some()
+                        {
+                            pending_return = ret_val_opt.take();
+                            let finally_state = current_try_stack[i].finally_state.unwrap();
+                            current_try_stack = current_try_stack[..i].to_vec();
+                            current_id = finally_state;
+                            break;
+                        }
+                    }
+                    if ret_val_opt.is_none() {
+                        continue;
+                    }
+                    let ret_val = ret_val_opt.unwrap();
 
                     // §27.5.3.3: DisposeResources when generator completes via return
                     let disp = self.dispose_resources(&func_env, Completion::Return(ret_val));
@@ -6354,25 +6397,38 @@ impl Interpreter {
                         return Completion::Throw(exc);
                     }
                     if let Some(ret_val) = pending_return.take() {
-                        if current_try_stack.is_empty() {
-                            obj_rc.borrow_mut().iterator_state =
-                                Some(IteratorState::StateMachineGenerator {
-                                    state_machine,
-                                    func_env,
-                                    is_strict,
-                                    execution_state: StateMachineExecutionState::Completed,
-                                    _sent_value: JsValue::Undefined,
-                                    try_stack: vec![],
-                                    pending_binding: None,
-                                    delegated_iterator: None,
-                                    pending_exception: None,
-                                    pending_return: None,
-                                });
-                            return Completion::Normal(
-                                self.create_iter_result_object(ret_val, true),
-                            );
+                        // Check for more enclosing try-finally blocks
+                        let mut ret_val_opt = Some(ret_val);
+                        for i in (0..current_try_stack.len()).rev() {
+                            if !current_try_stack[i].entered_finally
+                                && current_try_stack[i].finally_state.is_some()
+                            {
+                                pending_return = ret_val_opt.take();
+                                let finally_state = current_try_stack[i].finally_state.unwrap();
+                                current_try_stack = current_try_stack[..i].to_vec();
+                                current_id = finally_state;
+                                break;
+                            }
                         }
-                        pending_return = Some(ret_val);
+                        if ret_val_opt.is_none() {
+                            continue;
+                        }
+                        let ret_val = ret_val_opt.unwrap();
+                        // No more finally blocks — complete the generator
+                        obj_rc.borrow_mut().iterator_state =
+                            Some(IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                _sent_value: JsValue::Undefined,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                                pending_return: None,
+                            });
+                        return Completion::Normal(self.create_iter_result_object(ret_val, true));
                     }
                     current_id = *after_state;
                 }
@@ -6737,25 +6793,34 @@ impl Interpreter {
                 }
 
                 StateTerminator::Completed => {
+                    let has_pending_return = pending_return.is_some();
+                    let ret_val = pending_return.take().unwrap_or(JsValue::Undefined);
                     // §27.5.3.3 GeneratorStart: DisposeResources when generator completes
-                    let disp =
-                        self.dispose_resources(&func_env, Completion::Normal(JsValue::Undefined));
-                    if let Completion::Throw(e) = disp {
-                        obj_rc.borrow_mut().iterator_state =
-                            Some(IteratorState::StateMachineGenerator {
-                                state_machine,
-                                func_env,
-                                is_strict,
-                                execution_state: StateMachineExecutionState::Completed,
-                                _sent_value: JsValue::Undefined,
-                                try_stack: vec![],
-                                pending_binding: None,
-                                delegated_iterator: None,
-                                pending_exception: None,
-                                pending_return: None,
-                            });
-                        return Completion::Throw(e);
-                    }
+                    let disp = if has_pending_return {
+                        self.dispose_resources(&func_env, Completion::Return(ret_val.clone()))
+                    } else {
+                        self.dispose_resources(&func_env, Completion::Normal(JsValue::Undefined))
+                    };
+                    let final_val = match disp {
+                        Completion::Return(v) => v,
+                        Completion::Throw(e) => {
+                            obj_rc.borrow_mut().iterator_state =
+                                Some(IteratorState::StateMachineGenerator {
+                                    state_machine,
+                                    func_env,
+                                    is_strict,
+                                    execution_state: StateMachineExecutionState::Completed,
+                                    _sent_value: JsValue::Undefined,
+                                    try_stack: vec![],
+                                    pending_binding: None,
+                                    delegated_iterator: None,
+                                    pending_exception: None,
+                                    pending_return: None,
+                                });
+                            return Completion::Throw(e);
+                        }
+                        _ => ret_val,
+                    };
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineGenerator {
                             state_machine,
@@ -6769,9 +6834,7 @@ impl Interpreter {
                             pending_exception: None,
                             pending_return: None,
                         });
-                    return Completion::Normal(
-                        self.create_iter_result_object(JsValue::Undefined, true),
-                    );
+                    return Completion::Normal(self.create_iter_result_object(final_val, true));
                 }
 
                 StateTerminator::Await { .. } => {
@@ -7056,6 +7119,7 @@ impl Interpreter {
             execution_state,
             try_stack,
             delegated_iterator,
+            pending_return: stored_pending_return,
             ..
         }) = state
         {
@@ -7281,7 +7345,7 @@ impl Interpreter {
                             pending_binding: None,
                             delegated_iterator: None,
                             pending_exception: Some(exception.clone()),
-                            pending_return: None,
+                            pending_return: stored_pending_return,
                         });
                     return self.generator_next_state_machine(this, JsValue::Undefined);
                 }
@@ -7301,7 +7365,7 @@ impl Interpreter {
                             pending_binding: None,
                             delegated_iterator: None,
                             pending_exception: Some(exception.clone()),
-                            pending_return: None,
+                            pending_return: stored_pending_return,
                         });
                     return self.generator_next_state_machine(this, JsValue::Undefined);
                 }
@@ -13761,17 +13825,29 @@ impl Interpreter {
             Some(obj_id) => Ok(IdentifierRef::WithObject(obj_id)),
             None => {
                 if let Some(specific_env) = Environment::find_binding_env(env, name) {
-                    // Check if this env actually has the binding, or just has a global_object
-                    let has_binding = {
+                    let (has_binding, global_obj_id) = {
                         let e = specific_env.borrow();
-                        e.bindings.contains_key(name)
-                            || e.is_indirect_binding(name)
-                            || e.global_object
-                                .as_ref()
-                                .is_some_and(|obj| obj.borrow().properties.contains_key(name))
+                        let in_bindings =
+                            e.bindings.contains_key(name) || e.is_indirect_binding(name);
+                        if in_bindings {
+                            (true, None)
+                        } else if let Some(ref global_obj) = e.global_object {
+                            let own = global_obj.borrow().properties.contains_key(name);
+                            let gid = global_obj.borrow().id;
+                            (own, if !own { gid } else { None })
+                        } else {
+                            (false, None)
+                        }
                     };
                     if has_binding {
                         Ok(IdentifierRef::SpecificEnv(specific_env))
+                    } else if let Some(gid) = global_obj_id {
+                        // Check prototype chain (handles Proxy has traps)
+                        if self.proxy_has_property(gid, name)? {
+                            Ok(IdentifierRef::SpecificEnv(specific_env))
+                        } else {
+                            Ok(IdentifierRef::Unresolvable)
+                        }
                     } else {
                         Ok(IdentifierRef::Unresolvable)
                     }
@@ -13794,6 +13870,24 @@ impl Interpreter {
         match global_env.borrow_mut().set(name, value.clone()) {
             Ok(()) => Completion::Normal(value),
             Err(_) => Completion::Throw(self.create_type_error("Assignment to constant variable.")),
+        }
+    }
+
+    /// Sync a property set on an object to the corresponding global env binding,
+    /// if the object is a realm's global object.
+    fn sync_global_object_binding(&mut self, obj_id: u64, key: &str, value: &JsValue) {
+        for realm in &self.realms {
+            let is_global = realm
+                .global_object
+                .as_ref()
+                .is_some_and(|go| go.borrow().id == Some(obj_id));
+            if is_global {
+                let env = realm.global_env.clone();
+                if env.borrow().bindings.contains_key(key) {
+                    let _ = env.borrow_mut().set(key, value.clone());
+                }
+                return;
+            }
         }
     }
 
@@ -13831,7 +13925,30 @@ impl Interpreter {
                         }
                     }
                     SetBindingCheck::Unresolvable => {
-                        if env.borrow().strict {
+                        let strict = env.borrow().strict || specific_env.borrow().strict;
+                        let global_obj_id = specific_env
+                            .borrow()
+                            .global_object
+                            .as_ref()
+                            .and_then(|obj| obj.borrow().id);
+                        if let Some(gid) = global_obj_id {
+                            // §9.1.1.2.5 SetMutableBinding: check HasProperty
+                            let still_exists = self.proxy_has_property(gid, name);
+                            match still_exists {
+                                Ok(false) if strict => {
+                                    return Completion::Throw(self.create_reference_error(
+                                        &format!("{name} is not defined"),
+                                    ));
+                                }
+                                Err(e) => return Completion::Throw(e),
+                                _ => {}
+                            }
+                            let receiver = JsValue::Object(crate::types::JsObject { id: gid });
+                            match self.proxy_set(gid, name, value.clone(), &receiver) {
+                                Ok(_) => Completion::Normal(value),
+                                Err(e) => Completion::Throw(e),
+                            }
+                        } else if strict {
                             Completion::Throw(
                                 self.create_reference_error(&format!("{name} is not defined")),
                             )
@@ -13840,6 +13957,41 @@ impl Interpreter {
                         }
                     }
                     SetBindingCheck::Ok => {
+                        // If binding is not in env.bindings but found via global object's
+                        // has_property (prototype chain), use [[Set]] to respect setters/proxies
+                        let in_bindings = specific_env.borrow().bindings.contains_key(name);
+                        if !in_bindings {
+                            let global_obj_id = specific_env
+                                .borrow()
+                                .global_object
+                                .as_ref()
+                                .and_then(|obj| obj.borrow().id);
+                            if let Some(gid) = global_obj_id {
+                                // §9.1.1.2.5 SetMutableBinding: check HasProperty again
+                                let still_exists = self.proxy_has_property(gid, name);
+                                match still_exists {
+                                    Ok(false) => {
+                                        let strict =
+                                            env.borrow().strict || specific_env.borrow().strict;
+                                        if strict {
+                                            return Completion::Throw(self.create_reference_error(
+                                                &format!("{name} is not defined"),
+                                            ));
+                                        }
+                                    }
+                                    Err(e) => return Completion::Throw(e),
+                                    Ok(true) => {}
+                                }
+                                let receiver = JsValue::Object(crate::types::JsObject { id: gid });
+                                match self.proxy_set(gid, name, value.clone(), &receiver) {
+                                    Ok(_) => {
+                                        self.sync_global_object_binding(gid, name, &value);
+                                        return Completion::Normal(value);
+                                    }
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
+                        }
                         match specific_env.borrow_mut().set(name, value.clone()) {
                             Ok(()) => Completion::Normal(value),
                             Err(_) => Completion::Throw(
@@ -13862,9 +14014,10 @@ impl Interpreter {
         }
     }
 
-    /// Check if a global object property has a getter and needs special handling.
-    /// Returns Some(Completion) if the name resolves to a global getter property.
-    /// Returns None if no getter or not a global property — caller should use env.get().
+    /// Resolve a global object property for reading, walking the prototype chain.
+    /// Returns Some(Completion) if the name resolves to a property on the global object
+    /// or its prototype chain (including through Proxy has/get traps).
+    /// Returns None if no property found — caller should use env.get().
     fn resolve_global_getter(&mut self, name: &str, env: &EnvRef) -> Option<Completion> {
         let mut current = Some(env.clone());
         while let Some(env_ref) = current {
@@ -13879,16 +14032,29 @@ impl Interpreter {
             }
             if let Some(ref global_obj) = env_borrow.global_object {
                 let global_obj_clone = global_obj.clone();
-                let has_getter = global_obj_clone
-                    .borrow()
-                    .properties
-                    .get(name)
-                    .is_some_and(|d| d.get.is_some());
                 let global_id = global_obj_clone.borrow().id;
                 drop(env_borrow);
-                if has_getter && let Some(gid) = global_id {
-                    let this_val = JsValue::Object(crate::types::JsObject { id: gid });
-                    return Some(self.get_object_property(gid, name, &this_val));
+                if let Some(gid) = global_id {
+                    // Check own property first (fast path)
+                    let own_prop = self
+                        .get_object(gid)
+                        .and_then(|o| o.borrow().get_own_property(name));
+                    if let Some(ref desc) = own_prop {
+                        if desc.get.is_some() {
+                            let this_val = JsValue::Object(crate::types::JsObject { id: gid });
+                            return Some(self.get_object_property(gid, name, &this_val));
+                        }
+                        return None;
+                    }
+                    // Not own — check prototype chain (handles Proxy has/get traps)
+                    match self.proxy_has_property(gid, name) {
+                        Ok(true) => {
+                            let this_val = JsValue::Object(crate::types::JsObject { id: gid });
+                            return Some(self.get_object_property(gid, name, &this_val));
+                        }
+                        Ok(false) => return None,
+                        Err(e) => return Some(Completion::Throw(e)),
+                    }
                 }
                 return None;
             }
