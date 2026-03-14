@@ -31,6 +31,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   - `expressions.rs` — Expression parsing
   - `statements.rs` — Statement parsing
   - `declarations.rs` — Function, class, variable, destructuring parsing
+  - `modules.rs` — Module-specific parsing
 - `src/interpreter/` — Tree-walking interpreter
   - `mod.rs` — Interpreter struct, new(), run(), object/property helpers
   - `types.rs` — Completion, Environment, JsFunction, PropertyDescriptor, JsObjectData, etc.
@@ -59,6 +60,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - Primary validation: test262 suite
 - Custom tests: `tests/` directory
 - After any implementation work, run the full test262 suite and update README.md progress.
+- Update README progress with `python3 scripts/update-readme.py` after a full test262 run.
 - Run test262: `uv run python scripts/run-test262.py`
 - Run linter: `./scripts/lint.sh`
 - Python scripts are run via `uv run python` (no virtualenv setup needed).
