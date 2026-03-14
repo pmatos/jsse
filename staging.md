@@ -1,7 +1,7 @@
 # Staging Test Failures Plan
 
-**Current:** 101,013 / 101,234 (99.78%) — 221 failing scenarios
-**Previous baseline:** 101,035 / 101,269 (99.77%) — 234 failing scenarios
+**Current:** 101,022 / 101,234 (99.79%) — 212 failing scenarios
+**Previous baseline:** 101,013 / 101,234 (99.78%) — 221 failing scenarios
 
 ---
 
@@ -97,13 +97,13 @@ Removed incorrect `in_class_field_initializer` flag that broke `[` continuation 
 
 FIXED: Test runner now detects `sm/non262-strict-shell.js` in includes and skips the `:strict` scenario, since the harness manages strict/lenient mode internally via `testLenientAndStrict()`.
 
-### B3. RegExp: template literal lone surrogate escapes (3 tests, EASY)
+### ~~B3. RegExp: template literal lone surrogate escapes (3 tests, EASY)~~ DONE (+6 passes, +4 bonus)
 
-Parser rejects `\uDC38` etc. in template literals. Only `\u{XXXX}` surrogates should be rejected.
+Fixed template literal cooked values to use `Vec<u16>` (UTF-16 code units) instead of `String` (UTF-8), preserving lone surrogates. Also fixed RegExp constructor to preserve surrogate code units in pattern source (was using lossy `to_rust_string()`), fixed PUA-encoded surrogates being incorrectly split as supplementary chars in regex pattern translation, and fixed `AdvanceStringIndex`/`@@split` UTF-16 length calculations for PUA-encoded surrogates. 4 bonus passes from other regex surrogate fixes.
 
-- `staging/sm/RegExp/split-trace.js`
-- `staging/sm/RegExp/unicode-raw.js`
-- `staging/sm/RegExp/unicode-class-raw.js`
+- `staging/sm/RegExp/split-trace.js` — **NOW PASSING**
+- `staging/sm/RegExp/unicode-raw.js` — **NOW PASSING**
+- `staging/sm/RegExp/unicode-class-raw.js` — **NOW PASSING**
 
 ### B4. RegExp: `\u{NN}` without /u flag (1 test, EASY)
 

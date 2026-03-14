@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Test Files | Scenarios | Passing | Failing | Pass Rate |
 |------------|-----------|---------|---------|-----------|
-| 52,735     | 101,234   | 101,013 | 221     | 99.78%    |
+| 52,735     | 101,234   | 101,022 | 212     | 99.79%    |
 
 This includes all test262 directories: `language/`, `built-ins/`, `annexB/`, `intl402/`, and `staging/`.
 
@@ -121,7 +121,7 @@ Benchmark run on 2026-03-10 using `scripts/run-test262.py -j 64 --timeout 120` o
 
 | Engine | Version | Scenarios | Run | Skip | Pass | Fail | Rate |
 |--------|---------|-----------|-----|------|------|------|------|
-| **JSSE** | latest | 101,269 | 101,269 | 0 | 101,035 | 234 | **99.77%** |
+| **JSSE** | latest | 101,234 | 101,234 | 0 | 101,022 | 212 | **99.79%** |
 | **Boa** | v0.21 | 91,986 | 91,986 | 0 | 83,260 | 8,726 | **90.51%** |
 | **Node** | v25.8.0 | 91,986 | 91,187 | 799 | 79,201 | 11,986 | **86.86%** |
 

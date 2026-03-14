@@ -2732,7 +2732,7 @@ pub(super) fn translate_js_pattern_ex(
             continue;
         }
 
-        if !unicode && c as u32 >= 0x10000 {
+        if !unicode && c as u32 >= 0x10000 && pua_to_surrogate(c).is_none() {
             let cp = c as u32;
             let hi = ((cp - 0x10000) >> 10) + 0xD800;
             let lo = ((cp - 0x10000) & 0x3FF) + 0xDC00;
@@ -5937,7 +5937,7 @@ fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(Str
     {
         let b = obj.borrow();
         let source = if let Some(ref s) = b.regexp_original_source {
-            s.to_rust_string()
+            js_string_to_regex_input(&s.code_units)
         } else {
             return None;
         };
@@ -6073,7 +6073,7 @@ fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, s: &str) -> Comple
         let (source, flags) = if let Some(obj) = interp.get_object(rx_id) {
             let b = obj.borrow();
             let src = if let Some(ref s) = b.regexp_original_source {
-                s.to_rust_string()
+                js_string_to_regex_input(&s.code_units)
             } else {
                 String::new()
             };
@@ -6098,18 +6098,27 @@ fn advance_string_index(s: &str, index: usize, unicode: bool) -> usize {
     if !unicode {
         return index + 1;
     }
-    let utf16_len: usize = s.chars().map(|c| c.len_utf16()).sum();
+    let utf16_len: usize = s
+        .chars()
+        .map(|c| {
+            if pua_to_surrogate(c).is_some() {
+                1
+            } else {
+                c.len_utf16()
+            }
+        })
+        .sum();
     if index + 1 >= utf16_len {
         return index + 1;
     }
-    // Find the character at the given UTF-16 index
     let byte_offset = utf16_to_byte_offset(s, index);
     if byte_offset >= s.len() {
         return index + 1;
     }
     let c = s[byte_offset..].chars().next().unwrap_or('\0');
-    // If the code point takes 2 UTF-16 code units (surrogate pair), advance by 2
-    if c.len_utf16() == 2 {
+    if pua_to_surrogate(c).is_some() {
+        index + 1
+    } else if c.len_utf16() == 2 {
         index + 2
     } else {
         index + 1
@@ -6290,7 +6299,16 @@ fn regexp_exec_raw(
     };
 
     // lastIndex is in UTF-16 code units; convert to byte offset for string slicing
-    let input_utf16_len: usize = input.chars().map(|c| c.len_utf16()).sum();
+    let input_utf16_len: usize = input
+        .chars()
+        .map(|c| {
+            if pua_to_surrogate(c).is_some() {
+                1
+            } else {
+                c.len_utf16()
+            }
+        })
+        .sum();
     let last_index_utf16 = if global || sticky {
         let li_int = li_length as i64;
         if li_int < 0 || li_int as usize > input_utf16_len {
@@ -6704,6 +6722,7 @@ impl Interpreter {
                 let flags_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
                 let (pattern_str, flags_str);
+                let pattern_js: Option<JsString>;
 
                 // 3. If pattern is a RegExp object
                 let pattern_is_regexp = if let JsValue::Object(po) = &pattern_arg {
@@ -6732,10 +6751,11 @@ impl Interpreter {
                     if let Some(pobj) = interp.get_object(po_id) {
                         let b = pobj.borrow();
                         pattern_str = if let Some(ref s) = b.regexp_original_source {
-                            s.to_rust_string()
+                            js_string_to_regex_input(&s.code_units)
                         } else {
                             "(?:)".to_string()
                         };
+                        pattern_js = b.regexp_original_source.clone();
                         flags_str = if let Some(ref s) = b.regexp_original_flags {
                             s.to_rust_string()
                         } else {
@@ -6743,18 +6763,21 @@ impl Interpreter {
                         };
                     } else {
                         pattern_str = "(?:)".to_string();
+                        pattern_js = None;
                         flags_str = String::new();
                     }
                 } else {
                     // 4. Let P be pattern, let F be flags.
-                    pattern_str = if matches!(pattern_arg, JsValue::Undefined) {
-                        String::new()
+                    let p_js = if matches!(pattern_arg, JsValue::Undefined) {
+                        JsString::from_str("")
                     } else {
-                        match interp.to_string_value(&pattern_arg) {
+                        match interp.to_js_string(&pattern_arg) {
                             Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
                         }
                     };
+                    pattern_str = js_string_to_regex_input(&p_js.code_units);
+                    pattern_js = Some(p_js);
                     flags_str = if matches!(flags_arg, JsValue::Undefined) {
                         String::new()
                     } else {
@@ -6794,16 +6817,15 @@ impl Interpreter {
                     return Completion::Throw(interp.create_error("SyntaxError", &msg));
                 }
 
-                let source_str = if pattern_str.is_empty() {
-                    "(?:)".to_string()
-                } else {
-                    pattern_str
+                let source_js = match pattern_js {
+                    Some(js) if !js.code_units.is_empty() => js,
+                    _ => JsString::from_str("(?:)"),
                 };
 
                 // 5. Return ? RegExpInitialize(O, P, F).
                 if let Some(obj) = interp.get_object(obj_id) {
                     let mut b = obj.borrow_mut();
-                    b.regexp_original_source = Some(JsString::from_str(&source_str));
+                    b.regexp_original_source = Some(source_js);
                     b.regexp_original_flags = Some(JsString::from_str(&flags_str));
                 }
                 // Set lastIndex to 0 with strict mode (throws TypeError if non-writable)
@@ -7476,7 +7498,17 @@ impl Interpreter {
                 }
 
                 // Use UTF-16 code unit length for spec positions
-                let size: usize = s.chars().map(|c| c.len_utf16()).sum();
+                // PUA-encoded surrogates count as 1 UTF-16 code unit
+                let size: usize = s
+                    .chars()
+                    .map(|c| {
+                        if pua_to_surrogate(c).is_some() {
+                            1
+                        } else {
+                            c.len_utf16()
+                        }
+                    })
+                    .sum();
 
                 // 12. If size = 0, then
                 if size == 0 {
@@ -7484,7 +7516,7 @@ impl Interpreter {
                     let z = regexp_exec_abstract(interp, splitter_id, &s);
                     match z {
                         Completion::Normal(ref v) if matches!(v, JsValue::Null) => {
-                            a.push(JsValue::String(JsString::from_str(&s)));
+                            a.push(JsValue::String(regex_output_to_js_string(&s)));
                         }
                         Completion::Normal(_) => {}
                         other => return other,
@@ -7610,7 +7642,7 @@ impl Interpreter {
                 // 16. Push remaining substring
                 let p_byte = utf16_to_byte_offset(&s, p);
                 let t = &s[p_byte..];
-                a.push(JsValue::String(JsString::from_str(t)));
+                a.push(JsValue::String(regex_output_to_js_string(t)));
                 Completion::Normal(interp.create_array(a))
             },
         ));
@@ -8288,18 +8320,16 @@ impl Interpreter {
                 } else {
                     false
                 };
-                let (pattern_str, flags_str) =
+                // Get pattern and flags, preserving surrogate code units.
+                // `pattern_js` holds the exact JsString for storage;
+                // `pattern_str` is a PUA-encoded Rust String for validation.
+                let (pattern_js, pattern_str, flags_str) =
                     if has_regexp_matcher && let JsValue::Object(ref o) = pattern_arg {
-                        // Use [[OriginalSource]] and [[OriginalFlags]] directly
-                        let src = interp
+                        let src_js = interp
                             .get_object(o.id)
-                            .and_then(|obj| {
-                                obj.borrow()
-                                    .regexp_original_source
-                                    .as_ref()
-                                    .map(|s| s.to_string())
-                            })
-                            .unwrap_or_default();
+                            .and_then(|obj| obj.borrow().regexp_original_source.clone())
+                            .unwrap_or_else(|| JsString::from_str(""));
+                        let src = js_string_to_regex_input(&src_js.code_units);
                         let flg = if matches!(flags_arg, JsValue::Undefined) {
                             interp
                                 .get_object(o.id)
@@ -8316,17 +8346,17 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         };
-                        (src, flg)
+                        (src_js, src, flg)
                     } else if is_regexp_obj && let JsValue::Object(ref o) = pattern_arg {
-                        // RegExp-like (no [[RegExpMatcher]]): use Get()
                         let src = match interp.get_object_property(o.id, "source", &pattern_arg) {
-                            Completion::Normal(v) => match interp.to_string_value(&v) {
+                            Completion::Normal(v) => match interp.to_js_string(&v) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             },
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => String::new(),
+                            _ => JsString::from_str(""),
                         };
+                        let src_str = js_string_to_regex_input(&src.code_units);
                         let flg = if matches!(flags_arg, JsValue::Undefined) {
                             match interp.get_object_property(o.id, "flags", &pattern_arg) {
                                 Completion::Normal(v) => match interp.to_string_value(&v) {
@@ -8342,16 +8372,17 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         };
-                        (src, flg)
+                        (src, src_str, flg)
                     } else {
-                        let p = if matches!(pattern_arg, JsValue::Undefined) {
-                            String::new()
+                        let p_js = if matches!(pattern_arg, JsValue::Undefined) {
+                            JsString::from_str("")
                         } else {
-                            match interp.to_string_value(&pattern_arg) {
+                            match interp.to_js_string(&pattern_arg) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             }
                         };
+                        let p_str = js_string_to_regex_input(&p_js.code_units);
                         let f = if matches!(flags_arg, JsValue::Undefined) {
                             String::new()
                         } else {
@@ -8360,7 +8391,7 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         };
-                        (p, f)
+                        (p_js, p_str, f)
                     };
 
                 // Validate flags: only dgimsuy allowed, no duplicates
@@ -8397,10 +8428,10 @@ impl Interpreter {
                 }
 
                 // Empty source → "(?:)" per spec
-                let source_str = if pattern_str.is_empty() {
-                    "(?:)".to_string()
+                let source_js = if pattern_js.code_units.is_empty() {
+                    JsString::from_str("(?:)")
                 } else {
-                    pattern_str.clone()
+                    pattern_js
                 };
 
                 let proto = match interp
@@ -8413,7 +8444,7 @@ impl Interpreter {
                 obj.prototype = proto.or(Some(regexp_proto_rc.clone()));
                 obj.class_name = "RegExp".to_string();
                 // Store internal slots as non-enumerable hidden properties
-                obj.regexp_original_source = Some(JsString::from_str(&source_str));
+                obj.regexp_original_source = Some(source_js);
                 obj.regexp_original_flags = Some(JsString::from_str(&flags_str));
                 obj.insert_property(
                     "lastIndex".to_string(),

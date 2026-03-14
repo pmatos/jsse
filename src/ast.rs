@@ -475,7 +475,7 @@ pub fn utf16_eq(code_units: &[u16], s: &str) -> bool {
 #[derive(Clone, Debug)]
 pub struct TemplateLiteral {
     pub id: u64,
-    pub quasis: Vec<Option<String>>,
+    pub quasis: Vec<Option<Vec<u16>>>,
     pub raw_quasis: Vec<String>,
     pub expressions: Vec<Expression>,
 }

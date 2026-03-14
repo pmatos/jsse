@@ -1147,9 +1147,11 @@ impl Interpreter {
                 self.create_rejected_promise(err)
             }
             Expression::Template(tmpl) => {
-                let mut s = String::new();
+                let mut code_units: Vec<u16> = Vec::new();
                 for (i, quasi) in tmpl.quasis.iter().enumerate() {
-                    s.push_str(quasi.as_deref().unwrap_or(""));
+                    if let Some(q) = quasi {
+                        code_units.extend_from_slice(q);
+                    }
                     if i < tmpl.expressions.len() {
                         let val = match self.eval_expr(&tmpl.expressions[i], env) {
                             Completion::Normal(v) => v,
@@ -1159,10 +1161,10 @@ impl Interpreter {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         };
-                        s.push_str(&str_val);
+                        code_units.extend(str_val.encode_utf16());
                     }
                 }
-                Completion::Normal(JsValue::String(JsString::from_str(&s)))
+                Completion::Normal(JsValue::String(JsString { code_units }))
             }
             Expression::OptionalChain(base, prop) => {
                 let (base_val, base_this) = match self.eval_oc_base(base, prop, env) {
@@ -1784,7 +1786,9 @@ impl Interpreter {
             .quasis
             .iter()
             .map(|q| match q {
-                Some(s) => JsValue::String(JsString::from_str(s)),
+                Some(cu) => JsValue::String(JsString {
+                    code_units: cu.clone(),
+                }),
                 None => JsValue::Undefined,
             })
             .collect();
