@@ -861,22 +861,12 @@ impl Environment {
     /// CreateGlobalVarBinding with configurable:true (for eval-declared vars).
     pub fn declare_global_var_configurable(&mut self, name: &str) {
         if !self.bindings.contains_key(name) {
-            // If property already exists on global object, use its value
-            let existing_val = self.global_object.as_ref().and_then(|g| {
-                let gb = g.borrow();
-                gb.properties.get(name).and_then(|d| d.value.clone())
-            });
-            if let Some(val) = existing_val {
-                self.bindings.insert(
-                    name.to_string(),
-                    Binding {
-                        value: val,
-                        kind: BindingKind::Var,
-                        initialized: true,
-                        deletable: false,
-                    },
-                );
-            } else {
+            // Check if the global object has ANY property (data or accessor)
+            let has_global_prop = self
+                .global_object
+                .as_ref()
+                .is_some_and(|g| g.borrow().properties.contains_key(name));
+            if !has_global_prop {
                 self.declare(name, BindingKind::Var);
             }
         }

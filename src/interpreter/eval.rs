@@ -1280,6 +1280,20 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
+            JsValue::Symbol(_) => {
+                if let Some(ref sp) = self.realm().symbol_prototype {
+                    Completion::Normal(sp.borrow().get_property(name))
+                } else {
+                    Completion::Normal(JsValue::Undefined)
+                }
+            }
+            JsValue::BigInt(_) => {
+                if let Some(ref bp) = self.realm().bigint_prototype {
+                    Completion::Normal(bp.borrow().get_property(name))
+                } else {
+                    Completion::Normal(JsValue::Undefined)
+                }
+            }
             _ => Completion::Normal(JsValue::Undefined),
         }
     }
@@ -14564,6 +14578,62 @@ impl Interpreter {
                                                 "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with writable: true for non-configurable non-writable property in the proxy target",
                                             ));
                                     }
+                                    // Enumerable must match for non-configurable target
+                                    if result_desc.enumerable.is_some()
+                                        && result_desc.enumerable != td.enumerable
+                                    {
+                                        return Err(self.create_type_error(
+                                                "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with incompatible enumerable for non-configurable property in the proxy target",
+                                            ));
+                                    }
+                                    // Type mismatch: data vs accessor
+                                    if td.is_data_descriptor() != result_desc.is_data_descriptor()
+                                        && td.is_accessor_descriptor()
+                                            != result_desc.is_accessor_descriptor()
+                                    {
+                                        return Err(self.create_type_error(
+                                                "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with different type than non-configurable property in the proxy target",
+                                            ));
+                                    }
+                                    // Non-configurable accessor: getter/setter must match
+                                    if td.is_accessor_descriptor()
+                                        && result_desc.is_accessor_descriptor()
+                                    {
+                                        let td_get = td.get.as_ref();
+                                        let rd_get = result_desc.get.as_ref();
+                                        if rd_get.is_some()
+                                            && !Self::same_value_option(td_get, rd_get)
+                                        {
+                                            return Err(self.create_type_error(
+                                                    "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with different getter for non-configurable property in the proxy target",
+                                                ));
+                                        }
+                                        let td_set = td.set.as_ref();
+                                        let rd_set = result_desc.set.as_ref();
+                                        if rd_set.is_some()
+                                            && !Self::same_value_option(td_set, rd_set)
+                                        {
+                                            return Err(self.create_type_error(
+                                                    "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with different setter for non-configurable property in the proxy target",
+                                                ));
+                                        }
+                                    }
+                                    // Non-configurable non-writable data: value must match
+                                    if td.is_data_descriptor()
+                                        && td.writable == Some(false)
+                                        && result_desc.is_data_descriptor()
+                                        && result_desc.writable != Some(true)
+                                    {
+                                        if let (Some(tv), Some(rv)) =
+                                            (&td.value, &result_desc.value)
+                                        {
+                                            if !crate::interpreter::helpers::same_value(tv, rv) {
+                                                return Err(self.create_type_error(
+                                                        "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with different value for non-configurable non-writable property in the proxy target",
+                                                    ));
+                                            }
+                                        }
+                                    }
                                     // Step 21b: non-configurable non-writable result but writable target
                                     if result_desc.is_data_descriptor()
                                         && result_desc.writable == Some(false)
@@ -15060,10 +15130,24 @@ impl Interpreter {
         receiver: &JsValue,
         strict: bool,
     ) -> Completion {
-        // Find the property descriptor starting from base_id, walking prototype chain
+        // Find the property descriptor starting from base_id, walking prototype chain.
+        // If we encounter a Proxy, delegate to proxy_set.
         let mut current_id = Some(base_id);
         let mut desc: Option<PropertyDescriptor> = None;
         while let Some(id) = current_id {
+            if self.get_proxy_info(id).is_some() {
+                match self.proxy_set(id, key, val.clone(), receiver) {
+                    Ok(success) => {
+                        if !success && strict {
+                            return Completion::Throw(self.create_type_error(&format!(
+                                "Cannot set property '{key}' on proxy"
+                            )));
+                        }
+                        return Completion::Normal(val);
+                    }
+                    Err(e) => return Completion::Throw(e),
+                }
+            }
             if let Some(obj) = self.get_object(id) {
                 desc = obj.borrow().get_own_property_full(key);
                 if desc.is_some() {

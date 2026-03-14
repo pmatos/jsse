@@ -985,7 +985,12 @@ impl Interpreter {
                                         .properties
                                         .get(&idx_str)
                                         .is_some_and(|d| d.get.is_some());
-                                    let fast_val = if !has_accessor {
+                                    let is_hole = borrowed
+                                        .array_elements
+                                        .as_ref()
+                                        .is_some_and(|e| index < e.len())
+                                        && !borrowed.properties.contains_key(&idx_str);
+                                    let fast_val = if !has_accessor && !is_hole {
                                         borrowed
                                             .array_elements
                                             .as_ref()

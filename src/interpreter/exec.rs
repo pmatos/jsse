@@ -70,13 +70,9 @@ impl Interpreter {
                     // Skip if name conflicts with a parameter (binding exists but
                     // is NOT from a top-level var/function declaration)
                     let is_param = env.borrow().bindings.contains_key(&name)
-                        && !top_level_var_names.contains(&name);
+                        && !top_level_var_names.contains(&name)
+                        && name != "arguments";
                     if is_param {
-                        continue;
-                    }
-                    // B.3.3.1 step 6.a.ii + step 22.f: "arguments" is in parameterNames,
-                    // so skip Annex B hoisting for functions named "arguments"
-                    if name == "arguments" && !is_global && env.borrow().is_function_scope {
                         continue;
                     }
                     // Annex B: skip if non-simple params and name matches a parent binding
@@ -1775,6 +1771,7 @@ impl Interpreter {
                 other => return other,
             };
             if let Pattern::Identifier(name) = &d.pattern {
+                self.set_function_name(&init_val, name);
                 let _ = env.borrow_mut().set(name, init_val);
             }
         }

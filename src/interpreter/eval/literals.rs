@@ -365,13 +365,6 @@ impl Interpreter {
             );
         }
 
-        // Initialize class name binding (pre-declared above; spec §15.7.14 step 18.c/26.d)
-        if !class_binding_name.is_empty() {
-            class_env
-                .borrow_mut()
-                .initialize_binding(class_binding_name, ctor_val.clone());
-        }
-
         // Store constructor func for dynamic GetSuperConstructor (§13.3.7.2)
         if super_val.is_some() {
             class_env
@@ -868,6 +861,13 @@ impl Interpreter {
                     deferred_static.push(DeferredStatic::Block(stmts.clone()));
                 }
             }
+        }
+
+        // Initialize class name binding AFTER element evaluation (spec §15.7.14 step 27)
+        if !class_binding_name.is_empty() {
+            class_env
+                .borrow_mut()
+                .initialize_binding(class_binding_name, ctor_val.clone());
         }
 
         // Phase 2: Execute deferred static field initializers and static blocks

@@ -777,6 +777,14 @@ impl Interpreter {
         }
     }
 
+    fn same_value_option(a: Option<&JsValue>, b: Option<&JsValue>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => crate::interpreter::helpers::same_value(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn from_property_descriptor(&mut self, desc: &PropertyDescriptor) -> JsValue {
         let result = self.create_object();

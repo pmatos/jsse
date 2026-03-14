@@ -7265,7 +7265,7 @@ impl Interpreter {
             3,
             |interp, _this, args| {
                 let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(target, JsValue::Object(_)) {
+                if !interp.is_callable(&target) {
                     return Completion::Throw(
                         interp.create_type_error("Reflect.apply requires a function target"),
                     );
@@ -8515,7 +8515,15 @@ impl Interpreter {
                             Completion::Throw(e) => return Completion::Throw(e),
                             _ => JsValue::Undefined,
                         };
-                        let len = Interpreter::to_length(&len_val) as usize;
+                        let len_num = match interp.to_number_value(&len_val) {
+                            Ok(n) => n,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let len = if len_num.is_nan() || len_num <= 0.0 {
+                            0usize
+                        } else {
+                            (len_num.min(9007199254740991.0).floor()) as usize
+                        };
                         let mut list = Vec::with_capacity(len);
                         for i in 0..len {
                             match interp.get_object_property(o.id, &i.to_string(), &arr_arg) {
