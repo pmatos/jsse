@@ -31,7 +31,7 @@ def download_file(name: str, url_path: str) -> str:
         return cached.read_text(encoding="utf-8")
     url = UCD_BASE + url_path
     print(f"Downloading {url} ...", file=sys.stderr)
-    with urllib.request.urlopen(url) as resp:  # nosemgrep: dynamic-urllib-use-detected
+    with urllib.request.urlopen(url) as resp:
         data = resp.read().decode("utf-8")
     cached.write_text(data, encoding="utf-8")
     return data
