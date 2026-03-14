@@ -314,12 +314,6 @@ impl<'a> Parser<'a> {
         Ok(ExportDeclaration::Default(Box::new(expr)))
     }
 
-    #[allow(dead_code)]
-    fn parse_export_specifiers(&mut self) -> Result<Vec<ExportSpecifier>, ParseError> {
-        let (specs, _) = self.parse_export_specifiers_with_info()?;
-        Ok(specs)
-    }
-
     fn parse_export_specifiers_with_info(
         &mut self,
     ) -> Result<(Vec<ExportSpecifier>, bool), ParseError> {

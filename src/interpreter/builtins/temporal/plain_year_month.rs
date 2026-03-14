@@ -1445,42 +1445,6 @@ impl Interpreter {
     }
 }
 
-#[allow(dead_code)]
-fn get_opt_i32(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: i32,
-) -> Result<i32, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        Ok(to_integer_with_truncation(interp, &val)? as i32)
-    }
-}
-
-#[allow(dead_code)]
-fn get_opt_u8(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: u8,
-) -> Result<u8, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        Ok(to_integer_with_truncation(interp, &val)? as u8)
-    }
-}
-
 fn format_year_month(y: i32, m: u8, ref_day: u8, cal: &str, show_calendar: &str) -> String {
     let year_str = if (0..=9999).contains(&y) {
         format!("{y:04}")

@@ -6945,46 +6945,6 @@ impl Interpreter {
         }
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn iterator_next_with_value(
-        &mut self,
-        iterator: &JsValue,
-        value: &JsValue,
-    ) -> Result<JsValue, JsValue> {
-        if let JsValue::Object(io) = iterator {
-            let next_fn = if let Some(cached) = self.iterator_next_cache.get(&io.id).cloned() {
-                if matches!(cached, JsValue::Undefined) {
-                    None
-                } else {
-                    Some(cached)
-                }
-            } else {
-                match self.get_object_property(io.id, "next", iterator) {
-                    Completion::Normal(v) if !matches!(v, JsValue::Undefined) => Some(v),
-                    Completion::Throw(e) => return Err(e),
-                    _ => None,
-                }
-            };
-            if let Some(next_fn) = next_fn {
-                match self.call_function(&next_fn, iterator, std::slice::from_ref(value)) {
-                    Completion::Normal(v) => {
-                        if matches!(v, JsValue::Object(_)) {
-                            Ok(v)
-                        } else {
-                            Err(self.create_type_error("Iterator result is not an object"))
-                        }
-                    }
-                    Completion::Throw(e) => Err(e),
-                    _ => Err(self.create_type_error("Iterator next failed")),
-                }
-            } else {
-                Err(self.create_type_error("Iterator does not have a next method"))
-            }
-        } else {
-            Err(self.create_type_error("Iterator is not an object"))
-        }
-    }
-
     pub(crate) fn iterator_complete(&mut self, result: &JsValue) -> Result<bool, JsValue> {
         if let JsValue::Object(o) = result {
             let done = match self.get_object_property(o.id, "done", result) {
@@ -7131,33 +7091,6 @@ impl Interpreter {
             }
         }
         Ok(())
-    }
-
-    #[allow(dead_code)]
-    fn get_iterator_direct(&mut self, obj: &JsValue) -> Result<(JsValue, JsValue), JsValue> {
-        match obj {
-            JsValue::Object(o) => {
-                let next_method = self
-                    .get_object(o.id)
-                    .map(|od| od.borrow().get_property("next"))
-                    .unwrap_or(JsValue::Undefined);
-                if let JsValue::Object(no) = &next_method {
-                    if self
-                        .get_object(no.id)
-                        .map(|od| od.borrow().callable.is_some())
-                        .unwrap_or(false)
-                    {
-                        self.iterator_next_cache.insert(o.id, next_method.clone());
-                        Ok((obj.clone(), next_method))
-                    } else {
-                        Err(self.create_type_error("Iterator next is not a function"))
-                    }
-                } else {
-                    Err(self.create_type_error("Iterator next is not a function"))
-                }
-            }
-            _ => Err(self.create_type_error("Iterator is not an object")),
-        }
     }
 
     fn iterator_step_direct(

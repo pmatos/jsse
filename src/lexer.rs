@@ -235,8 +235,6 @@ impl fmt::Display for Keyword {
 pub struct SourceLocation {
     pub line: u32,
     pub column: u32,
-    #[allow(dead_code)]
-    pub offset: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -312,7 +310,6 @@ impl<'a> Lexer<'a> {
         SourceLocation {
             line: self.line,
             column: self.column,
-            offset: self.offset,
         }
     }
 
@@ -1558,20 +1555,6 @@ impl<'a> Lexer<'a> {
             _ => Err(self.error(format!("Unexpected character: {ch}"))),
         }
     }
-
-    #[allow(dead_code)]
-    pub fn tokenize_all(&mut self) -> Result<Vec<Token>, LexError> {
-        let mut tokens = Vec::new();
-        loop {
-            let token = self.next_token()?;
-            if token == Token::Eof {
-                tokens.push(token);
-                break;
-            }
-            tokens.push(token);
-        }
-        Ok(tokens)
-    }
 }
 
 fn hex_val(ch: char) -> Option<u32> {
@@ -1612,7 +1595,16 @@ mod tests {
 
     fn lex(src: &str) -> Vec<Token> {
         let mut lexer = Lexer::new(src);
-        lexer.tokenize_all().unwrap()
+        let mut tokens = Vec::new();
+        loop {
+            let token = lexer.next_token().unwrap();
+            if token == Token::Eof {
+                tokens.push(token);
+                break;
+            }
+            tokens.push(token);
+        }
+        tokens
     }
 
     fn lex_no_lt(src: &str) -> Vec<Token> {

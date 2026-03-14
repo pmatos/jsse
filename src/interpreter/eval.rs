@@ -29,8 +29,6 @@ fn string_to_bigint_for_comparison(s: &str) -> Option<num_bigint::BigInt> {
 
 enum IdentifierRef {
     WithObject(u64),
-    #[allow(dead_code)]
-    Binding,
     Unresolvable,
     SpecificEnv(EnvRef),
 }
@@ -1280,19 +1278,6 @@ impl Interpreter {
         }
     }
 
-    #[allow(dead_code)]
-    fn eval_optional_chain_tail(
-        &mut self,
-        base_val: &JsValue,
-        prop: &Expression,
-        env: &EnvRef,
-    ) -> Completion {
-        match self.eval_oc_tail_with_this(base_val, prop, env) {
-            Ok((v, _)) => Completion::Normal(v),
-            Err(c) => c,
-        }
-    }
-
     /// Evaluate an OptionalChain expression and return (value, this_context).
     /// Used when the optional chain result feeds into a call or nested chain.
     fn eval_optional_chain_with_ref(
@@ -1973,16 +1958,6 @@ impl Interpreter {
             }
             _ => Completion::Normal(val.clone()),
         }
-    }
-
-    #[allow(dead_code)]
-    fn is_regexp(&self, val: &JsValue) -> bool {
-        if let JsValue::Object(o) = val
-            && let Some(obj) = self.get_object(o.id)
-        {
-            return obj.borrow().class_name == "RegExp";
-        }
-        false
     }
 
     #[allow(clippy::wrong_self_convention)]
@@ -2862,7 +2837,7 @@ impl Interpreter {
                         self.create_reference_error(&format!("{name} is not defined")),
                     );
                 }
-                IdentifierRef::Binding | IdentifierRef::SpecificEnv(_) => {
+                IdentifierRef::SpecificEnv(_) => {
                     if let Some(result) = self.resolve_global_getter(name, env) {
                         match result {
                             Completion::Normal(v) => v,
@@ -3313,7 +3288,7 @@ impl Interpreter {
                             self.create_reference_error(&format!("{name} is not defined")),
                         );
                     }
-                    IdentifierRef::Binding | IdentifierRef::SpecificEnv(_) => {
+                    IdentifierRef::SpecificEnv(_) => {
                         if let Some(result) = self.resolve_global_getter(name, env) {
                             match result {
                                 Completion::Normal(v) => v,
@@ -3960,7 +3935,7 @@ impl Interpreter {
                             self.create_reference_error(&format!("{name} is not defined")),
                         );
                     }
-                    IdentifierRef::Binding | IdentifierRef::SpecificEnv(_) => {
+                    IdentifierRef::SpecificEnv(_) => {
                         if let Some(result) = self.resolve_global_getter(name, env) {
                             match result {
                                 Completion::Normal(v) => v,
@@ -4335,7 +4310,7 @@ impl Interpreter {
                                 self.create_reference_error(&format!("{name} is not defined")),
                             );
                         }
-                        IdentifierRef::Binding | IdentifierRef::SpecificEnv(_) => {
+                        IdentifierRef::SpecificEnv(_) => {
                             if let Some(result) = self.resolve_global_getter(name, env) {
                                 match result {
                                     Completion::Normal(v) => v,
@@ -5749,7 +5724,6 @@ impl Interpreter {
         self.generator_context = Some(GeneratorContext {
             target_yield,
             current_yield: 0,
-            sent_value,
             prev_sent_values: new_prev_sent.clone(),
             is_async: false,
             resume_kind: GeneratorResumeKind::Next,
@@ -5904,7 +5878,6 @@ impl Interpreter {
                 self.generator_context = Some(GeneratorContext {
                     target_yield: inject_at,
                     current_yield: 0,
-                    sent_value: JsValue::Undefined,
                     prev_sent_values: prev_sent.clone(),
                     is_async: false,
                     resume_kind: GeneratorResumeKind::Return(value.clone()),
@@ -6027,7 +6000,6 @@ impl Interpreter {
                 self.generator_context = Some(GeneratorContext {
                     target_yield: inject_at,
                     current_yield: 0,
-                    sent_value: JsValue::Undefined,
                     prev_sent_values: prev_sent.clone(),
                     is_async: false,
                     resume_kind: GeneratorResumeKind::Throw(exception),
@@ -6351,12 +6323,11 @@ impl Interpreter {
 
             let is_inline_replay = inline_yield_target.is_some();
             if let Some(target) = inline_yield_target.take() {
-                let sv = inline_yield_sent.take().unwrap_or(JsValue::Undefined);
+                let _sv = inline_yield_sent.take().unwrap_or(JsValue::Undefined);
                 let prev = inline_yield_prev_sent.take().unwrap_or_default();
                 self.generator_context = Some(GeneratorContext {
                     target_yield: target,
                     current_yield: 0,
-                    sent_value: sv,
                     prev_sent_values: prev,
                     is_async: false,
                     resume_kind: GeneratorResumeKind::Next,
@@ -9589,12 +9560,11 @@ impl Interpreter {
 
             let is_inline_replay = inline_yield_target.is_some();
             if let Some(target) = inline_yield_target.take() {
-                let sv = inline_yield_sent.take().unwrap_or(JsValue::Undefined);
+                let _sv = inline_yield_sent.take().unwrap_or(JsValue::Undefined);
                 let prev = inline_yield_prev_sent.take().unwrap_or_default();
                 self.generator_context = Some(GeneratorContext {
                     target_yield: target,
                     current_yield: 0,
-                    sent_value: sv,
                     prev_sent_values: prev,
                     is_async: true,
                     resume_kind: GeneratorResumeKind::Next,
@@ -11380,7 +11350,6 @@ impl Interpreter {
         self.generator_context = Some(GeneratorContext {
             target_yield,
             current_yield: 0,
-            sent_value,
             prev_sent_values: new_prev_sent.clone(),
             is_async: true,
             resume_kind: GeneratorResumeKind::Next,
@@ -15069,38 +15038,6 @@ impl Interpreter {
                     self.set_global_implicit(name, value)
                 }
             }
-            IdentifierRef::Binding => match Environment::check_set_binding(env, name) {
-                SetBindingCheck::TdzError => Completion::Throw(self.create_reference_error(
-                    &format!("Cannot access '{}' before initialization", name),
-                )),
-                SetBindingCheck::ConstAssign => {
-                    Completion::Throw(self.create_type_error("Assignment to constant variable."))
-                }
-                SetBindingCheck::FunctionNameAssign => {
-                    if env.borrow().strict {
-                        Completion::Throw(
-                            self.create_type_error("Assignment to constant variable."),
-                        )
-                    } else {
-                        Completion::Normal(value)
-                    }
-                }
-                SetBindingCheck::Unresolvable => {
-                    if env.borrow().strict {
-                        Completion::Throw(
-                            self.create_reference_error(&format!("{name} is not defined")),
-                        )
-                    } else {
-                        self.set_global_implicit(name, value)
-                    }
-                }
-                SetBindingCheck::Ok => match env.borrow_mut().set(name, value.clone()) {
-                    Ok(()) => Completion::Normal(value),
-                    Err(_) => Completion::Throw(
-                        self.create_type_error("Assignment to constant variable."),
-                    ),
-                },
-            },
         }
     }
 

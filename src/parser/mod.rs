@@ -151,11 +151,6 @@ impl<'a> Parser<'a> {
         self.pushback = Some((old_current, old_lt, old_ts, old_te));
     }
 
-    #[allow(dead_code)]
-    fn peek(&self) -> &Token {
-        &self.current
-    }
-
     fn eat(&mut self, expected: &Token) -> Result<(), ParseError> {
         if &self.current == expected {
             self.advance()?;
@@ -214,7 +209,6 @@ impl<'a> Parser<'a> {
         self.allow_super_property = true;
     }
 
-    #[allow(dead_code)]
     pub fn set_eval_allow_super_call(&mut self) {
         self.allow_super_call = true;
     }

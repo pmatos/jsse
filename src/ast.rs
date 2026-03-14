@@ -432,7 +432,6 @@ pub struct ClassMethod {
     pub kind: ClassMethodKind,
     pub value: FunctionExpr,
     pub is_static: bool,
-    #[allow(dead_code)]
     pub computed: bool,
 }
 
@@ -449,7 +448,6 @@ pub struct ClassProperty {
     pub key: PropertyKey,
     pub value: Option<Expression>,
     pub is_static: bool,
-    #[allow(dead_code)]
     pub computed: bool,
 }
 
@@ -464,12 +462,6 @@ impl Expression {
             _ => false,
         }
     }
-}
-
-#[allow(dead_code)]
-pub fn utf16_eq(code_units: &[u16], s: &str) -> bool {
-    let expected: Vec<u16> = s.encode_utf16().collect();
-    code_units == expected.as_slice()
 }
 
 #[derive(Clone, Debug)]

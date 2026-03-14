@@ -84,11 +84,6 @@ fn to_num(interp: &mut Interpreter, val: &JsValue) -> Result<f64, Completion> {
     }
 }
 
-#[allow(dead_code)]
-fn utf16_len(s: &str) -> usize {
-    s.encode_utf16().count()
-}
-
 fn utf16_units(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }

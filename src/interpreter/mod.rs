@@ -160,7 +160,7 @@ impl Interpreter {
             }
         }
 
-        let realm = Realm::new(0, global);
+        let realm = Realm::new(global);
 
         let mut interp = Self {
             realms: vec![realm],
@@ -257,7 +257,7 @@ impl Interpreter {
                 );
             }
         }
-        let realm = Realm::new(new_id, new_global_env);
+        let realm = Realm::new(new_global_env);
         self.realms.push(realm);
 
         let old_realm = self.current_realm_id;
@@ -585,17 +585,6 @@ impl Interpreter {
         JsValue::Object(crate::types::JsObject { id: dollar_262_id })
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn drain_agent_async_completions(&mut self) {
-        let completions: Vec<_> = {
-            let mut lock = self.agent_async_completions.0.lock().unwrap();
-            lock.drain(..).collect()
-        };
-        for f in completions {
-            f(self);
-        }
-    }
-
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
         if let JsValue::Object(o) = val {
             self.gc_temp_roots.push(o.id);
@@ -652,31 +641,6 @@ impl Interpreter {
             }
         }
         Ok(self.current_realm_id)
-    }
-
-    // GetPrototypeFromConstructor — §10.2.4
-    #[allow(dead_code)]
-    pub(crate) fn get_prototype_from_new_target(
-        &mut self,
-        default_proto: &Option<Rc<RefCell<JsObjectData>>>,
-    ) -> Result<Option<Rc<RefCell<JsObjectData>>>, JsValue> {
-        let nt = match self.new_target.clone() {
-            Some(v) => v,
-            None => return Ok(default_proto.clone()),
-        };
-        if let JsValue::Object(nt_o) = &nt {
-            let proto_val = match self.get_object_property(nt_o.id, "prototype", &nt) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
-            };
-            if let JsValue::Object(po) = proto_val
-                && let Some(proto_rc) = self.get_object(po.id)
-            {
-                return Ok(Some(proto_rc));
-            }
-        }
-        Ok(default_proto.clone())
     }
 
     // GetPrototypeFromConstructor with realm-aware fallback — §10.2.4
@@ -873,20 +837,6 @@ impl Interpreter {
             },
         );
         self.create_function(func)
-    }
-
-    #[allow(dead_code)]
-    fn is_strict_mode_body(body: &[Statement]) -> bool {
-        for stmt in body {
-            if let Statement::Expression(Expression::Literal(Literal::String(s))) = stmt {
-                if utf16_eq(s, "use strict") {
-                    return true;
-                }
-            } else {
-                break;
-            }
-        }
-        false
     }
 
     fn create_function(&mut self, func: JsFunction) -> JsValue {
@@ -1300,11 +1250,6 @@ impl Interpreter {
                 r
             }
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn get_current_module_path(&self) -> Option<&Path> {
-        self.current_module_path.as_deref()
     }
 
     fn run_module(&mut self, program: &Program, module_path: Option<PathBuf>) -> Completion {
@@ -3652,35 +3597,6 @@ impl Interpreter {
             }
             _ => {}
         }
-    }
-
-    #[allow(dead_code)]
-    fn get_export_names(&self, export: &ExportDeclaration) -> Vec<String> {
-        let mut names = Vec::new();
-        match export {
-            ExportDeclaration::Named {
-                specifiers,
-                declaration,
-                ..
-            } => {
-                for spec in specifiers {
-                    names.push(spec.exported.clone());
-                }
-                if let Some(decl) = declaration {
-                    self.get_declaration_export_names(decl, &mut names);
-                }
-            }
-            ExportDeclaration::Default(_)
-            | ExportDeclaration::DefaultFunction(_)
-            | ExportDeclaration::DefaultClass(_) => {
-                names.push("default".to_string());
-            }
-            ExportDeclaration::All { .. } => {
-                // Re-exports: will need to load the source module to get names
-                // For now, skip these
-            }
-        }
-        names
     }
 
     // Returns (export_name, binding_name) pairs

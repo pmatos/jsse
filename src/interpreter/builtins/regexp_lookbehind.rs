@@ -8,8 +8,6 @@
 pub struct LookbehindInfo {
     pub positive: bool,
     pub content: String,
-    #[allow(dead_code)]
-    pub num_captures: u32,
     /// Whether this lookbehind is at the end of the pattern (suffix position).
     /// Suffix lookbehinds need retry-with-shorter-text when they fail.
     pub is_suffix: bool,
@@ -1438,7 +1436,6 @@ pub fn extract_lookbehinds(source: &str) -> (Vec<LookbehindInfo>, String) {
             lookbehinds.push(LookbehindInfo {
                 positive,
                 content,
-                num_captures,
                 is_suffix,
                 capture_offset,
                 marker_group,
@@ -1517,7 +1514,6 @@ pub fn extract_lookbehinds_remaining(source: &str) -> (Vec<LookbehindInfo>, Stri
             let mut depth = 1;
             let mut j = content_start;
             let mut in_cc = false;
-            let mut num_caps: u32 = 0;
             while j < len && depth > 0 {
                 if chars[j] == '[' && !in_cc {
                     in_cc = true;
@@ -1534,11 +1530,9 @@ pub fn extract_lookbehinds_remaining(source: &str) -> (Vec<LookbehindInfo>, Stri
                             && chars[j + 3] != '='
                             && chars[j + 3] != '!'
                         {
-                            num_caps += 1;
                             _group_count += 1;
                         }
                     } else {
-                        num_caps += 1;
                         _group_count += 1;
                     }
                 } else if chars[j] == ')' && !in_cc {
@@ -1552,7 +1546,6 @@ pub fn extract_lookbehinds_remaining(source: &str) -> (Vec<LookbehindInfo>, Stri
             lookbehinds.push(LookbehindInfo {
                 positive,
                 content,
-                num_captures: num_caps,
                 is_suffix: false,
                 capture_offset: 0,
                 marker_group: 0,

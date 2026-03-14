@@ -10,174 +10,6 @@ pub(crate) mod zoned_date_time;
 
 use super::*;
 
-/// Which default date/time components to use when constructing DTF from toLocaleString.
-#[allow(dead_code)]
-pub(crate) enum TemporalDefaults {
-    /// date + time (Instant, PlainDateTime, ZonedDateTime)
-    All,
-    /// date only (PlainDate)
-    Date,
-    /// time only (PlainTime)
-    Time,
-    /// year + month only (PlainYearMonth)
-    YearMonth,
-    /// month + day only (PlainMonthDay)
-    MonthDay,
-}
-
-/// Check if options object has any explicit date/time formatting properties.
-#[allow(dead_code)]
-fn has_datetime_options(interp: &mut Interpreter, options: &JsValue) -> bool {
-    if matches!(options, JsValue::Undefined | JsValue::Null) {
-        return false;
-    }
-    if let JsValue::Object(o) = options {
-        for key in &[
-            "dateStyle",
-            "timeStyle",
-            "year",
-            "month",
-            "day",
-            "weekday",
-            "hour",
-            "minute",
-            "second",
-            "fractionalSecondDigits",
-            "dayPeriod",
-            "timeZoneName",
-            "era",
-        ] {
-            if let Completion::Normal(v) = interp.get_object_property(o.id, key, options)
-                && !matches!(v, JsValue::Undefined)
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Construct a DateTimeFormat with Temporal-type-appropriate defaults.
-/// If user didn't specify any date/time options, add defaults based on the Temporal type.
-#[allow(dead_code)]
-pub(crate) fn temporal_construct_dtf(
-    interp: &mut Interpreter,
-    dtf_ctor: &JsValue,
-    locales: &JsValue,
-    options: &JsValue,
-    defaults: TemporalDefaults,
-) -> Completion {
-    if has_datetime_options(interp, options) {
-        return interp.construct(dtf_ctor, &[locales.clone(), options.clone()]);
-    }
-
-    // Create options object with appropriate defaults
-    let opts_obj = interp.create_object();
-    if let Some(ref op) = interp.realm().object_prototype {
-        opts_obj.borrow_mut().prototype = Some(op.clone());
-    }
-
-    // Copy any existing properties from user options (e.g. timeZone)
-    if let JsValue::Object(o) = options
-        && let Some(obj) = interp.get_object(o.id)
-    {
-        let keys: Vec<String> = obj.borrow().property_order.clone();
-        for key in keys {
-            if let Completion::Normal(v) = interp.get_object_property(o.id, &key, options)
-                && !matches!(v, JsValue::Undefined)
-            {
-                opts_obj
-                    .borrow_mut()
-                    .insert_property(key, PropertyDescriptor::data(v, true, true, true));
-            }
-        }
-    }
-
-    // Add type-specific defaults
-    let numeric = JsValue::String(JsString::from_str("numeric"));
-    let two_digit = JsValue::String(JsString::from_str("2-digit"));
-    match defaults {
-        TemporalDefaults::All => {
-            opts_obj.borrow_mut().insert_property(
-                "year".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "month".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "day".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "hour".to_string(),
-                PropertyDescriptor::data(two_digit.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "minute".to_string(),
-                PropertyDescriptor::data(two_digit.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "second".to_string(),
-                PropertyDescriptor::data(two_digit.clone(), true, true, true),
-            );
-        }
-        TemporalDefaults::Date => {
-            opts_obj.borrow_mut().insert_property(
-                "year".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "month".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "day".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-        }
-        TemporalDefaults::Time => {
-            opts_obj.borrow_mut().insert_property(
-                "hour".to_string(),
-                PropertyDescriptor::data(two_digit.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "minute".to_string(),
-                PropertyDescriptor::data(two_digit.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "second".to_string(),
-                PropertyDescriptor::data(two_digit.clone(), true, true, true),
-            );
-        }
-        TemporalDefaults::YearMonth => {
-            opts_obj.borrow_mut().insert_property(
-                "year".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "month".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-        }
-        TemporalDefaults::MonthDay => {
-            opts_obj.borrow_mut().insert_property(
-                "month".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "day".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-        }
-    }
-
-    let opts_id = opts_obj.borrow().id.unwrap();
-    let opts_val = JsValue::Object(crate::types::JsObject { id: opts_id });
-    interp.construct(dtf_ctor, &[locales.clone(), opts_val])
-}
-
 /// Check if options object has a style that conflicts with the temporal type.
 /// In toLocaleString, each style must overlap with the type's data model:
 /// - dateStyle requires date data (PlainDate, PlainDateTime, PlainYearMonth, PlainMonthDay)
@@ -1581,49 +1413,6 @@ pub(crate) fn max_rounding_increment(unit: &str) -> Option<u64> {
     }
 }
 
-/// Validate rounding increment: truncate to integer, check range, check divisibility.
-/// Coerce and validate a rounding increment value.
-/// For since/until and PlainTime/PlainDateTime.round: uses max_rounding_increment (exclusive).
-/// `is_difference`: true for since/until, false for round.
-#[allow(dead_code)]
-pub(crate) fn validate_rounding_increment(
-    interp: &mut Interpreter,
-    inc_val: &JsValue,
-    unit: &str,
-    is_difference: bool,
-) -> Result<f64, Completion> {
-    let int_inc = coerce_rounding_increment(interp, inc_val)?;
-    // Check max_rounding_increment: increment < max AND max % increment == 0
-    if let Some(max) = max_rounding_increment(unit) {
-        let i = int_inc as u64;
-        if i >= max {
-            return Err(Completion::Throw(interp.create_range_error(&format!(
-                "roundingIncrement {int_inc} is out of range for {unit}"
-            ))));
-        }
-        if max % i != 0 {
-            return Err(Completion::Throw(interp.create_range_error(&format!(
-                "roundingIncrement {int_inc} does not divide evenly into {max}"
-            ))));
-        }
-    } else if !is_difference {
-        check_day_divisibility(interp, int_inc, unit)?;
-    }
-    Ok(int_inc)
-}
-
-/// For Instant.round: only requires increment to divide evenly into a solar day.
-#[allow(dead_code)]
-pub(crate) fn validate_rounding_increment_day_divisible(
-    interp: &mut Interpreter,
-    inc_val: &JsValue,
-    unit: &str,
-) -> Result<f64, Completion> {
-    let int_inc = coerce_rounding_increment(interp, inc_val)?;
-    check_day_divisibility(interp, int_inc, unit)?;
-    Ok(int_inc)
-}
-
 pub(crate) fn coerce_rounding_increment(
     interp: &mut Interpreter,
     inc_val: &JsValue,
@@ -1647,25 +1436,6 @@ pub(crate) fn coerce_rounding_increment(
         ));
     }
     Ok(int_inc)
-}
-
-#[allow(dead_code)]
-fn check_day_divisibility(
-    interp: &mut Interpreter,
-    int_inc: f64,
-    unit: &str,
-) -> Result<(), Completion> {
-    let unit_ns = temporal_unit_length_ns(unit) as u64;
-    if unit_ns > 0 {
-        let total_ns = int_inc as u64 * unit_ns;
-        let day_ns: u64 = 86_400_000_000_000;
-        if !day_ns.is_multiple_of(total_ns) {
-            return Err(Completion::Throw(interp.create_range_error(&format!(
-                "roundingIncrement {int_inc} for {unit} does not divide evenly into a day"
-            ))));
-        }
-    }
-    Ok(())
 }
 
 /// Validate a pre-coerced rounding increment value against unit constraints.
@@ -1902,30 +1672,6 @@ pub(crate) fn iso_week_of_year(year: i32, month: u8, day: u8) -> (u8, i32) {
     } else {
         (woy as u8, year)
     }
-}
-
-#[allow(dead_code)]
-pub(crate) fn balance_time(
-    hour: i64,
-    minute: i64,
-    second: i64,
-    millisecond: i64,
-    microsecond: i64,
-    nanosecond: i64,
-) -> (i64, u8, u8, u8, u16, u16, u16) {
-    let us = microsecond + nanosecond.div_euclid(1000);
-    let ns = nanosecond.rem_euclid(1000) as u16;
-    let ms = millisecond + us.div_euclid(1000);
-    let us_out = us.rem_euclid(1000) as u16;
-    let s = second + ms.div_euclid(1000);
-    let ms_out = ms.rem_euclid(1000) as u16;
-    let m = minute + s.div_euclid(60);
-    let s_out = s.rem_euclid(60) as u8;
-    let h = hour + m.div_euclid(60);
-    let m_out = m.rem_euclid(60) as u8;
-    let days = h.div_euclid(24);
-    let h_out = h.rem_euclid(24) as u8;
-    (days, h_out, m_out, s_out, ms_out, us_out, ns)
 }
 
 pub(crate) fn balance_iso_date(year: i32, month: i32, day: i32) -> (i32, u8, u8) {
@@ -2870,16 +2616,6 @@ fn is_iana_timezone(s: &str) -> bool {
 
 fn normalize_iana_timezone(s: &str) -> String {
     resolve_iana_timezone(s).unwrap_or_else(|| s.to_string())
-}
-
-/// Normalize a timezone ID for comparison: canonical offset form or case-insensitive IANA
-#[allow(dead_code)]
-pub(crate) fn normalize_tz_id(s: &str) -> String {
-    // Try parsing as offset to get canonical form
-    if let Some(canonical) = parse_utc_offset_timezone(s) {
-        return canonical;
-    }
-    s.to_ascii_lowercase()
 }
 
 /// ParseTemporalTimeZoneString per spec: extract timezone identifier from a string
@@ -4090,36 +3826,6 @@ pub(crate) fn to_integer_if_integral(v: f64) -> Option<f64> {
     Some(v)
 }
 
-// Format fractional seconds for toString
-#[allow(dead_code)]
-pub(crate) fn format_fractional_seconds(
-    seconds: u8,
-    millisecond: u16,
-    microsecond: u16,
-    nanosecond: u16,
-    precision: Option<u8>,
-) -> String {
-    let s = format!("{seconds:02}");
-    let total_ns = millisecond as u32 * 1_000_000 + microsecond as u32 * 1_000 + nanosecond as u32;
-    match precision {
-        Some(0) => s,
-        Some(p) => {
-            let frac = format!("{total_ns:09}");
-            format!("{s}.{}", &frac[..p as usize])
-        }
-        None => {
-            // Auto: trim trailing zeros
-            if total_ns == 0 {
-                s
-            } else {
-                let frac = format!("{total_ns:09}");
-                let trimmed = frac.trim_end_matches('0');
-                format!("{s}.{trimmed}")
-            }
-        }
-    }
-}
-
 // ISO month code
 pub(crate) fn iso_month_code(month: u8) -> String {
     format!("M{month:02}")
@@ -4206,17 +3912,6 @@ pub(crate) fn resolve_month_fields(
     }
 }
 
-/// Convenience: read + resolve in one step (for callers where ordering doesn't matter).
-#[allow(dead_code)]
-pub(crate) fn resolve_month_with_code(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    current: u8,
-) -> Result<u8, Completion> {
-    let (month, month_code) = read_month_fields(interp, obj)?;
-    resolve_month_fields(interp, month, month_code, current)
-}
-
 // Get temporal unit name mapping
 pub(crate) fn temporal_unit_singular(unit: &str) -> Option<&'static str> {
     match unit {
@@ -4287,21 +3982,6 @@ pub(crate) fn default_largest_unit_for_duration(
         return "microsecond";
     }
     "nanosecond"
-}
-
-// Larger temporal unit ordering
-/// DateDurationSign: returns the sign of a date duration's components.
-#[allow(dead_code)]
-pub(crate) fn duration_date_sign(years: i32, months: i32, weeks: i32, days: i32) -> i32 {
-    for &v in &[years, months, weeks, days] {
-        if v > 0 {
-            return 1;
-        }
-        if v < 0 {
-            return -1;
-        }
-    }
-    0
 }
 
 pub(crate) fn negate_rounding_mode(mode: &str) -> String {

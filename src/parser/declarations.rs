@@ -1355,11 +1355,6 @@ impl<'a> Parser<'a> {
         Ok((stmts, was_strict))
     }
 
-    #[allow(dead_code)]
-    fn parse_function_body(&mut self) -> Result<(Vec<Statement>, bool), ParseError> {
-        self.parse_function_body_with_context(false, false)
-    }
-
     pub(super) fn parse_arrow_function_body(
         &mut self,
         is_async: bool,

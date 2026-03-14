@@ -220,25 +220,6 @@ fn to_regex_input(interp: &mut Interpreter, val: &JsValue) -> Result<String, JsV
     }
 }
 
-#[allow(dead_code)]
-fn escape_regexp_pattern(source: &str) -> String {
-    if source.is_empty() {
-        return "(?:)".to_string();
-    }
-    let mut result = String::with_capacity(source.len());
-    for c in source.chars() {
-        match c {
-            '/' => result.push_str("\\/"),
-            '\n' => result.push_str("\\n"),
-            '\r' => result.push_str("\\r"),
-            '\u{2028}' => result.push_str("\\u2028"),
-            '\u{2029}' => result.push_str("\\u2029"),
-            _ => result.push(c),
-        }
-    }
-    result
-}
-
 fn escape_regexp_pattern_code_units(code_units: &[u16]) -> JsString {
     if code_units.is_empty() {
         return JsString::from_str("(?:)");
@@ -4349,12 +4330,6 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
     Ok(())
 }
 
-#[allow(dead_code)]
-fn build_fancy_regex(source: &str, flags: &str) -> Result<fancy_regex::Regex, String> {
-    let pattern = translate_js_pattern(source, flags)?;
-    fancy_regex::Regex::new(&pattern).map_err(|e| e.to_string())
-}
-
 enum CompiledRegex {
     Fancy(fancy_regex::Regex),
     Standard(regex::Regex),
@@ -5906,31 +5881,6 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
     }
 }
 
-#[allow(dead_code)]
-fn regex_is_match(re: &CompiledRegex, text: &str) -> bool {
-    match re {
-        CompiledRegex::Fancy(r) => r.is_match(text).unwrap_or(false),
-        CompiledRegex::Standard(r) => r.is_match(text),
-        CompiledRegex::FancyWithCustomLookbehind { .. } => regex_captures_at(re, text, 0).is_some(),
-    }
-}
-
-#[allow(dead_code)]
-fn build_rust_regex(source: &str, flags: &str) -> Result<regex::Regex, String> {
-    let mut pattern = String::new();
-    if flags.contains('i') {
-        pattern.push_str("(?i)");
-    }
-    if flags.contains('s') {
-        pattern.push_str("(?s)");
-    }
-    if flags.contains('m') {
-        pattern.push_str("(?m)");
-    }
-    pattern.push_str(source);
-    regex::Regex::new(&pattern).map_err(|e| e.to_string())
-}
-
 fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(String, String, u64)> {
     if let JsValue::Object(o) = this_val
         && let Some(obj) = interp.get_object(o.id)
@@ -5950,23 +5900,6 @@ fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(Str
         Some((source, flags, o.id))
     } else {
         None
-    }
-}
-
-#[allow(dead_code)]
-fn get_last_index(interp: &Interpreter, obj_id: u64) -> f64 {
-    if let Some(obj) = interp.get_object(obj_id) {
-        to_number(&obj.borrow().get_property("lastIndex"))
-    } else {
-        0.0
-    }
-}
-
-#[allow(dead_code)]
-fn set_last_index(interp: &Interpreter, obj_id: u64, val: f64) {
-    if let Some(obj) = interp.get_object(obj_id) {
-        obj.borrow_mut()
-            .insert_builtin("lastIndex".to_string(), JsValue::Number(val));
     }
 }
 

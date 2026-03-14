@@ -1204,24 +1204,6 @@ impl Interpreter {
     }
 }
 
-#[allow(dead_code)]
-fn get_opt_u8(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: u8,
-) -> Result<u8, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        Ok(to_integer_with_truncation(interp, &val)? as u8)
-    }
-}
-
 fn format_month_day(m: u8, d: u8, ref_year: i32, cal: &str, show_calendar: &str) -> String {
     let mut result = format!("{m:02}-{d:02}");
     let need_year = cal != "iso8601" || matches!(show_calendar, "always" | "critical");
