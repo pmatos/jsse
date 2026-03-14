@@ -2034,42 +2034,6 @@ fn parse_date_string(
     Ok((parsed.year, parsed.month, parsed.day, cal))
 }
 
-#[allow(dead_code)]
-fn get_date_field_i32(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: i32,
-) -> Result<i32, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        Ok(to_integer_with_truncation(interp, &val)? as i32)
-    }
-}
-
-#[allow(dead_code)]
-fn get_date_field_u8(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: u8,
-) -> Result<u8, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        Ok(to_integer_with_truncation(interp, &val)? as u8)
-    }
-}
-
 fn month_code_to_number(mc: &str) -> Option<u8> {
     month_code_to_number_pub(mc)
 }

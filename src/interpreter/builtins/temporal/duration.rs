@@ -3689,23 +3689,6 @@ fn format_number(v: f64) -> String {
     }
 }
 
-#[allow(dead_code)]
-pub(super) fn unbalance_time_ns(
-    total_ns: f64,
-    largest_unit: &str,
-) -> (f64, f64, f64, f64, f64, f64, f64) {
-    let result = unbalance_time_ns_i128(total_ns as i128, largest_unit);
-    (
-        result.0 as f64,
-        result.1 as f64,
-        result.2 as f64,
-        result.3 as f64,
-        result.4 as f64,
-        result.5 as f64,
-        result.6 as f64,
-    )
-}
-
 fn unbalance_time_ns_i128(
     total_ns: i128,
     largest_unit: &str,
@@ -3773,83 +3756,4 @@ fn unbalance_time_ns_i128(
         }
         _ => (0, 0, 0, 0, 0, 0, total_ns),
     }
-}
-
-// Balance time portion of a duration after add/subtract.
-// Per spec: AddDurations converts day+time to total nanoseconds,
-// then re-balances up to the largest unit present in either operand.
-#[allow(dead_code)]
-pub(crate) fn balance_duration_relative(
-    years: f64,
-    months: f64,
-    weeks: f64,
-    days: f64,
-    hours: f64,
-    minutes: f64,
-    seconds: f64,
-    milliseconds: f64,
-    microseconds: f64,
-    nanoseconds: f64,
-) -> (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64) {
-    // Determine largest unit present
-    let largest = default_largest_unit_for_duration(
-        years,
-        months,
-        weeks,
-        days,
-        hours,
-        minutes,
-        seconds,
-        milliseconds,
-        microseconds,
-        nanoseconds,
-    );
-
-    // For calendar units without relativeTo, just return as-is (validation elsewhere)
-    if matches!(largest, "year" | "month" | "week") {
-        return (
-            years,
-            months,
-            weeks,
-            days,
-            hours,
-            minutes,
-            seconds,
-            milliseconds,
-            microseconds,
-            nanoseconds,
-        );
-    }
-
-    // Convert day+time to total nanoseconds using i128 and re-balance
-    let total_ns = nanoseconds as i128
-        + microseconds as i128 * 1_000
-        + milliseconds as i128 * 1_000_000
-        + seconds as i128 * 1_000_000_000
-        + minutes as i128 * 60_000_000_000
-        + hours as i128 * 3_600_000_000_000
-        + days as i128 * 86_400_000_000_000;
-
-    let sign: i128 = if total_ns < 0 {
-        -1
-    } else if total_ns > 0 {
-        1
-    } else {
-        0
-    };
-    let abs_ns = total_ns.abs();
-    let (rd, rh, rmi, rs, rms, rus, rns) = unbalance_time_ns_i128(abs_ns, largest);
-
-    (
-        years,
-        months,
-        weeks,
-        (rd * sign) as f64,
-        (rh * sign) as f64,
-        (rmi * sign) as f64,
-        (rs * sign) as f64,
-        (rms * sign) as f64,
-        (rus * sign) as f64,
-        (rns * sign) as f64,
-    )
 }

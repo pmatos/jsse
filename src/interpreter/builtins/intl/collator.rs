@@ -164,25 +164,6 @@ pub(crate) fn do_compare(
     }
 }
 
-#[allow(dead_code)]
-fn collation_type_for_name(name: &str) -> Option<CollationType> {
-    match name {
-        "phonebk" => Some(CollationType::Phonebk),
-        "dict" => Some(CollationType::Dict),
-        "compat" => Some(CollationType::Compat),
-        "emoji" => Some(CollationType::Emoji),
-        "eor" => Some(CollationType::Eor),
-        "phonetic" => Some(CollationType::Phonetic),
-        "pinyin" => Some(CollationType::Pinyin),
-        "searchjl" => Some(CollationType::Searchjl),
-        "stroke" => Some(CollationType::Stroke),
-        "trad" => Some(CollationType::Trad),
-        "unihan" => Some(CollationType::Unihan),
-        "zhuyin" => Some(CollationType::Zhuyin),
-        _ => None,
-    }
-}
-
 fn is_collation_supported_for_locale(locale_str: &str, collation_name: &str) -> bool {
     // "eor" and "emoji" are universally supported (root collation data)
     if collation_name == "eor" || collation_name == "emoji" {

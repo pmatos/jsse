@@ -1088,24 +1088,6 @@ fn parse_time_string(
     }
 }
 
-#[allow(dead_code)]
-fn get_time_field(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: f64,
-) -> Result<f64, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        to_integer_with_truncation(interp, &val)
-    }
-}
-
 fn is_valid_time_round_unit(unit: &str) -> bool {
     matches!(
         unit,

@@ -45,20 +45,6 @@ struct DurationRecord {
 }
 
 impl DurationRecord {
-    #[allow(dead_code)]
-    fn is_zero(&self) -> bool {
-        self.years == 0.0
-            && self.months == 0.0
-            && self.weeks == 0.0
-            && self.days == 0.0
-            && self.hours == 0.0
-            && self.minutes == 0.0
-            && self.seconds == 0.0
-            && self.milliseconds == 0.0
-            && self.microseconds == 0.0
-            && self.nanoseconds == 0.0
-    }
-
     fn has_negative(&self) -> bool {
         self.years < 0.0
             || self.months < 0.0

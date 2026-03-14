@@ -2875,14 +2875,9 @@ impl Interpreter {
                                     + nns as i128;
                                 let local_ns = epoch_days * NS_PER_DAY + day_ns;
                                 let receiver_offset_ns = get_tz_offset_ns(&tz, &ns) as i128;
-                                let user_offset_ns = if let Some(ref off_str) = cached_offset_str_cal {
-                                    match super::parse_utc_offset_timezone(off_str) {
-                                        Some(canonical) => Some(super::offset_string_to_ns(&canonical)),
-                                        None => None,
-                                    }
-                                } else {
-                                    None
-                                };
+                                let user_offset_ns = cached_offset_str_cal.as_ref().and_then(|off_str| {
+                                    super::parse_utc_offset_timezone(off_str).map(|canonical| super::offset_string_to_ns(&canonical))
+                                });
                                 let new_epoch_ns = match offset_opt.as_str() {
                                     "use" => {
                                         let off = user_offset_ns.unwrap_or(receiver_offset_ns);
@@ -3131,14 +3126,9 @@ impl Interpreter {
 
                     // Determine offset based on offset option
                     let receiver_offset_ns = get_tz_offset_ns(&tz, &ns) as i128;
-                    let user_offset_ns = if let Some(ref off_str) = cached_offset_str {
-                        match super::parse_utc_offset_timezone(off_str) {
-                            Some(canonical) => Some(super::offset_string_to_ns(&canonical)),
-                            None => None,
-                        }
-                    } else {
-                        None
-                    };
+                    let user_offset_ns = cached_offset_str.as_ref().and_then(|off_str| {
+                        super::parse_utc_offset_timezone(off_str).map(|canonical| super::offset_string_to_ns(&canonical))
+                    });
                     let new_epoch_ns = match offset_opt.as_str() {
                         "use" => {
                             let off = user_offset_ns.unwrap_or(receiver_offset_ns);

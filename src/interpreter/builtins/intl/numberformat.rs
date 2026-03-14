@@ -1,7 +1,6 @@
 use super::super::super::*;
 use fixed_decimal::{
-    Decimal, FloatPrecision, RoundingIncrement, SignDisplay, SignedRoundingMode,
-    UnsignedRoundingMode,
+    Decimal, FloatPrecision, SignDisplay, SignedRoundingMode, UnsignedRoundingMode,
 };
 use icu::decimal::options::{DecimalFormatterOptions, GroupingStrategy};
 use icu::decimal::{DecimalFormatter, DecimalFormatterPreferences};
@@ -912,25 +911,6 @@ pub(crate) fn apply_arabic_separators(s: &str, ns: &str) -> String {
     result
 }
 
-#[allow(dead_code)]
-fn js_rounding_increment_to_fd(inc: u32) -> RoundingIncrement {
-    match inc {
-        2 => RoundingIncrement::MultiplesOf2,
-        5 => RoundingIncrement::MultiplesOf5,
-        10 => RoundingIncrement::MultiplesOf2, // approx: 10 = 2*5
-        20 => RoundingIncrement::MultiplesOf2,
-        25 => RoundingIncrement::MultiplesOf25,
-        50 => RoundingIncrement::MultiplesOf5,
-        100 => RoundingIncrement::MultiplesOf2,
-        200 => RoundingIncrement::MultiplesOf2,
-        500 => RoundingIncrement::MultiplesOf5,
-        1000 => RoundingIncrement::MultiplesOf2,
-        2000 => RoundingIncrement::MultiplesOf2,
-        5000 => RoundingIncrement::MultiplesOf5,
-        _ => RoundingIncrement::MultiplesOf1,
-    }
-}
-
 fn js_sign_display_to_fd(sign_display: &str) -> SignDisplay {
     match sign_display {
         "always" => SignDisplay::Always,
@@ -994,22 +974,6 @@ fn currency_position_after(locale: &str) -> bool {
             | "id"
             | "ms"
     )
-}
-
-#[allow(dead_code)]
-fn locale_uses_narrow_currency(locale: &str, cur_code: &str) -> bool {
-    if cur_code == "USD" {
-        let lang = locale
-            .split('-')
-            .next()
-            .unwrap_or(locale)
-            .split('_')
-            .next()
-            .unwrap_or(locale);
-        !matches!(lang, "en" | "de" | "fr" | "es" | "pt" | "nl" | "it")
-    } else {
-        false
-    }
 }
 
 fn locale_percent_has_space(locale: &str) -> bool {
@@ -2918,15 +2882,6 @@ pub(crate) fn format_to_parts_internal(
     }
 
     parts
-}
-
-#[allow(dead_code)]
-fn classify_number_chunk(s: &str) -> (String, String) {
-    if s.contains('.') {
-        ("fraction".to_string(), s.to_string())
-    } else {
-        ("integer".to_string(), s.to_string())
-    }
 }
 
 impl Interpreter {

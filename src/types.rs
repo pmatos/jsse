@@ -36,50 +36,6 @@ impl JsString {
     pub fn to_rust_string(&self) -> String {
         String::from_utf16_lossy(&self.code_units)
     }
-
-    // §6.1.4.1 StringIndexOf(string, searchValue, fromIndex)
-    #[allow(dead_code)]
-    pub fn index_of(&self, search: &JsString, from: usize) -> Option<usize> {
-        let s_len = self.code_units.len();
-        let search_len = search.code_units.len();
-        if search_len == 0 {
-            return if from <= s_len { Some(from) } else { None };
-        }
-        if from + search_len > s_len {
-            return None;
-        }
-        (from..=(s_len - search_len))
-            .find(|&i| self.code_units[i..i + search_len] == search.code_units[..])
-    }
-
-    #[allow(dead_code)]
-    pub fn slice_utf16(&self, start: usize, end: usize) -> JsString {
-        let s = start.min(self.code_units.len());
-        let e = end.min(self.code_units.len());
-        if s >= e {
-            return JsString { code_units: vec![] };
-        }
-        JsString {
-            code_units: self.code_units[s..e].to_vec(),
-        }
-    }
-
-    // §6.1.4.2 StringLastIndexOf
-    #[allow(dead_code)]
-    pub fn last_index_of(&self, search: &JsString, from: usize) -> Option<usize> {
-        let s_len = self.code_units.len();
-        let search_len = search.code_units.len();
-        if search_len == 0 {
-            return Some(from.min(s_len));
-        }
-        if search_len > s_len {
-            return None;
-        }
-        let max_start = from.min(s_len - search_len);
-        (0..=max_start)
-            .rev()
-            .find(|&i| self.code_units[i..i + search_len] == search.code_units[..])
-    }
 }
 
 impl fmt::Display for JsString {
@@ -108,27 +64,6 @@ impl JsSymbol {
             None => format!("Symbol()#{}", self.id),
         }
     }
-}
-
-// Well-known symbols (§6.1.5.1)
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
-pub enum WellKnownSymbol {
-    AsyncIterator,
-    HasInstance,
-    IsConcatSpreadable,
-    Iterator,
-    Match,
-    MatchAll,
-    Replace,
-    Search,
-    Species,
-    Split,
-    ToPrimitive,
-    ToStringTag,
-    Unscopables,
-    Dispose,
-    AsyncDispose,
 }
 
 #[derive(Clone, Debug)]
@@ -172,18 +107,8 @@ impl JsValue {
         matches!(self, JsValue::BigInt(_))
     }
 
-    #[allow(dead_code)]
-    pub fn is_object(&self) -> bool {
-        matches!(self, JsValue::Object(_))
-    }
-
     pub fn is_nullish(&self) -> bool {
         matches!(self, JsValue::Undefined | JsValue::Null)
-    }
-
-    #[allow(dead_code)]
-    pub fn is_nan(&self) -> bool {
-        matches!(self, JsValue::Number(n) if n.is_nan())
     }
 }
 
@@ -273,14 +198,6 @@ pub mod number_ops {
         }
         if x == 0.0 && y == 0.0 {
             return x.is_sign_positive() == y.is_sign_positive();
-        }
-        x == y
-    }
-
-    #[allow(dead_code)]
-    pub fn same_value_zero(x: f64, y: f64) -> bool {
-        if x.is_nan() && y.is_nan() {
-            return true;
         }
         x == y
     }
@@ -398,11 +315,6 @@ pub mod bigint_ops {
         }
     }
 
-    #[allow(dead_code)]
-    pub fn unsigned_right_shift(_x: &BigInt, _y: &BigInt) -> Result<BigInt, &'static str> {
-        Err("Cannot use >>> on BigInt")
-    }
-
     pub fn less_than(x: &BigInt, y: &BigInt) -> Option<bool> {
         Some(x < y)
     }
@@ -421,11 +333,6 @@ pub mod bigint_ops {
 
     pub fn bitwise_or(x: &BigInt, y: &BigInt) -> BigInt {
         x | y
-    }
-
-    #[allow(dead_code)]
-    pub fn to_string(x: &BigInt) -> String {
-        x.to_string()
     }
 }
 
@@ -455,25 +362,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn js_string_index_of() {
-        let s = JsString::from_str("hello world");
-        let search = JsString::from_str("world");
-        assert_eq!(s.index_of(&search, 0), Some(6));
-        assert_eq!(s.index_of(&search, 7), None);
-
-        let empty = JsString::from_str("");
-        assert_eq!(s.index_of(&empty, 5), Some(5));
-    }
-
-    #[test]
-    fn js_string_last_index_of() {
-        let s = JsString::from_str("abcabc");
-        let search = JsString::from_str("abc");
-        assert_eq!(s.last_index_of(&search, 5), Some(3));
-        assert_eq!(s.last_index_of(&search, 2), Some(0));
-    }
-
-    #[test]
     fn number_special_values() {
         assert_eq!(number_ops::to_string(f64::NAN), "NaN");
         assert_eq!(number_ops::to_string(0.0), "0");
@@ -487,12 +375,6 @@ mod tests {
         assert!(number_ops::same_value(f64::NAN, f64::NAN));
         assert!(!number_ops::same_value(0.0, -0.0));
         assert!(number_ops::same_value(0.0, 0.0));
-    }
-
-    #[test]
-    fn number_same_value_zero() {
-        assert!(number_ops::same_value_zero(f64::NAN, f64::NAN));
-        assert!(number_ops::same_value_zero(0.0, -0.0));
     }
 
     #[test]
@@ -554,7 +436,6 @@ mod tests {
             bigint_ops::signed_right_shift(&BigInt::from(16), &BigInt::from(2)),
             BigInt::from(4)
         );
-        assert!(bigint_ops::unsigned_right_shift(&BigInt::from(1), &BigInt::from(1)).is_err());
     }
 
     #[test]

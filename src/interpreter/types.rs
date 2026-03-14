@@ -68,19 +68,6 @@ impl BufferData {
             BufferData::Shared(s) => unsafe { (*s.data.get()).clone() },
         }
     }
-
-    #[allow(dead_code)]
-    pub fn is_shared(&self) -> bool {
-        matches!(self, BufferData::Shared(_))
-    }
-
-    #[allow(dead_code)]
-    pub fn shared_inner(&self) -> Option<&Arc<SharedBufferInner>> {
-        match self {
-            BufferData::Shared(s) => Some(s),
-            _ => None,
-        }
-    }
 }
 
 impl Clone for BufferData {
@@ -154,8 +141,6 @@ pub(crate) enum GeneratorResumeKind {
 pub(crate) struct GeneratorContext {
     pub(crate) target_yield: usize,
     pub(crate) current_yield: usize,
-    #[allow(dead_code)]
-    pub(crate) sent_value: JsValue,
     /// Values sent to previous yields (index k = value passed to next() after yield k)
     pub(crate) prev_sent_values: Vec<JsValue>,
     pub(crate) is_async: bool,
@@ -163,8 +148,8 @@ pub(crate) struct GeneratorContext {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum GeneratorExecutionState {
+    #[allow(dead_code)]
     SuspendedStart,
     SuspendedYield {
         target_yield: usize,
@@ -220,8 +205,6 @@ pub type EnvRef = Rc<RefCell<Environment>>;
 
 #[allow(clippy::type_complexity)]
 pub struct Realm {
-    #[allow(dead_code)]
-    pub(crate) id: usize,
     pub(crate) global_env: EnvRef,
     pub(crate) global_object: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) throw_type_error: Option<JsValue>,
@@ -314,9 +297,8 @@ pub struct Realm {
 }
 
 impl Realm {
-    pub(crate) fn new(id: usize, global_env: EnvRef) -> Self {
+    pub(crate) fn new(global_env: EnvRef) -> Self {
         Self {
-            id,
             global_env,
             global_object: None,
             throw_type_error: None,

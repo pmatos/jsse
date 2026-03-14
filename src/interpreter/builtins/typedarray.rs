@@ -894,30 +894,6 @@ impl Interpreter {
         Completion::Throw(self.create_type_error("not an ArrayBuffer"))
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn create_shared_arraybuffer(
-        &mut self,
-        data: Vec<u8>,
-        max_byte_length: Option<usize>,
-    ) -> Rc<RefCell<JsObjectData>> {
-        use crate::interpreter::types::{SharedBufferInner, next_sab_id};
-        let sab_id = next_sab_id();
-        let inner = Arc::new(SharedBufferInner::new(data, sab_id));
-        let buf_rc = Rc::new(RefCell::new(BufferData::Shared(inner.clone())));
-        let obj = self.create_object();
-        {
-            let mut o = obj.borrow_mut();
-            o.class_name = "SharedArrayBuffer".to_string();
-            o.prototype = self.realm().shared_arraybuffer_prototype.clone();
-            o.arraybuffer_data = Some(buf_rc);
-            o.arraybuffer_detached = None;
-            o.arraybuffer_max_byte_length = max_byte_length;
-            o.arraybuffer_is_shared = true;
-            o.sab_shared = Some(inner);
-        }
-        obj
-    }
-
     fn setup_shared_arraybuffer(&mut self) {
         let sab_proto = self.create_object();
         sab_proto.borrow_mut().class_name = "SharedArrayBuffer".to_string();
@@ -3140,23 +3116,6 @@ impl Interpreter {
             .insert_builtin("keys".to_string(), keys_fn);
     }
 
-    #[allow(dead_code)]
-    fn create_array_from_ta(&mut self, ta: &TypedArrayInfo) -> Rc<RefCell<JsObjectData>> {
-        let elems: Vec<JsValue> = (0..typed_array_length(ta))
-            .map(|i| typed_array_get_index(ta, i))
-            .collect();
-        let len = elems.len();
-        let arr = self.create_object();
-        {
-            let mut a = arr.borrow_mut();
-            a.class_name = "Array".to_string();
-            a.prototype = self.realm().array_prototype.clone();
-            a.array_elements = Some(elems);
-            a.insert_builtin("length".to_string(), JsValue::Number(len as f64));
-        }
-        arr
-    }
-
     fn setup_ta_higher_order_methods(&mut self, proto: &Rc<RefCell<JsObjectData>>) {
         // find
         let find_fn = self.create_function(JsFunction::native(
@@ -4440,49 +4399,6 @@ impl Interpreter {
         Ok(result_val)
     }
 
-    /// TypedArrayCreateSameType(exemplar, argumentList) — §23.2.4.3
-    /// Creates a new TypedArray of the same kind, without using @@species.
-    #[allow(dead_code)]
-    fn typed_array_create_same_type(
-        &mut self,
-        exemplar_kind: TypedArrayKind,
-        len: usize,
-    ) -> Completion {
-        let proto = self.get_typed_array_prototype(exemplar_kind);
-        let bpe = exemplar_kind.bytes_per_element();
-        let buf = vec![0u8; len * bpe];
-        let buf_rc = Rc::new(RefCell::new(BufferData::Owned(buf)));
-        let detached = Rc::new(Cell::new(false));
-        let ta_info = TypedArrayInfo {
-            kind: exemplar_kind,
-            buffer: buf_rc.clone(),
-            byte_offset: 0,
-            byte_length: len * bpe,
-            array_length: len,
-            is_detached: detached.clone(),
-            is_length_tracking: false,
-        };
-        let ab_obj = self.create_object();
-        {
-            let mut ab = ab_obj.borrow_mut();
-            ab.class_name = "ArrayBuffer".to_string();
-            ab.prototype = self.realm().arraybuffer_prototype.clone();
-            ab.arraybuffer_data = Some(buf_rc);
-            ab.arraybuffer_detached = Some(detached);
-        }
-        let ab_id = ab_obj.borrow().id.unwrap();
-        let result = self.create_object();
-        {
-            let mut r = result.borrow_mut();
-            r.class_name = exemplar_kind.name().to_string();
-            r.prototype = proto;
-            r.view_buffer_object_id = Some(ab_id);
-            r.typed_array_info = Some(ta_info);
-        }
-        let id = result.borrow().id.unwrap();
-        Completion::Normal(JsValue::Object(JsObject { id }))
-    }
-
     /// Coerce a value for writing to a TypedArray element.
     /// For Number kinds: ToNumber(value). For BigInt kinds: ToBigInt(value).
     /// Returns the coerced JsValue or throws.
@@ -4687,141 +4603,6 @@ impl Interpreter {
         Completion::Throw(
             self.create_type_error("TypedArray.from/of: constructor did not return a TypedArray"),
         )
-    }
-
-    #[allow(dead_code)]
-    fn construct_typed_array_from_this(
-        &mut self,
-        this_val: &JsValue,
-        values: &[JsValue],
-    ) -> Completion {
-        let len = values.len();
-        // Check `this` is callable (constructor)
-        if let JsValue::Object(o) = this_val {
-            let is_callable = self
-                .get_object(o.id)
-                .is_some_and(|obj| obj.borrow().callable.is_some());
-            if !is_callable {
-                return Completion::Throw(self.create_type_error("not a TypedArray constructor"));
-            }
-        } else {
-            return Completion::Throw(self.create_type_error("not a TypedArray constructor"));
-        }
-
-        // Use fast path for known built-in TypedArray constructors
-        if let JsValue::Object(o) = this_val
-            && let Some(obj) = self.get_object(o.id)
-        {
-            let name = {
-                let obj_ref = obj.borrow();
-                if let Some(ref func) = obj_ref.callable {
-                    match func {
-                        JsFunction::Native(n, _, _, _) => Some(n.clone()),
-                        JsFunction::User { .. } => None,
-                    }
-                } else {
-                    None
-                }
-            };
-            if let Some(name) = name {
-                let kind = match name.as_str() {
-                    "Int8Array" => Some(TypedArrayKind::Int8),
-                    "Uint8Array" => Some(TypedArrayKind::Uint8),
-                    "Uint8ClampedArray" => Some(TypedArrayKind::Uint8Clamped),
-                    "Int16Array" => Some(TypedArrayKind::Int16),
-                    "Uint16Array" => Some(TypedArrayKind::Uint16),
-                    "Int32Array" => Some(TypedArrayKind::Int32),
-                    "Uint32Array" => Some(TypedArrayKind::Uint32),
-                    "Float16Array" => Some(TypedArrayKind::Float16),
-                    "Float32Array" => Some(TypedArrayKind::Float32),
-                    "Float64Array" => Some(TypedArrayKind::Float64),
-                    "BigInt64Array" => Some(TypedArrayKind::BigInt64),
-                    "BigUint64Array" => Some(TypedArrayKind::BigUint64),
-                    _ => None,
-                };
-                if let Some(kind) = kind {
-                    let proto = self.get_typed_array_prototype(kind);
-                    let bpe = kind.bytes_per_element();
-                    let new_buf = vec![0u8; len * bpe];
-                    let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
-                    let new_detached = Rc::new(Cell::new(false));
-                    let ta = TypedArrayInfo {
-                        kind,
-                        buffer: new_buf_rc.clone(),
-                        byte_offset: 0,
-                        byte_length: len * bpe,
-                        array_length: len,
-                        is_detached: new_detached.clone(),
-                        is_length_tracking: false,
-                    };
-                    for (i, val) in values.iter().enumerate() {
-                        let coerced = match self.typed_array_coerce_value(kind, val) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        typed_array_set_index(&ta, i, &coerced);
-                    }
-                    let ab_obj = self.create_object();
-                    {
-                        let mut ab = ab_obj.borrow_mut();
-                        ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype = self.realm().arraybuffer_prototype.clone();
-                        ab.arraybuffer_data = Some(new_buf_rc);
-                        ab.arraybuffer_detached = Some(new_detached);
-                    }
-                    let ab_id = ab_obj.borrow().id.unwrap();
-                    let result = self.create_object();
-                    {
-                        let mut r = result.borrow_mut();
-                        r.class_name = kind.name().to_string();
-                        r.prototype = proto;
-                        r.view_buffer_object_id = Some(ab_id);
-                        r.typed_array_info = Some(ta);
-                    }
-                    let id = result.borrow().id.unwrap();
-                    return Completion::Normal(JsValue::Object(JsObject { id }));
-                }
-            }
-        }
-
-        // Generic path: call this_val as constructor with len, validate result is TypedArray
-        let new_obj = match self.construct_with_new_target(
-            this_val,
-            &[JsValue::Number(len as f64)],
-            this_val.clone(),
-        ) {
-            Completion::Normal(v) => v,
-            other => return other,
-        };
-        // Validate result is a TypedArray
-        let ta_kind = if let JsValue::Object(ref o) = new_obj {
-            self.get_object(o.id)
-                .and_then(|obj| obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind))
-        } else {
-            None
-        };
-        let ta_kind = match ta_kind {
-            Some(k) => k,
-            None => {
-                return Completion::Throw(self.create_type_error(
-                    "TypedArray.of/from: constructor did not return a TypedArray",
-                ));
-            }
-        };
-        // Set each element using Set semantics (which respects OOB/detach)
-        for (i, val) in values.iter().enumerate() {
-            let key = i.to_string();
-            let coerced = match self.typed_array_coerce_value(ta_kind, val) {
-                Ok(v) => v,
-                Err(e) => return Completion::Throw(e),
-            };
-            if let JsValue::Object(ref o) = new_obj
-                && let Some(obj) = self.get_object(o.id)
-            {
-                obj.borrow_mut().set_property_value(&key, coerced);
-            }
-        }
-        Completion::Normal(new_obj)
     }
 
     pub(crate) fn collect_iterable_or_arraylike(

@@ -91,21 +91,6 @@ fn is_valid_variants_value(s: &str) -> bool {
     true
 }
 
-#[allow(dead_code)]
-fn number_to_weekday_string(n: f64) -> Option<&'static str> {
-    match n as i64 {
-        0 => Some("sun"),
-        1 => Some("mon"),
-        2 => Some("tue"),
-        3 => Some("wed"),
-        4 => Some("thu"),
-        5 => Some("fri"),
-        6 => Some("sat"),
-        7 => Some("sun"),
-        _ => None,
-    }
-}
-
 fn string_digit_to_weekday(s: &str) -> Option<&'static str> {
     match s {
         "0" => Some("sun"),

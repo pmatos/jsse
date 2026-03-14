@@ -2586,60 +2586,6 @@ fn get_constructor_field_u16(
     }
 }
 
-#[allow(dead_code)]
-fn get_date_field_i32(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: i32,
-) -> Result<i32, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        Ok(to_integer_with_truncation(interp, &val)? as i32)
-    }
-}
-
-#[allow(dead_code)]
-fn get_date_field_u8(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: u8,
-) -> Result<u8, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        Ok(to_integer_with_truncation(interp, &val)? as u8)
-    }
-}
-
-#[allow(dead_code)]
-fn get_date_field_u16(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: u16,
-) -> Result<u16, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        Ok(to_integer_with_truncation(interp, &val)? as u16)
-    }
-}
-
 fn diff_date_time(
     y1: i32,
     m1: u8,
