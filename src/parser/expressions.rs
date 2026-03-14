@@ -193,6 +193,16 @@ impl<'a> Parser<'a> {
                 self.validate_destructuring_pattern(expr)
             }
             Expression::Spread(inner) => self.validate_destructuring_target(inner),
+            // Single-element Sequence is a parenthesization marker
+            Expression::Sequence(exprs) if exprs.len() == 1 => {
+                match &exprs[0] {
+                    // Parenthesized Object/Array patterns are not valid destructuring targets
+                    Expression::Object(_) | Expression::Array(..) => {
+                        Err(self.error("Invalid destructuring assignment target"))
+                    }
+                    other => self.validate_destructuring_target(other),
+                }
+            }
             Expression::Sequence(_) | Expression::Comma(_) => {
                 Err(self.error("Invalid destructuring assignment target"))
             }
@@ -208,9 +218,6 @@ impl<'a> Parser<'a> {
                             self.error("Assignment to 'eval' or 'arguments' in strict mode")
                         );
                     }
-                    Ok(())
-                } else if !self.strict && matches!(expr, Expression::Call(_, _)) {
-                    // Sloppy mode: call expressions are valid assignment targets
                     Ok(())
                 } else {
                     Err(self.error("Invalid destructuring assignment target"))
@@ -653,6 +660,22 @@ impl<'a> Parser<'a> {
             return Ok(expr);
         }
 
+        // Object with CoverInitializedName ({a = 0}) used as member base ({a = 0}.x)
+        // is not a destructuring pattern — reject CoverInitializedName
+        if Self::has_cover_initialized_name(&expr)
+            && matches!(
+                self.current,
+                Token::Dot
+                    | Token::LeftBracket
+                    | Token::LeftParen
+                    | Token::OptionalChain
+                    | Token::NoSubstitutionTemplate(_, _)
+                    | Token::TemplateHead(_, _)
+            )
+        {
+            return Err(self.error("Invalid shorthand property initializer"));
+        }
+
         loop {
             match &self.current {
                 Token::Dot => {
@@ -790,6 +813,9 @@ impl<'a> Parser<'a> {
         }
         loop {
             match &self.current {
+                Token::OptionalChain => {
+                    return Err(self.error("Invalid optional chain from new expression"));
+                }
                 Token::Dot => {
                     self.advance()?;
                     let prop = self.parse_dot_member_property()?;
@@ -1046,6 +1072,9 @@ impl<'a> Parser<'a> {
                         self.advance()?;
                         if self.current == Token::Arrow && !self.prev_line_terminator {
                             self.check_strict_binding_identifier(&name)?;
+                            if name == "await" {
+                                return Err(self.error("'await' is not allowed as a parameter name in an async function"));
+                            }
                             self.advance()?;
                             let prev_async = self.in_async;
                             self.in_async = true;
@@ -1352,6 +1381,16 @@ impl<'a> Parser<'a> {
                             return Err(self.error("Invalid shorthand property initializer"));
                         }
                         self.last_expr_parenthesized = true;
+                        // Wrap parenthesized Object/Array/Assign in Sequence marker
+                        // so validate_destructuring_target can reject them
+                        if matches!(
+                            &e,
+                            Expression::Object(_)
+                                | Expression::Array(..)
+                                | Expression::Assign(AssignOp::Assign, ..)
+                        ) {
+                            return Ok(Expression::Sequence(vec![e]));
+                        }
                         return Ok(e);
                     }
                     for e in &exprs {
@@ -1944,8 +1983,10 @@ impl<'a> Parser<'a> {
         let prev_static_block = self.in_static_block;
         self.in_static_block = false;
         let prev_generator = self.in_generator;
+        let prev_async = self.in_async;
         // FunctionExpression name uses [~Yield]; GeneratorExpression name uses [+Yield]
         self.in_generator = is_generator;
+        self.in_async = false;
         let name = if let Some(n) = self.current_identifier_name() {
             self.check_strict_binding_identifier(&n)?;
             self.advance()?;
@@ -1954,9 +1995,11 @@ impl<'a> Parser<'a> {
             None
         };
         self.in_generator = is_generator;
+        self.in_async = false;
         self.in_non_arrow_function += 1;
         let params = self.parse_formal_parameters()?;
         self.in_generator = prev_generator;
+        self.in_async = prev_async;
         self.in_static_block = prev_static_block;
         self.set_function_param_names(&params);
         let (body, body_strict) =
@@ -1974,6 +2017,11 @@ impl<'a> Parser<'a> {
                 return Err(self.error(format!(
                     "'{n}' is not allowed as a function name in strict mode"
                 )));
+            }
+            if let Some(ref n) = name
+                && Self::is_strict_reserved_word(n)
+            {
+                return Err(self.error(format!("Unexpected strict mode reserved word '{n}'")));
             }
             self.check_strict_params(&params)?;
         }

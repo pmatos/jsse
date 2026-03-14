@@ -12837,6 +12837,7 @@ impl Interpreter {
             let mut found_function = false;
             let mut found_home_object = false;
             let mut found_derived_constructor = false;
+            let mut function_boundary_count: u32 = 0;
             let mut env_walk = Some(caller_env.clone());
             loop {
                 let e = match env_walk {
@@ -12847,14 +12848,27 @@ impl Interpreter {
                 if borrowed.is_field_initializer {
                     in_field_initializer = true;
                 }
-                if borrowed.is_function_scope && !borrowed.is_arrow_scope && !found_function {
-                    found_function = true;
+                // __home_object__ lives in the method's closure env (one scope
+                // above its function scope). Allow finding it through the first
+                // non-arrow function boundary (the method itself) but not
+                // through a second one (a nested non-method function).
+                if function_boundary_count <= 1
+                    && borrowed.bindings.contains_key("__home_object__")
+                    && !found_home_object
+                {
+                    found_home_object = true;
                 }
-                if borrowed.is_derived_constructor_scope && !found_derived_constructor {
+                if function_boundary_count <= 1
+                    && borrowed.is_derived_constructor_scope
+                    && !found_derived_constructor
+                {
                     found_derived_constructor = true;
                 }
-                if borrowed.bindings.contains_key("__home_object__") && !found_home_object {
-                    found_home_object = true;
+                if borrowed.is_function_scope && !borrowed.is_arrow_scope {
+                    if !found_function {
+                        found_function = true;
+                    }
+                    function_boundary_count += 1;
                 }
                 if let Some(ref names) = borrowed.class_private_names {
                     let name_set: std::collections::HashSet<String> =
@@ -17401,7 +17415,9 @@ impl Interpreter {
                         );
                         be.class_private_names = self.class_private_names.last().cloned();
                     }
-                    match self.exec_statements(&stmts, &block_env) {
+                    let result = self.exec_statements(&stmts, &block_env);
+                    let result = self.dispose_resources(&block_env, result);
+                    match result {
                         Completion::Normal(_) => {}
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => {}

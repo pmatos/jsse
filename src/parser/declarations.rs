@@ -148,6 +148,18 @@ impl<'a> Parser<'a> {
                     PropertyKey::Identifier(n) => n.clone(),
                     _ => return Err(self.error("Expected identifier for shorthand pattern")),
                 };
+                // `async` followed by something that looks like a method name/modifier
+                if name == "async"
+                    && !matches!(
+                        self.current,
+                        Token::Colon | Token::Assign | Token::Comma | Token::RightBrace
+                    )
+                {
+                    return Err(self.error("Invalid destructuring assignment target"));
+                }
+                if Self::is_reserved_identifier(&name, false) {
+                    return Err(self.error(format!("Unexpected token '{name}'")));
+                }
                 if self.in_static_block && name == "await" {
                     return Err(self.error(
                         "'await' is not allowed as a binding identifier in class static blocks",
@@ -269,6 +281,9 @@ impl<'a> Parser<'a> {
                 return Err(self.error(format!(
                     "'{name}' is not allowed as a function name in strict mode"
                 )));
+            }
+            if Self::is_strict_reserved_word(&name) {
+                return Err(self.error(format!("Unexpected strict mode reserved word '{name}'")));
             }
             self.check_strict_params(&params)?;
         }
@@ -1075,7 +1090,11 @@ impl<'a> Parser<'a> {
         let prev_gen = self.in_generator;
         self.in_async = false;
         self.in_generator = false;
+        // Increment in_function to prevent module-level await from matching
+        // (class field initializers use [~Await] per spec)
+        self.in_function += 1;
         let result = self.parse_assignment_expression();
+        self.in_function -= 1;
         self.in_async = prev_async;
         self.in_generator = prev_gen;
         result
@@ -1266,6 +1285,8 @@ impl<'a> Parser<'a> {
         self.in_function += 1;
         self.allow_super_property = super_property;
         self.allow_super_call = super_call;
+        let prev_formal = self.in_formal_parameters;
+        self.in_formal_parameters = false;
         let prev_block = self.in_block_or_function;
         let prev_sc = self.in_switch_case;
         let prev_static_block = self.in_static_block;
@@ -1343,6 +1364,7 @@ impl<'a> Parser<'a> {
         self.labels = prev_labels;
         self.allow_super_property = prev_super_property;
         self.allow_super_call = prev_super_call;
+        self.in_formal_parameters = prev_formal;
         self.in_block_or_function = prev_block;
         self.in_switch_case = prev_sc;
         self.in_static_block = prev_static_block;

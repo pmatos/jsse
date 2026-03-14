@@ -2435,6 +2435,33 @@ impl Interpreter {
                         (params.join(","), body)
                     };
 
+                    // Per spec §20.2.1.1: parse parameters and body independently
+                    // to reject cases like Function("/*", "*/) {") where a comment
+                    // spans the parameter/body boundary.
+                    if !params_str.is_empty() {
+                        let params_test = format!("(function({}\n) {{}})", params_str);
+                        match parser::Parser::new(&params_test).and_then(|mut p| p.parse_program())
+                        {
+                            Ok(_) => {}
+                            Err(e) => {
+                                return Completion::Throw(
+                                    interp.create_error("SyntaxError", &format!("{}", e)),
+                                );
+                            }
+                        }
+                    }
+                    {
+                        let body_test = format!("(function() {{\n{}\n}})", body_str);
+                        match parser::Parser::new(&body_test).and_then(|mut p| p.parse_program()) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                return Completion::Throw(
+                                    interp.create_error("SyntaxError", &format!("{}", e)),
+                                );
+                            }
+                        }
+                    }
+
                     let fn_source_text =
                         format!("function anonymous({}\n) {{\n{}\n}}", params_str, body_str);
                     let source = format!(
@@ -2975,6 +3002,30 @@ impl Interpreter {
                         (params.join(","), body)
                     };
 
+                    if !params_str.is_empty() {
+                        let params_test = format!("(async function({}\n) {{}})", params_str);
+                        match parser::Parser::new(&params_test).and_then(|mut p| p.parse_program())
+                        {
+                            Ok(_) => {}
+                            Err(e) => {
+                                return Completion::Throw(
+                                    interp.create_error("SyntaxError", &format!("{}", e)),
+                                );
+                            }
+                        }
+                    }
+                    {
+                        let body_test = format!("(async function() {{\n{}\n}})", body_str);
+                        match parser::Parser::new(&body_test).and_then(|mut p| p.parse_program()) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                return Completion::Throw(
+                                    interp.create_error("SyntaxError", &format!("{}", e)),
+                                );
+                            }
+                        }
+                    }
+
                     let fn_source_text = format!(
                         "async function anonymous({}\n) {{\n{}\n}}",
                         params_str, body_str
@@ -3110,6 +3161,30 @@ impl Interpreter {
                         (params.join(","), body)
                     };
 
+                    if !params_str.is_empty() {
+                        let params_test = format!("(function*({}\n) {{}})", params_str);
+                        match parser::Parser::new(&params_test).and_then(|mut p| p.parse_program())
+                        {
+                            Ok(_) => {}
+                            Err(e) => {
+                                return Completion::Throw(
+                                    interp.create_error("SyntaxError", &format!("{}", e)),
+                                );
+                            }
+                        }
+                    }
+                    {
+                        let body_test = format!("(function*() {{\n{}\n}})", body_str);
+                        match parser::Parser::new(&body_test).and_then(|mut p| p.parse_program()) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                return Completion::Throw(
+                                    interp.create_error("SyntaxError", &format!("{}", e)),
+                                );
+                            }
+                        }
+                    }
+
                     let fn_source_text =
                         format!("function* anonymous({}\n) {{\n{}\n}}", params_str, body_str);
                     let source = format!(
@@ -3242,6 +3317,30 @@ impl Interpreter {
                         };
                         (params.join(","), body)
                     };
+
+                    if !params_str.is_empty() {
+                        let params_test = format!("(async function*({}\n) {{}})", params_str);
+                        match parser::Parser::new(&params_test).and_then(|mut p| p.parse_program())
+                        {
+                            Ok(_) => {}
+                            Err(e) => {
+                                return Completion::Throw(
+                                    interp.create_error("SyntaxError", &format!("{}", e)),
+                                );
+                            }
+                        }
+                    }
+                    {
+                        let body_test = format!("(async function*() {{\n{}\n}})", body_str);
+                        match parser::Parser::new(&body_test).and_then(|mut p| p.parse_program()) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                return Completion::Throw(
+                                    interp.create_error("SyntaxError", &format!("{}", e)),
+                                );
+                            }
+                        }
+                    }
 
                     let fn_source_text = format!(
                         "async function* anonymous({}\n) {{\n{}\n}}",

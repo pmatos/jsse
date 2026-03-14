@@ -2284,14 +2284,16 @@ impl Interpreter {
             if found {
                 // Fall through from match in A through rest of A, then default + B
                 if let Some(r) = self.exec_switch_cases(&s.cases[i..a_end], &switch_env, &mut v) {
+                    let r = self.dispose_resources(&switch_env, r);
                     return r;
                 }
                 if let Some(di) = default_idx
                     && let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env, &mut v)
                 {
+                    let r = self.dispose_resources(&switch_env, r);
                     return r;
                 }
-                return Completion::Normal(v);
+                return self.dispose_resources(&switch_env, Completion::Normal(v));
             }
         }
 
@@ -2311,19 +2313,21 @@ impl Interpreter {
                     if let Some(r) =
                         self.exec_switch_cases(&s.cases[b_start + i..], &switch_env, &mut v)
                     {
+                        let r = self.dispose_resources(&switch_env, r);
                         return r;
                     }
-                    return Completion::Normal(v);
+                    return self.dispose_resources(&switch_env, Completion::Normal(v));
                 }
             }
 
             // Phase 3: No match anywhere — execute default, then fall through B
             if let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env, &mut v) {
+                let r = self.dispose_resources(&switch_env, r);
                 return r;
             }
         }
 
-        Completion::Normal(v)
+        self.dispose_resources(&switch_env, Completion::Normal(v))
     }
 
     fn exec_switch_cases(
