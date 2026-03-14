@@ -1873,10 +1873,9 @@ impl Interpreter {
                                         if src_start + byte_count <= buf.len()
                                             && dst_start + byte_count <= buf.len()
                                         {
-                                            let src =
-                                                buf[src_start..src_start + byte_count].to_vec();
-                                            buf[dst_start..dst_start + byte_count]
-                                                .copy_from_slice(&src);
+                                            for j in 0..byte_count {
+                                                buf[dst_start + j] = buf[src_start + j];
+                                            }
                                         }
                                     });
                                 } else {
