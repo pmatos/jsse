@@ -1,7 +1,7 @@
 # Staging Test Failures Plan
 
-**Current:** 101,022 / 101,234 (99.79%) — 212 failing scenarios
-**Previous baseline:** 101,013 / 101,234 (99.78%) — 221 failing scenarios
+**Current:** 101,025 / 101,234 (99.79%) — 209 failing scenarios
+**Previous baseline:** 101,022 / 101,234 (99.79%) — 212 failing scenarios
 
 ---
 
@@ -105,11 +105,11 @@ Fixed template literal cooked values to use `Vec<u16>` (UTF-16 code units) inste
 - `staging/sm/RegExp/unicode-raw.js` — **NOW PASSING**
 - `staging/sm/RegExp/unicode-class-raw.js` — **NOW PASSING**
 
-### B4. RegExp: `\u{NN}` without /u flag (1 test, EASY)
+### ~~B4. RegExp: `\u{NN}` without /u flag (1 test, EASY)~~ DONE (+3 passes)
 
-`/\u{41}/` (no `/u`) should be `\u` + `{41}` quantifier, not Unicode escape.
+Added `unicode` guard to `\u{...}` braced escape handling in both `translate_js_pattern_ex` and `validate_js_pattern`. Without `/u` or `/v`, `\u{41}` is now correctly parsed as identity escape `\u` + quantifier `{41}`.
 
-- `staging/sm/RegExp/unicode-braced.js`
+- `staging/sm/RegExp/unicode-braced.js` — **NOW PASSING**
 
 ### B5. RegExp: AdvanceStringIndex lone surrogate off-by-one (2 tests, EASY)
 

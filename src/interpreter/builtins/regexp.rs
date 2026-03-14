@@ -2065,7 +2065,7 @@ pub(super) fn translate_js_pattern_ex(
                 }
                 // \uHHHH or \u{HHHH+}
                 'u' => {
-                    if i + 2 < len && chars[i + 2] == '{' {
+                    if unicode && i + 2 < len && chars[i + 2] == '{' {
                         // \u{HHHH+}
                         let start = i + 3;
                         if let Some(end) = chars[start..].iter().position(|&c| c == '}') {
@@ -3615,7 +3615,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     ));
                 }
             } else if after_escape == 'u' {
-                if i < len && chars[i] == '{' {
+                if _unicode && i < len && chars[i] == '{' {
                     i += 1;
                     let hex_start = i;
                     while i < len && chars[i] != '}' {
