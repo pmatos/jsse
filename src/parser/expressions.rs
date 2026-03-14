@@ -646,6 +646,13 @@ impl<'a> Parser<'a> {
             self.parse_primary_expression()?
         };
 
+        // ArrowFunction is not a LeftHandSideExpression per spec §13.3,
+        // so member access, calls, and tagged templates cannot extend it
+        // unless it was parenthesized (making it a PrimaryExpression).
+        if matches!(expr, Expression::ArrowFunction(_)) && !self.last_expr_parenthesized {
+            return Ok(expr);
+        }
+
         loop {
             match &self.current {
                 Token::Dot => {
@@ -659,11 +666,6 @@ impl<'a> Parser<'a> {
                     expr = Expression::Member(Box::new(expr), prop);
                 }
                 Token::LeftBracket => {
-                    // In class field initializers, [ after a line terminator starts a new
-                    // class element (ASI inserts ; before the [)
-                    if self.in_class_field_initializer && self.prev_line_terminator {
-                        break;
-                    }
                     self.advance()?;
                     let prop = self.parse_expression()?;
                     self.eat(&Token::RightBracket)?;

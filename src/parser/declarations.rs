@@ -1073,14 +1073,11 @@ impl<'a> Parser<'a> {
     fn parse_field_initializer_value(&mut self) -> Result<Expression, ParseError> {
         let prev_async = self.in_async;
         let prev_gen = self.in_generator;
-        let prev_class_field = self.in_class_field_initializer;
         self.in_async = false;
         self.in_generator = false;
-        self.in_class_field_initializer = true;
         let result = self.parse_assignment_expression();
         self.in_async = prev_async;
         self.in_generator = prev_gen;
-        self.in_class_field_initializer = prev_class_field;
         result
     }
 

@@ -1,7 +1,7 @@
 # Staging Test Failures Plan
 
-**Current:** 101,023 / 101,328 (99.70%) — 305 failing scenarios
-**Previous baseline:** 101,020 / 101,269 (99.75%) — 249 failing scenarios
+**Current:** 101,035 / 101,269 (99.77%) — 234 failing scenarios
+**Previous baseline:** 101,023 / 101,328 (99.70%) — 305 failing scenarios
 
 ---
 
@@ -82,16 +82,16 @@ Fixed `proxy_get_own_property_descriptor` to return a normalized descriptor (via
 
 ## B. Medium Impact — Good ROI
 
-### B1. Class field ASI parsing bug (6 tests, MEDIUM)
+### ~~B1. Class field ASI parsing bug (6 tests, MEDIUM)~~ DONE (+12 passes)
 
-`x = obj` followed by `['lol']` on next line — parser incorrectly inserts ASI. Single parser fix.
+Removed incorrect `in_class_field_initializer` flag that broke `[` continuation after newlines. The real fix: ArrowFunction is not a LeftHandSideExpression per spec §13.3, so `parse_left_hand_side_expression()` now skips the member access loop for bare (non-parenthesized) arrow functions. This correctly handles both cases: `x = obj\n['lol']` continues as member access (obj is a PrimaryExpression), while `()=>{}\n[expr]` triggers ASI (arrow function cannot be extended).
 
-- `language/expressions/class/elements/fields-asi-1.js`
-- `language/expressions/class/elements/fields-asi-2.js`
-- `language/expressions/class/elements/fields-asi-3.js`
-- `language/statements/class/elements/fields-asi-1.js`
-- `language/statements/class/elements/fields-asi-2.js`
-- `language/statements/class/elements/fields-asi-3.js`
+- `language/expressions/class/elements/fields-asi-1.js` — **NOW PASSING**
+- `language/expressions/class/elements/fields-asi-2.js` — **NOW PASSING**
+- `language/expressions/class/elements/fields-asi-3.js` — **NOW PASSING**
+- `language/statements/class/elements/fields-asi-1.js` — **NOW PASSING**
+- `language/statements/class/elements/fields-asi-2.js` — **NOW PASSING**
+- `language/statements/class/elements/fields-asi-3.js` — **NOW PASSING**
 
 ### B2. Strict mode SM tests — harness incompatibility (13 tests, EASY)
 
