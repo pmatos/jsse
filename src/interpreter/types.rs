@@ -2,40 +2,114 @@ use crate::ast::*;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
 use crate::interpreter::helpers::same_value;
 use crate::types::{JsString, JsValue};
-use std::cell::{Cell, RefCell, UnsafeCell};
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
+use std::sync::RwLock;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 static NEXT_SAB_ID: AtomicU64 = AtomicU64::new(1);
 
 pub fn next_sab_id() -> u64 {
-    NEXT_SAB_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    NEXT_SAB_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 pub struct SharedBufferInner {
-    data: UnsafeCell<Vec<u8>>,
+    words: RwLock<Vec<u64>>,
+    len: AtomicUsize,
     pub id: u64,
 }
 
-unsafe impl Send for SharedBufferInner {}
-unsafe impl Sync for SharedBufferInner {}
-
 impl SharedBufferInner {
     pub fn new(data: Vec<u8>, id: u64) -> Self {
+        let len = data.len();
+        let mut words = vec![0u64; len.div_ceil(8)];
+        for (idx, byte) in data.into_iter().enumerate() {
+            let word_idx = idx / 8;
+            let shift = (idx % 8) * 8;
+            words[word_idx] |= (byte as u64) << shift;
+        }
         Self {
-            data: UnsafeCell::new(data),
+            words: RwLock::new(words),
+            len: AtomicUsize::new(len),
             id,
         }
     }
 
-    pub fn as_ptr(&self) -> *mut u8 {
-        unsafe { (*self.data.get()).as_mut_ptr() }
+    pub fn len(&self) -> usize {
+        self.len.load(Ordering::SeqCst)
     }
 
-    pub fn len(&self) -> usize {
-        unsafe { (*self.data.get()).len() }
+    fn byte_slice(words: &[u64], len: usize) -> &[u8] {
+        let bytes =
+            unsafe { std::slice::from_raw_parts(words.as_ptr() as *const u8, words.len() * 8) };
+        &bytes[..len]
+    }
+
+    fn byte_slice_mut(words: &mut [u64], len: usize) -> &mut [u8] {
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(words.as_mut_ptr() as *mut u8, words.len() * 8)
+        };
+        &mut bytes[..len]
+    }
+
+    pub fn with_read<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+        let len = self.len();
+        let guard = self.words.read().unwrap();
+        f(Self::byte_slice(&guard, len))
+    }
+
+    pub fn with_write<R>(&self, f: impl FnOnce(&mut [u8]) -> R) -> R {
+        let len = self.len();
+        let mut guard = self.words.write().unwrap();
+        f(Self::byte_slice_mut(&mut guard, len))
+    }
+
+    pub fn resize(&self, new_len: usize, value: u8) {
+        let old_len = self.len();
+        let mut guard = self.words.write().unwrap();
+        let new_words_len = new_len.div_ceil(8);
+        if guard.len() < new_words_len {
+            guard.resize(new_words_len, 0);
+        }
+        {
+            let old_words_len = old_len.div_ceil(8);
+            let new_words = &mut guard[..new_words_len.max(old_words_len)];
+            let bytes = unsafe {
+                std::slice::from_raw_parts_mut(
+                    new_words.as_mut_ptr() as *mut u8,
+                    new_words.len() * 8,
+                )
+            };
+            if new_len > old_len {
+                bytes[old_len..new_len].fill(value);
+            } else {
+                bytes[new_len..old_len].fill(0);
+            }
+        }
+        if guard.len() > new_words_len {
+            guard.truncate(new_words_len);
+        }
+        self.len.store(new_len, Ordering::SeqCst);
+    }
+
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.with_read(|bytes| bytes.to_vec())
+    }
+
+    pub(crate) fn with_atomic_ptr<T, R>(
+        &self,
+        offset: usize,
+        size: usize,
+        f: impl FnOnce(*mut T) -> R,
+    ) -> Option<R> {
+        if offset + size > self.len() {
+            return None;
+        }
+        let guard = self.words.read().unwrap();
+        let base = guard.as_ptr() as *mut u8;
+        Some(f(unsafe { base.add(offset) as *mut T }))
     }
 }
 
@@ -55,17 +129,49 @@ pub enum BufferData {
 }
 
 impl BufferData {
+    pub fn len(&self) -> usize {
+        match self {
+            BufferData::Owned(v) => v.len(),
+            BufferData::Shared(s) => s.len(),
+        }
+    }
+
     pub fn resize(&mut self, new_len: usize, value: u8) {
         match self {
             BufferData::Owned(v) => v.resize(new_len, value),
-            BufferData::Shared(s) => unsafe { (*s.data.get()).resize(new_len, value) },
+            BufferData::Shared(s) => s.resize(new_len, value),
         }
     }
 
     pub fn to_vec(&self) -> Vec<u8> {
         match self {
             BufferData::Owned(v) => v.clone(),
-            BufferData::Shared(s) => unsafe { (*s.data.get()).clone() },
+            BufferData::Shared(s) => s.to_vec(),
+        }
+    }
+
+    pub fn is_shared(&self) -> bool {
+        matches!(self, BufferData::Shared(_))
+    }
+
+    pub fn shared_inner(&self) -> Option<&Arc<SharedBufferInner>> {
+        match self {
+            BufferData::Shared(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn with_read<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+        match self {
+            BufferData::Owned(v) => f(v),
+            BufferData::Shared(s) => s.with_read(f),
+        }
+    }
+
+    pub fn with_write<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> R {
+        match self {
+            BufferData::Owned(v) => f(v),
+            BufferData::Shared(s) => s.with_write(f),
         }
     }
 }
@@ -73,25 +179,6 @@ impl BufferData {
 impl Clone for BufferData {
     fn clone(&self) -> Self {
         BufferData::Owned(self.to_vec())
-    }
-}
-
-impl std::ops::Deref for BufferData {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] {
-        match self {
-            BufferData::Owned(v) => v,
-            BufferData::Shared(s) => unsafe { &*s.data.get() },
-        }
-    }
-}
-
-impl std::ops::DerefMut for BufferData {
-    fn deref_mut(&mut self) -> &mut [u8] {
-        match self {
-            BufferData::Owned(v) => v,
-            BufferData::Shared(s) => unsafe { &mut *s.data.get() },
-        }
     }
 }
 
@@ -2636,11 +2723,13 @@ pub(crate) fn typed_array_length(ta: &TypedArrayInfo) -> usize {
         return 0;
     }
     if ta.is_length_tracking {
-        let buf_len = ta.buffer.borrow().len();
+        let buf_borrow = ta.buffer.borrow();
+        let buf_len = (*buf_borrow).len();
         let remaining = buf_len.saturating_sub(ta.byte_offset);
         remaining / ta.kind.bytes_per_element()
     } else {
-        let buf_len = ta.buffer.borrow().len();
+        let buf_borrow = ta.buffer.borrow();
+        let buf_len = (*buf_borrow).len();
         if ta.byte_offset + ta.byte_length > buf_len {
             0
         } else {
@@ -2653,7 +2742,8 @@ pub(crate) fn is_typed_array_out_of_bounds(ta: &TypedArrayInfo) -> bool {
     if ta.is_detached.get() {
         return true;
     }
-    let buf_len = ta.buffer.borrow().len();
+    let buf_borrow = ta.buffer.borrow();
+    let buf_len = (*buf_borrow).len();
     if ta.is_length_tracking {
         ta.byte_offset > buf_len
     } else {
@@ -2693,135 +2783,139 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
     if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
         return JsValue::Undefined;
     }
-    let buf = ta.buffer.borrow();
     let offset = ta.byte_offset + idx * ta.kind.bytes_per_element();
-    if offset + ta.kind.bytes_per_element() > buf.len() {
-        return JsValue::Undefined;
-    }
-    match ta.kind {
-        TypedArrayKind::Int8 => JsValue::Number(buf[offset] as i8 as f64),
-        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => JsValue::Number(buf[offset] as f64),
-        TypedArrayKind::Int16 => {
-            let v = i16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-            JsValue::Number(v as f64)
+    (*ta.buffer.borrow()).with_read(|buf| {
+        if offset + ta.kind.bytes_per_element() > buf.len() {
+            return JsValue::Undefined;
         }
-        TypedArrayKind::Uint16 => {
-            let v = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-            JsValue::Number(v as f64)
+        match ta.kind {
+            TypedArrayKind::Int8 => JsValue::Number(buf[offset] as i8 as f64),
+            TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => {
+                JsValue::Number(buf[offset] as f64)
+            }
+            TypedArrayKind::Int16 => {
+                let v = i16::from_ne_bytes([buf[offset], buf[offset + 1]]);
+                JsValue::Number(v as f64)
+            }
+            TypedArrayKind::Uint16 => {
+                let v = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
+                JsValue::Number(v as f64)
+            }
+            TypedArrayKind::Int32 => {
+                let v = i32::from_ne_bytes([
+                    buf[offset],
+                    buf[offset + 1],
+                    buf[offset + 2],
+                    buf[offset + 3],
+                ]);
+                JsValue::Number(v as f64)
+            }
+            TypedArrayKind::Uint32 => {
+                let v = u32::from_ne_bytes([
+                    buf[offset],
+                    buf[offset + 1],
+                    buf[offset + 2],
+                    buf[offset + 3],
+                ]);
+                JsValue::Number(v as f64)
+            }
+            TypedArrayKind::Float32 => {
+                let v = f32::from_ne_bytes([
+                    buf[offset],
+                    buf[offset + 1],
+                    buf[offset + 2],
+                    buf[offset + 3],
+                ]);
+                JsValue::Number(v as f64)
+            }
+            TypedArrayKind::Float64 => {
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(&buf[offset..offset + 8]);
+                JsValue::Number(f64::from_ne_bytes(bytes))
+            }
+            TypedArrayKind::BigInt64 => {
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(&buf[offset..offset + 8]);
+                JsValue::BigInt(crate::types::JsBigInt {
+                    value: num_bigint::BigInt::from(i64::from_ne_bytes(bytes)),
+                })
+            }
+            TypedArrayKind::BigUint64 => {
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(&buf[offset..offset + 8]);
+                JsValue::BigInt(crate::types::JsBigInt {
+                    value: num_bigint::BigInt::from(u64::from_ne_bytes(bytes)),
+                })
+            }
+            TypedArrayKind::Float16 => {
+                let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
+                JsValue::Number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
+                    bits,
+                ))
+            }
         }
-        TypedArrayKind::Float16 => {
-            let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-            JsValue::Number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
-                bits,
-            ))
-        }
-        TypedArrayKind::Int32 => {
-            let v = i32::from_ne_bytes([
-                buf[offset],
-                buf[offset + 1],
-                buf[offset + 2],
-                buf[offset + 3],
-            ]);
-            JsValue::Number(v as f64)
-        }
-        TypedArrayKind::Uint32 => {
-            let v = u32::from_ne_bytes([
-                buf[offset],
-                buf[offset + 1],
-                buf[offset + 2],
-                buf[offset + 3],
-            ]);
-            JsValue::Number(v as f64)
-        }
-        TypedArrayKind::Float32 => {
-            let v = f32::from_ne_bytes([
-                buf[offset],
-                buf[offset + 1],
-                buf[offset + 2],
-                buf[offset + 3],
-            ]);
-            JsValue::Number(v as f64)
-        }
-        TypedArrayKind::Float64 => {
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::Number(f64::from_ne_bytes(bytes))
-        }
-        TypedArrayKind::BigInt64 => {
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::BigInt(crate::types::JsBigInt {
-                value: num_bigint::BigInt::from(i64::from_ne_bytes(bytes)),
-            })
-        }
-        TypedArrayKind::BigUint64 => {
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::BigInt(crate::types::JsBigInt {
-                value: num_bigint::BigInt::from(u64::from_ne_bytes(bytes)),
-            })
-        }
-    }
+    })
 }
 
 pub(crate) fn typed_array_set_index(ta: &TypedArrayInfo, idx: usize, value: &JsValue) -> bool {
-    let mut buf = ta.buffer.borrow_mut();
     let offset = ta.byte_offset + idx * ta.kind.bytes_per_element();
-    if offset + ta.kind.bytes_per_element() > buf.len() {
-        return false;
-    }
-    match ta.kind {
-        TypedArrayKind::Int8 => {
-            let v = to_int8(value);
-            buf[offset] = v as u8;
+    (*ta.buffer.borrow_mut()).with_write(|buf| {
+        if offset + ta.kind.bytes_per_element() > buf.len() {
+            return false;
         }
-        TypedArrayKind::Uint8 => {
-            let v = to_uint8(value);
-            buf[offset] = v;
+        match ta.kind {
+            TypedArrayKind::Int8 => {
+                let v = to_int8(value);
+                buf[offset] = v as u8;
+            }
+            TypedArrayKind::Uint8 => {
+                let v = to_uint8(value);
+                buf[offset] = v;
+            }
+            TypedArrayKind::Uint8Clamped => {
+                let v = to_uint8_clamped(value);
+                buf[offset] = v;
+            }
+            TypedArrayKind::Int16 => {
+                let v = to_int16(value);
+                buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
+            }
+            TypedArrayKind::Uint16 => {
+                let v = to_uint16(value);
+                buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
+            }
+            TypedArrayKind::Int32 => {
+                let v = to_int32(value);
+                buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
+            }
+            TypedArrayKind::Uint32 => {
+                let v = to_uint32(value);
+                buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
+            }
+            TypedArrayKind::Float32 => {
+                let n = to_number(value);
+                buf[offset..offset + 4].copy_from_slice(&(n as f32).to_ne_bytes());
+            }
+            TypedArrayKind::Float64 => {
+                let n = to_number(value);
+                buf[offset..offset + 8].copy_from_slice(&n.to_ne_bytes());
+            }
+            TypedArrayKind::BigInt64 => {
+                let v = to_bigint64(value);
+                buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
+            }
+            TypedArrayKind::BigUint64 => {
+                let v = to_biguint64(value);
+                buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
+            }
+            TypedArrayKind::Float16 => {
+                let n = to_number(value);
+                let bits = crate::interpreter::builtins::typedarray::dv_f64_to_f16_bits(n);
+                buf[offset..offset + 2].copy_from_slice(&bits.to_ne_bytes());
+            }
         }
-        TypedArrayKind::Uint8Clamped => {
-            let v = to_uint8_clamped(value);
-            buf[offset] = v;
-        }
-        TypedArrayKind::Int16 => {
-            let v = to_int16(value);
-            buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
-        }
-        TypedArrayKind::Uint16 => {
-            let v = to_uint16(value);
-            buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
-        }
-        TypedArrayKind::Float16 => {
-            let n = to_number(value);
-            let bits = crate::interpreter::builtins::typedarray::dv_f64_to_f16_bits(n);
-            buf[offset..offset + 2].copy_from_slice(&bits.to_ne_bytes());
-        }
-        TypedArrayKind::Int32 => {
-            let v = to_int32(value);
-            buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
-        }
-        TypedArrayKind::Uint32 => {
-            let v = to_uint32(value);
-            buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
-        }
-        TypedArrayKind::Float32 => {
-            let n = to_number(value);
-            buf[offset..offset + 4].copy_from_slice(&(n as f32).to_ne_bytes());
-        }
-        TypedArrayKind::Float64 => {
-            let n = to_number(value);
-            buf[offset..offset + 8].copy_from_slice(&n.to_ne_bytes());
-        }
-        TypedArrayKind::BigInt64 => {
-            let v = to_bigint64(value);
-            buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
-        }
-        TypedArrayKind::BigUint64 => {
-            let v = to_biguint64(value);
-            buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
-        }
-    }
-    true
+        true
+    })
 }
 
 fn to_number(v: &JsValue) -> f64 {
