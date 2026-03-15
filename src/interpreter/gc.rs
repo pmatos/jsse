@@ -260,6 +260,20 @@ impl Interpreter {
                 }
             }
 
+            // Trace wrap_iter_record (WrapForValidIteratorPrototype state)
+            if let Some((ref iter, ref next)) = obj.wrap_iter_record {
+                Self::collect_value_roots(iter, &mut worklist);
+                Self::collect_value_roots(next, &mut worklist);
+            }
+
+            // Trace iterator helper closures
+            if let Some(ref v) = obj.helper_next_closure {
+                Self::collect_value_roots(v, &mut worklist);
+            }
+            if let Some(ref v) = obj.helper_return_closure {
+                Self::collect_value_roots(v, &mut worklist);
+            }
+
             // Trace iterator state
             if let Some(ref state) = obj.iterator_state {
                 match state {

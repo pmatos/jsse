@@ -381,6 +381,7 @@ pub struct Realm {
     pub(crate) object_prototype_tostring: Option<JsValue>,
     pub(crate) sloppy_caller_getter: Option<JsValue>,
     pub(crate) sloppy_arguments_getter: Option<JsValue>,
+    pub(crate) iterator_helper_prototype: Option<Rc<RefCell<JsObjectData>>>,
 }
 
 impl Realm {
@@ -475,6 +476,7 @@ impl Realm {
             object_prototype_tostring: None,
             sloppy_caller_getter: None,
             sloppy_arguments_getter: None,
+            iterator_helper_prototype: None,
         }
     }
 
@@ -555,6 +557,7 @@ impl Realm {
             &self.uri_error_prototype,
             &self.eval_error_prototype,
             &self.shadow_realm_prototype,
+            &self.iterator_helper_prototype,
         ] {
             if let Some(p) = proto
                 && let Some(id) = p.borrow().id
@@ -1659,6 +1662,10 @@ pub struct JsObjectData {
     pub(crate) regexp_original_flags: Option<JsString>,
     pub(crate) deferred_construct: bool,
     pub(crate) gc_native_roots: Option<Vec<JsValue>>,
+    pub(crate) wrap_iter_record: Option<(JsValue, JsValue)>,
+    pub(crate) helper_next_closure: Option<JsValue>,
+    pub(crate) helper_return_closure: Option<JsValue>,
+    pub(crate) helper_gen_state: Option<Rc<Cell<u8>>>,
 }
 
 #[derive(Clone)]
@@ -1727,6 +1734,10 @@ impl JsObjectData {
             regexp_original_flags: None,
             deferred_construct: false,
             gc_native_roots: None,
+            wrap_iter_record: None,
+            helper_next_closure: None,
+            helper_return_closure: None,
+            helper_gen_state: None,
         }
     }
 

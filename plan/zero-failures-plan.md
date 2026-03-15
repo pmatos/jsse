@@ -1,6 +1,6 @@
 # Plan: Zero test262 Failures (153 remaining)
 
-Based on investigation of all failing tests. Phase 1 parser fixes completed 2026-03-14 (+26 passes, 0 regressions). Phase 2 interpreter property/prototype fixes completed 2026-03-14 (+12 passes, -1 regression). Phase 2 continued: generator/proxy/global/Reflect fixes completed 2026-03-14 (+9 passes, 0 regressions → 101,065 / 101,234 = 99.83%). Phase 3 RegExp engine fixes completed 2026-03-14 (+16 net passes, 0 regressions → 101,081 / 101,234 = 99.85%).
+Based on investigation of all failing tests. Phase 1 parser fixes completed 2026-03-14 (+26 passes, 0 regressions). Phase 2 interpreter property/prototype fixes completed 2026-03-14 (+12 passes, -1 regression). Phase 2 continued: generator/proxy/global/Reflect fixes completed 2026-03-14 (+9 passes, 0 regressions → 101,065 / 101,234 = 99.83%). Phase 3 RegExp engine fixes completed 2026-03-14 (+16 net passes, 0 regressions → 101,081 / 101,234 = 99.85%). Phase 4 Iterator helper fixes completed 2026-03-15 (+16 net passes, 0 regressions → 101,097 / 101,234 = 99.86%).
 
 ## Breakdown by Category (updated 2026-03-14)
 
@@ -8,7 +8,7 @@ Based on investigation of all failing tests. Phase 1 parser fixes completed 2026
 |----------|:---:|:---:|
 | Intl402/Temporal | 36 | 18 |
 | RegExp (SM + built-ins) | 8 | 5 |
-| Iterator helpers | 16 | 8 |
+| ~~Iterator helpers~~ | ~~16~~ | ~~8~~ |
 | TypedArray (SM + built-ins) | 22 | 11 |
 | Generators | 3 | 2 |
 | Async functions | 4 | 2 |
@@ -164,36 +164,30 @@ Based on investigation of all failing tests. Phase 1 parser fixes completed 2026
 
 ---
 
-## Phase 4: Iterator Helpers (~16 tests) — NEXT UP
+## Phase 4: Iterator Helper Fixes ✅ COMPLETED (2026-03-15)
 
-### 4.1 WrapForValidIteratorPrototype `.return()` alive-state tracking — 2 tests
-**File:** `src/interpreter/builtins/iterators.rs`
-**Bug:** `return` method incorrectly tracks alive state; should always delegate.
-**Tests:** `Iterator/from/modify-return.js`, `proxy-wrap-return.js` (partially)
+**Result: +16 net passes, 0 regressions.**
 
-### 4.2 Wrapper `next` incorrectly validates return type — 2 tests
-**File:** `src/interpreter/builtins/iterators.rs`
-**Bug:** Non-object results rejected instead of passed through.
-**Tests:** `Iterator/from/wrap-next-not-object-throws.js` (x2)
+### 4.1 `flatMap` doesn't close outer iterator when inner value throws — 2 tests ✅ DONE (+2)
+**Fix:** Added `IfAbruptCloseIterator` pattern to the inner `iterator_value` error path — sets alive=false and calls `iterator_close_getter` on the outer iterator before rethrowing.
 
-### 4.3 `flatMap` doesn't close outer iterator when inner value throws — 2 tests
-**File:** `src/interpreter/builtins/iterators.rs`
-**Bug:** Missing `IfAbruptCloseIterator` for inner value extraction.
-**Tests:** `flatMap/close-iterator-when-inner-value-throws.js` (x2)
+### 4.2+4.4 WrapForValidIteratorPrototype simplification + cross-realm state — 6 tests ✅ DONE (+4 wrapper, +2 cross-realm)
+**Fix:** Two spec violations fixed together:
+- Removed `alive` boolean tracking — spec has no such state. `next()` always delegates `Call(nextMethod, iterator)` directly without validating result type or checking completion. `return()` always looks up and calls `return` on the underlying iterator.
+- Eliminated per-realm `HashMap<u64, (JsValue, JsValue, bool)>` state map. Iterator record now stored directly on the wrapper object via `wrap_iter_record: Option<(JsValue, JsValue)>` field on `JsObjectData`. This fixes cross-realm calls where `thisWrap.next.call(otherWrap)` failed because `otherWrap` was in a different realm's map.
+**Tests:** `modify-return.js`, `wrap-next-not-object-throws.js`, `wrap-functions-on-other-global.js` (x2 each)
 
-### 4.4 `Iterator.from` prototype check bypasses Proxy `getPrototypeOf` — 6 tests
-**File:** `src/interpreter/builtins/iterators.rs`
-**Bug:** Reads Rust struct field instead of calling `[[GetPrototypeOf]]`.
+### 4.3 `Iterator.from` prototype check bypasses Proxy `getPrototypeOf` — 6 tests ✅ DONE (+6)
+**Fix:** Replaced manual `Rc::ptr_eq` prototype chain walk with `ordinary_has_instance(&iterator_ctor, &iter_val)`, which uses `proxy_get_prototype_of` and properly consults Proxy `getPrototypeOf` handlers.
 **Tests:** `proxy-not-wrapped.js`, `proxy-wrap-next.js`, `proxy-wrap-return.js` (x2 each)
 
-### 4.5 Cross-realm iterator wrapper/helper state — 4 tests
-**File:** `src/interpreter/builtins/iterators.rs`
-**Bug:** State stored in per-realm map; needs to be on the object itself.
-**Tests:** `wrap-functions-on-other-global.js`, `iterator-helpers-from-other-global.js` (x2 each)
+### 4.5 Cross-realm iterator helper prototype methods — 2 tests ✅ DONE (+2)
+**Fix:** Created proper `%IteratorHelperPrototype%` per realm with shared `next` and `return` methods that read state from `this`. Per-instance closures and generator state stored on `JsObjectData` fields (`helper_next_closure`, `helper_return_closure`, `helper_gen_state`). Previously `next`/`return` were own closure properties per instance, so cross-realm `OtherHelper.prototype.next.call(thisHelper)` failed. Added `iterator_helper_prototype` to `Realm` struct and GC root list.
+**Tests:** `iterator-helpers-from-other-global.js` (x2)
 
 ---
 
-## Phase 5: TypedArray Fixes (~22 tests)
+## Phase 5: TypedArray Fixes (~22 tests) — NEXT UP
 
 ### 5.1 `Object.seal`/`Object.freeze` on TypedArrays — 6 tests
 **File:** `src/interpreter/builtins/mod.rs`
@@ -336,7 +330,7 @@ Based on investigation of all failing tests. Phase 1 parser fixes completed 2026
 | ~~2~~ | ~~1.x parser fixes~~ | ~~+26~~ | ~~DONE~~ |
 | ~~3~~ | ~~2.x interpreter fixes~~ | ~~+21~~ | ~~DONE~~ |
 | ~~4~~ | ~~3.x RegExp fixes~~ | ~~+16~~ | ~~DONE~~ |
-| 5 | 4.x Iterator helpers | ~16 | Medium |
+| ~~5~~ | ~~4.x Iterator helpers~~ | ~~+16~~ | ~~DONE~~ |
 | 6 | 5.x TypedArray | ~22 | Medium |
 | 7 | 6.x Set operations | ~6 | Medium |
 | 8 | 7.x Intl/Temporal | ~36 | Hard (locale data) |
@@ -344,4 +338,4 @@ Based on investigation of all failing tests. Phase 1 parser fixes completed 2026
 | — | Test262 bugs (1.1) | 6 | N/A |
 | — | RegExp deferred (3.7-3.10) | 8 | Hard (perf/engine) |
 
-**Progress: 101,081 / 101,234 (99.85%). Remaining fixable: ~153 tests** (6 are test262 bugs, ~7 are OOM/timeout performance issues, ~8 are deferred RegExp engine/perf issues, ~6 are hard locale data issues).
+**Progress: 101,097 / 101,234 (99.86%). Remaining fixable: ~137 tests** (6 are test262 bugs, ~7 are OOM/timeout performance issues, ~8 are deferred RegExp engine/perf issues, ~6 are hard locale data issues).
