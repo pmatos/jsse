@@ -3583,18 +3583,28 @@ impl Interpreter {
                 )
             },
         ));
-        // TypedArray.from
+        // TypedArray.from — §23.2.2.1
         let ta_from_fn = self.create_function(JsFunction::native(
             "from".to_string(),
             1,
             |interp, this_val, args| {
-                // this_val is the constructor (e.g. Uint8Array)
+                // Step 1: C = this value
                 let source = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let map_fn = args.get(1).cloned();
+                let map_fn_arg = args.get(1).cloned();
                 let this_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
 
+                // Step 2: IsConstructor(C)
+                let is_ctor = matches!(this_val, JsValue::Object(o) if {
+                    interp.get_object(o.id).is_some_and(|obj| obj.borrow().callable.is_some())
+                });
+                if !is_ctor {
+                    return Completion::Throw(
+                        interp.create_type_error("TypedArray.from requires a constructor"),
+                    );
+                }
+
                 // Step 3: If mapfn is provided and not undefined, check callable
-                let mapping = if let Some(ref mf) = map_fn
+                let mapping = if let Some(ref mf) = map_fn_arg
                     && !matches!(mf, JsValue::Undefined)
                 {
                     let is_callable = matches!(mf, JsValue::Object(o) if {
@@ -3610,74 +3620,193 @@ impl Interpreter {
                     false
                 };
 
-                // Step 5: Let arrayLike be ! ToObject(source).
-                let source_obj = match interp.to_object(&source) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Completion::Throw(e),
-                    _ => {
-                        return Completion::Throw(
-                            interp.create_type_error("Cannot convert undefined or null to object"),
-                        );
+                // Step 4: Get @@iterator from raw source (before ToObject)
+                let using_iterator = if let JsValue::Object(ref o) = source {
+                    match interp.get_object_property(o.id, "Symbol(Symbol.iterator)", &source) {
+                        Completion::Normal(v)
+                            if !matches!(v, JsValue::Undefined | JsValue::Null) =>
+                        {
+                            Some(v)
+                        }
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => None,
                     }
-                };
-                // Collect source values (iterable or array-like)
-                let values = interp.collect_iterable_or_arraylike(&source_obj);
-                let values = match values {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = values.len();
-
-                // Create the target object by calling the constructor with len
-                let target_obj = match interp.typed_array_create(this_val, len) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-
-                // For each element: apply mapper if any, then Set(targetObj, k, value, true)
-                let ta_kind = if let JsValue::Object(ref o) = target_obj {
-                    interp
-                        .get_object(o.id)
-                        .and_then(|obj| obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind))
+                } else if matches!(source, JsValue::Undefined | JsValue::Null) {
+                    // GetMethod on non-object primitive: need ToObject first for null/undefined → TypeError
+                    return Completion::Throw(
+                        interp.create_type_error("Cannot convert undefined or null to object"),
+                    );
                 } else {
-                    None
-                };
-                let ta_kind = match ta_kind {
-                    Some(k) => k,
-                    None => {
-                        return Completion::Throw(
-                            interp.create_type_error("TypedArray.from: target is not a TypedArray"),
-                        );
-                    }
-                };
-
-                for (k, val) in values.iter().enumerate() {
-                    let mapped_val = if mapping {
-                        let mf = map_fn.as_ref().unwrap();
-                        match interp.call_function(
-                            mf,
-                            &this_arg,
-                            &[val.clone(), JsValue::Number(k as f64)],
-                        ) {
-                            Completion::Normal(v) => v,
-                            other => return other,
+                    // Primitive: wrap to object, check @@iterator
+                    let wrapped = match interp.to_object(&source) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => {
+                            return Completion::Throw(
+                                interp.create_type_error("Cannot convert to object"),
+                            );
+                        }
+                    };
+                    if let JsValue::Object(ref wo) = wrapped {
+                        match interp.get_object_property(wo.id, "Symbol(Symbol.iterator)", &wrapped)
+                        {
+                            Completion::Normal(v)
+                                if !matches!(v, JsValue::Undefined | JsValue::Null) =>
+                            {
+                                Some(v)
+                            }
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => None,
                         }
                     } else {
-                        val.clone()
-                    };
-                    // Coerce and Set (silently ignores OOB/detached)
-                    let coerced = match interp.typed_array_coerce_value(ta_kind, &mapped_val) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let key = k.to_string();
-                    if let JsValue::Object(ref o) = target_obj
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        obj.borrow_mut().set_property_value(&key, coerced);
+                        None
                     }
+                };
+
+                if let Some(iter_fn) = using_iterator {
+                    // Step 5: Iterable path — collect all values, then create TA, then set
+                    let values = match interp.iterate_with_function(&source, &iter_fn) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    let len = values.len();
+                    let target_obj = match interp.typed_array_create(this_val, len) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let ta_kind = if let JsValue::Object(ref o) = target_obj {
+                        interp.get_object(o.id).and_then(|obj| {
+                            obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind)
+                        })
+                    } else {
+                        None
+                    };
+                    let ta_kind =
+                        match ta_kind {
+                            Some(k) => k,
+                            None => {
+                                return Completion::Throw(interp.create_type_error(
+                                    "TypedArray.from: target is not a TypedArray",
+                                ));
+                            }
+                        };
+                    for (k, val) in values.iter().enumerate() {
+                        let mapped_val = if mapping {
+                            let mf = map_fn_arg.as_ref().unwrap();
+                            match interp.call_function(
+                                mf,
+                                &this_arg,
+                                &[val.clone(), JsValue::Number(k as f64)],
+                            ) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            }
+                        } else {
+                            val.clone()
+                        };
+                        let coerced = match interp.typed_array_coerce_value(ta_kind, &mapped_val) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let key = k.to_string();
+                        if let JsValue::Object(ref o) = target_obj
+                            && let Some(obj) = interp.get_object(o.id)
+                        {
+                            obj.borrow_mut().set_property_value(&key, coerced);
+                        }
+                    }
+                    Completion::Normal(target_obj)
+                } else {
+                    // Step 6: Array-like path — ToObject, get length, create TA, then get each element
+                    let array_like = match interp.to_object(&source) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => {
+                            return Completion::Throw(
+                                interp.create_type_error("Cannot convert to object"),
+                            );
+                        }
+                    };
+                    // Step 7: len = LengthOfArrayLike (ToLength calls ToNumber which invokes valueOf)
+                    let len = if let JsValue::Object(ref o) = array_like {
+                        let len_val = match interp.get_object_property(o.id, "length", &array_like)
+                        {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
+                        let n = match interp.to_number_value(&len_val) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        use crate::interpreter::helpers::to_integer_or_infinity;
+                        let int_len = to_integer_or_infinity(n);
+                        if int_len < 0.0 {
+                            0
+                        } else {
+                            int_len.min(9007199254740991.0) as usize
+                        }
+                    } else {
+                        0
+                    };
+                    // Step 8: Create target TA
+                    let target_obj = match interp.typed_array_create(this_val, len) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let ta_kind = if let JsValue::Object(ref o) = target_obj {
+                        interp.get_object(o.id).and_then(|obj| {
+                            obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind)
+                        })
+                    } else {
+                        None
+                    };
+                    let ta_kind =
+                        match ta_kind {
+                            Some(k) => k,
+                            None => {
+                                return Completion::Throw(interp.create_type_error(
+                                    "TypedArray.from: target is not a TypedArray",
+                                ));
+                            }
+                        };
+                    // Step 9: For each k, get element from source
+                    for k in 0..len {
+                        let val = if let JsValue::Object(ref o) = array_like {
+                            match interp.get_object_property(o.id, &k.to_string(), &array_like) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => JsValue::Undefined,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
+                        let mapped_val = if mapping {
+                            let mf = map_fn_arg.as_ref().unwrap();
+                            match interp.call_function(
+                                mf,
+                                &this_arg,
+                                &[val.clone(), JsValue::Number(k as f64)],
+                            ) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            }
+                        } else {
+                            val
+                        };
+                        let coerced = match interp.typed_array_coerce_value(ta_kind, &mapped_val) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let key = k.to_string();
+                        if let JsValue::Object(ref o) = target_obj
+                            && let Some(obj) = interp.get_object(o.id)
+                        {
+                            obj.borrow_mut().set_property_value(&key, coerced);
+                        }
+                    }
+                    Completion::Normal(target_obj)
                 }
-                Completion::Normal(target_obj)
             },
         ));
         if let JsValue::Object(o) = &ta_ctor
@@ -3848,8 +3977,12 @@ impl Interpreter {
                                     let detached = src_ref.arraybuffer_detached.clone()
                                         .unwrap_or_else(|| Rc::new(Cell::new(false)));
                                     let is_resizable = src_ref.arraybuffer_max_byte_length.is_some();
-                                    let buf_len = buffer_len(&buf_rc);
                                     drop(src_ref);
+                                    // §22.2.4.5 step 4: AllocateTypedArray (GetPrototypeFromConstructor) before ToIndex
+                                    let proto = match get_proto(interp) {
+                                        Ok(p) => p,
+                                        Err(e) => return Completion::Throw(e),
+                                    };
                                     let byte_offset = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
                                         let offset_val = match interp.to_index(&args[1]) {
                                             Completion::Normal(v) => v,
@@ -3858,12 +3991,7 @@ impl Interpreter {
                                         };
                                         if let JsValue::Number(n) = offset_val { n as usize } else { 0 }
                                     } else { 0 };
-                                    // §22.2.4.5 step 9: check detach after byteOffset ToIndex
-                                    if detached.get() {
-                                        return Completion::Throw(interp.create_type_error(
-                                            "Cannot construct TypedArray from detached ArrayBuffer"
-                                        ));
-                                    }
+                                    // §22.2.4.5 step 7: modulo check before detach check
                                     if byte_offset % bpe != 0 {
                                         return Completion::Throw(interp.create_error("RangeError",
                                             "start offset of typed array should be a multiple of BYTES_PER_ELEMENT"
@@ -3877,7 +4005,7 @@ impl Interpreter {
                                             Completion::Throw(e) => return Completion::Throw(e),
                                             _ => return Completion::Normal(JsValue::Undefined),
                                         };
-                                        // §22.2.4.5: check detach after length ToIndex
+                                        // §22.2.4.5 step 9: check detach after length ToIndex
                                         if detached.get() {
                                             return Completion::Throw(interp.create_type_error(
                                                 "Cannot construct TypedArray from detached ArrayBuffer"
@@ -3885,12 +4013,20 @@ impl Interpreter {
                                         }
                                         if let JsValue::Number(n) = len_val { n as usize } else { 0 }
                                     } else {
+                                        // §22.2.4.5 step 9: detach check (no length arg path)
+                                        if detached.get() {
+                                            return Completion::Throw(interp.create_type_error(
+                                                "Cannot construct TypedArray from detached ArrayBuffer"
+                                            ));
+                                        }
+                                        // Re-read buf_len in case side effects changed it
+                                        let buf_len = buffer_len(&buf_rc);
                                         if buf_len < byte_offset {
                                             return Completion::Throw(interp.create_error("RangeError",
                                                 "start offset is outside the bounds of the buffer"
                                             ));
                                         }
-                                        if !is_resizable && (buf_len - byte_offset) % bpe != 0 {
+                                        if !is_resizable && !(buf_len - byte_offset).is_multiple_of(bpe) {
                                             return Completion::Throw(interp.create_error("RangeError",
                                                 "byte length of typed array should be a multiple of BYTES_PER_ELEMENT"
                                             ));
@@ -3898,7 +4034,9 @@ impl Interpreter {
                                         (buf_len - byte_offset) / bpe
                                     };
                                     let byte_length = array_length * bpe;
-                                    if byte_offset + byte_length > buf_len {
+                                    // Re-read buffer length (side effects may have resized)
+                                    let current_buf_len = buffer_len(&buf_rc);
+                                    if byte_offset + byte_length > current_buf_len {
                                         return Completion::Throw(interp.create_error("RangeError", "invalid typed array length"));
                                     }
                                     let ta_info = TypedArrayInfo {
@@ -3909,10 +4047,6 @@ impl Interpreter {
                                         array_length,
                                         is_detached: detached,
                                         is_length_tracking,
-                                    };
-                                    let proto = match get_proto(interp) {
-                                        Ok(p) => p,
-                                        Err(e) => return Completion::Throw(e),
                                     };
                                     let buf_val = first.clone();
                                     let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, &proto);
@@ -4561,7 +4695,16 @@ impl Interpreter {
                     _ => None,
                 };
                 if let Some(kind) = kind {
-                    let proto = self.get_typed_array_prototype(kind);
+                    // Get prototype from the constructor's .prototype property
+                    // (handles cross-realm constructors correctly)
+                    let proto = match self.get_object_property(o.id, "prototype", ctor) {
+                        #[allow(clippy::map_clone)]
+                        Completion::Normal(JsValue::Object(po)) => {
+                            self.get_object(po.id).map(|p| p.clone())
+                        }
+                        _ => None,
+                    }
+                    .or_else(|| self.get_typed_array_prototype(kind));
                     let bpe = kind.bytes_per_element();
                     let new_buf = vec![0u8; len * bpe];
                     let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
@@ -4626,6 +4769,64 @@ impl Interpreter {
         Completion::Throw(
             self.create_type_error("TypedArray.from/of: constructor did not return a TypedArray"),
         )
+    }
+
+    /// Iterate using a known iterator function, collecting all values.
+    pub(crate) fn iterate_with_function(
+        &mut self,
+        source: &JsValue,
+        iter_fn: &JsValue,
+    ) -> Result<Vec<JsValue>, Completion> {
+        if !self.is_callable(iter_fn) {
+            return Err(Completion::Throw(
+                self.create_type_error("@@iterator is not a function"),
+            ));
+        }
+        let iter = match self.call_function(iter_fn, source, &[]) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(Completion::Throw(e)),
+            _ => return Err(Completion::Throw(self.create_type_error("bad iterator"))),
+        };
+        if !matches!(iter, JsValue::Object(_)) {
+            return Err(Completion::Throw(self.create_type_error(
+                "Result of the Symbol.iterator method is not an object",
+            )));
+        }
+        let mut values = Vec::new();
+        while let JsValue::Object(io) = &iter {
+            let next_fn = match self.get_object_property(io.id, "next", &iter) {
+                Completion::Normal(v) => v,
+                _ => break,
+            };
+            let result = match self.call_function(&next_fn, &iter, &[]) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(Completion::Throw(e)),
+                _ => break,
+            };
+            if !matches!(result, JsValue::Object(_)) {
+                return Err(Completion::Throw(
+                    self.create_type_error("Iterator result is not an object"),
+                ));
+            }
+            if let JsValue::Object(ro) = &result {
+                let done = match self.get_object_property(ro.id, "done", &result) {
+                    Completion::Normal(v) => self.to_boolean_val(&v),
+                    _ => true,
+                };
+                if done {
+                    break;
+                }
+                let value = match self.get_object_property(ro.id, "value", &result) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(Completion::Throw(e)),
+                    _ => JsValue::Undefined,
+                };
+                values.push(value);
+            } else {
+                break;
+            }
+        }
+        Ok(values)
     }
 
     pub(crate) fn collect_iterable_or_arraylike(

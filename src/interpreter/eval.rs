@@ -1372,14 +1372,6 @@ impl Interpreter {
         Completion::Normal(JsValue::Number(integer_index))
     }
 
-    pub(crate) fn to_length(val: &JsValue) -> f64 {
-        let len = to_number(val);
-        if len.is_nan() || len <= 0.0 {
-            return 0.0;
-        }
-        len.min(9007199254740991.0).floor() // 2^53 - 1
-    }
-
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_object(&mut self, val: &JsValue) -> Completion {
         match val {
@@ -14789,16 +14781,13 @@ impl Interpreter {
                                         && td.writable == Some(false)
                                         && result_desc.is_data_descriptor()
                                         && result_desc.writable != Some(true)
-                                    {
-                                        if let (Some(tv), Some(rv)) =
+                                        && let (Some(tv), Some(rv)) =
                                             (&td.value, &result_desc.value)
-                                        {
-                                            if !crate::interpreter::helpers::same_value(tv, rv) {
-                                                return Err(self.create_type_error(
-                                                        "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with different value for non-configurable non-writable property in the proxy target",
-                                                    ));
-                                            }
-                                        }
+                                        && !crate::interpreter::helpers::same_value(tv, rv)
+                                    {
+                                        return Err(self.create_type_error(
+                                            "'getOwnPropertyDescriptor' on proxy: trap returned descriptor with different value for non-configurable non-writable property in the proxy target",
+                                        ));
                                     }
                                     // Step 21b: non-configurable non-writable result but writable target
                                     if result_desc.is_data_descriptor()
@@ -14952,8 +14941,12 @@ impl Interpreter {
 
             // TypedArray [[OwnPropertyKeys]]: virtual integer indices
             if let Some(ref ta) = b.typed_array_info {
-                for i in 0..ta.array_length {
-                    int_keys_set.insert(i as u64, i.to_string());
+                use crate::interpreter::types::{is_typed_array_out_of_bounds, typed_array_length};
+                if !is_typed_array_out_of_bounds(ta) {
+                    let len = typed_array_length(ta);
+                    for i in 0..len {
+                        int_keys_set.insert(i as u64, i.to_string());
+                    }
                 }
             }
 

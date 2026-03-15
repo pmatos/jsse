@@ -5036,30 +5036,37 @@ impl Interpreter {
                                 }
                             }
                         } else if let Some(obj) = interp.get_object(obj_id) {
-                            // §20.1.2.6 / §7.3.16: TypedArray [[DefineOwnProperty]] returns
-                            // false for configurable:false on indexed elements, so freeze must
-                            // throw TypeError. For resizable-buffer-backed TAs, throw always.
+                            // TypedArray [[PreventExtensions]] — §10.4.5.2
                             {
                                 let b = obj.borrow();
-                                if b.typed_array_info.is_some() {
-                                    let has_elements = b
-                                        .typed_array_info
-                                        .as_ref()
-                                        .is_some_and(|ta| ta.array_length > 0);
-                                    let is_resizable = b
+                                if let Some(ref ta) = b.typed_array_info {
+                                    use crate::interpreter::types::is_typed_array_fixed_length;
+                                    let is_fixed = b
                                         .view_buffer_object_id
                                         .and_then(|buf_id| interp.get_object(buf_id))
-                                        .is_some_and(|buf| {
-                                            buf.borrow().arraybuffer_max_byte_length.is_some()
-                                        });
-                                    if has_elements || is_resizable {
+                                        .map(|buf| is_typed_array_fixed_length(ta, &buf.borrow()))
+                                        .unwrap_or(true);
+                                    if !is_fixed {
                                         return Completion::Throw(interp.create_type_error(
                                             "Cannot freeze array buffer views with elements",
                                         ));
                                     }
                                 }
                             }
+                            // §7.3.16 step 1: preventExtensions succeeds
                             obj.borrow_mut().extensible = false;
+                            // TA elements can't be made non-configurable/non-writable (§10.4.5.3)
+                            {
+                                let b = obj.borrow();
+                                if let Some(ref ta) = b.typed_array_info {
+                                    use crate::interpreter::types::typed_array_length;
+                                    if typed_array_length(ta) > 0 {
+                                        return Completion::Throw(interp.create_type_error(
+                                            "Cannot freeze array buffer views with elements",
+                                        ));
+                                    }
+                                }
+                            }
                             let keys_and_descs: Vec<(String, PropertyDescriptor)> = {
                                 let b = obj.borrow();
                                 b.properties
@@ -5936,6 +5943,24 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
+                        // TypedArray [[PreventExtensions]] — §10.4.5.2
+                        {
+                            let b = obj.borrow();
+                            if let Some(ref ta) = b.typed_array_info {
+                                let is_fixed = b.view_buffer_object_id
+                                    .and_then(|buf_id| interp.get_object(buf_id))
+                                    .map(|buf| {
+                                        use crate::interpreter::types::is_typed_array_fixed_length;
+                                        is_typed_array_fixed_length(ta, &buf.borrow())
+                                    })
+                                    .unwrap_or(true);
+                                if !is_fixed {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot prevent extensions on a TypedArray backed by a resizable buffer"
+                                    ));
+                                }
+                            }
+                        }
                         obj.borrow_mut().extensible = false;
                     }
                     Completion::Normal(target)
@@ -6150,7 +6175,38 @@ impl Interpreter {
                                 }
                             }
                         } else if let Some(obj) = interp.get_object(obj_id) {
+                            // TypedArray [[PreventExtensions]] — §10.4.5.2
+                            {
+                                let b = obj.borrow();
+                                if let Some(ref ta) = b.typed_array_info {
+                                    let is_fixed = b.view_buffer_object_id
+                                        .and_then(|buf_id| interp.get_object(buf_id))
+                                        .map(|buf| {
+                                            use crate::interpreter::types::is_typed_array_fixed_length;
+                                            is_typed_array_fixed_length(ta, &buf.borrow())
+                                        })
+                                        .unwrap_or(true);
+                                    if !is_fixed {
+                                        return Completion::Throw(interp.create_type_error(
+                                            "Cannot seal: preventExtensions returned false"
+                                        ));
+                                    }
+                                }
+                            }
+                            // §7.3.16 step 1: preventExtensions succeeds, set non-extensible
                             obj.borrow_mut().extensible = false;
+                            // TA elements can't be made non-configurable (§10.4.5.3)
+                            {
+                                let b = obj.borrow();
+                                if let Some(ref ta) = b.typed_array_info {
+                                    use crate::interpreter::types::typed_array_length;
+                                    if typed_array_length(ta) > 0 {
+                                        return Completion::Throw(interp.create_type_error(
+                                            "Cannot seal a TypedArray with elements"
+                                        ));
+                                    }
+                                }
+                            }
                             let keys: Vec<String> =
                                 obj.borrow().properties.keys().cloned().collect();
                             for key in keys {
@@ -7878,6 +7934,23 @@ impl Interpreter {
                         match interp.proxy_prevent_extensions(o.id) {
                             Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
                             Err(e) => return Completion::Throw(e),
+                        }
+                    }
+                    // TypedArray [[PreventExtensions]] — §10.4.5.2
+                    {
+                        let b = obj.borrow();
+                        if let Some(ref ta) = b.typed_array_info {
+                            let is_fixed = b
+                                .view_buffer_object_id
+                                .and_then(|buf_id| interp.get_object(buf_id))
+                                .map(|buf| {
+                                    use crate::interpreter::types::is_typed_array_fixed_length;
+                                    is_typed_array_fixed_length(ta, &buf.borrow())
+                                })
+                                .unwrap_or(true);
+                            if !is_fixed {
+                                return Completion::Normal(JsValue::Boolean(false));
+                            }
                         }
                     }
                     obj.borrow_mut().extensible = false;

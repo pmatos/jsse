@@ -150,10 +150,12 @@ impl BufferData {
         }
     }
 
+    #[allow(dead_code)]
     pub fn is_shared(&self) -> bool {
         matches!(self, BufferData::Shared(_))
     }
 
+    #[allow(dead_code)]
     pub fn shared_inner(&self) -> Option<&Arc<SharedBufferInner>> {
         match self {
             BufferData::Shared(s) => Some(s),
@@ -2737,6 +2739,19 @@ pub(crate) fn typed_array_length(ta: &TypedArrayInfo) -> usize {
             ta.array_length
         }
     }
+}
+
+/// §10.4.5 IsTypedArrayFixedLength(O)
+/// Returns true only if the TA has an explicit length on a non-resizable buffer,
+/// or an explicit length on a SharedArrayBuffer (which can only grow, not shrink).
+pub(crate) fn is_typed_array_fixed_length(ta: &TypedArrayInfo, buffer_obj: &JsObjectData) -> bool {
+    if !ta.is_length_tracking && buffer_obj.arraybuffer_max_byte_length.is_none() {
+        return true;
+    }
+    if !ta.is_length_tracking && buffer_obj.arraybuffer_is_shared {
+        return true;
+    }
+    false
 }
 
 pub(crate) fn is_typed_array_out_of_bounds(ta: &TypedArrayInfo) -> bool {
