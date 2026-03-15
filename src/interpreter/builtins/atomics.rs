@@ -19,10 +19,10 @@ fn check_ta_detached(interp: &mut Interpreter, ta_val: &JsValue) -> Result<(), J
         && let Some(obj) = interp.get_object(o.id)
     {
         let obj_ref = obj.borrow();
-        if let Some(ref info) = obj_ref.typed_array_info {
-            if info.is_detached.get() {
-                return Err(interp.create_type_error("typed array is detached"));
-            }
+        if let Some(ref info) = obj_ref.typed_array_info
+            && info.is_detached.get()
+        {
+            return Err(interp.create_type_error("typed array is detached"));
         }
     }
     Ok(())

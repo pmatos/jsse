@@ -375,6 +375,11 @@ fn to_temporal_plain_month_day(
             if cal != "iso8601" {
                 // Non-ISO calendar: convert the parsed ISO date to calendar fields
                 let iso_year = parsed.2.unwrap_or(1972);
+                if !(-271821..=275760).contains(&iso_year) {
+                    return Err(Completion::Throw(
+                        interp.create_range_error("ISO year out of range for non-ISO calendar"),
+                    ));
+                }
                 if let Some(fields) =
                     super::iso_to_calendar_fields(iso_year, parsed.0, parsed.1, &cal)
                 {

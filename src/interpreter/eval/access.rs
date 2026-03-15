@@ -364,9 +364,20 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                // Check null/undefined for chained access
                 if matches!(&inner_val, JsValue::Null | JsValue::Undefined) {
-                    return Completion::Normal(JsValue::Boolean(true));
+                    let key_str = match mp {
+                        MemberProperty::Dot(name) => name.clone(),
+                        MemberProperty::Computed(_) => "property".to_string(),
+                        MemberProperty::Private(name) => format!("#{name}"),
+                    };
+                    return Completion::Throw(self.create_type_error(&format!(
+                        "Cannot read properties of {} (reading '{key_str}')",
+                        if matches!(&inner_val, JsValue::Null) {
+                            "null"
+                        } else {
+                            "undefined"
+                        }
+                    )));
                 }
                 let key = match mp {
                     MemberProperty::Dot(name) => name.clone(),

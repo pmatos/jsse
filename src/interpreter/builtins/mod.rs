@@ -501,6 +501,10 @@ impl Interpreter {
                             if let Some(ref cv) = cause_val {
                                 $o.insert_builtin("cause".to_string(), cv.clone());
                             }
+                            $o.insert_builtin(
+                                "stack".to_string(),
+                                JsValue::String(JsString::from_str("")),
+                            );
                         };
                     }
 
@@ -787,6 +791,10 @@ impl Interpreter {
                             if let Some(ref cv) = cause_val {
                                 $o.insert_builtin("cause".to_string(), cv.clone());
                             }
+                            $o.insert_builtin(
+                                "stack".to_string(),
+                                JsValue::String(JsString::from_str("")),
+                            );
                         };
                     }
 
@@ -890,6 +898,10 @@ impl Interpreter {
                         }
                         o.insert_builtin("error".to_string(), error_val.clone());
                         o.insert_builtin("suppressed".to_string(), suppressed_val.clone());
+                        o.insert_builtin(
+                            "stack".to_string(),
+                            JsValue::String(JsString::from_str("")),
+                        );
                     }
                     let id = obj.borrow().id.unwrap();
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
@@ -1002,6 +1014,10 @@ impl Interpreter {
                                 if let Some(ref cv) = cause_val {
                                     $o.insert_builtin("cause".to_string(), cv.clone());
                                 }
+                                $o.insert_builtin(
+                                    "stack".to_string(),
+                                    JsValue::String(JsString::from_str("")),
+                                );
                             };
                         }
 
@@ -3602,20 +3618,19 @@ impl Interpreter {
                 }
                 let obj = interp.create_object();
                 obj.borrow_mut().prototype = None;
-                obj.borrow_mut().insert_builtin(
-                    "rawJSON".to_string(),
-                    JsValue::String(JsString::from_str(&text)),
-                );
+                {
+                    let mut o = obj.borrow_mut();
+                    let desc = PropertyDescriptor::data(
+                        JsValue::String(JsString::from_str(&text)),
+                        false,
+                        true,
+                        false,
+                    );
+                    o.property_order.push("rawJSON".to_string());
+                    o.properties.insert("rawJSON".to_string(), desc);
+                }
                 obj.borrow_mut().extensible = false;
                 obj.borrow_mut().is_raw_json = true;
-                // Freeze: make all properties non-writable, non-configurable
-                let keys: Vec<String> = obj.borrow().property_order.clone();
-                for k in keys {
-                    if let Some(desc) = obj.borrow_mut().properties.get_mut(&k) {
-                        desc.writable = Some(false);
-                        desc.configurable = Some(false);
-                    }
-                }
                 let id = obj.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             },

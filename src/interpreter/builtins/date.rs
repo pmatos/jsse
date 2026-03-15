@@ -1617,6 +1617,7 @@ impl Interpreter {
                 "name".to_string(),
                 JsValue::String(JsString::from_str(name)),
             );
+            o.insert_builtin("stack".to_string(), JsValue::String(JsString::from_str("")));
         }
         let id = obj.borrow().id.unwrap();
         JsValue::Object(crate::types::JsObject { id })

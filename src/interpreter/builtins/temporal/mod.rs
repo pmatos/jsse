@@ -3080,6 +3080,11 @@ pub(crate) fn parse_temporal_year_month_string(
                 let mut calendar = None;
                 pos = parse_annotations_extract_calendar(bytes, pos, &mut calendar)?;
                 if pos == bytes.len() {
+                    if let Some(ref cal) = calendar
+                        && cal != "iso8601"
+                    {
+                        return None;
+                    }
                     return Some((year, month, None, calendar, false, false));
                 }
             }
@@ -3119,6 +3124,11 @@ pub(crate) fn parse_temporal_month_day_string(
             && day >= 1
             && day <= iso_days_in_month(1972, month)
         {
+            if let Some(ref cal) = calendar
+                && cal != "iso8601"
+            {
+                return None;
+            }
             return Some((month, day, None, calendar, false));
         }
     }
@@ -3141,6 +3151,11 @@ pub(crate) fn parse_temporal_month_day_string(
                 && day >= 1
                 && day <= iso_days_in_month(1972, month)
             {
+                if let Some(ref cal) = calendar
+                    && cal != "iso8601"
+                {
+                    return None;
+                }
                 return Some((month, day, None, calendar, false));
             }
         }
@@ -3165,6 +3180,11 @@ pub(crate) fn parse_temporal_month_day_string(
                 && day >= 1
                 && day <= iso_days_in_month(1972, month)
             {
+                if let Some(ref cal) = calendar
+                    && cal != "iso8601"
+                {
+                    return None;
+                }
                 return Some((month, day, None, calendar, false));
             }
         }
