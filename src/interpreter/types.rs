@@ -6,7 +6,7 @@ use std::cell::{Cell, RefCell, UnsafeCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 
 static NEXT_SAB_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -2701,6 +2701,11 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
     if offset + ta.kind.bytes_per_element() > buf.len() {
         return JsValue::Undefined;
     }
+
+    if let BufferData::Shared(s) = &*buf {
+        return typed_array_get_index_shared(ta.kind, s, offset);
+    }
+
     match ta.kind {
         TypedArrayKind::Int8 => JsValue::Number(buf[offset] as i8 as f64),
         TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => JsValue::Number(buf[offset] as f64),
@@ -2761,12 +2766,115 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
     }
 }
 
+fn shared_load_byte(s: &SharedBufferInner, offset: usize) -> u8 {
+    unsafe { AtomicU8::from_ptr(s.as_ptr().add(offset)).load(Ordering::SeqCst) }
+}
+
+fn typed_array_get_index_shared(
+    kind: TypedArrayKind,
+    s: &SharedBufferInner,
+    offset: usize,
+) -> JsValue {
+    match kind {
+        TypedArrayKind::Int8 => JsValue::Number(shared_load_byte(s, offset) as i8 as f64),
+        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => {
+            JsValue::Number(shared_load_byte(s, offset) as f64)
+        }
+        TypedArrayKind::Int16 => {
+            let v =
+                i16::from_ne_bytes([shared_load_byte(s, offset), shared_load_byte(s, offset + 1)]);
+            JsValue::Number(v as f64)
+        }
+        TypedArrayKind::Uint16 => {
+            let v =
+                u16::from_ne_bytes([shared_load_byte(s, offset), shared_load_byte(s, offset + 1)]);
+            JsValue::Number(v as f64)
+        }
+        TypedArrayKind::Int32 => {
+            let v = i32::from_ne_bytes([
+                shared_load_byte(s, offset),
+                shared_load_byte(s, offset + 1),
+                shared_load_byte(s, offset + 2),
+                shared_load_byte(s, offset + 3),
+            ]);
+            JsValue::Number(v as f64)
+        }
+        TypedArrayKind::Uint32 => {
+            let v = u32::from_ne_bytes([
+                shared_load_byte(s, offset),
+                shared_load_byte(s, offset + 1),
+                shared_load_byte(s, offset + 2),
+                shared_load_byte(s, offset + 3),
+            ]);
+            JsValue::Number(v as f64)
+        }
+        TypedArrayKind::Float32 => {
+            let v = f32::from_ne_bytes([
+                shared_load_byte(s, offset),
+                shared_load_byte(s, offset + 1),
+                shared_load_byte(s, offset + 2),
+                shared_load_byte(s, offset + 3),
+            ]);
+            JsValue::Number(v as f64)
+        }
+        TypedArrayKind::Float64 => {
+            let bytes = [
+                shared_load_byte(s, offset),
+                shared_load_byte(s, offset + 1),
+                shared_load_byte(s, offset + 2),
+                shared_load_byte(s, offset + 3),
+                shared_load_byte(s, offset + 4),
+                shared_load_byte(s, offset + 5),
+                shared_load_byte(s, offset + 6),
+                shared_load_byte(s, offset + 7),
+            ];
+            JsValue::Number(f64::from_ne_bytes(bytes))
+        }
+        TypedArrayKind::BigInt64 => {
+            let bytes = [
+                shared_load_byte(s, offset),
+                shared_load_byte(s, offset + 1),
+                shared_load_byte(s, offset + 2),
+                shared_load_byte(s, offset + 3),
+                shared_load_byte(s, offset + 4),
+                shared_load_byte(s, offset + 5),
+                shared_load_byte(s, offset + 6),
+                shared_load_byte(s, offset + 7),
+            ];
+            JsValue::BigInt(crate::types::JsBigInt {
+                value: num_bigint::BigInt::from(i64::from_ne_bytes(bytes)),
+            })
+        }
+        TypedArrayKind::BigUint64 => {
+            let bytes = [
+                shared_load_byte(s, offset),
+                shared_load_byte(s, offset + 1),
+                shared_load_byte(s, offset + 2),
+                shared_load_byte(s, offset + 3),
+                shared_load_byte(s, offset + 4),
+                shared_load_byte(s, offset + 5),
+                shared_load_byte(s, offset + 6),
+                shared_load_byte(s, offset + 7),
+            ];
+            JsValue::BigInt(crate::types::JsBigInt {
+                value: num_bigint::BigInt::from(u64::from_ne_bytes(bytes)),
+            })
+        }
+    }
+}
+
 pub(crate) fn typed_array_set_index(ta: &TypedArrayInfo, idx: usize, value: &JsValue) -> bool {
     let mut buf = ta.buffer.borrow_mut();
     let offset = ta.byte_offset + idx * ta.kind.bytes_per_element();
     if offset + ta.kind.bytes_per_element() > buf.len() {
         return false;
     }
+
+    if let BufferData::Shared(s) = &*buf {
+        typed_array_set_index_shared(ta.kind, s, offset, value);
+        return true;
+    }
+
     match ta.kind {
         TypedArrayKind::Int8 => {
             let v = to_int8(value);
@@ -2814,6 +2922,78 @@ pub(crate) fn typed_array_set_index(ta: &TypedArrayInfo, idx: usize, value: &JsV
         }
     }
     true
+}
+
+fn shared_store_byte(s: &SharedBufferInner, offset: usize, value: u8) {
+    unsafe { AtomicU8::from_ptr(s.as_ptr().add(offset)).store(value, Ordering::SeqCst) }
+}
+
+fn typed_array_set_index_shared(
+    kind: TypedArrayKind,
+    s: &SharedBufferInner,
+    offset: usize,
+    value: &JsValue,
+) {
+    match kind {
+        TypedArrayKind::Int8 => {
+            let v = to_int8(value);
+            shared_store_byte(s, offset, v as u8);
+        }
+        TypedArrayKind::Uint8 => {
+            let v = to_uint8(value);
+            shared_store_byte(s, offset, v);
+        }
+        TypedArrayKind::Uint8Clamped => {
+            let v = to_uint8_clamped(value);
+            shared_store_byte(s, offset, v);
+        }
+        TypedArrayKind::Int16 => {
+            let v = to_int16(value).to_ne_bytes();
+            shared_store_byte(s, offset, v[0]);
+            shared_store_byte(s, offset + 1, v[1]);
+        }
+        TypedArrayKind::Uint16 => {
+            let v = to_uint16(value).to_ne_bytes();
+            shared_store_byte(s, offset, v[0]);
+            shared_store_byte(s, offset + 1, v[1]);
+        }
+        TypedArrayKind::Int32 => {
+            let v = to_int32(value).to_ne_bytes();
+            for (i, b) in v.iter().copied().enumerate() {
+                shared_store_byte(s, offset + i, b);
+            }
+        }
+        TypedArrayKind::Uint32 => {
+            let v = to_uint32(value).to_ne_bytes();
+            for (i, b) in v.iter().copied().enumerate() {
+                shared_store_byte(s, offset + i, b);
+            }
+        }
+        TypedArrayKind::Float32 => {
+            let v = (to_number(value) as f32).to_ne_bytes();
+            for (i, b) in v.iter().copied().enumerate() {
+                shared_store_byte(s, offset + i, b);
+            }
+        }
+        TypedArrayKind::Float64 => {
+            let v = to_number(value).to_ne_bytes();
+            for (i, b) in v.iter().copied().enumerate() {
+                shared_store_byte(s, offset + i, b);
+            }
+        }
+        TypedArrayKind::BigInt64 => {
+            let v = to_bigint64(value).to_ne_bytes();
+            for (i, b) in v.iter().copied().enumerate() {
+                shared_store_byte(s, offset + i, b);
+            }
+        }
+        TypedArrayKind::BigUint64 => {
+            let v = to_biguint64(value).to_ne_bytes();
+            for (i, b) in v.iter().copied().enumerate() {
+                shared_store_byte(s, offset + i, b);
+            }
+        }
+    }
 }
 
 fn to_number(v: &JsValue) -> f64 {
