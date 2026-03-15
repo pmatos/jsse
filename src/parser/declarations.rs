@@ -721,6 +721,13 @@ impl<'a> Parser<'a> {
                     None
                 }
             }
+            ClassElement::AutoAccessor(p) => {
+                if let PropertyKey::Private(name) = &p.key {
+                    Some((name.clone(), PrivateNameKind::Other, p.is_static))
+                } else {
+                    None
+                }
+            }
             ClassElement::StaticBlock(_) => None,
         }
     }
@@ -905,7 +912,6 @@ impl<'a> Parser<'a> {
                     Token::LeftParen | Token::Assign | Token::Semicolon | Token::RightBrace
                 );
             if next_is_field_name {
-                // auto-accessor field: parse as a normal field (discard accessor semantics)
                 let (key, computed) = self.parse_property_name()?;
                 let value = if self.current == Token::Assign {
                     self.advance()?;
@@ -920,7 +926,7 @@ impl<'a> Parser<'a> {
                     None
                 };
                 self.eat_semicolon()?;
-                return Ok(ClassElement::Property(ClassProperty {
+                return Ok(ClassElement::AutoAccessor(ClassProperty {
                     key,
                     value,
                     is_static,

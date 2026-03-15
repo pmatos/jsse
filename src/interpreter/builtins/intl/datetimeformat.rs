@@ -2134,6 +2134,48 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
 
 const RANGE_SEP: &str = "\u{2009}\u{2013}\u{2009}";
 
+/// For DMY locales, formatRange zero-pads numeric months when both day and
+/// month are present (PlainDate, MonthDay) but not for time-containing or
+/// year-month-only formats.
+fn should_pad_range_month(opts: &DtfOptions) -> bool {
+    let is_numeric_month = opts.month.as_ref().is_some_and(|m| m == "numeric");
+    let has_day = opts.day.is_some();
+    let has_time = opts.hour.is_some() || opts.minute.is_some() || opts.second.is_some();
+    let (order, _) = locale_date_order(&opts.locale);
+    is_numeric_month && has_day && !has_time && order[0] == 'd'
+}
+
+fn pad_month_in_parts(parts: &mut [(String, String)]) {
+    for (typ, val) in parts.iter_mut() {
+        if typ == "month"
+            && let Ok(n) = val.parse::<u32>()
+            && n < 10
+        {
+            *val = format!("0{n}");
+        }
+    }
+}
+
+/// For DMY MonthDay ranges, strip trailing separator from the start range
+/// parts. The trailing separator appears only after the end range.
+fn is_dmy_month_day_range(opts: &DtfOptions) -> bool {
+    let has_day = opts.day.is_some();
+    let has_month = opts.month.is_some();
+    let has_year = opts.year.is_some();
+    let has_time = opts.hour.is_some() || opts.minute.is_some() || opts.second.is_some();
+    let (order, _) = locale_date_order(&opts.locale);
+    has_day && has_month && !has_year && !has_time && order[0] == 'd'
+}
+
+fn strip_trailing_separator(parts: &mut Vec<(String, String)>) {
+    if let Some(last) = parts.last()
+        && last.0 == "literal"
+        && last.1.len() <= 2
+    {
+        parts.pop();
+    }
+}
+
 fn format_range_with_options(start_ms: f64, end_ms: f64, opts: &DtfOptions) -> String {
     let start_str = format_with_options(start_ms, opts);
     let end_str = format_with_options(end_ms, opts);
@@ -2209,8 +2251,20 @@ fn format_range_with_options(start_ms: f64, end_ms: f64, opts: &DtfOptions) -> S
     }
 
     // Same-day collapsing: if date parts are the same, show "date, time1 – time2"
-    let start_parts = format_to_parts_with_options(start_ms, opts);
-    let end_parts = format_to_parts_with_options(end_ms, opts);
+    let mut start_parts = format_to_parts_with_options(start_ms, opts);
+    let mut end_parts = format_to_parts_with_options(end_ms, opts);
+
+    let pad_month = should_pad_range_month(opts);
+    if pad_month {
+        pad_month_in_parts(&mut start_parts);
+        pad_month_in_parts(&mut end_parts);
+    }
+
+    let md_range = is_dmy_month_day_range(opts);
+    if md_range {
+        strip_trailing_separator(&mut start_parts);
+    }
+
     let date_types = ["year", "month", "day", "weekday", "era", "relatedYear"];
     let time_types = ["hour", "minute", "second", "fractionalSecond", "dayPeriod"];
     let start_date: Vec<_> = start_parts
@@ -2258,6 +2312,18 @@ fn format_range_with_options(start_ms: f64, end_ms: f64, opts: &DtfOptions) -> S
         return result;
     }
 
+    if pad_month {
+        let mut s = String::new();
+        for (_, v) in &start_parts {
+            s.push_str(v);
+        }
+        s.push_str(RANGE_SEP);
+        for (_, v) in &end_parts {
+            s.push_str(v);
+        }
+        return s;
+    }
+
     format!("{}{}{}", start_str, RANGE_SEP, end_str)
 }
 
@@ -2266,8 +2332,25 @@ fn format_range_to_parts_with_options(
     end_ms: f64,
     opts: &DtfOptions,
 ) -> Vec<(String, String, String)> {
-    let start_parts = format_to_parts_with_options(start_ms, opts);
-    let end_parts = format_to_parts_with_options(end_ms, opts);
+    let mut start_parts = format_to_parts_with_options(start_ms, opts);
+    let mut end_parts = format_to_parts_with_options(end_ms, opts);
+
+    if should_pad_range_month(opts) {
+        pad_month_in_parts(&mut start_parts);
+        pad_month_in_parts(&mut end_parts);
+    }
+
+    let md_range = is_dmy_month_day_range(opts);
+    let mut trailing_sep: Option<(String, String)> = None;
+    if md_range {
+        strip_trailing_separator(&mut start_parts);
+        if let Some(last) = end_parts.last()
+            && last.0 == "literal"
+            && last.1.len() <= 2
+        {
+            trailing_sep = Some(end_parts.pop().unwrap());
+        }
+    }
 
     if start_parts == end_parts {
         return start_parts
@@ -2483,6 +2566,9 @@ fn format_range_to_parts_with_options(
     ));
     for (t, v) in &end_parts {
         all.push((t.clone(), v.clone(), "endRange".to_string()));
+    }
+    if let Some((t, v)) = trailing_sep {
+        all.push((t, v, "shared".to_string()));
     }
     all
 }
@@ -4145,6 +4231,23 @@ fn detect_temporal_type(interp: &Interpreter, val: &JsValue) -> Option<TemporalT
     None
 }
 
+fn detect_temporal_calendar(interp: &Interpreter, val: &JsValue) -> Option<String> {
+    if let JsValue::Object(o) = val
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let td = obj.borrow().temporal_data.clone();
+        return match td {
+            Some(TemporalData::PlainDate { calendar, .. }) => Some(calendar),
+            Some(TemporalData::PlainDateTime { calendar, .. }) => Some(calendar),
+            Some(TemporalData::PlainYearMonth { calendar, .. }) => Some(calendar),
+            Some(TemporalData::PlainMonthDay { calendar, .. }) => Some(calendar),
+            Some(TemporalData::ZonedDateTime { calendar, .. }) => Some(calendar),
+            _ => None,
+        };
+    }
+    None
+}
+
 fn has_explicit_date_time_opts(opts: &DtfOptions) -> bool {
     opts.has_explicit_components
 }
@@ -4853,6 +4956,17 @@ impl Interpreter {
                         "Temporal object does not overlap with DateTimeFormat options",
                     ));
                 }
+                if start_tt.is_some() && end_tt.is_some() {
+                    let sc = detect_temporal_calendar(interp, &start_arg);
+                    let ec = detect_temporal_calendar(interp, &end_arg);
+                    if let (Some(s), Some(e)) = (&sc, &ec)
+                        && s != e
+                    {
+                        return Completion::Throw(interp.create_range_error(
+                            "formatRange arguments must use the same calendar",
+                        ));
+                    }
+                }
                 let start_ms = match resolve_date_value(interp, &start_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -4942,6 +5056,17 @@ impl Interpreter {
                             "Temporal object does not overlap with DateTimeFormat options",
                         ));
                     }
+                if start_tt.is_some() && end_tt.is_some() {
+                    let sc = detect_temporal_calendar(interp, &start_arg);
+                    let ec = detect_temporal_calendar(interp, &end_arg);
+                    if let (Some(s), Some(e)) = (&sc, &ec)
+                        && s != e
+                    {
+                        return Completion::Throw(interp.create_range_error(
+                            "formatRangeToParts arguments must use the same calendar",
+                        ));
+                    }
+                }
                 let start_ms = match resolve_date_value(interp, &start_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),

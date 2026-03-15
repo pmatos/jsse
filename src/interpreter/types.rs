@@ -1249,6 +1249,8 @@ pub enum PrivateFieldDef {
 pub enum InstanceFieldDef {
     Private(PrivateFieldDef),
     Public(String, Option<Expression>),
+    /// Auto accessor backing storage initialization: (storage_slot_name, initializer)
+    AutoAccessorStorage(String, Option<Expression>),
 }
 
 #[derive(Debug, Clone)]

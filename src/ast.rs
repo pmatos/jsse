@@ -423,6 +423,7 @@ pub struct ClassExpr {
 pub enum ClassElement {
     Method(ClassMethod),
     Property(ClassProperty),
+    AutoAccessor(ClassProperty),
     StaticBlock(Vec<Statement>),
 }
 

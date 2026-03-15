@@ -59,6 +59,7 @@ pub struct Interpreter {
     // microtask roots are now stored inline in the microtask_queue tuples
     pub(crate) class_private_names: Vec<std::collections::HashMap<String, String>>,
     next_class_brand_id: u64,
+    next_auto_accessor_id: u64,
     pub(crate) regexp_legacy_input: String,
     pub(crate) regexp_legacy_last_match: String,
     pub(crate) regexp_legacy_last_paren: String,
@@ -192,6 +193,7 @@ impl Interpreter {
             gc_temp_roots: Vec::new(),
             class_private_names: Vec::new(),
             next_class_brand_id: 0,
+            next_auto_accessor_id: 0,
             regexp_legacy_input: String::new(),
             regexp_legacy_last_match: String::new(),
             regexp_legacy_last_paren: String::new(),

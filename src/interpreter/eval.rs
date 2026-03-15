@@ -270,6 +270,22 @@ impl Interpreter {
                         self, &this_val, key, val,
                     )?;
                 }
+                InstanceFieldDef::AutoAccessorStorage(slot_name, initializer) => {
+                    let val = if let Some(init) = initializer {
+                        match self.eval_expr(init, &init_env) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Err(e),
+                            _ => JsValue::Undefined,
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+                    if let Some(obj) = self.get_object(this_obj_id) {
+                        obj.borrow_mut()
+                            .private_fields
+                            .insert(slot_name.clone(), PrivateElement::Field(val));
+                    }
+                }
                 _ => {} // Methods/accessors handled in pass 1
             }
         }
@@ -13182,6 +13198,21 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     }
+                    InstanceFieldDef::AutoAccessorStorage(slot_name, initializer) => {
+                        let val = if let Some(init) = initializer {
+                            match self.eval_expr(init, &init_env) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
+                        if let Some(obj) = self.get_object(new_obj_id) {
+                            obj.borrow_mut()
+                                .private_fields
+                                .insert(slot_name.clone(), PrivateElement::Field(val));
+                        }
+                    }
                     _ => {} // Methods/accessors handled in pass 1
                 }
             }
@@ -13478,6 +13509,21 @@ impl Interpreter {
                             };
                             if let Some(obj) = self.get_object(new_obj_id) {
                                 obj.borrow_mut().insert_value(key.clone(), val);
+                            }
+                        }
+                        InstanceFieldDef::AutoAccessorStorage(slot_name, initializer) => {
+                            let val = if let Some(init) = initializer {
+                                match self.eval_expr(init, &init_env) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                }
+                            } else {
+                                JsValue::Undefined
+                            };
+                            if let Some(obj) = self.get_object(new_obj_id) {
+                                obj.borrow_mut()
+                                    .private_fields
+                                    .insert(slot_name.clone(), PrivateElement::Field(val));
                             }
                         }
                         _ => {} // Methods/accessors handled in pass 1

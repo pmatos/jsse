@@ -218,6 +218,13 @@ impl Interpreter {
                             .or_insert_with(|| format!("{n}#{brand_id}"));
                     }
                 }
+                ClassElement::AutoAccessor(p) => {
+                    if let PropertyKey::Private(n) = &p.key {
+                        pn_set
+                            .entry(n.clone())
+                            .or_insert_with(|| format!("{n}#{brand_id}"));
+                    }
+                }
                 ClassElement::StaticBlock(_) => {}
             }
         }
@@ -488,6 +495,7 @@ impl Interpreter {
             // (source_name, branded_name, initializer)
             PrivateField(String, String, Option<Expression>),
             Block(Vec<Statement>),
+            AutoAccessor(String, String, Option<Expression>),
         }
         let mut deferred_static: Vec<DeferredStatic> = Vec::new();
 
@@ -856,6 +864,136 @@ impl Interpreter {
                         }
                     }
                 }
+                ClassElement::AutoAccessor(p) => {
+                    // Private auto accessors: treat as private field (backing storage = the field itself)
+                    if let PropertyKey::Private(name) = &p.key {
+                        let branded = self.resolve_private_name(name, &class_env);
+                        if !p.is_static {
+                            if let JsValue::Object(ref o) = ctor_val
+                                && let Some(func_obj) = self.get_object(o.id)
+                            {
+                                func_obj.borrow_mut().class_instance_field_defs.push(
+                                    InstanceFieldDef::Private(PrivateFieldDef::Field {
+                                        name: branded,
+                                        initializer: p.value.clone(),
+                                    }),
+                                );
+                            }
+                        } else {
+                            deferred_static.push(DeferredStatic::PrivateField(
+                                name.clone(),
+                                branded,
+                                p.value.clone(),
+                            ));
+                        }
+                        continue;
+                    }
+                    let key = match &p.key {
+                        PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
+                        PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
+                        PropertyKey::Computed(expr) => match self.eval_expr(expr, &class_env) {
+                            Completion::Normal(v) => match self.to_property_key(&v) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            },
+                            other => return other,
+                        },
+                        PropertyKey::Private(_) => unreachable!(),
+                    };
+                    let slot_id = self.next_auto_accessor_id;
+                    self.next_auto_accessor_id += 1;
+                    let storage_slot = format!("__auto_accessor_{slot_id}");
+
+                    let getter_slot = storage_slot.clone();
+                    let getter_func = JsFunction::native(
+                        format!("get {key}"),
+                        0,
+                        move |interp, this, _args| {
+                            let obj_id = match this {
+                                JsValue::Object(o) => o.id,
+                                _ => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot read private member from an object whose class did not declare it",
+                                    ));
+                                }
+                            };
+                            if let Some(obj) = interp.get_object(obj_id)
+                                && let Some(PrivateElement::Field(v)) =
+                                    obj.borrow().private_fields.get(&getter_slot)
+                            {
+                                return Completion::Normal(v.clone());
+                            }
+                            Completion::Throw(interp.create_type_error(
+                                "Cannot read private member from an object whose class did not declare it",
+                            ))
+                        },
+                    );
+                    let getter_val = self.create_function(getter_func);
+
+                    let setter_slot = storage_slot.clone();
+                    let setter_func = JsFunction::native(
+                        format!("set {key}"),
+                        1,
+                        move |interp, this, args| {
+                            let obj_id = match this {
+                                JsValue::Object(o) => o.id,
+                                _ => {
+                                    return Completion::Throw(interp.create_type_error(
+                                        "Cannot write private member to an object whose class did not declare it",
+                                    ));
+                                }
+                            };
+                            let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                            if let Some(obj) = interp.get_object(obj_id)
+                                && obj.borrow().private_fields.contains_key(&setter_slot)
+                            {
+                                obj.borrow_mut()
+                                    .private_fields
+                                    .insert(setter_slot.clone(), PrivateElement::Field(val));
+                                return Completion::Normal(JsValue::Undefined);
+                            }
+                            Completion::Throw(interp.create_type_error(
+                                "Cannot write private member to an object whose class did not declare it",
+                            ))
+                        },
+                    );
+                    let setter_val = self.create_function(setter_func);
+
+                    let target = if p.is_static {
+                        if let JsValue::Object(ref o) = ctor_val {
+                            self.get_object(o.id)
+                        } else {
+                            None
+                        }
+                    } else {
+                        proto_obj.clone()
+                    };
+                    if let Some(ref t) = target {
+                        let desc = PropertyDescriptor {
+                            value: None,
+                            writable: None,
+                            get: Some(getter_val),
+                            set: Some(setter_val),
+                            enumerable: Some(false),
+                            configurable: Some(true),
+                        };
+                        t.borrow_mut().define_own_property(key.clone(), desc);
+                    }
+
+                    if p.is_static {
+                        deferred_static.push(DeferredStatic::AutoAccessor(
+                            key,
+                            storage_slot,
+                            p.value.clone(),
+                        ));
+                    } else if let JsValue::Object(ref o) = ctor_val
+                        && let Some(func_obj) = self.get_object(o.id)
+                    {
+                        func_obj.borrow_mut().class_instance_field_defs.push(
+                            InstanceFieldDef::AutoAccessorStorage(storage_slot, p.value.clone()),
+                        );
+                    }
+                }
                 ClassElement::StaticBlock(stmts) => {
                     // Defer static block execution to phase 2
                     deferred_static.push(DeferredStatic::Block(stmts.clone()));
@@ -925,6 +1063,24 @@ impl Interpreter {
                             .borrow_mut()
                             .private_fields
                             .insert(branded, PrivateElement::Field(val));
+                    }
+                }
+                DeferredStatic::AutoAccessor(_key, storage_slot, initializer) => {
+                    let val = if let Some(ref expr) = initializer {
+                        match self.eval_expr(expr, &static_field_env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+                    if let JsValue::Object(ref o) = ctor_val
+                        && let Some(func_obj) = self.get_object(o.id)
+                    {
+                        func_obj
+                            .borrow_mut()
+                            .private_fields
+                            .insert(storage_slot, PrivateElement::Field(val));
                     }
                 }
                 DeferredStatic::Block(stmts) => {

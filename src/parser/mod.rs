@@ -622,6 +622,13 @@ impl<'a> Parser<'a> {
                         return true;
                     }
                 }
+                crate::ast::ClassElement::AutoAccessor(p) => {
+                    if let crate::ast::PropertyKey::Computed(e) = &p.key
+                        && Self::contains_arguments(e)
+                    {
+                        return true;
+                    }
+                }
                 crate::ast::ClassElement::StaticBlock(_) => {}
             }
         }

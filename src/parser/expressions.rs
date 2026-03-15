@@ -2180,7 +2180,9 @@ impl<'a> Parser<'a> {
             if self.current == Token::Arrow && !self.prev_line_terminator {
                 self.advance()?;
                 for e in &exprs {
-                    if Self::expr_contains_await_identifier(e) {
+                    if Self::expr_contains_await_identifier(e)
+                        || Self::expr_contains_await_expression(e)
+                    {
                         return Err(
                             self.error("'await' is not allowed in async arrow formal parameters")
                         );

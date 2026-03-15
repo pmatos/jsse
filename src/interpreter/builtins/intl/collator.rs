@@ -116,7 +116,12 @@ pub(crate) fn do_compare(
     let mut prefs = CollatorPreferences::from(&locale);
 
     if usage == "search" {
-        prefs.collation_type = Some(CollationType::Search);
+        let lang = locale.id.language.as_str();
+        if lang == "de" {
+            prefs.collation_type = Some(CollationType::Phonebk);
+        } else {
+            prefs.collation_type = Some(CollationType::Search);
+        }
     } else if collation != "default" {
         match collation {
             "phonebk" => prefs.collation_type = Some(CollationType::Phonebk),
