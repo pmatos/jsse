@@ -52,6 +52,9 @@ fn sanitize_native_fn_name(name: &str) -> String {
         return "set ".to_string();
     }
     // Handle bracket notation like "[Symbol.iterator]"
+    if name.starts_with('[') && name.ends_with(']') {
+        return name.to_string();
+    }
     if name.starts_with('[') {
         return String::new();
     }

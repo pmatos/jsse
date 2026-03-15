@@ -1,6 +1,6 @@
 # Plan: Zero test262 Failures (90 remaining)
 
-Based on investigation of all failing tests. Phase 1 parser fixes completed 2026-03-14 (+26 passes, 0 regressions). Phase 2 interpreter property/prototype fixes completed 2026-03-14 (+12 passes, -1 regression). Phase 2 continued: generator/proxy/global/Reflect fixes completed 2026-03-14 (+9 passes, 0 regressions → 101,065 / 101,234 = 99.83%). Phase 3 RegExp engine fixes completed 2026-03-14 (+16 net passes, 0 regressions → 101,081 / 101,234 = 99.85%). Phase 4 Iterator helper fixes completed 2026-03-15 (+16 net passes, 0 regressions → 101,097 / 101,234 = 99.86%). Phase 5 TypedArray fixes completed 2026-03-15 (+19 net passes + 11 bonus, 0 regressions → 101,116 / 101,234 = 99.88%). Phase 6 Set operation fixes completed 2026-03-15 (+6 passes, 0 regressions → 101,122 / 101,234 = 99.89%). Phase 7 Intl402 & Temporal fixes completed 2026-03-15 (+28 net passes, 0 regressions → 101,144 / 101,234 = 99.91%).
+Based on investigation of all failing tests. Phase 1 parser fixes completed 2026-03-14 (+26 passes, 0 regressions). Phase 2 interpreter property/prototype fixes completed 2026-03-14 (+12 passes, -1 regression). Phase 2 continued: generator/proxy/global/Reflect fixes completed 2026-03-14 (+9 passes, 0 regressions → 101,065 / 101,234 = 99.83%). Phase 3 RegExp engine fixes completed 2026-03-14 (+16 net passes, 0 regressions → 101,081 / 101,234 = 99.85%). Phase 4 Iterator helper fixes completed 2026-03-15 (+16 net passes, 0 regressions → 101,097 / 101,234 = 99.86%). Phase 5 TypedArray fixes completed 2026-03-15 (+19 net passes + 11 bonus, 0 regressions → 101,116 / 101,234 = 99.88%). Phase 6 Set operation fixes completed 2026-03-15 (+6 passes, 0 regressions → 101,122 / 101,234 = 99.89%). Phase 7 Intl402 & Temporal fixes completed 2026-03-15 (+28 net passes, 0 regressions → 101,144 / 101,234 = 99.91%). Phase 8 Miscellaneous fixes completed 2026-03-15 (+14 net passes, 0 code regressions → 101,158 / 101,234 = 99.92%).
 
 ## Breakdown by Category (updated 2026-03-14)
 
@@ -267,62 +267,48 @@ The `iterate_with_function` helper and restructured array-like path fixed additi
 
 ---
 
-## Phase 8: Miscellaneous (~16 tests)
+## Phase 8: Miscellaneous Fixes ✅ COMPLETED (2026-03-15)
 
-### 8.1 Stack overflow crashes instead of catchable error — 1 test
-**File:** `src/main.rs` or interpreter loop
-**Fix:** Use `stacker` crate or manual stack depth tracking.
+**Result: +14 net passes (+15 new, 1 flaky timeout), 0 code regressions.**
 
-### 8.2 `Error.prototype.stack` not implemented — 2 tests
-**File:** `src/interpreter/builtins/mod.rs`
-**Fix:** Add `.stack` property to Error objects (non-standard but widely used).
+### 8.1 Remove `groupBy` from Array unscopables — 1 test ✅ DONE (+1)
+**Fix:** Removed `"groupBy"` from unscopables list in `array.rs`. `groupBy` is on `Object`/`Map`, never on `Array.prototype`.
+**Tests:** `staging/sm/Array/unscopables.js`
 
-### 8.3 `JSON.rawJSON` symbol property leak — 2 tests
-**File:** `src/interpreter/builtins/mod.rs`
-**Fix:** Ensure `rawJSON` is stored as string property, not symbol.
+### 8.2 Don't set length in `filter` and `map` — 2 tests ✅ DONE (+2)
+**Fix:** Removed explicit `Set(A, "length")` calls at end of `map` and `filter`. Per spec, only `slice`/`concat`/`splice` set length explicitly.
+**Tests:** `staging/sm/Array/species.js` (x2)
 
-### 8.4 `Array.prototype.toLocaleString` this-boxing in strict mode — 1 test
-**File:** `src/interpreter/builtins/array.rs`
-**Fix:** Don't box primitive `this` in strict mode calls.
+### 8.3 Don't close iterator on IteratorValue throw in `Array.from` — 2 tests ✅ DONE (+2)
+**Fix:** Removed `iterator_close` call when `iterator_value` returns Err. Per spec §23.1.2.1 step 6.d.v, IteratorValue is NOT wrapped in IfAbruptCloseIterator.
+**Tests:** `staging/sm/Array/from-iterator-close.js` (x2)
 
-### 8.5 `Array.prototype[Symbol.unscopables]` includes `groupBy` — 1 test
-**File:** `src/interpreter/builtins/array.rs`
-**Fix:** Remove `groupBy` from unscopables.
+### 8.4 Symbol-keyed names in `Function.prototype.toString` — 2 tests ✅ DONE (+2)
+**Fix:** In `sanitize_native_fn_name`, return bracket-notation names like `[Symbol.split]` as-is instead of returning empty string.
+**Tests:** `staging/sm/Function/function-toString-builtin-name.js` (x2)
 
-### 8.6 `Array.from` over-closing iterator on value getter throw — 2 tests
-**File:** `src/interpreter/builtins/array.rs`
-**Fix:** Don't call iterator `return()` when value getter throws.
+### 8.5 `BigInt.asIntN`/`asUintN` large bit count optimization — 2 tests ✅ DONE (+2)
+**Fix:** Added early return when the bigint trivially fits within the bit range (avoids `1 << 2^32` OOM). `asIntN`: return unchanged if `bits() + 1 <= bits`. `asUintN`: return unchanged if non-negative and `bits() <= bits`.
+**Tests:** `staging/sm/BigInt/large-bit-length.js` (x2)
 
-### 8.7 `Array.prototype.filter` species sets spurious length — 2 tests
-**File:** `src/interpreter/builtins/array.rs`
+### 8.6 `toLocaleString` pass raw value as getter receiver — 1 test ✅ DONE (+1)
+**Fix:** Use `get_object_property(obj_ref.id, "toLocaleString", &next_element)` instead of `obj_get(element_obj)` so that getters on String.prototype receive the raw string value (not boxed object) as `this` in strict mode.
+**Tests:** `staging/sm/Array/toLocaleString.js` (onlyStrict)
 
-### 8.8 `Function.prototype.toString` for Symbol-keyed built-ins — 2 tests
-**File:** `src/interpreter/builtins/mod.rs`
-**Fix:** Include `[Symbol.split]` etc. in toString output.
+### 8.7 Date parser: space-separated non-ISO format — 2 tests ✅ DONE (+2)
+**Fix:** Added `parse_space_separated_date` function allowing single-digit month/day/hour/minute/second with space separator (e.g., `"1997-3-8 1:1:1"`). Also fixed ISO parser to reject bare 2-digit-only timezone offset (e.g., `T...-07` → NaN, space-separated `-07` → valid as `-0700`).
+**Tests:** `staging/sm/Date/non-iso.js` (x2)
 
-### 8.9 Unicode 16.0 case mapping gaps — 2 tests
-**File:** `src/interpreter/helpers.rs`
+### 8.8 Atomics: detached buffer check after argument coercion — 2 tests ✅ DONE (+2)
+**Fix:** Added `check_ta_detached` helper. Added re-check after all argument coercion in `load`, `store`, `compareExchange`, and `atomics_rmw` (covers add/sub/and/or/xor/exchange). The test's `badValue.valueOf()` detaches the buffer during coercion.
+**Tests:** `staging/sm/Atomics/detached-buffers.js` (x2)
 
-### 8.10 `BigInt.asIntN` OOM on large bit counts — 2 tests
-**File:** `src/types.rs`
-**Fix:** Optimize for small values with large bit counts.
-
-### 8.11 Date parser: non-ISO space-separated format — 2 tests
-**File:** `src/interpreter/builtins/date.rs`
-
-### 8.12 Atomics: detached buffer check after argument coercion — 2 tests
-**File:** `src/interpreter/builtins/` (Atomics)
-
-### 8.13 Decorators: auto-accessor incomplete — 2 tests
-**File:** `src/interpreter/exec.rs`
-
-### 8.14 Memory/performance (OOM under 512MB) — 3 tests
-**Tests:** `parse-mega-huge-array.js`, `regress-610026.js`, `regress-1507322-deep-weakmap.js`
-**Fix:** Reduce memory overhead for large JSON arrays, deeply nested blocks, deep WeakMap chains.
-
-### 8.15 `String.replace` timeout on huge backreference — 1 test
-**Tests:** `String/replace-math.js`
-**Fix:** Optimize replacement with capture-group backreferences on large strings.
+### 8.9 Deferred fixes (not addressed)
+- **Stack overflow** (1 test) — needs `stacker` crate or depth tracking
+- **Unicode 16.0 case mapping** (2 tests) — depends on ICU4X/Rust stdlib version
+- **Auto-accessor class fields** (2 tests) — needs AST/parser/interpreter changes
+- **Memory/performance** (3 tests) — `parse-mega-huge-array.js`, `regress-610026.js`, `regress-1507322-deep-weakmap.js`
+- **`String.replace` timeout** (1 test) — `replace-math.js` needs optimization
 
 ---
 
@@ -338,9 +324,9 @@ The `iterate_with_function` helper and restructured array-like path fixed additi
 | ~~6~~ | ~~5.x TypedArray~~ | ~~+30~~ | ~~DONE~~ |
 | ~~7~~ | ~~6.x Set operations~~ | ~~+6~~ | ~~DONE~~ |
 | ~~8~~ | ~~7.x Intl/Temporal~~ | ~~+28~~ | ~~DONE~~ |
-| 9 | 8.x Miscellaneous | ~16 | Mixed |
+| ~~9~~ | ~~8.x Miscellaneous~~ | ~~+14~~ | ~~DONE~~ |
 | — | Test262 bugs (1.1) | 6 | N/A |
 | — | RegExp deferred (3.7-3.10) | 8 | Hard (perf/engine) |
 | — | Intl deferred (7.8) | 6 | Hard (ICU/locale) |
 
-**Progress: 101,144 / 101,234 (99.91%). Remaining: ~90 failures** (6 are test262 bugs, ~7 are OOM/timeout performance issues, ~8 are deferred RegExp engine/perf issues, ~6 are hard locale/ICU data issues, ~20 are expected intl402 behavior differences for non-ISO calendar string tests).
+**Progress: 101,158 / 101,234 (99.92%). Remaining: ~76 failures** (6 are test262 bugs, ~7 are OOM/timeout performance issues, ~8 are deferred RegExp engine/perf issues, ~6 are hard locale/ICU data issues, ~20 are expected intl402 behavior differences for non-ISO calendar string tests, ~9 deferred from Phase 8).

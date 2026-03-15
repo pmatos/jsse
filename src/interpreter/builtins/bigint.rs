@@ -246,6 +246,10 @@ impl Interpreter {
                         value: num_bigint::BigInt::from(0),
                     }));
                 }
+                let bit_len = b.value.bits() + 1; // +1 for sign bit
+                if bit_len <= bits {
+                    return Completion::Normal(bigint_val);
+                }
                 let modulus = num_bigint::BigInt::from(1) << bits;
                 let mut result = &b.value % &modulus;
                 if result < num_bigint::BigInt::from(0) {
@@ -282,6 +286,9 @@ impl Interpreter {
                     return Completion::Normal(JsValue::BigInt(JsBigInt {
                         value: num_bigint::BigInt::from(0),
                     }));
+                }
+                if b.value >= num_bigint::BigInt::from(0) && b.value.bits() <= bits {
+                    return Completion::Normal(bigint_val);
                 }
                 let modulus = num_bigint::BigInt::from(1) << bits;
                 let mut result = &b.value % &modulus;

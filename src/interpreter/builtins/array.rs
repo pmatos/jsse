@@ -1336,11 +1336,17 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let to_locale_str_method =
-                            match obj_get(interp, &element_obj, "toLocaleString") {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
+                        let JsValue::Object(ref obj_ref) = element_obj else {
+                            unreachable!()
+                        };
+                        let to_locale_str_method = match interp.get_object_property(
+                            obj_ref.id,
+                            "toLocaleString",
+                            &next_element,
+                        ) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
                         if interp.is_callable(&to_locale_str_method) {
                             match interp.call_function(
                                 &to_locale_str_method,
@@ -1791,10 +1797,6 @@ impl Interpreter {
                         _ => {}
                     }
                 }
-                if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::Number(len as f64)) {
-                    interp.gc_unroot_value(&a);
-                    return Completion::Throw(e);
-                }
                 interp.gc_unroot_value(&a);
                 Completion::Normal(a)
             },
@@ -1869,10 +1871,6 @@ impl Interpreter {
                         }
                         _ => {}
                     }
-                }
-                if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::Number(to as f64)) {
-                    interp.gc_unroot_value(&a);
-                    return Completion::Throw(e);
                 }
                 interp.gc_unroot_value(&a);
                 Completion::Normal(a)
@@ -3374,7 +3372,6 @@ impl Interpreter {
                         let value = match interp.iterator_value(&next) {
                             Ok(v) => v,
                             Err(e) => {
-                                let _ = interp.iterator_close(&iterator, JsValue::Undefined);
                                 return Completion::Throw(e);
                             }
                         };
@@ -3826,7 +3823,6 @@ impl Interpreter {
                 "findLastIndex",
                 "flat",
                 "flatMap",
-                "groupBy",
                 "includes",
                 "keys",
                 "toReversed",

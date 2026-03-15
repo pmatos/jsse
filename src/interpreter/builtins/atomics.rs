@@ -14,6 +14,20 @@ struct WaiterEntry {
 static WAITER_MAP: LazyLock<Mutex<HashMap<(u64, usize), Vec<WaiterEntry>>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+fn check_ta_detached(interp: &mut Interpreter, ta_val: &JsValue) -> Result<(), JsValue> {
+    if let JsValue::Object(o) = ta_val
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let obj_ref = obj.borrow();
+        if let Some(ref info) = obj_ref.typed_array_info {
+            if info.is_detached.get() {
+                return Err(interp.create_type_error("typed array is detached"));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn get_sab_info(interp: &Interpreter, ta_val: &JsValue) -> Option<(Arc<SharedBufferInner>, usize)> {
     if let JsValue::Object(o) = ta_val
         && let Some(obj) = interp.get_object(o.id)
@@ -140,6 +154,9 @@ impl Interpreter {
                         Ok(i) => i,
                         Err(e) => return Completion::Throw(e),
                     };
+                if let Err(e) = check_ta_detached(interp, &ta_val) {
+                    return Completion::Throw(e);
+                }
                 let offset = byte_offset + byte_index;
                 if let Some((sab, _ta_byte_offset)) = get_sab_info(interp, &ta_val) {
                     return atomic_load_shared(&sab, offset, kind, is_bigint);
@@ -195,6 +212,9 @@ impl Interpreter {
                     };
                     (JsValue::Number(n), JsValue::Number(int_val))
                 };
+                if let Err(e) = check_ta_detached(interp, &ta_val) {
+                    return Completion::Throw(e);
+                }
                 let offset = byte_offset + byte_index;
                 if let Some((sab, _ta_byte_offset)) = get_sab_info(interp, &ta_val) {
                     atomic_store_shared(&sab, offset, kind, is_bigint, &converted);
@@ -254,6 +274,9 @@ impl Interpreter {
                     };
                     (exp, rep)
                 };
+                if let Err(e) = check_ta_detached(interp, &ta_val) {
+                    return Completion::Throw(e);
+                }
                 let offset = byte_offset + byte_index;
                 if let Some((sab, _ta_byte_offset)) = get_sab_info(interp, &ta_val) {
                     return atomic_compare_exchange_shared(
@@ -1299,6 +1322,9 @@ fn atomics_rmw(
             Err(e) => return Completion::Throw(e),
         }
     };
+    if let Err(e) = check_ta_detached(interp, &ta_val) {
+        return Completion::Throw(e);
+    }
     let offset = byte_offset + byte_index;
 
     if let Some((sab, _)) = get_sab_info(interp, &ta_val) {

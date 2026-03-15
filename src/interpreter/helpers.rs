@@ -1690,6 +1690,11 @@ pub(crate) fn parse_date_string(s: &str) -> f64 {
         return t;
     }
 
+    // Try space-separated relaxed format: "1997-3-8 1:1:1"
+    if let Some(t) = parse_space_separated_date(s) {
+        return t;
+    }
+
     // Try toUTCString() format: "Thu, 01 Jan 1970 00:00:00 GMT"
     if let Some(t) = parse_utcstring_format(s) {
         return t;
@@ -1807,6 +1812,123 @@ fn parse_iso_date(s: &str) -> Option<f64> {
         } else if pos + 1 < len && bytes[pos].is_ascii_digit() {
             s.get(pos..pos + 2)?.parse().ok()?
         } else {
+            return None;
+        };
+        let offset = sign * (tz_hour * 60.0 + tz_min) * 60_000.0;
+        return Some(time_clip(dt - offset));
+    }
+
+    None
+}
+
+fn parse_space_separated_date(s: &str) -> Option<f64> {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+
+    let (year, pos) = parse_iso_year(s)?;
+
+    if pos >= len || bytes[pos] != b'-' {
+        return None;
+    }
+    let pos = pos + 1;
+
+    // Month: 1 or 2 digits
+    let (month, pos) = parse_one_or_two_digits(bytes, pos)?;
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+
+    if pos >= len || bytes[pos] != b'-' {
+        return None;
+    }
+    let pos = pos + 1;
+
+    // Day: 1 or 2 digits
+    let (day_val, pos) = parse_one_or_two_digits(bytes, pos)?;
+    if !(1..=31).contains(&day_val) {
+        return None;
+    }
+
+    // Must have space separator (not T)
+    if pos >= len || bytes[pos] != b' ' {
+        return None;
+    }
+    let pos = pos + 1;
+
+    // Must not be just trailing space
+    if pos >= len {
+        return None;
+    }
+
+    // Hour: 1 or 2 digits
+    let (hour, pos) = parse_one_or_two_digits(bytes, pos)?;
+
+    // Must have colon after hour (hour-only is NaN)
+    if pos >= len || bytes[pos] != b':' {
+        return None;
+    }
+    let pos = pos + 1;
+
+    // Minute: 1 or 2 digits
+    let (minute, pos) = parse_one_or_two_digits(bytes, pos)?;
+
+    let (second, ms_val, pos) = if pos < len && bytes[pos] == b':' {
+        let pos = pos + 1;
+        let (sec, pos) = parse_one_or_two_digits(bytes, pos)?;
+        if pos < len && bytes[pos] == b'.' {
+            let pos = pos + 1;
+            let frac_start = pos;
+            let mut frac_end = pos;
+            while frac_end < len && bytes[frac_end].is_ascii_digit() {
+                frac_end += 1;
+            }
+            let frac_str = s.get(frac_start..frac_end)?;
+            let ms = match frac_str.len() {
+                1 => frac_str.parse::<i32>().ok()? * 100,
+                2 => frac_str.parse::<i32>().ok()? * 10,
+                3 => frac_str.parse::<i32>().ok()?,
+                n if n > 3 => frac_str[..3].parse::<i32>().ok()?,
+                _ => 0,
+            };
+            (sec, ms, frac_end)
+        } else {
+            (sec, 0, pos)
+        }
+    } else {
+        (0, 0, pos)
+    };
+
+    let d = make_day(year as f64, (month - 1) as f64, day_val as f64);
+    let time = make_time(hour as f64, minute as f64, second as f64, ms_val as f64);
+    let dt = make_date(d, time);
+
+    // Timezone
+    if pos >= len {
+        // No timezone = local time
+        return Some(time_clip(utc_time(dt)));
+    }
+
+    let ch = bytes[pos];
+    if ch == b'Z' || ch == b'z' {
+        if pos + 1 == len {
+            return Some(time_clip(dt));
+        }
+        return None;
+    }
+
+    if ch == b'+' || ch == b'-' {
+        let sign: f64 = if ch == b'+' { 1.0 } else { -1.0 };
+        let pos = pos + 1;
+        if pos + 2 > len {
+            return None;
+        }
+        let tz_hour: f64 = s.get(pos..pos + 2)?.parse().ok()?;
+        let pos = pos + 2;
+        let tz_min: f64 = if pos < len && bytes[pos] == b':' {
+            s.get(pos + 1..pos + 3)?.parse().ok()?
+        } else if pos + 1 < len && bytes[pos].is_ascii_digit() {
+            s.get(pos..pos + 2)?.parse().ok()?
+        } else {
             0.0
         };
         let offset = sign * (tz_hour * 60.0 + tz_min) * 60_000.0;
@@ -1814,6 +1936,19 @@ fn parse_iso_date(s: &str) -> Option<f64> {
     }
 
     None
+}
+
+fn parse_one_or_two_digits(bytes: &[u8], pos: usize) -> Option<(i32, usize)> {
+    if pos >= bytes.len() || !bytes[pos].is_ascii_digit() {
+        return None;
+    }
+    if pos + 1 < bytes.len() && bytes[pos + 1].is_ascii_digit() {
+        let val = (bytes[pos] - b'0') as i32 * 10 + (bytes[pos + 1] - b'0') as i32;
+        Some((val, pos + 2))
+    } else {
+        let val = (bytes[pos] - b'0') as i32;
+        Some((val, pos + 1))
+    }
 }
 
 fn parse_iso_year(s: &str) -> Option<(i64, usize)> {
