@@ -1396,17 +1396,18 @@ impl Interpreter {
                         Ok(r) => r,
                         Err(e) => return Completion::Throw(e),
                     };
-                    // Copy this's entries AFTER GetSetRecord (side-effects may mutate this)
-                    let entries = obj.borrow().set_data.clone().unwrap();
-                    let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-                    for entry in entries.iter().flatten() {
-                        new_entries.push(Some(entry.clone()));
-                    }
+                    // Step 5: GetIteratorFromMethod (may trigger .next getter side effects)
                     let (keys_iter, next_fn) =
                         match get_keys_iterator(interp, &other_rec.keys, &other) {
                             Ok(r) => r,
                             Err(c) => return c,
                         };
+                    // Step 7: Copy O.[[SetData]] AFTER GetIteratorFromMethod
+                    let entries = obj.borrow().set_data.clone().unwrap();
+                    let mut new_entries: Vec<Option<JsValue>> = Vec::new();
+                    for entry in entries.iter().flatten() {
+                        new_entries.push(Some(entry.clone()));
+                    }
                     loop {
                         let value = match iter_step_value(interp, &keys_iter, &next_fn) {
                             Ok(Some(v)) => v,
@@ -1451,17 +1452,32 @@ impl Interpreter {
                     let this_size = entries.iter().filter(|e| e.is_some()).count();
 
                     if this_size as f64 <= other_rec.size {
-                        for entry in entries.iter().flatten() {
-                            let has_result = match interp.call_function(
-                                &other_rec.has,
-                                &other,
-                                std::slice::from_ref(entry),
-                            ) {
-                                Completion::Normal(v) => v,
-                                other => return other,
+                        let mut index = 0;
+                        loop {
+                            let entry = {
+                                let borrowed = obj.borrow();
+                                let data = borrowed.set_data.as_ref().unwrap();
+                                if index >= data.len() {
+                                    break;
+                                }
+                                data[index].clone()
                             };
-                            if interp.to_boolean_val(&has_result) {
-                                new_entries.push(Some(canonicalize_key(entry.clone())));
+                            index += 1;
+                            if let Some(entry) = entry {
+                                let has_result = match interp.call_function(
+                                    &other_rec.has,
+                                    &other,
+                                    &[entry.clone()],
+                                ) {
+                                    Completion::Normal(v) => v,
+                                    other => return other,
+                                };
+                                if interp.to_boolean_val(&has_result) {
+                                    let val = canonicalize_key(entry);
+                                    if !set_data_has(&new_entries, &val) {
+                                        new_entries.push(Some(val));
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -1581,17 +1597,18 @@ impl Interpreter {
                         Ok(r) => r,
                         Err(e) => return Completion::Throw(e),
                     };
-                    // Copy this's entries AFTER GetSetRecord
-                    let entries = obj.borrow().set_data.clone().unwrap();
-                    let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-                    for entry in entries.iter().flatten() {
-                        new_entries.push(Some(entry.clone()));
-                    }
+                    // Step 5: GetIteratorFromMethod (may trigger .next getter side effects)
                     let (keys_iter, next_fn) =
                         match get_keys_iterator(interp, &other_rec.keys, &other) {
                             Ok(r) => r,
                             Err(c) => return c,
                         };
+                    // Step 6: Copy O.[[SetData]] AFTER GetIteratorFromMethod
+                    let entries = obj.borrow().set_data.clone().unwrap();
+                    let mut new_entries: Vec<Option<JsValue>> = Vec::new();
+                    for entry in entries.iter().flatten() {
+                        new_entries.push(Some(entry.clone()));
+                    }
                     loop {
                         let value = match iter_step_value(interp, &keys_iter, &next_fn) {
                             Ok(Some(v)) => v,

@@ -1,6 +1,6 @@
 # Plan: Zero test262 Failures (118 remaining)
 
-Based on investigation of all failing tests. Phase 1 parser fixes completed 2026-03-14 (+26 passes, 0 regressions). Phase 2 interpreter property/prototype fixes completed 2026-03-14 (+12 passes, -1 regression). Phase 2 continued: generator/proxy/global/Reflect fixes completed 2026-03-14 (+9 passes, 0 regressions → 101,065 / 101,234 = 99.83%). Phase 3 RegExp engine fixes completed 2026-03-14 (+16 net passes, 0 regressions → 101,081 / 101,234 = 99.85%). Phase 4 Iterator helper fixes completed 2026-03-15 (+16 net passes, 0 regressions → 101,097 / 101,234 = 99.86%). Phase 5 TypedArray fixes completed 2026-03-15 (+19 net passes + 11 bonus, 0 regressions → 101,116 / 101,234 = 99.88%).
+Based on investigation of all failing tests. Phase 1 parser fixes completed 2026-03-14 (+26 passes, 0 regressions). Phase 2 interpreter property/prototype fixes completed 2026-03-14 (+12 passes, -1 regression). Phase 2 continued: generator/proxy/global/Reflect fixes completed 2026-03-14 (+9 passes, 0 regressions → 101,065 / 101,234 = 99.83%). Phase 3 RegExp engine fixes completed 2026-03-14 (+16 net passes, 0 regressions → 101,081 / 101,234 = 99.85%). Phase 4 Iterator helper fixes completed 2026-03-15 (+16 net passes, 0 regressions → 101,097 / 101,234 = 99.86%). Phase 5 TypedArray fixes completed 2026-03-15 (+19 net passes + 11 bonus, 0 regressions → 101,116 / 101,234 = 99.88%). Phase 6 Set operation fixes completed 2026-03-15 (+6 passes, 0 regressions → 101,122 / 101,234 = 99.89%).
 
 ## Breakdown by Category (updated 2026-03-14)
 
@@ -10,11 +10,11 @@ Based on investigation of all failing tests. Phase 1 parser fixes completed 2026
 | RegExp (SM + built-ins) | 8 | 5 |
 | ~~Iterator helpers~~ | ~~16~~ | ~~8~~ |
 | ~~TypedArray (SM + built-ins)~~ | ~~22~~ | ~~11~~ |
+| ~~Set operations~~ | ~~6~~ | ~~3~~ |
 | Generators | 3 | 2 |
 | Async functions | 4 | 2 |
 | Class features | 2 | 1 |
 | Expressions/destructuring | 0 | 0 |
-| Set operations | 6 | 3 |
 | Function | 3 | 2 |
 | Explicit resource management | 4 | 2 |
 | Other (Proxy, Reflect, JSON, etc.) | 49 | 28 |
@@ -217,11 +217,16 @@ The `iterate_with_function` helper and restructured array-like path fixed additi
 
 ---
 
-## Phase 6: Set Operations (~6 tests) — NEXT UP
+## Phase 6: Set Operation Fixes ✅ COMPLETED (2026-03-15)
 
-### 6.1 Set operations don't handle concurrent modification — 6 tests
+**Result: +6 passes, 0 regressions.**
+
+### 6.1 Set operations don't handle concurrent modification — 6 tests ✅ DONE (+6)
 **File:** `src/interpreter/builtins/collections.rs`
-**Bug:** `intersection`, `union`, `symmetricDifference` don't handle set mutation during `has()`/`keys()` callbacks.
+**Fix:** Three changes:
+- `union`: moved `get_keys_iterator()` before `set_data` snapshot (spec requires copying `O.[[SetData]]` after `GetIteratorFromMethod`, which may trigger `.next` getter side effects)
+- `symmetricDifference`: same reorder as union
+- `intersection` has-path: replaced frozen snapshot iteration with index-based live iteration (matching `isSubsetOf` pattern), with `set_data_has` duplicate guard
 **Tests:** `Set/intersection.js`, `Set/symmetric-difference.js`, `Set/union.js` (x2 each)
 
 ---
@@ -327,10 +332,10 @@ The `iterate_with_function` helper and restructured array-like path fixed additi
 | ~~4~~ | ~~3.x RegExp fixes~~ | ~~+16~~ | ~~DONE~~ |
 | ~~5~~ | ~~4.x Iterator helpers~~ | ~~+16~~ | ~~DONE~~ |
 | ~~6~~ | ~~5.x TypedArray~~ | ~~+30~~ | ~~DONE~~ |
-| 7 | 6.x Set operations | ~6 | Medium |
+| ~~7~~ | ~~6.x Set operations~~ | ~~+6~~ | ~~DONE~~ |
 | 8 | 7.x Intl/Temporal | ~36 | Hard (locale data) |
 | 9 | 8.x Miscellaneous | ~16 | Mixed |
 | — | Test262 bugs (1.1) | 6 | N/A |
 | — | RegExp deferred (3.7-3.10) | 8 | Hard (perf/engine) |
 
-**Progress: 101,116 / 101,234 (99.88%). Remaining fixable: ~118 tests** (6 are test262 bugs, ~7 are OOM/timeout performance issues, ~8 are deferred RegExp engine/perf issues, ~6 are hard locale data issues).
+**Progress: 101,122 / 101,234 (99.89%). Remaining fixable: ~112 tests** (6 are test262 bugs, ~7 are OOM/timeout performance issues, ~8 are deferred RegExp engine/perf issues, ~6 are hard locale data issues).
