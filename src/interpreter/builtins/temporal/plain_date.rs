@@ -1140,45 +1140,6 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("withCalendar".to_string(), with_cal_fn);
 
-        // getISOFields()
-        let get_iso_fn = self.create_function(JsFunction::native(
-            "getISOFields".to_string(),
-            0,
-            |interp, this, _args| {
-                let (y, m, d, cal) = match get_plain_date_fields(interp, this) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let obj = interp.create_object();
-                obj.borrow_mut().insert_property(
-                    "calendar".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str(&cal)),
-                        true,
-                        true,
-                        true,
-                    ),
-                );
-                obj.borrow_mut().insert_property(
-                    "isoDay".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(d as f64), true, true, true),
-                );
-                obj.borrow_mut().insert_property(
-                    "isoMonth".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(m as f64), true, true, true),
-                );
-                obj.borrow_mut().insert_property(
-                    "isoYear".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(y as f64), true, true, true),
-                );
-                let id = obj.borrow().id.unwrap();
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-            },
-        ));
-        proto
-            .borrow_mut()
-            .insert_builtin("getISOFields".to_string(), get_iso_fn);
-
         // toZonedDateTime(item)
         let to_zdt_fn = self.create_function(JsFunction::native(
             "toZonedDateTime".to_string(),

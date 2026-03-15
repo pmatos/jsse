@@ -352,11 +352,29 @@ fn to_temporal_plain_year_month(
                     ));
                 }
             };
-            // §13.35 step 5.h: reject non-iso8601 calendar from string
             if cal != "iso8601" {
-                return Err(Completion::Throw(interp.create_range_error(&format!(
-                    "PlainYearMonth from string requires iso8601 calendar, got: {cal}"
-                ))));
+                // Non-ISO calendar: parse ISO date, convert to calendar year/month
+                let iso_year = parsed.0;
+                let iso_month = parsed.1;
+                let iso_day = parsed.2.unwrap_or(1);
+                if let Some(fields) =
+                    super::iso_to_calendar_fields(iso_year, iso_month, iso_day, &cal)
+                {
+                    // Convert calendar year+month back to ISO for storage
+                    if let Some((ref_y, ref_m, ref_d)) = super::calendar_fields_to_iso(
+                        fields.era.as_deref(),
+                        fields.year,
+                        Some(&fields.month_code),
+                        Some(fields.month_ordinal),
+                        1,
+                        &cal,
+                    ) {
+                        return Ok((ref_y, ref_m, ref_d, cal));
+                    }
+                }
+                return Err(Completion::Throw(
+                    interp.create_range_error("Invalid calendar fields for PlainYearMonth"),
+                ));
             }
             if !super::iso_year_month_within_limits(parsed.0, parsed.1) {
                 return Err(Completion::Throw(

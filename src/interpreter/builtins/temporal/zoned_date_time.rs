@@ -2444,45 +2444,6 @@ impl Interpreter {
                 .insert_builtin("toPlainDateTime".to_string(), method);
         }
 
-        // toPlainYearMonth()
-        {
-            let method = self.create_function(JsFunction::native(
-                "toPlainYearMonth".to_string(),
-                0,
-                |interp, this, _args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
-                    let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(&ns, &tz);
-                    super::plain_year_month::create_plain_year_month_result(interp, y, m, d, &cal)
-                },
-            ));
-            proto
-                .borrow_mut()
-                .insert_builtin("toPlainYearMonth".to_string(), method);
-        }
-
-        // toPlainMonthDay()
-        {
-            let method = self.create_function(JsFunction::native(
-                "toPlainMonthDay".to_string(),
-                0,
-                |interp, this, _args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
-                    let (_y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(&ns, &tz);
-                    // Per spec, ISO 8601 calendar uses reference year 1972
-                    super::plain_month_day::create_plain_month_day_result(interp, m, d, 1972, &cal)
-                },
-            ));
-            proto
-                .borrow_mut()
-                .insert_builtin("toPlainMonthDay".to_string(), method);
-        }
-
         // startOfDay()
         {
             let method = self.create_function(JsFunction::native(
@@ -3417,52 +3378,6 @@ impl Interpreter {
             proto
                 .borrow_mut()
                 .insert_builtin("round".to_string(), method);
-        }
-
-        // getISOFields()
-        {
-            let method = self.create_function(JsFunction::native(
-                "getISOFields".to_string(),
-                0,
-                |interp, this, _args| {
-                    let (ns, tz, cal) = match get_zdt_fields(interp, this) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
-                    let (y, m, d, h, mi, s, ms, us, nanos) = epoch_ns_to_components(&ns, &tz);
-                    let offset_ns = get_tz_offset_ns(&tz, &ns);
-                    let result = interp.create_object();
-                    macro_rules! set_field {
-                        ($name:expr, $val:expr) => {
-                            result.borrow_mut().insert_property(
-                                $name.to_string(),
-                                PropertyDescriptor::data($val, true, true, true),
-                            );
-                        };
-                    }
-                    set_field!("calendar", JsValue::String(JsString::from_str(&cal)));
-                    set_field!("isoDay", JsValue::Number(d as f64));
-                    set_field!("isoHour", JsValue::Number(h as f64));
-                    set_field!("isoMicrosecond", JsValue::Number(us as f64));
-                    set_field!("isoMillisecond", JsValue::Number(ms as f64));
-                    set_field!("isoMinute", JsValue::Number(mi as f64));
-                    set_field!("isoMonth", JsValue::Number(m as f64));
-                    set_field!("isoNanosecond", JsValue::Number(nanos as f64));
-                    set_field!("isoSecond", JsValue::Number(s as f64));
-                    set_field!("isoYear", JsValue::Number(y as f64));
-                    set_field!(
-                        "offset",
-                        JsValue::String(JsString::from_str(&format_offset_string(offset_ns)))
-                    );
-                    set_field!("timeZone", JsValue::String(JsString::from_str(&tz)));
-
-                    let id = result.borrow().id.unwrap();
-                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-                },
-            ));
-            proto
-                .borrow_mut()
-                .insert_builtin("getISOFields".to_string(), method);
         }
 
         // getTimeZoneTransition(direction)

@@ -372,11 +372,22 @@ fn to_temporal_plain_month_day(
                     ));
                 }
             };
-            // Reject non-iso8601 calendar from string
             if cal != "iso8601" {
-                return Err(Completion::Throw(interp.create_range_error(&format!(
-                    "PlainMonthDay from string requires iso8601 calendar, got: {cal}"
-                ))));
+                // Non-ISO calendar: convert the parsed ISO date to calendar fields
+                let iso_year = parsed.2.unwrap_or(1972);
+                if let Some(fields) =
+                    super::iso_to_calendar_fields(iso_year, parsed.0, parsed.1, &cal)
+                {
+                    let mc = &fields.month_code;
+                    if let Some((ref_y, ref_m, ref_d)) =
+                        super::calendar_month_day_to_iso(mc, fields.day, None, &cal, "constrain")
+                    {
+                        return Ok((ref_m, ref_d, ref_y, cal));
+                    }
+                }
+                return Err(Completion::Throw(
+                    interp.create_range_error("Invalid calendar fields for PlainMonthDay"),
+                ));
             }
             Ok((parsed.0, parsed.1, 1972, cal))
         }

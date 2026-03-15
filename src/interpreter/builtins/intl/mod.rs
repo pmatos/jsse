@@ -737,12 +737,12 @@ impl Interpreter {
                     let known_languages = [
                         "af", "am", "ar", "as", "az", "be", "bg", "bn", "bo", "br", "bs", "ca",
                         "cs", "cy", "da", "de", "el", "en", "eo", "es", "et", "eu", "fa", "fi",
-                        "fil", "fo", "fr", "ga", "gl", "gu", "ha", "he", "hi", "hr", "hu", "hy",
-                        "id", "ig", "is", "it", "ja", "ka", "kk", "km", "kn", "ko", "kok", "ku",
-                        "ky", "lb", "ln", "lo", "lt", "lv", "mk", "ml", "mn", "mr", "ms", "mt",
-                        "my", "nb", "ne", "nl", "nn", "no", "or", "pa", "pl", "ps", "pt", "ro",
-                        "ru", "si", "sk", "sl", "sq", "sr", "sv", "sw", "ta", "te", "th", "tk",
-                        "tr", "uk", "ur", "uz", "vi", "wo", "yo", "zh", "zu",
+                        "fil", "fo", "fr", "ga", "gl", "gu", "gv", "ha", "he", "hi", "hr", "hu",
+                        "hy", "id", "ig", "is", "it", "ja", "ka", "kk", "km", "kn", "ko", "kok",
+                        "ku", "ky", "lb", "ln", "lo", "lt", "lv", "mk", "ml", "mn", "mr", "ms",
+                        "mt", "my", "nb", "ne", "nl", "nn", "no", "or", "pa", "pl", "ps", "pt",
+                        "ro", "ru", "si", "sk", "sl", "sq", "sr", "sv", "sw", "ta", "te", "th",
+                        "tk", "tr", "uk", "ur", "uz", "vi", "wo", "yo", "zh", "zu",
                     ];
                     if known_languages.contains(&lang.as_str()) {
                         return true;

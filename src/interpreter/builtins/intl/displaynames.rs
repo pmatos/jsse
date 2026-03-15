@@ -1326,10 +1326,6 @@ impl Interpreter {
                 });
 
                 let obj_id = obj.borrow().id.unwrap();
-                let proto_id = proto_clone.borrow().id;
-                interp.apply_new_target_prototype(obj_id, proto_id, |realm| {
-                    realm.object_prototype.clone()
-                });
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },
         ));

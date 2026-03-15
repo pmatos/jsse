@@ -8,13 +8,13 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Test Files | Scenarios | Passing | Failing | Pass Rate |
 |------------|-----------|---------|---------|-----------|
-| 52,735     | 101,234   | 101,116 | 118     | 99.88%    |
+| 52,799     | 101,362   | 101,143 | 219     | 99.78%    |
 
 This includes all test262 directories: `language/`, `built-ins/`, `annexB/`, `intl402/`, and `staging/`.
 
-Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262/blob/main/INTERPRETING.md)), test files without `noStrict`, `onlyStrict`, `module`, or `raw` flags must be run **twice**: once in default (sloppy) mode and once with `"use strict";` prepended. Our test runner implements this dual-mode execution, expanding 52,735 test files into 101,234 scenarios.
+Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262/blob/main/INTERPRETING.md)), test files without `noStrict`, `onlyStrict`, `module`, or `raw` flags must be run **twice**: once in default (sloppy) mode and once with `"use strict";` prepended. Our test runner implements this dual-mode execution, expanding 52,799 test files into 101,362 scenarios.
 
-On the full suite: **101,116 / 101,234 (99.88%)**.
+On the full suite: **101,143 / 101,362 (99.78%)**.
 
 *ES Modules now supported with dynamic `import()` and `import.meta`. Async tests run with Promise/async-await support.*
 

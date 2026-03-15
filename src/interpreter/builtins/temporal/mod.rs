@@ -3451,8 +3451,15 @@ fn parse_iso_offset(bytes: &[u8], start: usize) -> Option<(ParsedOffset, usize)>
         }
         minutes = m;
 
-        if has_sep && pos < bytes.len() && bytes[pos] == b':' {
-            pos += 1;
+        let has_seconds = if has_sep {
+            pos < bytes.len() && bytes[pos] == b':'
+        } else {
+            pos + 1 < bytes.len() && bytes[pos].is_ascii_digit() && bytes[pos + 1].is_ascii_digit()
+        };
+        if has_seconds {
+            if has_sep {
+                pos += 1; // skip ':'
+            }
             has_sub_minute = true;
             let (s, new_pos) = parse_two_digit(bytes, pos)?;
             pos = new_pos;

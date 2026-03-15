@@ -1467,7 +1467,7 @@ impl Interpreter {
                                 let has_result = match interp.call_function(
                                     &other_rec.has,
                                     &other,
-                                    &[entry.clone()],
+                                    std::slice::from_ref(&entry),
                                 ) {
                                     Completion::Normal(v) => v,
                                     other => return other,

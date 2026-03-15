@@ -108,6 +108,15 @@ fn base_locale(locale_str: &str) -> String {
 
 fn get_plural_categories_sorted(locale_str: &str, plural_type: &str) -> Vec<&'static str> {
     let base = base_locale(locale_str);
+
+    // ICU4X lacks full plural rule data for some locales; supplement manually
+    if plural_type == "cardinal" {
+        let lang = base.split('-').next().unwrap_or(&base);
+        if lang == "gv" {
+            return vec!["one", "two", "few", "many", "other"];
+        }
+    }
+
     let icu_locale: IcuLocale = base.parse().unwrap_or_else(|_| "en".parse().unwrap());
     let prefs = PluralRulesPreferences::from(&icu_locale);
     let mut opts = IcuPluralRulesOptions::default();
