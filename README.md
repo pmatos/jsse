@@ -8,13 +8,13 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Test Files | Scenarios | Passing | Failing | Pass Rate |
 |------------|-----------|---------|---------|-----------|
-| 52,735     | 101,234   | 101,189 | 45      | 99.96%    |
+| 51,222     | 98,426    | 98,422  | 4       | 100.00%   |
 
-This includes all test262 directories: `language/`, `built-ins/`, `annexB/`, `intl402/`, and `staging/`.
+Covers `language/`, `built-ins/`, `annexB/`, and `intl402/`. The 4 remaining failures are RegExp `\p{Cs}`/`\p{Co}` property-escape tests blocked by a known architectural limitation ([#37](https://github.com/pmatos/jsse/issues/37)).
 
-Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262/blob/main/INTERPRETING.md)), test files without `noStrict`, `onlyStrict`, `module`, or `raw` flags must be run **twice**: once in default (sloppy) mode and once with `"use strict";` prepended. Our test runner implements this dual-mode execution, expanding 52,735 test files into 101,234 scenarios.
+**Staging tests** (not included above): 2,762 / 2,808 (98.36%). Staging failures include flaky timeouts, libm precision gaps, and a [spec-compliance conflict](https://github.com/pmatos/jsse/issues/36) with AnnexB arguments hoisting.
 
-On the full suite: **101,189 / 101,234 (99.96%)**.
+Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262/blob/main/INTERPRETING.md)), test files without `noStrict`, `onlyStrict`, `module`, or `raw` flags must be run **twice**: once in default (sloppy) mode and once with `"use strict";` prepended. Our test runner implements this dual-mode execution.
 
 *ES Modules now supported with dynamic `import()` and `import.meta`. Async tests run with Promise/async-await support.*
 

@@ -75,6 +75,10 @@ impl Interpreter {
                     if is_param {
                         continue;
                     }
+                    // Annex B §B.3.3.1 step 22.f: skip "arguments" in function scopes
+                    if name == "arguments" && !is_global && env.borrow().is_function_scope {
+                        continue;
+                    }
                     // Annex B: skip if non-simple params and name matches a parent binding
                     if !env.borrow().has_simple_params {
                         let has_parent_binding = env
