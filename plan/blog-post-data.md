@@ -43,45 +43,43 @@
 
 ## 2. Claude Code Usage & API Cost (from `ccusage`)
 
-### Overall
+### Overall (JSSE project only, filtered by project path)
 
 | Metric | Value |
 |--------|-------|
-| **Total API cost** | **$3,773.07** |
-| **Days with usage** | 36 |
+| **Total API cost** | **$3,754.98** |
+| **Days with usage** | 31 (main) + worktrees/sub-projects |
 | **Sessions** | 169 |
-| **Output tokens** | 4,820,348 |
-| **Input tokens** | 492,836 |
-| **Cache read tokens** | 7,100,228,204 |
-| **Cache creation tokens** | 98,626,049 |
-| **Total tokens** | 7,204,167,437 |
+| **Output tokens** | 4,818,993 |
+| **Input tokens** | 368,134 |
+| **Cache read tokens** | 7,050,342,513 |
+| **Cache creation tokens** | 95,570,148 |
+| **Total tokens** | 7,151,099,788 |
 
 ### Per-model breakdown
 
-| Model | Cost | Output Tokens | Cache Read | Cache Create |
-|-------|------|---------------|------------|--------------|
-| Claude Opus 4.6 | $3,360.55 | 4,044,047 | 5,675,694,112 | 66,731,329 |
-| Claude Sonnet 4.6 | $322.72 | 304,112 | 912,474,787 | 11,833,332 |
-| Claude Haiku 4.5 | $73.80 | 467,255 | 484,751,145 | 18,318,042 |
-| Claude Sonnet 4.5 | $13.74 | 4,733 | 24,719,447 | 1,590,260 |
-| Claude Opus 4.5 | $2.26 | 201 | 2,588,713 | 153,086 |
+| Model | Cost | Output Tokens |
+|-------|------|---------------|
+| Claude Opus 4.6 | $3,362.82 | 4,052,466 |
+| Claude Sonnet 4.6 | $322.72 | 304,112 |
+| Claude Haiku 4.5 | $69.44 | 462,415 |
 
-### Top 5 most expensive days
+### Cost by sub-project
 
-| Date | Cost |
-|------|------|
-| Feb 22 | $360.94 |
-| Feb 21 | $356.54 |
-| Mar 12 | $261.78 |
-| Mar 4 | $250.71 |
-| Feb 23 | $243.68 |
+| Sub-project | Cost |
+|-------------|------|
+| Main (`jsse`) | $2,917.66 |
+| Intl402 worktree | $653.42 |
+| Acorn tests | $46.01 |
+| Worktrees (6 total) | $123.55 |
+| Other (clippy, chief) | $14.33 |
 
 ### Notes
 
-- The vast majority of cost (89%) was from Claude Opus 4.6, the primary model used for implementation.
+- The vast majority of cost (90%) was from Claude Opus 4.6, the primary model used for implementation.
 - Claude Haiku 4.5 was used for background tasks (subagents, search).
 - Cache read tokens are ~7.1B — aggressive prompt caching kept costs far below what raw token counts would suggest.
-- Total cost includes all sessions across the project directory, including worktree sessions.
+- Costs are filtered to JSSE project paths only (non-JSSE usage on this machine was $20.36).
 
 ---
 
