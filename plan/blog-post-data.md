@@ -47,39 +47,43 @@
 
 | Metric | Value |
 |--------|-------|
-| **Total API cost** | **$3,754.98** |
-| **Days with usage** | 31 (main) + worktrees/sub-projects |
-| **Sessions** | 169 |
-| **Output tokens** | 4,818,993 |
-| **Input tokens** | 368,134 |
-| **Cache read tokens** | 7,050,342,513 |
-| **Cache creation tokens** | 95,570,148 |
-| **Total tokens** | 7,151,099,788 |
+| **Total API cost** | **$4,618.94** |
+| **Days with usage** | 47 |
+| **Sessions** | 302 |
+| **Output tokens** | 5,213,836 |
+| **Input tokens** | 805,681 |
+| **Cache read tokens** | 8,756,323,833 |
+| **Cache creation tokens** | 138,138,630 |
+| **Total tokens** | 8,900,481,980 |
 
 ### Per-model breakdown
 
 | Model | Cost | Output Tokens |
 |-------|------|---------------|
-| Claude Opus 4.6 | $3,362.82 | 4,052,466 |
-| Claude Sonnet 4.6 | $322.72 | 304,112 |
-| Claude Haiku 4.5 | $69.44 | 462,415 |
+| Claude Opus 4.6 | $4,062.91 | 4,237,823 |
+| Claude Sonnet 4.6 | $345.54 | 409,366 |
+| Claude Haiku 4.5 | $124.83 | 530,568 |
+| Claude Sonnet 4.5 | $45.56 | 26,690 |
+| Claude Opus 4.5 | $40.11 | 9,389 |
 
 ### Cost by sub-project
 
 | Sub-project | Cost |
 |-------------|------|
-| Main (`jsse`) | $2,917.66 |
+| Main (`jsse`) | $3,728.33 |
 | Intl402 worktree | $653.42 |
-| Acorn tests | $46.01 |
 | Worktrees (6 total) | $123.55 |
-| Other (clippy, chief) | $14.33 |
+| Clippy fixes | $59.88 |
+| Acorn tests | $46.01 |
+| Real app testing | $7.47 |
+| Other (chief) | $0.27 |
 
 ### Notes
 
-- The vast majority of cost (90%) was from Claude Opus 4.6, the primary model used for implementation.
+- The vast majority of cost (88%) was from Claude Opus 4.6, the primary model used for implementation.
 - Claude Haiku 4.5 was used for background tasks (subagents, search).
-- Cache read tokens are ~7.1B — aggressive prompt caching kept costs far below what raw token counts would suggest.
-- Costs are filtered to JSSE project paths only (non-JSSE usage on this machine was $20.36).
+- Cache read tokens are ~8.8B — aggressive prompt caching kept costs far below what raw token counts would suggest.
+- Costs are filtered to JSSE project paths only, combined across two machines.
 
 ---
 
