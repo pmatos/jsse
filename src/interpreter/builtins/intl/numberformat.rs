@@ -60,9 +60,11 @@ pub(crate) fn is_known_numbering_system(ns: &str) -> bool {
             | "deva"
             | "diak"
             | "fullwide"
+            | "gara"
             | "gong"
             | "gonm"
             | "gujr"
+            | "gukh"
             | "guru"
             | "hanidec"
             | "hmng"
@@ -72,6 +74,7 @@ pub(crate) fn is_known_numbering_system(ns: &str) -> bool {
             | "kawi"
             | "khmr"
             | "knda"
+            | "krai"
             | "lana"
             | "lanatham"
             | "laoo"
@@ -89,13 +92,17 @@ pub(crate) fn is_known_numbering_system(ns: &str) -> bool {
             | "mroo"
             | "mtei"
             | "mymr"
+            | "mymrepka"
+            | "mymrpao"
             | "mymrshan"
             | "mymrtlng"
             | "nagm"
             | "newa"
             | "nkoo"
             | "olck"
+            | "onao"
             | "orya"
+            | "outlined"
             | "osma"
             | "rohg"
             | "saur"
@@ -105,6 +112,7 @@ pub(crate) fn is_known_numbering_system(ns: &str) -> bool {
             | "sinh"
             | "sora"
             | "sund"
+            | "sunu"
             | "takr"
             | "talu"
             | "tamldec"
@@ -113,6 +121,7 @@ pub(crate) fn is_known_numbering_system(ns: &str) -> bool {
             | "tibt"
             | "tirh"
             | "tnsa"
+            | "tols"
             | "vaii"
             | "wara"
             | "wcho"
@@ -827,15 +836,24 @@ pub(crate) fn numbering_system_zero(ns: &str) -> Option<char> {
         "gonm" => Some('\u{11D50}'),
         "hmng" => Some('\u{16B50}'),
         "hmnp" => Some('\u{1E140}'),
+        "gara" => Some('\u{10D40}'),
+        "gukh" => Some('\u{16130}'),
         "kali" => Some('\u{A900}'),
+        "krai" => Some('\u{16D70}'),
         "lanatham" => Some('\u{1A90}'),
         "modi" => Some('\u{11650}'),
         "mymrshan" => Some('\u{1090}'),
+        "mymrepka" => Some('\u{116DA}'),
+        "mymrpao" => Some('\u{116D0}'),
         "mymrtlng" => Some('\u{A9F0}'),
         "newa" => Some('\u{11450}'),
+        "onao" => Some('\u{1E5F1}'),
+        "outlined" => Some('\u{1CCF0}'),
         "sind" => Some('\u{112F0}'),
         "sinh" => Some('\u{0DE6}'),
+        "sunu" => Some('\u{11BF0}'),
         "tirh" => Some('\u{114D0}'),
+        "tols" => Some('\u{11DE0}'),
         "wcho" => Some('\u{1E2F0}'),
         "latn" | "" => None,
         _ => None,

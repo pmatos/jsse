@@ -211,6 +211,18 @@ fn extract_calendar_annotation(s: &str) -> Option<String> {
     None
 }
 
+pub(crate) fn validate_calendar_name(cal: &str) -> Option<String> {
+    if !cal.bytes().all(|b| b.is_ascii()) {
+        return None;
+    }
+    let normalized = canonicalize_temporal_calendar(cal);
+    if is_supported_temporal_calendar(&normalized) {
+        Some(normalized)
+    } else {
+        None
+    }
+}
+
 pub(crate) fn validate_calendar(cal: &str) -> Option<String> {
     if !cal.bytes().all(|b| b.is_ascii()) {
         return None;
@@ -220,14 +232,16 @@ pub(crate) fn validate_calendar(cal: &str) -> Option<String> {
         return Some(normalized);
     }
     if let Some(parsed) = parse_temporal_date_time_string(cal) {
-        let c = parsed.calendar.unwrap_or_else(|| "iso8601".to_string());
-        let cn = canonicalize_temporal_calendar(&c);
-        if is_supported_temporal_calendar(&cn) {
-            return Some(cn);
+        if let Some(c) = parsed.calendar {
+            let cn = canonicalize_temporal_calendar(&c);
+            if is_supported_temporal_calendar(&cn) {
+                return Some(cn);
+            }
+        } else {
+            return Some("iso8601".to_string());
         }
     }
     if parse_temporal_time_string(cal).is_some() {
-        // Extract calendar from [u-ca=...] annotation if present
         if let Some(ca_cal) = extract_calendar_annotation(cal) {
             let cn = canonicalize_temporal_calendar(&ca_cal);
             if is_supported_temporal_calendar(&cn) {
@@ -237,17 +251,23 @@ pub(crate) fn validate_calendar(cal: &str) -> Option<String> {
         return Some("iso8601".to_string());
     }
     if let Some(parsed) = parse_temporal_month_day_string(cal) {
-        let c = parsed.3.unwrap_or_else(|| "iso8601".to_string());
-        let cn = canonicalize_temporal_calendar(&c);
-        if is_supported_temporal_calendar(&cn) {
-            return Some(cn);
+        if let Some(c) = parsed.3 {
+            let cn = canonicalize_temporal_calendar(&c);
+            if is_supported_temporal_calendar(&cn) {
+                return Some(cn);
+            }
+        } else {
+            return Some("iso8601".to_string());
         }
     }
     if let Some(parsed) = parse_temporal_year_month_string(cal) {
-        let c = parsed.3.unwrap_or_else(|| "iso8601".to_string());
-        let cn = canonicalize_temporal_calendar(&c);
-        if is_supported_temporal_calendar(&cn) {
-            return Some(cn);
+        if let Some(c) = parsed.3 {
+            let cn = canonicalize_temporal_calendar(&c);
+            if is_supported_temporal_calendar(&cn) {
+                return Some(cn);
+            }
+        } else {
+            return Some("iso8601".to_string());
         }
     }
     None
@@ -3492,6 +3512,9 @@ fn parse_iso_offset(bytes: &[u8], start: usize) -> Option<(ParsedOffset, usize)>
                     pos += 1;
                 }
                 let frac_len = pos - frac_start;
+                if frac_len == 0 || frac_len > 9 {
+                    return None;
+                }
                 if frac_len > 0 {
                     let mut frac_digits = [b'0'; 9];
                     let copy_len = 9.min(frac_len);

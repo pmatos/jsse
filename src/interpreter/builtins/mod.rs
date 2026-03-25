@@ -570,13 +570,19 @@ impl Interpreter {
                         let name_val = interp.get_object_property(o.id, "name", this_val);
                         let name = match name_val {
                             Completion::Normal(JsValue::Undefined) => "Error".to_string(),
-                            Completion::Normal(v) => to_js_string(&v),
+                            Completion::Normal(v) => match interp.to_js_string(&v) {
+                                Ok(s) => s.to_rust_string(),
+                                Err(e) => return Completion::Throw(e),
+                            },
                             other => return other,
                         };
                         let msg_val = interp.get_object_property(o.id, "message", this_val);
                         let msg = match msg_val {
                             Completion::Normal(JsValue::Undefined) => String::new(),
-                            Completion::Normal(v) => to_js_string(&v),
+                            Completion::Normal(v) => match interp.to_js_string(&v) {
+                                Ok(s) => s.to_rust_string(),
+                                Err(e) => return Completion::Throw(e),
+                            },
                             other => return other,
                         };
                         return if name.is_empty() {

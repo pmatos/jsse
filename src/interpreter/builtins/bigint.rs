@@ -66,21 +66,24 @@ impl Interpreter {
                             interp.create_type_error("BigInt.prototype.toString requires a BigInt"),
                         );
                     };
-                    let radix = args
-                        .first()
-                        .map(|v| {
-                            if v.is_undefined() {
-                                10
-                            } else {
-                                to_number(v) as u32
+                    let radix =
+                        match args.first() {
+                            Some(v) if !v.is_undefined() => {
+                                let num = match interp.to_number_value(v) {
+                                    Ok(n) => n,
+                                    Err(e) => return Completion::Throw(e),
+                                };
+                                let r = num as u32;
+                                if !(2..=36).contains(&r) {
+                                    return Completion::Throw(interp.create_error(
+                                        "RangeError",
+                                        "radix must be between 2 and 36",
+                                    ));
+                                }
+                                r
                             }
-                        })
-                        .unwrap_or(10);
-                    if !(2..=36).contains(&radix) {
-                        return Completion::Throw(
-                            interp.create_error("RangeError", "radix must be between 2 and 36"),
-                        );
-                    }
+                            _ => 10,
+                        };
                     let s = if radix == 10 {
                         n.to_string()
                     } else {

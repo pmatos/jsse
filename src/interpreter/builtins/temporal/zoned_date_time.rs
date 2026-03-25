@@ -1297,7 +1297,7 @@ fn to_temporal_zoned_date_time_with_options(
                     };
 
                     let cal_raw = parsed.calendar.unwrap_or_else(|| "iso8601".to_string());
-                    let cal = match super::validate_calendar(&cal_raw) {
+                    let cal = match super::validate_calendar_name(&cal_raw) {
                         Some(c) => c,
                         None => {
                             return Completion::Throw(
@@ -1465,7 +1465,7 @@ fn from_string_with_options(
     };
 
     let cal_raw = parsed.calendar.unwrap_or_else(|| "iso8601".to_string());
-    let cal = match super::validate_calendar(&cal_raw) {
+    let cal = match super::validate_calendar_name(&cal_raw) {
         Some(c) => c,
         None => {
             return Completion::Throw(

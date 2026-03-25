@@ -703,6 +703,42 @@ impl Interpreter {
                 .insert_builtin("try".to_string(), try_fn);
         }
 
+        // Promise.allKeyed (await-dictionary proposal — stub)
+        let all_keyed_fn = self.create_function(JsFunction::native(
+            "allKeyed".to_string(),
+            1,
+            |interp, _this, _args| {
+                Completion::Throw(
+                    interp.create_type_error("Promise.allKeyed is not yet implemented"),
+                )
+            },
+        ));
+        if let JsValue::Object(ref o) = ctor
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj
+                .borrow_mut()
+                .insert_builtin("allKeyed".to_string(), all_keyed_fn);
+        }
+
+        // Promise.allSettledKeyed (await-dictionary proposal — stub)
+        let all_settled_keyed_fn = self.create_function(JsFunction::native(
+            "allSettledKeyed".to_string(),
+            1,
+            |interp, _this, _args| {
+                Completion::Throw(
+                    interp.create_type_error("Promise.allSettledKeyed is not yet implemented"),
+                )
+            },
+        ));
+        if let JsValue::Object(ref o) = ctor
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj
+                .borrow_mut()
+                .insert_builtin("allSettledKeyed".to_string(), all_settled_keyed_fn);
+        }
+
         // Register Promise as global
         self.realm()
             .global_env

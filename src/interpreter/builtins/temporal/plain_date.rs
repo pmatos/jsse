@@ -4,7 +4,7 @@ use crate::interpreter::builtins::temporal::{
     iso_date_valid, iso_day_of_week, iso_day_of_year, iso_days_in_month, iso_days_in_year,
     iso_is_leap_year, iso_month_code, iso_week_of_year, parse_difference_options,
     parse_overflow_option, parse_temporal_date_time_string, resolve_month_fields,
-    round_date_duration, to_temporal_calendar_slot_value, validate_calendar,
+    round_date_duration, to_temporal_calendar_slot_value, validate_calendar_name,
 };
 
 impl Interpreter {
@@ -1979,7 +1979,7 @@ fn parse_date_string(
         )));
     }
     let cal = parsed.calendar.unwrap_or_else(|| "iso8601".to_string());
-    let cal = match validate_calendar(&cal) {
+    let cal = match validate_calendar_name(&cal) {
         Some(c) => c,
         None => {
             return Err(Completion::Throw(

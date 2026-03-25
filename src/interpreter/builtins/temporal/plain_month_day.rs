@@ -2,7 +2,7 @@ use super::*;
 use crate::interpreter::builtins::temporal::{
     get_prop, is_undefined, iso_date_valid, iso_days_in_month, iso_month_code,
     parse_overflow_option, parse_temporal_month_day_string, resolve_month_fields,
-    to_temporal_calendar_slot_value, validate_calendar,
+    to_temporal_calendar_slot_value, validate_calendar_name,
 };
 
 pub(super) fn create_plain_month_day_result(
@@ -364,7 +364,7 @@ fn to_temporal_plain_month_day(
                 )));
             }
             let cal = parsed.3.unwrap_or_else(|| "iso8601".to_string());
-            let cal = match validate_calendar(&cal) {
+            let cal = match validate_calendar_name(&cal) {
                 Some(c) => c,
                 None => {
                     return Err(Completion::Throw(

@@ -5,7 +5,7 @@ use crate::interpreter::builtins::temporal::{
     iso_time_valid, iso_week_of_year, nanoseconds_to_time, parse_difference_options,
     parse_overflow_option, parse_temporal_date_time_string, resolve_month_fields,
     round_number_to_increment, temporal_unit_singular, time_to_nanoseconds,
-    to_temporal_calendar_slot_value, validate_calendar,
+    to_temporal_calendar_slot_value, validate_calendar_name,
 };
 
 pub(super) fn create_plain_date_time_result(
@@ -201,7 +201,7 @@ fn parse_date_time_string(
         )));
     }
     let cal = parsed.calendar.unwrap_or_else(|| "iso8601".to_string());
-    let cal = match validate_calendar(&cal) {
+    let cal = match validate_calendar_name(&cal) {
         Some(c) => c,
         None => {
             return Err(Completion::Throw(

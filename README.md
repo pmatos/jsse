@@ -8,9 +8,9 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Test Files | Scenarios | Passing | Failing | Pass Rate |
 |------------|-----------|---------|---------|-----------|
-| 51,222     | 98,426    | 98,426  | 0       | 100.00%   |
+| 51,525     | 99,020    | 98,962  | 58      | 99.94%    |
 
-Covers `language/`, `built-ins/`, `annexB/`, and `intl402/`. All non-staging tests pass.
+Covers `language/`, `built-ins/`, `annexB/`, and `intl402/`.
 
 **Staging tests** (not included above): 2,762 / 2,808 (98.36%). Staging failures include flaky timeouts, libm precision gaps, and a [spec-compliance conflict](https://github.com/pmatos/jsse/issues/36) with AnnexB arguments hoisting.
 

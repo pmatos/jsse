@@ -557,6 +557,16 @@ impl Interpreter {
                         }
                     }
                     if matches!(value, JsValue::Null | JsValue::Undefined) {
+                        let resource = DisposableResource {
+                            value: value.clone(),
+                            hint: DisposeHint::Async,
+                            dispose_method: JsValue::Undefined,
+                        };
+                        if let Some(obj2) = interp.get_object(o.id) {
+                            if let Some(ds) = &mut obj2.borrow_mut().disposable_stack {
+                                ds.stack.push(resource);
+                            }
+                        }
                         return Completion::Normal(value);
                     }
                     // Try Symbol.asyncDispose first, then Symbol.dispose
@@ -564,20 +574,24 @@ impl Interpreter {
                     let mut hint = DisposeHint::Async;
                     if let Some(key) = interp.get_symbol_key("asyncDispose")
                         && let JsValue::Object(vo) = &value
-                        && let Some(vobj) = interp.get_object(vo.id)
                     {
-                        let m = vobj.borrow().get_property(&key);
-                        if !matches!(m, JsValue::Undefined) {
+                        let m = match interp.get_object_property(vo.id, &key, &value) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if !matches!(m, JsValue::Undefined | JsValue::Null) {
                             method = m;
                         }
                     }
                     if matches!(method, JsValue::Undefined)
                         && let Some(key) = interp.get_symbol_key("dispose")
                         && let JsValue::Object(vo) = &value
-                        && let Some(vobj) = interp.get_object(vo.id)
                     {
-                        let m = vobj.borrow().get_property(&key);
-                        if !matches!(m, JsValue::Undefined) {
+                        let m = match interp.get_object_property(vo.id, &key, &value) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if !matches!(m, JsValue::Undefined | JsValue::Null) {
                             method = m;
                             hint = DisposeHint::Sync;
                         }
@@ -885,11 +899,21 @@ impl Interpreter {
             };
 
             let mut current_error: Option<JsValue> = None;
+            let mut needs_await = false;
+            let mut has_awaited = false;
             for resource in stack.iter().rev() {
+                if resource.hint == DisposeHint::Async
+                    && matches!(resource.dispose_method, JsValue::Undefined)
+                {
+                    needs_await = true;
+                    continue;
+                }
                 let result = self.call_function(&resource.dispose_method, &resource.value, &[]);
                 match result {
                     Completion::Normal(v) => {
                         if resource.hint == DisposeHint::Async {
+                            needs_await = true;
+                            has_awaited = true;
                             match self.await_value(&v) {
                                 Completion::Normal(_) => {}
                                 Completion::Throw(e) => {
@@ -905,6 +929,9 @@ impl Interpreter {
                     }
                     _ => {}
                 }
+            }
+            if needs_await && !has_awaited {
+                let _ = self.await_value(&JsValue::Undefined);
             }
 
             if let Some(err) = current_error {
