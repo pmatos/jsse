@@ -1698,7 +1698,19 @@ fn format_with_options(ms: f64, opts: &DtfOptions) -> String {
 }
 
 fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
-    let adjusted_ms = ms + tz_offset_ms(&opts.time_zone, ms);
+    let is_plain = matches!(
+        opts.temporal_type,
+        Some(TemporalType::PlainDate)
+            | Some(TemporalType::PlainTime)
+            | Some(TemporalType::PlainDateTime)
+            | Some(TemporalType::PlainYearMonth)
+            | Some(TemporalType::PlainMonthDay)
+    );
+    let adjusted_ms = if is_plain {
+        ms
+    } else {
+        ms + tz_offset_ms(&opts.time_zone, ms)
+    };
     let mut c = timestamp_to_components(adjusted_ms);
     let hc = resolve_hour_cycle(opts);
 
@@ -3750,7 +3762,19 @@ fn format_to_parts_with_options(ms: f64, opts: &DtfOptions) -> Vec<(String, Stri
 }
 
 fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, String)> {
-    let adjusted_ms = ms + tz_offset_ms(&opts.time_zone, ms);
+    let is_plain = matches!(
+        opts.temporal_type,
+        Some(TemporalType::PlainDate)
+            | Some(TemporalType::PlainTime)
+            | Some(TemporalType::PlainDateTime)
+            | Some(TemporalType::PlainYearMonth)
+            | Some(TemporalType::PlainMonthDay)
+    );
+    let adjusted_ms = if is_plain {
+        ms
+    } else {
+        ms + tz_offset_ms(&opts.time_zone, ms)
+    };
     let mut c = timestamp_to_components(adjusted_ms);
     apply_calendar_conversion(&mut c, &opts.calendar);
     let hc = resolve_hour_cycle(opts);
@@ -4529,17 +4553,16 @@ fn check_temporal_overlap(opts: &DtfOptions, tt: TemporalType) -> bool {
     }
 }
 
-fn adjust_plain_temporal_ms(ms: f64, tz: &str, tt: TemporalType) -> f64 {
-    // Plain temporal types have no timezone — their ISO fields represent local date/time.
-    // The formatter applies tz_offset_ms(tz) to convert from UTC to local.
-    // We counteract that by subtracting the offset so the result is the original fields.
+fn adjust_plain_temporal_ms(ms: f64, _tz: &str, tt: TemporalType) -> f64 {
+    // Plain temporal types bypass timezone conversion in format_with_options_raw,
+    // so no adjustment is needed here. The ms value represents UTC-interpreted
+    // date/time fields that will be used directly.
     match tt {
         TemporalType::PlainDate
         | TemporalType::PlainTime
         | TemporalType::PlainDateTime
         | TemporalType::PlainYearMonth
-        | TemporalType::PlainMonthDay => ms - tz_offset_ms(tz, ms),
-        // Instant and ZonedDateTime already encode a real UTC instant
+        | TemporalType::PlainMonthDay => ms,
         TemporalType::Instant | TemporalType::ZonedDateTime => ms,
     }
 }

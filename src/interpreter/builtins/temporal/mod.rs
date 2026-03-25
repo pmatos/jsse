@@ -200,7 +200,7 @@ fn extract_calendar_annotation(s: &str) -> Option<String> {
             if let Some(eq) = annotation.find('=') {
                 let key = &annotation[..eq];
                 if key == "u-ca" {
-                    return Some(annotation[eq + 1..].to_string());
+                    return Some(annotation[eq + 1..].to_ascii_lowercase());
                 }
             }
             rest = &content[close + 1..];
@@ -2900,7 +2900,7 @@ pub(crate) fn parse_temporal_date_time_string(s: &str) -> Option<ParsedIsoDateTi
                     calendar_critical = true;
                 }
                 if calendar.is_none() {
-                    calendar = Some(annotation[eq_pos + 1..].to_string());
+                    calendar = Some(annotation[eq_pos + 1..].to_ascii_lowercase());
                 }
             } else if is_critical {
                 return None;
@@ -3382,7 +3382,7 @@ fn parse_annotations_extract_calendar(
             }
             if key == "u-ca" {
                 if calendar.is_none() {
-                    *calendar = Some(annotation[eq_pos + 1..].to_string());
+                    *calendar = Some(annotation[eq_pos + 1..].to_ascii_lowercase());
                 }
             } else if is_critical {
                 return None;
