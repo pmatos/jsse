@@ -93,205 +93,7 @@ impl Interpreter {
                 None => continue,
             };
             let obj = obj_rc.borrow();
-
-            // Trace prototype
-            if let Some(ref proto) = obj.prototype
-                && let Some(pid) = proto.borrow().id
-            {
-                worklist.push(pid);
-            }
-
-            // Trace properties
-            for desc in obj.properties.values() {
-                if let Some(ref v) = desc.value {
-                    Self::collect_value_roots(v, &mut worklist);
-                }
-                if let Some(ref v) = desc.get {
-                    Self::collect_value_roots(v, &mut worklist);
-                }
-                if let Some(ref v) = desc.set {
-                    Self::collect_value_roots(v, &mut worklist);
-                }
-            }
-
-            // Trace array elements
-            if let Some(ref elems) = obj.array_elements {
-                for v in elems {
-                    Self::collect_value_roots(v, &mut worklist);
-                }
-            }
-
-            // Trace primitive value
-            if let Some(ref v) = obj.primitive_value {
-                Self::collect_value_roots(v, &mut worklist);
-            }
-
-            // Trace private fields
-            for elem in obj.private_fields.values() {
-                match elem {
-                    PrivateElement::Field(v) | PrivateElement::Method(v) => {
-                        Self::collect_value_roots(v, &mut worklist);
-                    }
-                    PrivateElement::Accessor { get, set } => {
-                        if let Some(g) = get {
-                            Self::collect_value_roots(g, &mut worklist);
-                        }
-                        if let Some(s) = set {
-                            Self::collect_value_roots(s, &mut worklist);
-                        }
-                    }
-                }
-            }
-
-            // Trace class_instance_field_defs (method/accessor templates on constructors)
-            for idef in &obj.class_instance_field_defs {
-                if let InstanceFieldDef::Private(def) = idef {
-                    match def {
-                        PrivateFieldDef::Method { value, .. } => {
-                            Self::collect_value_roots(value, &mut worklist);
-                        }
-                        PrivateFieldDef::Accessor { get, set, .. } => {
-                            if let Some(g) = get {
-                                Self::collect_value_roots(g, &mut worklist);
-                            }
-                            if let Some(s) = set {
-                                Self::collect_value_roots(s, &mut worklist);
-                            }
-                        }
-                        PrivateFieldDef::Field { .. } => {}
-                    }
-                }
-            }
-
-            // Trace callable (closure environments)
-            if let Some(ref func) = obj.callable
-                && let JsFunction::User { closure, .. } = func
-            {
-                Self::collect_env_roots(closure, &mut worklist);
-            }
-
-            // Trace wrapped function target
-            if let Some(target_id) = obj.wrapped_target_function_id {
-                worklist.push(target_id);
-            }
-
-            // Trace bound function target and bound args
-            if let Some(ref target) = obj.bound_target_function {
-                Self::collect_value_roots(target, &mut worklist);
-            }
-            if let Some(ref bargs) = obj.bound_args {
-                for v in bargs {
-                    Self::collect_value_roots(v, &mut worklist);
-                }
-            }
-
-            // Trace parameter_map environments
-            if let Some(ref map) = obj.parameter_map {
-                for (env_ref, _) in map.values() {
-                    Self::collect_env_roots(env_ref, &mut worklist);
-                }
-            }
-
-            // Trace map_data (skip WeakMap — handled by ephemeron pass)
-            if obj.class_name != "WeakMap"
-                && let Some(ref entries) = obj.map_data
-            {
-                for entry in entries.iter().flatten() {
-                    Self::collect_value_roots(&entry.0, &mut worklist);
-                    Self::collect_value_roots(&entry.1, &mut worklist);
-                }
-            }
-
-            // Trace set_data (skip WeakSet — cleared post-sweep)
-            if obj.class_name != "WeakSet"
-                && let Some(ref entries) = obj.set_data
-            {
-                for val in entries.iter().flatten() {
-                    Self::collect_value_roots(val, &mut worklist);
-                }
-            }
-
-            // Trace proxy target/handler
-            if let Some(ref target) = obj.proxy_target
-                && let Some(tid) = target.borrow().id
-            {
-                worklist.push(tid);
-            }
-            if let Some(ref handler) = obj.proxy_handler
-                && let Some(hid) = handler.borrow().id
-            {
-                worklist.push(hid);
-            }
-
-            // Trace promise_data (reactions + state value)
-            if let Some(ref pd) = obj.promise_data {
-                match &pd.state {
-                    crate::interpreter::types::PromiseState::Fulfilled(v)
-                    | crate::interpreter::types::PromiseState::Rejected(v) => {
-                        Self::collect_value_roots(v, &mut worklist);
-                    }
-                    crate::interpreter::types::PromiseState::Pending => {}
-                }
-                for reaction in pd
-                    .fulfill_reactions
-                    .iter()
-                    .chain(pd.reject_reactions.iter())
-                {
-                    if let Some(ref h) = reaction.handler {
-                        Self::collect_value_roots(h, &mut worklist);
-                    }
-                    Self::collect_value_roots(&reaction.resolve, &mut worklist);
-                    Self::collect_value_roots(&reaction.reject, &mut worklist);
-                    if let Some(pid) = reaction.promise_id {
-                        worklist.push(pid);
-                    }
-                }
-            }
-
-            // Trace view_buffer_object_id (TypedArray / DataView backing buffer)
-            if let Some(buf_id) = obj.view_buffer_object_id {
-                worklist.push(buf_id);
-            }
-
-            // Trace GC roots from native closures
-            if let Some(ref roots) = obj.gc_native_roots {
-                for v in roots {
-                    Self::collect_value_roots(v, &mut worklist);
-                }
-            }
-
-            // Trace wrap_iter_record (WrapForValidIteratorPrototype state)
-            if let Some((ref iter, ref next)) = obj.wrap_iter_record {
-                Self::collect_value_roots(iter, &mut worklist);
-                Self::collect_value_roots(next, &mut worklist);
-            }
-
-            // Trace iterator helper closures
-            if let Some(ref v) = obj.helper_next_closure {
-                Self::collect_value_roots(v, &mut worklist);
-            }
-            if let Some(ref v) = obj.helper_return_closure {
-                Self::collect_value_roots(v, &mut worklist);
-            }
-
-            // Trace iterator state
-            if let Some(ref state) = obj.iterator_state {
-                match state {
-                    IteratorState::ArrayIterator { array_id, .. } => worklist.push(*array_id),
-                    IteratorState::TypedArrayIterator { typed_array_id, .. } => {
-                        worklist.push(*typed_array_id)
-                    }
-                    IteratorState::MapIterator { map_id, .. } => worklist.push(*map_id),
-                    IteratorState::SetIterator { set_id, .. } => worklist.push(*set_id),
-                    IteratorState::Generator { func_env, .. }
-                    | IteratorState::AsyncGenerator { func_env, .. }
-                    | IteratorState::StateMachineGenerator { func_env, .. }
-                    | IteratorState::StateMachineAsyncGenerator { func_env, .. } => {
-                        Self::collect_env_roots(func_env, &mut worklist);
-                    }
-                    _ => {}
-                }
-            }
+            Self::trace_object_fields(&obj, &mut worklist);
         }
 
         // Ephemeron fixpoint: mark WeakMap values whose keys are reachable
@@ -328,7 +130,7 @@ impl Interpreter {
                     }
                 }
             }
-            // BFS from any newly marked objects
+            // BFS from any newly marked objects (use same full tracing as main mark phase)
             while let Some(id) = worklist.pop() {
                 let idx = id as usize;
                 if idx >= obj_count || marks[idx] {
@@ -341,53 +143,7 @@ impl Interpreter {
                     None => continue,
                 };
                 let obj = obj_rc.borrow();
-                if let Some(ref proto) = obj.prototype
-                    && let Some(pid) = proto.borrow().id
-                {
-                    worklist.push(pid);
-                }
-                for desc in obj.properties.values() {
-                    if let Some(ref v) = desc.value {
-                        Self::collect_value_roots(v, &mut worklist);
-                    }
-                    if let Some(ref v) = desc.get {
-                        Self::collect_value_roots(v, &mut worklist);
-                    }
-                    if let Some(ref v) = desc.set {
-                        Self::collect_value_roots(v, &mut worklist);
-                    }
-                }
-                if let Some(ref elems) = obj.array_elements {
-                    for v in elems {
-                        Self::collect_value_roots(v, &mut worklist);
-                    }
-                }
-                if let Some(ref v) = obj.primitive_value {
-                    Self::collect_value_roots(v, &mut worklist);
-                }
-                if let Some(ref func) = obj.callable
-                    && let JsFunction::User { closure, .. } = func
-                {
-                    Self::collect_env_roots(closure, &mut worklist);
-                }
-                if let Some(target_id) = obj.wrapped_target_function_id {
-                    worklist.push(target_id);
-                }
-                if obj.class_name != "WeakMap"
-                    && let Some(ref entries) = obj.map_data
-                {
-                    for entry in entries.iter().flatten() {
-                        Self::collect_value_roots(&entry.0, &mut worklist);
-                        Self::collect_value_roots(&entry.1, &mut worklist);
-                    }
-                }
-                if obj.class_name != "WeakSet"
-                    && let Some(ref entries) = obj.set_data
-                {
-                    for val in entries.iter().flatten() {
-                        Self::collect_value_roots(val, &mut worklist);
-                    }
-                }
+                Self::trace_object_fields(&obj, &mut worklist);
             }
             if !new_marks {
                 break;
@@ -448,6 +204,170 @@ impl Interpreter {
     fn collect_value_roots(val: &JsValue, worklist: &mut Vec<u64>) {
         if let JsValue::Object(o) = val {
             worklist.push(o.id);
+        }
+    }
+
+    fn trace_object_fields(obj: &JsObjectData, worklist: &mut Vec<u64>) {
+        if let Some(ref proto) = obj.prototype
+            && let Some(pid) = proto.borrow().id
+        {
+            worklist.push(pid);
+        }
+        for desc in obj.properties.values() {
+            if let Some(ref v) = desc.value {
+                Self::collect_value_roots(v, worklist);
+            }
+            if let Some(ref v) = desc.get {
+                Self::collect_value_roots(v, worklist);
+            }
+            if let Some(ref v) = desc.set {
+                Self::collect_value_roots(v, worklist);
+            }
+        }
+        if let Some(ref elems) = obj.array_elements {
+            for v in elems {
+                Self::collect_value_roots(v, worklist);
+            }
+        }
+        if let Some(ref v) = obj.primitive_value {
+            Self::collect_value_roots(v, worklist);
+        }
+        for elem in obj.private_fields.values() {
+            match elem {
+                PrivateElement::Field(v) | PrivateElement::Method(v) => {
+                    Self::collect_value_roots(v, worklist);
+                }
+                PrivateElement::Accessor { get, set } => {
+                    if let Some(g) = get {
+                        Self::collect_value_roots(g, worklist);
+                    }
+                    if let Some(s) = set {
+                        Self::collect_value_roots(s, worklist);
+                    }
+                }
+            }
+        }
+        for idef in &obj.class_instance_field_defs {
+            if let InstanceFieldDef::Private(def) = idef {
+                match def {
+                    PrivateFieldDef::Method { value, .. } => {
+                        Self::collect_value_roots(value, worklist);
+                    }
+                    PrivateFieldDef::Accessor { get, set, .. } => {
+                        if let Some(g) = get {
+                            Self::collect_value_roots(g, worklist);
+                        }
+                        if let Some(s) = set {
+                            Self::collect_value_roots(s, worklist);
+                        }
+                    }
+                    PrivateFieldDef::Field { .. } => {}
+                }
+            }
+        }
+        if let Some(ref func) = obj.callable
+            && let JsFunction::User { closure, .. } = func
+        {
+            Self::collect_env_roots(closure, worklist);
+        }
+        if let Some(target_id) = obj.wrapped_target_function_id {
+            worklist.push(target_id);
+        }
+        if let Some(ref target) = obj.bound_target_function {
+            Self::collect_value_roots(target, worklist);
+        }
+        if let Some(ref bargs) = obj.bound_args {
+            for v in bargs {
+                Self::collect_value_roots(v, worklist);
+            }
+        }
+        if let Some(ref map) = obj.parameter_map {
+            for (env_ref, _) in map.values() {
+                Self::collect_env_roots(env_ref, worklist);
+            }
+        }
+        if obj.class_name != "WeakMap"
+            && let Some(ref entries) = obj.map_data
+        {
+            for entry in entries.iter().flatten() {
+                Self::collect_value_roots(&entry.0, worklist);
+                Self::collect_value_roots(&entry.1, worklist);
+            }
+        }
+        if obj.class_name != "WeakSet"
+            && let Some(ref entries) = obj.set_data
+        {
+            for val in entries.iter().flatten() {
+                Self::collect_value_roots(val, worklist);
+            }
+        }
+        if let Some(ref target) = obj.proxy_target
+            && let Some(tid) = target.borrow().id
+        {
+            worklist.push(tid);
+        }
+        if let Some(ref handler) = obj.proxy_handler
+            && let Some(hid) = handler.borrow().id
+        {
+            worklist.push(hid);
+        }
+        if let Some(ref pd) = obj.promise_data {
+            match &pd.state {
+                crate::interpreter::types::PromiseState::Fulfilled(v)
+                | crate::interpreter::types::PromiseState::Rejected(v) => {
+                    Self::collect_value_roots(v, worklist);
+                }
+                crate::interpreter::types::PromiseState::Pending => {}
+            }
+            for reaction in pd
+                .fulfill_reactions
+                .iter()
+                .chain(pd.reject_reactions.iter())
+            {
+                if let Some(ref h) = reaction.handler {
+                    Self::collect_value_roots(h, worklist);
+                }
+                Self::collect_value_roots(&reaction.resolve, worklist);
+                Self::collect_value_roots(&reaction.reject, worklist);
+                if let Some(pid) = reaction.promise_id {
+                    worklist.push(pid);
+                }
+            }
+        }
+        if let Some(buf_id) = obj.view_buffer_object_id {
+            worklist.push(buf_id);
+        }
+        if let Some(ref roots) = obj.gc_native_roots {
+            for v in roots {
+                Self::collect_value_roots(v, worklist);
+            }
+        }
+        if let Some((ref iter, ref next)) = obj.wrap_iter_record {
+            Self::collect_value_roots(iter, worklist);
+            Self::collect_value_roots(next, worklist);
+        }
+        if let Some(ref v) = obj.helper_next_closure {
+            Self::collect_value_roots(v, worklist);
+        }
+        if let Some(ref v) = obj.helper_return_closure {
+            Self::collect_value_roots(v, worklist);
+        }
+        if let Some(ref state) = obj.iterator_state {
+            match state {
+                IteratorState::ArrayIterator { array_id, .. } => worklist.push(*array_id),
+                IteratorState::TypedArrayIterator { typed_array_id, .. } => {
+                    worklist.push(*typed_array_id)
+                }
+                IteratorState::MapIterator { map_id, .. } => worklist.push(*map_id),
+                IteratorState::SetIterator { set_id, .. } => worklist.push(*set_id),
+                IteratorState::Generator { func_env, .. }
+                | IteratorState::AsyncGenerator { func_env, .. }
+                | IteratorState::StateMachineGenerator { func_env, .. }
+                | IteratorState::StateMachineAsyncGenerator { func_env, .. } => {
+                    Self::collect_env_roots(func_env, worklist);
+                }
+                _ => {}
+            }
         }
     }
 

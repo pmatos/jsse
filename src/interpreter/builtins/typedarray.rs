@@ -4833,6 +4833,16 @@ impl Interpreter {
         &mut self,
         val: &JsValue,
     ) -> Result<Vec<JsValue>, Completion> {
+        self.gc_root_value(val);
+        let result = self.collect_iterable_or_arraylike_inner(val);
+        self.gc_unroot_value(val);
+        result
+    }
+
+    fn collect_iterable_or_arraylike_inner(
+        &mut self,
+        val: &JsValue,
+    ) -> Result<Vec<JsValue>, Completion> {
         if let JsValue::Object(o) = val
             && let Some(_obj) = self.get_object(o.id)
         {
