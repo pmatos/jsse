@@ -8,11 +8,12 @@ impl<'a> Parser<'a> {
         if let Token::StringLiteral(source) = &self.current {
             let source = String::from_utf16_lossy(source);
             self.advance()?;
-            self.skip_import_attributes()?;
+            let attributes = self.parse_import_attributes()?;
             self.eat_semicolon()?;
             return Ok(ImportDeclaration {
                 specifiers: vec![],
                 source,
+                attributes,
             });
         }
 
@@ -33,9 +34,13 @@ impl<'a> Parser<'a> {
 
                 self.eat_from()?;
                 let source = self.parse_module_specifier()?;
-                self.skip_import_attributes()?;
+                let attributes = self.parse_import_attributes()?;
                 self.eat_semicolon()?;
-                return Ok(ImportDeclaration { specifiers, source });
+                return Ok(ImportDeclaration {
+                    specifiers,
+                    source,
+                    attributes,
+                });
             }
             // Not `defer *`, restore and fall through to default import
             self.push_back(self.current.clone(), self.prev_line_terminator);
@@ -58,18 +63,26 @@ impl<'a> Parser<'a> {
                     self.advance()?; // consume second `from`
                     specifiers.push(ImportSpecifier::SourcePhase(local));
                     let source = self.parse_module_specifier()?;
-                    self.skip_import_attributes()?;
+                    let attributes = self.parse_import_attributes()?;
                     self.eat_semicolon()?;
-                    return Ok(ImportDeclaration { specifiers, source });
+                    return Ok(ImportDeclaration {
+                        specifiers,
+                        source,
+                        attributes,
+                    });
                 }
                 // `import source from "..."` — default import, binding = "source"
                 // current is the string literal, saved2 was `from`
                 // We already consumed `source` and `from`, current is the string
                 specifiers.push(ImportSpecifier::Default("source".to_string()));
                 let source = self.parse_module_specifier()?;
-                self.skip_import_attributes()?;
+                let attributes = self.parse_import_attributes()?;
                 self.eat_semicolon()?;
-                return Ok(ImportDeclaration { specifiers, source });
+                return Ok(ImportDeclaration {
+                    specifiers,
+                    source,
+                    attributes,
+                });
             } else if self.current_identifier_name().is_some() {
                 // `import source X from "..."` — source-phase, binding = X
                 let local = self
@@ -79,9 +92,13 @@ impl<'a> Parser<'a> {
                 specifiers.push(ImportSpecifier::SourcePhase(local));
                 self.eat_from()?;
                 let source = self.parse_module_specifier()?;
-                self.skip_import_attributes()?;
+                let attributes = self.parse_import_attributes()?;
                 self.eat_semicolon()?;
-                return Ok(ImportDeclaration { specifiers, source });
+                return Ok(ImportDeclaration {
+                    specifiers,
+                    source,
+                    attributes,
+                });
             }
             // Not source-phase and not followed by from/ident, restore
             self.push_back(self.current.clone(), self.prev_line_terminator);
@@ -134,20 +151,25 @@ impl<'a> Parser<'a> {
 
         self.eat_from()?;
         let source = self.parse_module_specifier()?;
-        self.skip_import_attributes()?;
+        let attributes = self.parse_import_attributes()?;
         self.eat_semicolon()?;
 
-        Ok(ImportDeclaration { specifiers, source })
+        Ok(ImportDeclaration {
+            specifiers,
+            source,
+            attributes,
+        })
     }
 
-    /// Skip `with { ... }` import attributes if present.
-    fn skip_import_attributes(&mut self) -> Result<(), ParseError> {
+    /// Parse `with { ... }` import attributes if present.
+    fn parse_import_attributes(&mut self) -> Result<Vec<(String, String)>, ParseError> {
         let is_with = self.current_identifier_name().as_deref() == Some("with")
             || self.current == Token::Keyword(Keyword::With);
         if is_with && !self.prev_line_terminator {
             self.advance()?; // with
             self.eat(&Token::LeftBrace)?;
             let mut seen_keys = std::collections::HashSet::new();
+            let mut attributes = Vec::new();
             while self.current != Token::RightBrace {
                 // AttributeKey: IdentifierName | StringLiteral
                 let key = if let Token::StringLiteral(s) = &self.current {
@@ -172,17 +194,21 @@ impl<'a> Parser<'a> {
                     return Err(self.error(format!("Duplicate attribute key '{}'", key)));
                 }
                 self.eat(&Token::Colon)?;
-                if !matches!(&self.current, Token::StringLiteral(_)) {
+                let value = if let Token::StringLiteral(s) = &self.current {
+                    String::from_utf16_lossy(s)
+                } else {
                     return Err(self.error("Expected string literal as attribute value"));
-                }
+                };
                 self.advance()?;
+                attributes.push((key, value));
                 if self.current == Token::Comma {
                     self.advance()?;
                 }
             }
             self.eat(&Token::RightBrace)?;
+            return Ok(attributes);
         }
-        Ok(())
+        Ok(vec![])
     }
 
     fn parse_named_imports(
@@ -236,7 +262,7 @@ impl<'a> Parser<'a> {
             };
             self.eat_from()?;
             let source = self.parse_module_specifier()?;
-            self.skip_import_attributes()?;
+            self.parse_import_attributes()?;
             self.eat_semicolon()?;
             return Ok(ExportDeclaration::All { exported, source });
         }
@@ -251,7 +277,7 @@ impl<'a> Parser<'a> {
             let source = if self.is_from_keyword() {
                 self.advance()?;
                 let s = self.parse_module_specifier()?;
-                self.skip_import_attributes()?;
+                self.parse_import_attributes()?;
                 Some(s)
             } else {
                 // §16.2.3: without `from`, string literal local names are SyntaxError

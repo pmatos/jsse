@@ -34,6 +34,7 @@ pub enum ModuleItem {
 pub struct ImportDeclaration {
     pub specifiers: Vec<ImportSpecifier>,
     pub source: String,
+    pub attributes: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug)]

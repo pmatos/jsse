@@ -26,6 +26,25 @@ pub(crate) mod generator_transform;
 #[cfg(test)]
 mod tests;
 
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum ImportModuleType {
+    Text,
+    Bytes,
+}
+
+fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
+    for (key, value) in attrs {
+        if key == "type" {
+            return match value.as_str() {
+                "text" => Some(ImportModuleType::Text),
+                "bytes" => Some(ImportModuleType::Bytes),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
 #[allow(clippy::type_complexity)]
 pub struct Interpreter {
     pub(crate) realms: Vec<Realm>,
@@ -47,6 +66,7 @@ pub struct Interpreter {
     )>,
     cached_has_instance_key: Option<String>,
     module_registry: HashMap<PathBuf, Rc<RefCell<LoadedModule>>>,
+    synthetic_module_registry: HashMap<(PathBuf, ImportModuleType), Rc<RefCell<LoadedModule>>>,
     current_module_path: Option<PathBuf>,
     loading_deferred: bool,
     last_call_had_explicit_return: bool,
@@ -182,6 +202,7 @@ impl Interpreter {
             microtask_queue: Vec::new(),
             cached_has_instance_key: None,
             module_registry: HashMap::new(),
+            synthetic_module_registry: HashMap::new(),
             current_module_path: None,
             loading_deferred: false,
             last_call_had_explicit_return: false,
@@ -1361,33 +1382,52 @@ impl Interpreter {
         // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6)
         // For deferred imports, load without evaluation.
         for item in &program.module_items {
-            let (specifier, is_deferred) = match item {
+            let (specifier, is_deferred, import_type) = match item {
                 ModuleItem::ImportDeclaration(import) => {
                     let is_defer = import
                         .specifiers
                         .iter()
                         .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    (Some(import.source.as_str()), is_defer)
+                    (
+                        Some(import.source.as_str()),
+                        is_defer,
+                        import_module_type(&import.attributes),
+                    )
                 }
                 ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), false)
+                    (Some(source.as_str()), false, None)
                 }
                 ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                     source: Some(source),
                     ..
-                }) => (Some(source.as_str()), false),
-                _ => (None, false),
+                }) => (Some(source.as_str()), false, None),
+                _ => (None, false, None),
             };
             if let Some(spec) = specifier {
                 let module_path = self.current_module_path.clone();
                 if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
-                    if is_deferred {
-                        if let Err(e) = self.load_module_no_eval(&resolved) {
-                            self.current_module_path = prev_module_path;
-                            return Completion::Throw(e);
+                    match import_type {
+                        Some(ImportModuleType::Text) => {
+                            if let Err(e) = self.load_text_module(&resolved) {
+                                self.current_module_path = prev_module_path;
+                                return Completion::Throw(e);
+                            }
                         }
-                    } else {
-                        let _ = self.load_module(&resolved);
+                        Some(ImportModuleType::Bytes) => {
+                            if let Err(e) = self.load_bytes_module(&resolved) {
+                                self.current_module_path = prev_module_path;
+                                return Completion::Throw(e);
+                            }
+                        }
+                        None if is_deferred => {
+                            if let Err(e) = self.load_module_no_eval(&resolved) {
+                                self.current_module_path = prev_module_path;
+                                return Completion::Throw(e);
+                            }
+                        }
+                        None => {
+                            let _ = self.load_module(&resolved);
+                        }
                     }
                 }
             }
@@ -1467,6 +1507,45 @@ impl Interpreter {
     fn process_import(&mut self, import: &ImportDeclaration, env: &EnvRef) -> Result<(), JsValue> {
         let module_path = self.current_module_path.clone();
         let resolved = self.resolve_module_specifier(&import.source, module_path.as_deref())?;
+
+        let itype = import_module_type(&import.attributes);
+
+        // Text/bytes imports use synthetic module registry
+        if let Some(ref it) = itype {
+            let canon = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+            let key = (canon, it.clone());
+            let loaded = self
+                .synthetic_module_registry
+                .get(&key)
+                .cloned()
+                .ok_or_else(|| {
+                    JsValue::String(JsString::from_str(&format!(
+                        "Synthetic module not found for '{}'",
+                        import.source
+                    )))
+                })?;
+            for spec in &import.specifiers {
+                match spec {
+                    ImportSpecifier::Default(local) => {
+                        let val = loaded
+                            .borrow()
+                            .exports
+                            .get("default")
+                            .cloned()
+                            .unwrap_or(JsValue::Undefined);
+                        env.borrow_mut().declare(local, BindingKind::Const);
+                        env.borrow_mut().initialize_binding(local, val);
+                    }
+                    ImportSpecifier::Namespace(local) => {
+                        let ns = self.create_module_namespace(&loaded);
+                        env.borrow_mut().declare(local, BindingKind::Const);
+                        env.borrow_mut().initialize_binding(local, ns);
+                    }
+                    _ => {}
+                }
+            }
+            return Ok(());
+        }
 
         let is_deferred = import
             .specifiers
@@ -1894,30 +1973,43 @@ impl Interpreter {
         // For deferred imports, load without evaluation.
         // For non-deferred, load normally (which includes evaluation).
         for item in &program.module_items {
-            let (specifier, is_deferred) = match item {
+            let (specifier, is_deferred, itype) = match item {
                 ModuleItem::ImportDeclaration(import) => {
                     let is_defer = import
                         .specifiers
                         .iter()
                         .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    (Some(import.source.as_str()), is_defer)
+                    (
+                        Some(import.source.as_str()),
+                        is_defer,
+                        import_module_type(&import.attributes),
+                    )
                 }
                 ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), false)
+                    (Some(source.as_str()), false, None)
                 }
                 ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                     source: Some(source),
                     ..
-                }) => (Some(source.as_str()), false),
-                _ => (None, false),
+                }) => (Some(source.as_str()), false, None),
+                _ => (None, false, None),
             };
             if let Some(spec) = specifier {
                 let module_path = self.current_module_path.clone();
                 if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
-                    if is_deferred {
-                        self.load_module_no_eval(&resolved)?;
-                    } else {
-                        let _ = self.load_module(&resolved);
+                    match itype {
+                        Some(ImportModuleType::Text) => {
+                            self.load_text_module(&resolved)?;
+                        }
+                        Some(ImportModuleType::Bytes) => {
+                            self.load_bytes_module(&resolved)?;
+                        }
+                        None if is_deferred => {
+                            self.load_module_no_eval(&resolved)?;
+                        }
+                        None => {
+                            let _ = self.load_module(&resolved);
+                        }
                     }
                 }
             }
@@ -2088,30 +2180,32 @@ impl Interpreter {
 
         // Pre-load pass: load sub-dependencies
         for item in &program.module_items {
-            let (specifier, _is_deferred) = match item {
-                ModuleItem::ImportDeclaration(import) => {
-                    let is_defer = import
-                        .specifiers
-                        .iter()
-                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    (Some(import.source.as_str()), is_defer)
-                }
+            let (specifier, itype) = match item {
+                ModuleItem::ImportDeclaration(import) => (
+                    Some(import.source.as_str()),
+                    import_module_type(&import.attributes),
+                ),
                 ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), false)
+                    (Some(source.as_str()), None)
                 }
                 ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                     source: Some(source),
                     ..
-                }) => (Some(source.as_str()), false),
-                _ => (None, false),
+                }) => (Some(source.as_str()), None),
+                _ => (None, None),
             };
             if let Some(spec) = specifier {
                 let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref())
-                    && let Err(e) = self.load_module_no_eval(&resolved)
-                {
-                    self.loading_deferred = prev_loading_deferred;
-                    return Err(e);
+                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
+                    let result = match itype {
+                        Some(ImportModuleType::Text) => self.load_text_module(&resolved),
+                        Some(ImportModuleType::Bytes) => self.load_bytes_module(&resolved),
+                        None => self.load_module_no_eval(&resolved),
+                    };
+                    if let Err(e) = result {
+                        self.loading_deferred = prev_loading_deferred;
+                        return Err(e);
+                    }
                 }
             }
         }
@@ -2161,6 +2255,126 @@ impl Interpreter {
         self.loading_deferred = prev_loading_deferred;
         self.current_module_path = prev_path;
         Ok(loaded_module)
+    }
+
+    fn create_synthetic_default_module(
+        &mut self,
+        canon_path: PathBuf,
+        value: JsValue,
+    ) -> Rc<RefCell<LoadedModule>> {
+        let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
+        module_env.borrow_mut().strict = true;
+        module_env
+            .borrow_mut()
+            .declare("*default*", BindingKind::Const);
+        module_env
+            .borrow_mut()
+            .initialize_binding("*default*", value.clone());
+        let loaded = Rc::new(RefCell::new(LoadedModule {
+            path: canon_path,
+            env: module_env,
+            exports: {
+                let mut m = HashMap::new();
+                m.insert("default".to_string(), value);
+                m
+            },
+            export_bindings: {
+                let mut m = HashMap::new();
+                m.insert("default".to_string(), "*default*".to_string());
+                m
+            },
+            cached_namespace: None,
+            cached_deferred_namespace: None,
+            cached_import_meta: None,
+            error: None,
+            namespace_imports: HashMap::new(),
+            star_export_sources: Vec::new(),
+            evaluated: true,
+            is_evaluating: false,
+            deferred_only: false,
+            has_tla: false,
+            program_ast: None,
+            async_evaluation_order: None,
+            pending_async_dependencies: 0,
+            async_parent_modules: Vec::new(),
+            cycle_root: None,
+            top_level_capability: None,
+            dfs_index: None,
+            dfs_ancestor_index: None,
+        }));
+        loaded
+    }
+
+    fn load_text_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let key = (canon.clone(), ImportModuleType::Text);
+        if let Some(existing) = self.synthetic_module_registry.get(&key) {
+            return Ok(existing.clone());
+        }
+        let source = std::fs::read_to_string(path).map_err(|e| {
+            JsValue::String(JsString::from_str(&format!(
+                "Cannot read module '{}': {}",
+                path.display(),
+                e
+            )))
+        })?;
+        let value = JsValue::String(JsString::from_str(&source));
+        let module = self.create_synthetic_default_module(canon, value);
+        self.synthetic_module_registry.insert(key, module.clone());
+        Ok(module)
+    }
+
+    fn load_bytes_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let key = (canon.clone(), ImportModuleType::Bytes);
+        if let Some(existing) = self.synthetic_module_registry.get(&key) {
+            return Ok(existing.clone());
+        }
+        let bytes = std::fs::read(path).map_err(|e| {
+            JsValue::String(JsString::from_str(&format!(
+                "Cannot read module '{}': {}",
+                path.display(),
+                e
+            )))
+        })?;
+        let value = self.create_immutable_uint8array(&bytes);
+        let module = self.create_synthetic_default_module(canon, value);
+        self.synthetic_module_registry.insert(key, module.clone());
+        Ok(module)
+    }
+
+    fn create_immutable_uint8array(&mut self, bytes: &[u8]) -> JsValue {
+        use std::cell::Cell;
+        let len = bytes.len();
+        let buf_rc = Rc::new(RefCell::new(BufferData::Owned(bytes.to_vec())));
+        let detached = Rc::new(Cell::new(false));
+
+        let ab_obj = self.create_object();
+        {
+            let mut ab = ab_obj.borrow_mut();
+            ab.class_name = "ArrayBuffer".to_string();
+            ab.prototype = self.realm().arraybuffer_prototype.clone();
+            ab.arraybuffer_data = Some(buf_rc.clone());
+            ab.arraybuffer_detached = Some(detached.clone());
+            ab.arraybuffer_is_immutable = true;
+        }
+        let ab_id = ab_obj.borrow().id.unwrap();
+        let buf_val = JsValue::Object(crate::types::JsObject { id: ab_id });
+
+        let ta_info = TypedArrayInfo {
+            kind: TypedArrayKind::Uint8,
+            buffer: buf_rc,
+            byte_offset: 0,
+            byte_length: len,
+            array_length: len,
+            is_detached: detached,
+            is_length_tracking: false,
+        };
+
+        let proto = self.realm().uint8array_prototype.clone().unwrap();
+        let ta_obj = self.create_typed_array_object_with_proto(ta_info, buf_val, &proto);
+        let ta_id = ta_obj.borrow().id.unwrap();
+        JsValue::Object(crate::types::JsObject { id: ta_id })
     }
 
     /// Execute a module's body synchronously (no DFS into dependencies).
@@ -2495,6 +2709,10 @@ impl Interpreter {
         for item in &program.module_items {
             let (specifier, is_deferred) = match item {
                 ModuleItem::ImportDeclaration(import) => {
+                    // Skip synthetic (text/bytes) imports — they're not DFS dependencies
+                    if import_module_type(&import.attributes).is_some() {
+                        continue;
+                    }
                     let is_defer = import
                         .specifiers
                         .iter()
@@ -2849,7 +3067,12 @@ impl Interpreter {
             drop(module_ref);
             for item in &items {
                 let specifier = match item {
-                    ModuleItem::ImportDeclaration(import) => Some(import.source.as_str()),
+                    ModuleItem::ImportDeclaration(import) => {
+                        if import_module_type(&import.attributes).is_some() {
+                            continue;
+                        }
+                        Some(import.source.as_str())
+                    }
                     ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
                         Some(source.as_str())
                     }
@@ -2927,7 +3150,12 @@ impl Interpreter {
             drop(module_ref);
             for item in &items {
                 let specifier = match item {
-                    ModuleItem::ImportDeclaration(import) => Some(import.source.as_str()),
+                    ModuleItem::ImportDeclaration(import) => {
+                        if import_module_type(&import.attributes).is_some() {
+                            continue;
+                        }
+                        Some(import.source.as_str())
+                    }
                     ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
                         Some(source.as_str())
                     }

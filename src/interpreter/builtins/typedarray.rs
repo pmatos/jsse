@@ -160,6 +160,41 @@ impl Interpreter {
             },
         );
 
+        // immutable getter
+        let immutable_getter = self.create_function(JsFunction::native(
+            "get immutable".to_string(),
+            0,
+            |interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let obj_ref = obj.borrow();
+                    if obj_ref.arraybuffer_data.is_some() {
+                        if obj_ref.arraybuffer_is_shared {
+                            return Completion::Throw(
+                                interp.create_type_error("not an ArrayBuffer"),
+                            );
+                        }
+                        return Completion::Normal(JsValue::Boolean(
+                            obj_ref.arraybuffer_is_immutable,
+                        ));
+                    }
+                }
+                Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+            },
+        ));
+        ab_proto.borrow_mut().insert_property(
+            "immutable".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(immutable_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
+
         // maxByteLength getter
         let max_byte_length_getter = self.create_function(JsFunction::native(
             "get maxByteLength".to_string(),
@@ -4624,7 +4659,7 @@ impl Interpreter {
         obj
     }
 
-    fn create_typed_array_object_with_proto(
+    pub(crate) fn create_typed_array_object_with_proto(
         &mut self,
         info: TypedArrayInfo,
         buf_val: JsValue,
