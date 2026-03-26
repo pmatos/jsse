@@ -4774,6 +4774,7 @@ impl Interpreter {
                 let result =
                     self.construct_with_new_target(&super_ctor, &arg_vals, current_new_target);
                 self.new_target = saved_new_target;
+                self.gc_unroot_args(&arg_vals);
                 if let Completion::Normal(ref v) = result {
                     // Bind this in the function environment
                     Self::initialize_this_binding(env, v.clone());
@@ -4791,6 +4792,7 @@ impl Interpreter {
                 let result =
                     self.construct_with_new_target(&super_ctor, &arg_vals, current_new_target);
                 self.new_target = saved_new_target;
+                self.gc_unroot_args(&arg_vals);
                 if let Completion::Throw(_) = result {
                     return result;
                 }
@@ -5036,7 +5038,9 @@ impl Interpreter {
                 Err(e) => return Completion::Throw(e),
             };
             let caller_strict = env.borrow().strict;
-            return self.perform_eval(&evaluated_args, caller_strict, true, env);
+            let result = self.perform_eval(&evaluated_args, caller_strict, true, env);
+            self.gc_unroot_args(&evaluated_args);
+            return result;
         }
 
         // Root func_val and this_val before evaluating args (which may trigger GC)
@@ -5054,13 +5058,16 @@ impl Interpreter {
         self.gc_unroot_value(&this_val);
         self.gc_unroot_value(&func_val);
         if saved_tail && !self.is_builtin_eval(&func_val) {
+            self.gc_unroot_args(&evaluated_args);
             return Completion::TailCall {
                 func: func_val,
                 this: this_val,
                 args: evaluated_args,
             };
         }
-        self.call_function(&func_val, &this_val, &evaluated_args)
+        let result = self.call_function(&func_val, &this_val, &evaluated_args);
+        self.gc_unroot_args(&evaluated_args);
+        result
     }
 
     pub(crate) fn generator_next(&mut self, this: &JsValue, sent_value: JsValue) -> Completion {
@@ -12019,9 +12026,7 @@ impl Interpreter {
                 evaluated.push(val);
             }
         }
-        for v in &evaluated {
-            self.gc_unroot_value(v);
-        }
+        // Args are returned still rooted — callers must call gc_unroot_args after consuming them
         Ok(evaluated)
     }
 
@@ -12869,9 +12874,13 @@ impl Interpreter {
             Completion::Normal(v) => v,
             other => return other,
         };
+        self.gc_root_value(&callee_val);
         let evaluated_args = match self.eval_spread_args(args, env) {
             Ok(args) => args,
-            Err(e) => return Completion::Throw(e),
+            Err(e) => {
+                self.gc_unroot_value(&callee_val);
+                return Completion::Throw(e);
+            }
         };
         // Check if callee is a constructor
         if let JsValue::Object(ref co) = callee_val {
@@ -12896,12 +12905,16 @@ impl Interpreter {
                         None => String::new(),
                     };
                     drop(b);
+                    self.gc_unroot_args(&evaluated_args);
+                    self.gc_unroot_value(&callee_val);
                     return Completion::Throw(
                         self.create_type_error(&format!("{} is not a constructor", name)),
                     );
                 }
             }
         } else {
+            self.gc_unroot_args(&evaluated_args);
+            self.gc_unroot_value(&callee_val);
             return Completion::Throw(
                 self.create_type_error(&format!("{:?} is not a constructor", callee_val)),
             );
@@ -12913,6 +12926,8 @@ impl Interpreter {
             let target_val = self.get_proxy_target_val(co.id);
             let args_array = self.create_array(evaluated_args.clone());
             let new_target = callee_val.clone();
+            self.gc_unroot_args(&evaluated_args);
+            self.gc_unroot_value(&callee_val);
             match self.invoke_proxy_trap(
                 co.id,
                 "construct",
@@ -12942,6 +12957,8 @@ impl Interpreter {
             && let Some(func_obj) = self.get_object(co.id)
             && func_obj.borrow().bound_target_function.is_some()
         {
+            self.gc_unroot_args(&evaluated_args);
+            self.gc_unroot_value(&callee_val);
             return self.construct_with_new_target(
                 &callee_val,
                 &evaluated_args,
@@ -12983,6 +13000,8 @@ impl Interpreter {
                 };
                 let prev_new_target = self.new_target.take();
                 self.new_target = Some(callee_val.clone());
+                self.gc_unroot_args(&evaluated_args);
+                self.gc_unroot_value(&callee_val);
                 let result = self.construct_with_new_target(
                     &super_ctor,
                     &evaluated_args,
@@ -13011,6 +13030,8 @@ impl Interpreter {
             self.constructing_derived = true;
             self.calling_as_construct = true;
             let result = self.call_function(&callee_val, &JsValue::Undefined, &evaluated_args);
+            self.gc_unroot_args(&evaluated_args);
+            self.gc_unroot_value(&callee_val);
             self.constructing_derived = prev_constructing_derived;
             let had_explicit_return = self.last_call_had_explicit_return;
             let final_this = self.last_call_this_value.take();
@@ -13222,6 +13243,8 @@ impl Interpreter {
             self.last_call_this_value = None;
             self.calling_as_construct = true;
             let result = self.call_function(&callee_val, &this_val, &evaluated_args);
+            self.gc_unroot_args(&evaluated_args);
+            self.gc_unroot_value(&callee_val);
             let had_explicit_return = self.last_call_had_explicit_return;
             let final_this = self.last_call_this_value.take().unwrap_or(this_val.clone());
             self.new_target = prev_new_target;

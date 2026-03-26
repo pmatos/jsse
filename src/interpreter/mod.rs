@@ -603,6 +603,12 @@ impl Interpreter {
         }
     }
 
+    pub(crate) fn gc_unroot_args(&mut self, args: &[JsValue]) {
+        for v in args {
+            self.gc_unroot_value(v);
+        }
+    }
+
     pub(crate) fn can_be_held_weakly(&self, val: &JsValue) -> bool {
         match val {
             JsValue::Object(_) => true,
