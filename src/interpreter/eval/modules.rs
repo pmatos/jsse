@@ -592,7 +592,11 @@ impl Interpreter {
         }
     }
 
-    pub(super) fn dynamic_import(&mut self, specifier: &str) -> Completion {
+    pub(super) fn dynamic_import(
+        &mut self,
+        specifier: &str,
+        import_type: Option<super::ImportModuleType>,
+    ) -> Completion {
         let resolved =
             match self.resolve_module_specifier(specifier, self.current_module_path.as_deref()) {
                 Ok(p) => p,
@@ -600,6 +604,21 @@ impl Interpreter {
                     return self.create_rejected_promise(e);
                 }
             };
+
+        // Text/bytes synthetic modules: load and resolve immediately
+        if let Some(ref itype) = import_type {
+            let module = match itype {
+                super::ImportModuleType::Text => self.load_text_module(&resolved),
+                super::ImportModuleType::Bytes => self.load_bytes_module(&resolved),
+            };
+            return match module {
+                Ok(m) => {
+                    let ns = self.create_module_namespace(&m);
+                    self.create_resolved_promise(ns)
+                }
+                Err(e) => self.create_rejected_promise(e),
+            };
+        }
 
         // If we're NOT inside a static module load, load synchronously
         if self.static_module_load_depth == 0 {

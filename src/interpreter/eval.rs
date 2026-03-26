@@ -999,6 +999,7 @@ impl Interpreter {
                     other => return other,
                 };
                 // Evaluate options expression if present (abrupt completions propagate directly)
+                let mut dynamic_import_type: Option<super::ImportModuleType> = None;
                 if let Some(opts_expr) = options_expr {
                     match self.eval_expr(opts_expr, env) {
                         Completion::Normal(opts_val) => {
@@ -1045,7 +1046,19 @@ impl Interpreter {
                                                     }
                                                     other => return other,
                                                 };
-                                                if !matches!(v, JsValue::String(_)) {
+                                                if let JsValue::String(ref sv) = v {
+                                                    if k == "type" {
+                                                        let s = sv.to_string();
+                                                        if s == "text" {
+                                                            dynamic_import_type =
+                                                                Some(super::ImportModuleType::Text);
+                                                        } else if s == "bytes" {
+                                                            dynamic_import_type = Some(
+                                                                super::ImportModuleType::Bytes,
+                                                            );
+                                                        }
+                                                    }
+                                                } else {
                                                     let err = self.create_type_error(
                                                         "Import attribute values must be strings",
                                                     );
@@ -1065,7 +1078,7 @@ impl Interpreter {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
                 };
-                self.dynamic_import(&source)
+                self.dynamic_import(&source, dynamic_import_type)
             }
             Expression::ImportDefer(source_expr, options_expr) => {
                 let source_val = match self.eval_expr(source_expr, env) {
