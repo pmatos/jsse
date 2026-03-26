@@ -633,6 +633,35 @@ pub(crate) fn calendar_fields_to_iso_overflow(
 /// calendar date (month_code, day) exists. This matches the spec behavior for
 /// Temporal.PlainMonthDay.
 ///
+/// Spec Table 6: Chinese/Dangi leap month reference years (used as extended_year).
+/// (month_number, ref_year_for_days_1_29, ref_year_for_day_30)
+/// None means the month+day combination has never occurred.
+const CHINESE_DANGI_LEAP_REF: [(u8, Option<i32>, Option<i32>); 12] = [
+    (1, None, None),       // M01L never occurs
+    (2, Some(1947), None), // M02L: no day 30
+    (3, Some(1966), Some(1955)),
+    (4, Some(1963), Some(1944)),
+    (5, Some(1971), Some(1952)),
+    (6, Some(1960), Some(1941)),
+    (7, Some(1968), Some(1938)),
+    (8, Some(1957), None),  // M08L: no day 30
+    (9, Some(2014), None),  // M09L: no day 30
+    (10, Some(1984), None), // M10L: no day 30
+    (11, Some(2033), None), // M11L: no day 30
+    (12, None, None),       // M12L never occurs
+];
+
+fn chinese_dangi_leap_ref(month_code: &str) -> Option<(Option<i32>, Option<i32>)> {
+    if !(month_code.len() == 4 && month_code.ends_with('L')) {
+        return None;
+    }
+    let mn: u8 = month_code[1..3].parse().ok()?;
+    CHINESE_DANGI_LEAP_REF
+        .iter()
+        .find(|(m, _, _)| *m == mn)
+        .map(|(_, r29, r30)| (*r29, *r30))
+}
+
 /// When `year_hint` is provided (from the property bag's `year` field), it's used
 /// for validation: in reject mode, the day must be valid in that specific year;
 /// in constrain mode, the day is clamped to valid range for that year. Either way,
@@ -650,6 +679,24 @@ pub(crate) fn calendar_month_day_to_iso(
         return None;
     }
     let kind = calendar_id_to_icu_kind(calendar_id)?;
+
+    // Bail out early for out-of-range years
+    if let Some(hint_year) = year_hint {
+        let cal = AnyCalendar::new(kind);
+        let mut f = IcuDateFields::default();
+        f.extended_year = Some(hint_year);
+        f.month_code = Some(b"M01");
+        f.day = Some(1);
+        match IcuDate::try_from_fields(f, Default::default(), cal) {
+            Ok(d) => {
+                let iso_year = d.to_iso().year().extended_year();
+                if !(-271821..=275760).contains(&iso_year) {
+                    return None;
+                }
+            }
+            Err(_) => return None,
+        }
+    }
 
     // If a year_hint is provided, validate/constrain against it first
     let actual_day = if let Some(hint_year) = year_hint {
@@ -685,6 +732,50 @@ pub(crate) fn calendar_month_day_to_iso(
     } else {
         day
     };
+
+    // Table 6 path for Chinese/Dangi leap months
+    if matches!(calendar_id, "chinese" | "dangi") && month_code.ends_with('L') {
+        if let Some((ref_1_29, ref_30)) = chinese_dangi_leap_ref(month_code) {
+            // Clamp day to 30 (lunisolar month max)
+            let mut eff_day = actual_day;
+            if eff_day > 30 {
+                if overflow == "reject" {
+                    return None;
+                }
+                eff_day = 30;
+            }
+
+            // Check if month+day combo is valid per Table 6
+            if ref_1_29.is_none() || (eff_day == 30 && ref_30.is_none()) {
+                if overflow == "reject" {
+                    return None;
+                }
+                let non_leap = &month_code[..3];
+                return calendar_month_day_to_iso(non_leap, eff_day, None, calendar_id, overflow);
+            }
+
+            let ref_year = if eff_day == 30 {
+                ref_30.unwrap()
+            } else {
+                ref_1_29.unwrap()
+            };
+            let cal = AnyCalendar::new(kind);
+            let mut f = IcuDateFields::default();
+            f.extended_year = Some(ref_year);
+            f.month_code = Some(month_code.as_bytes());
+            f.day = Some(eff_day);
+            if let Ok(d) = IcuDate::try_from_fields(f, Default::default(), cal) {
+                let iso = d.to_iso();
+                return Some((
+                    iso.year().extended_year(),
+                    iso.month().ordinal,
+                    iso.day_of_month().0,
+                ));
+            }
+            return None;
+        }
+        return None;
+    }
 
     // Now find the reference ISO year: latest ISO year ≤ 1972 where month_code+actual_day exists.
     // Convert ISO 1972-07-01 to the calendar, then try multiple calendar years that could

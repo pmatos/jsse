@@ -1102,12 +1102,32 @@ impl Interpreter {
             "toPlainMonthDay".to_string(),
             0,
             |interp, this, _args| {
-                let (_y, m, d, cal) = match get_plain_date_fields(interp, this) {
+                let (y, m, d, cal) = match get_plain_date_fields(interp, this) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                // Per spec, ISO 8601 calendar uses reference year 1972
-                super::plain_month_day::create_plain_month_day_result(interp, m, d, 1972, &cal)
+                if cal == "iso8601" {
+                    return super::plain_month_day::create_plain_month_day_result(
+                        interp, m, d, 1972, &cal,
+                    );
+                }
+                // Non-ISO: get calendar monthCode+day, find reference year
+                if let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal) {
+                    if let Some((iso_y, iso_m, iso_d)) = super::calendar_month_day_to_iso(
+                        &cf.month_code,
+                        cf.day,
+                        None,
+                        &cal,
+                        "constrain",
+                    ) {
+                        return super::plain_month_day::create_plain_month_day_result(
+                            interp, iso_m, iso_d, iso_y, &cal,
+                        );
+                    }
+                }
+                Completion::Throw(
+                    interp.create_range_error("Invalid calendar fields for PlainMonthDay"),
+                )
             },
         ));
         proto

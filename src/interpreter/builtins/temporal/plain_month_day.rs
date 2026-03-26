@@ -1159,6 +1159,11 @@ impl Interpreter {
                             if let Some((iso_y, iso_m, iso_d)) = super::calendar_fields_to_iso_overflow(
                                 Some(es), ey, Some(&mc), month_num.map(|v| v as u8), d_f as u8, &cal, &overflow,
                             ) {
+                                if !(-271821..=275760).contains(&iso_y) {
+                                    return Completion::Throw(
+                                        interp.create_range_error("Invalid calendar fields for PlainMonthDay"),
+                                    );
+                                }
                                 return create_plain_month_day_result(interp, iso_m, iso_d, iso_y, &cal);
                             }
                             if overflow == "reject" {
