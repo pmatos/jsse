@@ -39,6 +39,13 @@ impl Interpreter {
                 Self::collect_value_roots(val, &mut worklist);
             }
         }
+        for module in self.synthetic_module_registry.values() {
+            let m = module.borrow();
+            Self::collect_env_roots(&m.env, &mut worklist);
+            for val in m.exports.values() {
+                Self::collect_value_roots(val, &mut worklist);
+            }
+        }
         // Trace active call stack environments
         for env in &self.call_stack_envs {
             Self::collect_env_roots(env, &mut worklist);
