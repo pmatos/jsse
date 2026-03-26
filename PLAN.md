@@ -51,14 +51,14 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | Math | 100% | 654/654 |
 | Object | 100% | 6,802/6,802 |
 | Promise | 100% | 1,272/1,272 |
-| Array | 99.4% | 6,072/6,111 |
+| Array | 100% | 6,115/6,115 |
 | Iterator | 100% | 1,020/1,020 |
 | Atomics | 91% | 698/764 |
 | TypedArray | 100% | 2,860/2,860 |
 | Date | 100% | 1,188/1,188 |
 | Function | 99% | 883/893 |
 | Proxy | 100% | 607/607 |
-| TypedArrayConstructors | 95% | 1,384/1,442 |
+| TypedArrayConstructors | 100% | 1,442/1,442 |
 
 ---
 

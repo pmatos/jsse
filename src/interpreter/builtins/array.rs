@@ -3346,32 +3346,50 @@ impl Interpreter {
                     } else {
                         interp.create_array(Vec::new())
                     };
+                    interp.gc_root_value(&a);
 
                     let iterator = match interp.call_function(&iter_method, &source, &[]) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
+                            interp.gc_unroot_value(&a);
                             return Completion::Throw(e);
                         }
-                        other => return other,
+                        other => {
+                            interp.gc_unroot_value(&a);
+                            return other;
+                        }
                     };
+                    interp.gc_root_value(&iterator);
                     let mut k: usize = 0;
                     loop {
                         let next = match interp.iterator_step(&iterator) {
                             Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => {
+                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_value(&a);
+                                return Completion::Throw(e);
+                            }
                         };
                         let next = match next {
                             Some(result) => result,
                             None => {
                                 if let Err(e) = set_length_throw(interp, &a, k) {
+                                    interp.gc_unroot_value(&iterator);
+                                    interp.gc_unroot_value(&a);
                                     return Completion::Throw(e);
                                 }
+                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_value(&a);
                                 return Completion::Normal(a);
                             }
                         };
+                        interp.gc_root_value(&next);
                         let value = match interp.iterator_value(&next) {
                             Ok(v) => v,
                             Err(e) => {
+                                interp.gc_unroot_value(&next);
+                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_value(&a);
                                 return Completion::Throw(e);
                             }
                         };
@@ -3383,7 +3401,10 @@ impl Interpreter {
                             ) {
                                 Completion::Normal(v) => v,
                                 other => {
+                                    interp.gc_unroot_value(&next);
                                     let _ = interp.iterator_close(&iterator, JsValue::Undefined);
+                                    interp.gc_unroot_value(&iterator);
+                                    interp.gc_unroot_value(&a);
                                     return other;
                                 }
                             }
@@ -3393,9 +3414,13 @@ impl Interpreter {
                         if let Err(e) =
                             create_data_property_or_throw(interp, &a, &k.to_string(), mapped_value)
                         {
+                            interp.gc_unroot_value(&next);
                             let _ = interp.iterator_close(&iterator, JsValue::Undefined);
+                            interp.gc_unroot_value(&iterator);
+                            interp.gc_unroot_value(&a);
                             return Completion::Throw(e);
                         }
+                        interp.gc_unroot_value(&next);
                         k += 1;
                     }
                 } else {
@@ -3404,25 +3429,40 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    interp.gc_root_value(&array_like);
                     let len = match length_of_array_like(interp, &array_like) {
                         Ok(v) => v,
-                        Err(c) => return c,
+                        Err(c) => {
+                            interp.gc_unroot_value(&array_like);
+                            return c;
+                        }
                     };
 
                     let a = if interp.is_constructor(&c) {
                         match interp.construct(&c, &[JsValue::Number(len as f64)]) {
                             Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            other => return other,
+                            Completion::Throw(e) => {
+                                interp.gc_unroot_value(&array_like);
+                                return Completion::Throw(e);
+                            }
+                            other => {
+                                interp.gc_unroot_value(&array_like);
+                                return other;
+                            }
                         }
                     } else {
                         interp.create_array(Vec::new())
                     };
+                    interp.gc_root_value(&a);
 
                     for k in 0..len {
                         let kvalue = match obj_get(interp, &array_like, &k.to_string()) {
                             Ok(v) => v,
-                            Err(c) => return c,
+                            Err(c) => {
+                                interp.gc_unroot_value(&a);
+                                interp.gc_unroot_value(&array_like);
+                                return c;
+                            }
                         };
                         let mapped_value = if mapping {
                             match interp.call_function(
@@ -3431,7 +3471,11 @@ impl Interpreter {
                                 &[kvalue, JsValue::Number(k as f64)],
                             ) {
                                 Completion::Normal(v) => v,
-                                other => return other,
+                                other => {
+                                    interp.gc_unroot_value(&a);
+                                    interp.gc_unroot_value(&array_like);
+                                    return other;
+                                }
                             }
                         } else {
                             kvalue
@@ -3439,12 +3483,18 @@ impl Interpreter {
                         if let Err(e) =
                             create_data_property_or_throw(interp, &a, &k.to_string(), mapped_value)
                         {
+                            interp.gc_unroot_value(&a);
+                            interp.gc_unroot_value(&array_like);
                             return Completion::Throw(e);
                         }
                     }
                     if let Err(e) = set_length_throw(interp, &a, len) {
+                        interp.gc_unroot_value(&a);
+                        interp.gc_unroot_value(&array_like);
                         return Completion::Throw(e);
                     }
+                    interp.gc_unroot_value(&a);
+                    interp.gc_unroot_value(&array_like);
                     Completion::Normal(a)
                 }
             },
