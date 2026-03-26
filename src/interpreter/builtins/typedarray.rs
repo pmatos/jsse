@@ -1786,12 +1786,12 @@ impl Interpreter {
                     let bpe = ta.kind.bytes_per_element();
                     let new_offset = ta.byte_offset + begin * bpe;
 
-                    let length_arg = if end_is_undefined && ta.is_length_tracking {
-                        JsValue::Undefined
+                    let offset_val = JsValue::Number(new_offset as f64);
+                    let ctor_args: Vec<JsValue> = if end_is_undefined && ta.is_length_tracking {
+                        vec![buf_val, offset_val]
                     } else {
-                        JsValue::Number(new_len as f64)
+                        vec![buf_val, offset_val, JsValue::Number(new_len as f64)]
                     };
-                    let ctor_args = [buf_val, JsValue::Number(new_offset as f64), length_arg];
                     return match interp.typed_array_species_create(this_val, &ctor_args) {
                         Ok(v) => Completion::Normal(v),
                         Err(e) => Completion::Throw(e),
