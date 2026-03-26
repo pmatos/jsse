@@ -543,11 +543,12 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 has_any |= has_mc;
-                let (_new_ry, has_y) = match read_field_i32(interp, &item, "year", ry) {
+                let (prop_year, has_y) = match read_field_i32(interp, &item, "year", ry) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
                 has_any |= has_y;
+                let validation_year = if has_y { prop_year } else { ry };
                 if !has_any {
                     return Completion::Throw(
                         interp
@@ -596,7 +597,11 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     if overflow == "reject" {
-                        if !iso_date_valid(ry, new_m, new_d) {
+                        let cm = new_m;
+                        if !(1..=12).contains(&cm)
+                            || new_d < 1
+                            || new_d > iso_days_in_month(validation_year, cm)
+                        {
                             return Completion::Throw(
                                 interp.create_range_error("Invalid month/day"),
                             );
@@ -604,7 +609,7 @@ impl Interpreter {
                         create_plain_month_day_result(interp, new_m, new_d, ry, &cal)
                     } else {
                         let cm = new_m.clamp(1, 12);
-                        let cd = new_d.clamp(1, iso_days_in_month(ry, cm));
+                        let cd = new_d.clamp(1, iso_days_in_month(validation_year, cm));
                         create_plain_month_day_result(interp, cm, cd, ry, &cal)
                     }
                 }

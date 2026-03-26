@@ -430,8 +430,22 @@ pub(crate) fn get_start_of_day(tz: &str, epoch_days: i128) -> i128 {
 /// Uses OffsetComponents to get base_utc_offset + dst_offset.
 fn get_total_offset_secs(tz_parsed: &chrono_tz::Tz, epoch_secs: i64) -> i32 {
     use chrono_tz::OffsetComponents;
-    let utc_dt = chrono::DateTime::from_timestamp(epoch_secs, 0)
-        .unwrap_or_else(|| chrono::DateTime::from_timestamp(0, 0).unwrap());
+    let utc_dt = match chrono::DateTime::from_timestamp(epoch_secs, 0) {
+        Some(dt) => dt,
+        None => {
+            if epoch_secs < 0 {
+                chrono::NaiveDate::MIN
+                    .and_hms_opt(0, 0, 0)
+                    .unwrap()
+                    .and_utc()
+            } else {
+                chrono::NaiveDate::MAX
+                    .and_hms_opt(23, 59, 59)
+                    .unwrap()
+                    .and_utc()
+            }
+        }
+    };
     let tz_dt = utc_dt.with_timezone(tz_parsed);
     let offset = tz_dt.offset();
     (offset.base_utc_offset().num_seconds() + offset.dst_offset().num_seconds()) as i32

@@ -1288,10 +1288,10 @@ fn round_relative_duration(
 
                     // Round using actual day length as the increment unit
                     let inc_ns = increment as i128 * day_length_ns;
-                    let _total_ns_in_day = total_days_i as i128 * day_length_ns + remaining_ns;
+                    let total_ns = total_days_i as i128 * day_length_ns + remaining_ns;
                     let rounded_ns =
-                        super::round_i128_to_increment(remaining_ns, inc_ns, rounding_mode);
-                    let rounded_days = total_days_i + (rounded_ns / day_length_ns) as i32;
+                        super::round_i128_to_increment(total_ns, inc_ns, rounding_mode);
+                    let rounded_days = (rounded_ns / day_length_ns) as i32;
 
                     if y != 0.0 || mo != 0.0 || w != 0.0 {
                         (y as i32, mo as i32, w as i32, rounded_days)
