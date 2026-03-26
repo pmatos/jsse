@@ -5068,9 +5068,9 @@ impl Interpreter {
             }
         };
 
-        self.gc_unroot_value(&this_val);
-        self.gc_unroot_value(&func_val);
         if saved_tail && !self.is_builtin_eval(&func_val) {
+            self.gc_unroot_value(&this_val);
+            self.gc_unroot_value(&func_val);
             self.gc_unroot_args(&evaluated_args);
             return Completion::TailCall {
                 func: func_val,
@@ -5079,6 +5079,8 @@ impl Interpreter {
             };
         }
         let result = self.call_function(&func_val, &this_val, &evaluated_args);
+        self.gc_unroot_value(&this_val);
+        self.gc_unroot_value(&func_val);
         self.gc_unroot_args(&evaluated_args);
         result
     }

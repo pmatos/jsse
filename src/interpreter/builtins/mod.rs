@@ -8674,7 +8674,6 @@ impl Interpreter {
 
                 let bind_this = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let bound_args: Vec<JsValue> = args.iter().skip(1).cloned().collect();
-                let func = this_val.clone();
 
                 // Spec §20.2.3.2: HasOwnProperty(Target, "length"), then Get, then type check
                 // For proxy targets, use invoke_proxy_trap to trigger getOwnPropertyDescriptor
@@ -8749,43 +8748,44 @@ impl Interpreter {
 
                 let is_ctor = interp.is_constructor(this_val);
 
-                let _bound_args_len = bound_args.len();
-                let bound = if is_ctor {
-                    JsFunction::constructor(
-                        bound_name,
-                        bound_length,
-                        move |interp2, this, call_args: &[JsValue]| {
-                            let mut all_args = bound_args.clone();
+                // Use Rc<Cell<u64>> so the closure can read the bound function's
+                // own object ID at call time (chicken-and-egg: closure goes into
+                // the object, so we can't know the ID until after creation).
+                let bound_id_cell = Rc::new(std::cell::Cell::new(0u64));
+                let id_cell = bound_id_cell.clone();
+                let bound = JsFunction::Native(
+                    bound_name,
+                    bound_length,
+                    Rc::new(
+                        move |interp2: &mut Interpreter, this: &JsValue, call_args: &[JsValue]| {
+                            let obj_id = id_cell.get();
+                            let (target, bt, ba) = {
+                                let obj = interp2.get_object(obj_id).unwrap();
+                                let b = obj.borrow();
+                                (
+                                    b.bound_target_function
+                                        .clone()
+                                        .unwrap_or(JsValue::Undefined),
+                                    b.bound_this.clone().unwrap_or(JsValue::Undefined),
+                                    b.bound_args.clone().unwrap_or_default(),
+                                )
+                            };
+                            let mut all_args = ba;
                             all_args.extend_from_slice(call_args);
-                            // When called as constructor, new_target is set and this is a fresh object
-                            // Use that this (not bind_this) — the new machinery already created it
                             if interp2.new_target.is_some() {
-                                interp2.call_function(&func, this, &all_args)
+                                interp2.call_function(&target, this, &all_args)
                             } else {
-                                interp2.call_function(&func, &bind_this, &all_args)
+                                interp2.call_function(&target, &bt, &all_args)
                             }
                         },
-                    )
-                } else {
-                    JsFunction::Native(
-                        bound_name,
-                        bound_length,
-                        Rc::new(
-                            move |interp2: &mut Interpreter,
-                                  _this: &JsValue,
-                                  call_args: &[JsValue]| {
-                                let mut all_args = bound_args.clone();
-                                all_args.extend_from_slice(call_args);
-                                interp2.call_function(&func, &bind_this, &all_args)
-                            },
-                        ),
-                        false,
-                    )
-                };
+                    ),
+                    is_ctor,
+                );
                 let result = interp.create_function(bound);
                 if let JsValue::Object(ref o) = result
                     && let Some(obj) = interp.get_object(o.id)
                 {
+                    bound_id_cell.set(o.id);
                     // §20.2.3.2 step 4-5: Set bound function's [[Prototype]] to target's [[Prototype]]
                     if let JsValue::Object(target_o) = this_val
                         && let Some(target_obj) = interp.get_object(target_o.id)
@@ -8795,8 +8795,9 @@ impl Interpreter {
                     // Per spec, bound functions do not have own .prototype property
                     obj.borrow_mut().properties.remove("prototype");
                     obj.borrow_mut().property_order.retain(|k| k != "prototype");
-                    // Track [[BoundTargetFunction]] and [[BoundArguments]] for instanceof and newTarget resolution
+                    // Store all bound references in GC-traced object fields
                     obj.borrow_mut().bound_target_function = Some(this_val.clone());
+                    obj.borrow_mut().bound_this = Some(bind_this.clone());
                     let stored_bound_args: Vec<JsValue> = args.iter().skip(1).cloned().collect();
                     obj.borrow_mut().bound_args = Some(stored_bound_args);
                     // Overwrite length with correct f64 value (handles Infinity)

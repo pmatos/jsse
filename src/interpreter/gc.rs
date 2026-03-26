@@ -165,7 +165,6 @@ impl Interpreter {
                 self.function_realm_map.remove(&(i as u64));
             }
         }
-
         // Post-sweep: clear dead weak entries
         for i in 0..obj_count {
             if !marks[i] {
@@ -287,6 +286,9 @@ impl Interpreter {
             for v in bargs {
                 Self::collect_value_roots(v, worklist);
             }
+        }
+        if let Some(ref bt) = obj.bound_this {
+            Self::collect_value_roots(bt, worklist);
         }
         if let Some(ref map) = obj.parameter_map {
             for (env_ref, _) in map.values() {
