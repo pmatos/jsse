@@ -483,6 +483,7 @@ impl Interpreter {
                         let obj_ref = obj.borrow();
                         buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
+                    let old_data_len = old_data.len();
                     let mut new_data = vec![0u8; new_len];
                     let copy_len = old_len.min(new_len);
                     new_data[..copy_len].copy_from_slice(&old_data[..copy_len]);
@@ -494,6 +495,7 @@ impl Interpreter {
                         obj_ref.arraybuffer_data =
                             Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
+                    interp.gc_untrack_external_bytes(old_data_len);
                     let new_ab = interp.create_arraybuffer_resizable(new_data, max_byte_length);
                     let id = new_ab.borrow().id.unwrap();
                     return Completion::Normal(JsValue::Object(JsObject { id }));
@@ -565,6 +567,7 @@ impl Interpreter {
                         let obj_ref = obj.borrow();
                         buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
+                    let old_data_len = old_data.len();
                     let mut new_data = vec![0u8; new_len];
                     let copy_len = old_len.min(new_len);
                     new_data[..copy_len].copy_from_slice(&old_data[..copy_len]);
@@ -576,6 +579,7 @@ impl Interpreter {
                         obj_ref.arraybuffer_data =
                             Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
+                    interp.gc_untrack_external_bytes(old_data_len);
                     let new_ab = interp.create_arraybuffer(new_data);
                     let id = new_ab.borrow().id.unwrap();
                     return Completion::Normal(JsValue::Object(JsObject { id }));
@@ -646,6 +650,7 @@ impl Interpreter {
                         let obj_ref = obj.borrow();
                         buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
+                    let old_data_len = old_data.len();
                     let mut new_data = vec![0u8; new_len];
                     let copy_len = old_len.min(new_len);
                     new_data[..copy_len].copy_from_slice(&old_data[..copy_len]);
@@ -658,6 +663,7 @@ impl Interpreter {
                         obj_ref.arraybuffer_data =
                             Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
+                    interp.gc_untrack_external_bytes(old_data_len);
                     // Create immutable ArrayBuffer
                     let new_ab = interp.create_arraybuffer(new_data);
                     new_ab.borrow_mut().arraybuffer_is_immutable = true;
@@ -722,9 +728,18 @@ impl Interpreter {
                             ),
                         );
                     }
-                    let obj_ref = obj.borrow();
-                    let buf = obj_ref.arraybuffer_data.as_ref().unwrap();
-                    buf.borrow_mut().resize(new_len, 0u8);
+                    let old_len = {
+                        let obj_ref = obj.borrow();
+                        let buf = obj_ref.arraybuffer_data.as_ref().unwrap();
+                        let old = buf.borrow().len();
+                        buf.borrow_mut().resize(new_len, 0u8);
+                        old
+                    };
+                    if new_len > old_len {
+                        interp.gc_track_external_bytes(new_len - old_len);
+                    } else {
+                        interp.gc_untrack_external_bytes(old_len - new_len);
+                    }
                     return Completion::Normal(JsValue::Undefined);
                 }
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
@@ -812,6 +827,7 @@ impl Interpreter {
                 } else {
                     vec![0u8; len]
                 };
+                let buf_len = buf.len();
                 let buf_rc = Rc::new(RefCell::new(BufferData::Owned(buf)));
                 let detached = Rc::new(Cell::new(false));
                 let obj = interp.create_object();
@@ -823,6 +839,7 @@ impl Interpreter {
                     o.arraybuffer_detached = Some(detached);
                     o.arraybuffer_max_byte_length = max_byte_length;
                 }
+                interp.gc_track_external_bytes(buf_len);
                 let id = obj.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(JsObject { id }))
             },
@@ -910,6 +927,7 @@ impl Interpreter {
         data: Vec<u8>,
         max_byte_length: Option<usize>,
     ) -> Rc<RefCell<JsObjectData>> {
+        let data_len = data.len();
         let buf_rc = Rc::new(RefCell::new(BufferData::Owned(data)));
         let detached = Rc::new(Cell::new(false));
         let obj = self.create_object();
@@ -921,6 +939,7 @@ impl Interpreter {
             o.arraybuffer_detached = Some(detached);
             o.arraybuffer_max_byte_length = max_byte_length;
         }
+        self.gc_track_external_bytes(data_len);
         obj
     }
 
@@ -928,20 +947,39 @@ impl Interpreter {
         if let JsValue::Object(o) = ab_val
             && let Some(obj) = self.get_object(o.id)
         {
-            let mut obj_ref = obj.borrow_mut();
-            if obj_ref.arraybuffer_data.is_some() {
+            let old_len;
+            {
+                let obj_ref = obj.borrow();
+                if obj_ref.arraybuffer_data.is_none() {
+                    drop(obj_ref);
+                    return Completion::Throw(self.create_type_error("not an ArrayBuffer"));
+                }
                 if obj_ref.arraybuffer_is_shared {
+                    drop(obj_ref);
                     return Completion::Throw(
                         self.create_type_error("Cannot detach a SharedArrayBuffer"),
                     );
                 }
+                old_len = if let Some(ref bd) = obj_ref.arraybuffer_data {
+                    if let BufferData::Owned(ref v) = *bd.borrow() {
+                        v.len()
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
+            }
+            {
+                let mut obj_ref = obj.borrow_mut();
                 if let Some(ref det) = obj_ref.arraybuffer_detached {
                     det.set(true);
                 }
                 obj_ref.arraybuffer_data =
                     Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
-                return Completion::Normal(JsValue::Undefined);
             }
+            self.gc_untrack_external_bytes(old_len);
+            return Completion::Normal(JsValue::Undefined);
         }
         Completion::Throw(self.create_type_error("not an ArrayBuffer"))
     }
@@ -2633,14 +2671,15 @@ impl Interpreter {
                     };
                     let len = typed_array_length(&ta);
                     let bpe = ta.kind.bytes_per_element();
-                    let new_buf = vec![0u8; len * bpe];
+                    let buf_byte_len = len * bpe;
+                    let new_buf = vec![0u8; buf_byte_len];
                     let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
                     let new_ta = TypedArrayInfo {
                         kind: ta.kind,
                         buffer: new_buf_rc.clone(),
                         byte_offset: 0,
-                        byte_length: len * bpe,
+                        byte_length: buf_byte_len,
                         array_length: len,
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
@@ -2657,6 +2696,7 @@ impl Interpreter {
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
+                    interp.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj.borrow().id.unwrap();
                     let buf_val = JsValue::Object(JsObject { id: ab_id });
                     let result = interp.create_typed_array_object(new_ta, buf_val);
@@ -2774,14 +2814,15 @@ impl Interpreter {
                     }
                     let len = typed_array_length(&ta);
                     let bpe = ta.kind.bytes_per_element();
-                    let new_buf = vec![0u8; len * bpe];
+                    let buf_byte_len = len * bpe;
+                    let new_buf = vec![0u8; buf_byte_len];
                     let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
                     let new_ta = TypedArrayInfo {
                         kind: ta.kind,
                         buffer: new_buf_rc.clone(),
                         byte_offset: 0,
-                        byte_length: len * bpe,
+                        byte_length: buf_byte_len,
                         array_length: len,
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
@@ -2797,6 +2838,7 @@ impl Interpreter {
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
+                    interp.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj.borrow().id.unwrap();
                     let buf_val = JsValue::Object(JsObject { id: ab_id });
                     let result = interp.create_typed_array_object(new_ta, buf_val);
@@ -3006,14 +3048,15 @@ impl Interpreter {
                     }
 
                     let bpe = ta.kind.bytes_per_element();
-                    let new_buf = vec![0u8; len as usize * bpe];
+                    let buf_byte_len = len as usize * bpe;
+                    let new_buf = vec![0u8; buf_byte_len];
                     let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
                     let new_ta = TypedArrayInfo {
                         kind: ta.kind,
                         buffer: new_buf_rc.clone(),
                         byte_offset: 0,
-                        byte_length: len as usize * bpe,
+                        byte_length: buf_byte_len,
                         array_length: len as usize,
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
@@ -3034,6 +3077,7 @@ impl Interpreter {
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
+                    interp.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj.borrow().id.unwrap();
                     let buf_val = JsValue::Object(JsObject { id: ab_id });
                     let result = interp.create_typed_array_object(new_ta, buf_val);
@@ -4109,14 +4153,15 @@ impl Interpreter {
                                         ));
                                     }
                                     let len = typed_array_length(&src_ta);
-                                    let new_buf = vec![0u8; len * bpe];
+                                    let buf_byte_len = len * bpe;
+                                    let new_buf = vec![0u8; buf_byte_len];
                                     let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                                     let new_detached = Rc::new(Cell::new(false));
                                     let new_ta = TypedArrayInfo {
                                         kind,
                                         buffer: new_buf_rc.clone(),
                                         byte_offset: 0,
-                                        byte_length: len * bpe,
+                                        byte_length: buf_byte_len,
                                         array_length: len,
                                         is_detached: new_detached.clone(),
                                         is_length_tracking: false,
@@ -4133,6 +4178,7 @@ impl Interpreter {
                                         ab.arraybuffer_data = Some(new_buf_rc);
                                         ab.arraybuffer_detached = Some(new_detached);
                                     }
+                                    interp.gc_track_external_bytes(buf_byte_len);
                                     let proto = match get_proto(interp) {
                                         Ok(p) => p,
                                         Err(e) => return Completion::Throw(e),
@@ -4151,14 +4197,15 @@ impl Interpreter {
                                     Err(c) => return c,
                                 };
                                 let len = values.len();
-                                let new_buf = vec![0u8; len * bpe];
+                                let buf_byte_len = len * bpe;
+                                let new_buf = vec![0u8; buf_byte_len];
                                 let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                                 let new_detached = Rc::new(Cell::new(false));
                                 let new_ta = TypedArrayInfo {
                                     kind,
                                     buffer: new_buf_rc.clone(),
                                     byte_offset: 0,
-                                    byte_length: len * bpe,
+                                    byte_length: buf_byte_len,
                                     array_length: len,
                                     is_detached: new_detached.clone(),
                                     is_length_tracking: false,
@@ -4178,6 +4225,7 @@ impl Interpreter {
                                     ab.arraybuffer_data = Some(new_buf_rc);
                                     ab.arraybuffer_detached = Some(new_detached);
                                 }
+                                interp.gc_track_external_bytes(buf_byte_len);
                                 let proto = match get_proto(interp) {
                                     Ok(p) => p,
                                     Err(e) => return Completion::Throw(e),
@@ -4613,14 +4661,15 @@ impl Interpreter {
         type_proto: &Rc<RefCell<JsObjectData>>,
     ) -> Completion {
         let bpe = kind.bytes_per_element();
-        let buf = vec![0u8; len * bpe];
+        let buf_byte_len = len * bpe;
+        let buf = vec![0u8; buf_byte_len];
         let buf_rc = Rc::new(RefCell::new(BufferData::Owned(buf)));
         let detached = Rc::new(Cell::new(false));
         let ta_info = TypedArrayInfo {
             kind,
             buffer: buf_rc.clone(),
             byte_offset: 0,
-            byte_length: len * bpe,
+            byte_length: buf_byte_len,
             array_length: len,
             is_detached: detached.clone(),
             is_length_tracking: false,
@@ -4633,6 +4682,7 @@ impl Interpreter {
             ab.arraybuffer_data = Some(buf_rc);
             ab.arraybuffer_detached = Some(detached);
         }
+        self.gc_track_external_bytes(buf_byte_len);
         let ab_id = ab_obj.borrow().id.unwrap();
         let buf_val = JsValue::Object(JsObject { id: ab_id });
         let result = self.create_typed_array_object_with_proto(ta_info, buf_val, type_proto);
@@ -4741,14 +4791,15 @@ impl Interpreter {
                     }
                     .or_else(|| self.get_typed_array_prototype(kind));
                     let bpe = kind.bytes_per_element();
-                    let new_buf = vec![0u8; len * bpe];
+                    let buf_byte_len = len * bpe;
+                    let new_buf = vec![0u8; buf_byte_len];
                     let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
                     let ta = TypedArrayInfo {
                         kind,
                         buffer: new_buf_rc.clone(),
                         byte_offset: 0,
-                        byte_length: len * bpe,
+                        byte_length: buf_byte_len,
                         array_length: len,
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
@@ -4761,6 +4812,7 @@ impl Interpreter {
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
+                    self.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj.borrow().id.unwrap();
                     let result = self.create_object();
                     {
@@ -6554,6 +6606,7 @@ fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Compl
         ab.arraybuffer_data = Some(buf_rc);
         ab.arraybuffer_detached = Some(detached);
     }
+    interp.gc_track_external_bytes(len);
     let ab_id = ab_obj.borrow().id.unwrap();
     let buf_val = JsValue::Object(JsObject { id: ab_id });
 

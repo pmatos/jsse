@@ -3306,6 +3306,10 @@ impl PromiseData {
 }
 
 pub(crate) const GC_THRESHOLD: usize = 4096;
+pub(crate) const GC_INITIAL_THRESHOLD_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const GC_MIN_THRESHOLD_BYTES: usize = 256 * 1024;
+pub(crate) const GC_GROWTH_FACTOR: usize = 2;
+pub(crate) const GC_OBJECT_OVERHEAD: usize = 512;
 
 pub(crate) struct SetRecord {
     pub(crate) has: JsValue,

@@ -176,16 +176,16 @@ fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
         vec![obj_val.clone()],
         Box::new(|_| Completion::Normal(JsValue::Undefined)),
     ));
-    interp.gc_alloc_count = usize::MAX;
-    interp.maybe_gc();
+    interp.gc_requested = true;
+    interp.gc_safepoint();
     assert!(
         interp.get_object(id).is_some(),
         "microtask root should keep object alive"
     );
 
     interp.microtask_queue.clear();
-    interp.gc_alloc_count = usize::MAX;
-    interp.maybe_gc();
+    interp.gc_requested = true;
+    interp.gc_safepoint();
     assert!(
         interp.get_object(id).is_none(),
         "object should be collectable after queue clears"
@@ -214,13 +214,13 @@ fn gc_keeps_module_exports_alive_until_registry_entry_is_removed() {
         panic!("expected exported object");
     };
 
-    interp.gc_alloc_count = usize::MAX;
-    interp.maybe_gc();
+    interp.gc_requested = true;
+    interp.gc_safepoint();
     assert!(interp.get_object(obj_ref.id).is_some());
 
     interp.module_registry.remove(&canon);
-    interp.gc_alloc_count = usize::MAX;
-    interp.maybe_gc();
+    interp.gc_requested = true;
+    interp.gc_safepoint();
     assert!(interp.get_object(obj_ref.id).is_none());
 
     let _ = fs::remove_dir_all(&dir);

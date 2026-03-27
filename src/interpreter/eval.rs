@@ -12406,7 +12406,7 @@ impl Interpreter {
         self.call_stack_envs.push(lex_env.clone());
         let mut last = Completion::Empty;
         for stmt in &program.body {
-            self.maybe_gc();
+            self.gc_safepoint();
             match self.exec_statement(stmt, &lex_env) {
                 Completion::Normal(v) => last = Completion::Normal(v),
                 Completion::Empty => {}

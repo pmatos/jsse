@@ -3,6 +3,7 @@ use super::*;
 impl Interpreter {
     pub(crate) fn allocate_object_slot(&mut self, obj: Rc<RefCell<JsObjectData>>) -> u64 {
         self.gc_alloc_count += 1;
+        let is_reuse = !self.free_list.is_empty();
         let id = if let Some(idx) = self.free_list.pop() {
             self.objects[idx] = Some(obj.clone());
             idx as u64
@@ -12,13 +13,36 @@ impl Interpreter {
             idx as u64
         };
         obj.borrow_mut().id = Some(id);
+        let cost = if is_reuse {
+            GC_OBJECT_OVERHEAD / 2
+        } else {
+            GC_OBJECT_OVERHEAD
+        };
+        self.gc_bytes_since_gc += cost;
+        if self.gc_alloc_count >= GC_THRESHOLD || self.gc_bytes_since_gc >= self.gc_threshold_bytes
+        {
+            self.gc_requested = true;
+        }
         id
     }
 
-    pub(crate) fn maybe_gc(&mut self) {
-        if self.gc_alloc_count < GC_THRESHOLD {
+    pub(crate) fn gc_track_external_bytes(&mut self, bytes: usize) {
+        self.gc_external_bytes += bytes;
+        self.gc_bytes_since_gc += bytes;
+        if self.gc_bytes_since_gc >= self.gc_threshold_bytes {
+            self.gc_requested = true;
+        }
+    }
+
+    pub(crate) fn gc_untrack_external_bytes(&mut self, bytes: usize) {
+        self.gc_external_bytes = self.gc_external_bytes.saturating_sub(bytes);
+    }
+
+    pub(crate) fn gc_safepoint(&mut self) {
+        if !self.gc_requested {
             return;
         }
+        self.gc_requested = false;
         self.gc_alloc_count = 0;
         let obj_count = self.objects.len();
         let mut marks = vec![false; obj_count];
@@ -160,11 +184,25 @@ impl Interpreter {
         // Sweep phase
         for (i, mark) in marks.iter().enumerate().take(obj_count) {
             if !mark && self.objects[i].is_some() {
+                if let Some(ref obj_rc) = self.objects[i] {
+                    let obj = obj_rc.borrow();
+                    if let Some(ref buf_data) = obj.arraybuffer_data
+                        && let BufferData::Owned(ref v) = *buf_data.borrow()
+                    {
+                        self.gc_external_bytes = self.gc_external_bytes.saturating_sub(v.len());
+                    }
+                }
                 self.objects[i] = None;
                 self.free_list.push(i);
                 self.function_realm_map.remove(&(i as u64));
             }
         }
+        // Adaptive threshold: scale next GC budget from live heap size
+        let live_count = self.objects.iter().filter(|o| o.is_some()).count();
+        let live_bytes = live_count * GC_OBJECT_OVERHEAD + self.gc_external_bytes;
+        self.gc_threshold_bytes =
+            std::cmp::max(GC_MIN_THRESHOLD_BYTES, live_bytes * GC_GROWTH_FACTOR);
+        self.gc_bytes_since_gc = 0;
         // Post-sweep: clear dead weak entries
         for i in 0..obj_count {
             if !marks[i] {

@@ -56,6 +56,10 @@ pub struct Interpreter {
     new_target: Option<JsValue>,
     free_list: Vec<usize>,
     gc_alloc_count: usize,
+    gc_requested: bool,
+    gc_bytes_since_gc: usize,
+    gc_external_bytes: usize,
+    gc_threshold_bytes: usize,
     generator_context: Option<GeneratorContext>,
     pub(crate) destructuring_yield: bool,
     pub(crate) pending_iter_close: Vec<JsValue>,
@@ -195,6 +199,10 @@ impl Interpreter {
             new_target: None,
             free_list: Vec::new(),
             gc_alloc_count: 0,
+            gc_requested: false,
+            gc_bytes_since_gc: 0,
+            gc_external_bytes: 0,
+            gc_threshold_bytes: GC_INITIAL_THRESHOLD_BYTES,
             generator_context: None,
             destructuring_yield: false,
             pending_iter_close: Vec::new(),
@@ -314,7 +322,8 @@ impl Interpreter {
             "gc".to_string(),
             0,
             |interp, _this, _args| {
-                interp.maybe_gc();
+                interp.gc_requested = true;
+                interp.gc_safepoint();
                 Completion::Normal(JsValue::Undefined)
             },
         ));
@@ -1248,7 +1257,7 @@ impl Interpreter {
     }
 
     pub fn run(&mut self, program: &Program) -> Completion {
-        self.maybe_gc();
+        self.gc_safepoint();
         let result = match program.source_type {
             SourceType::Script => {
                 let global = self.realm().global_env.clone();
@@ -1264,7 +1273,7 @@ impl Interpreter {
     }
 
     pub fn run_with_path(&mut self, program: &Program, path: &Path) -> Completion {
-        self.maybe_gc();
+        self.gc_safepoint();
         match program.source_type {
             SourceType::Script => {
                 let prev = self.current_module_path.take();
@@ -2358,6 +2367,7 @@ impl Interpreter {
             ab.arraybuffer_detached = Some(detached.clone());
             ab.arraybuffer_is_immutable = true;
         }
+        self.gc_track_external_bytes(len);
         let ab_id = ab_obj.borrow().id.unwrap();
         let buf_val = JsValue::Object(crate::types::JsObject { id: ab_id });
 
