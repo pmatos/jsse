@@ -899,6 +899,35 @@ fn canonicalize_timezone(tz: &str) -> String {
     tz.to_string()
 }
 
+fn default_numbering_system_for_locale(locale: &str) -> &'static str {
+    let lang = locale
+        .split('-')
+        .next()
+        .unwrap_or(locale)
+        .split('_')
+        .next()
+        .unwrap_or(locale);
+    match lang {
+        "ar" => "arab",
+        "fa" => "arabext",
+        "bn" => "beng",
+        "hi" | "mr" | "ne" | "sa" => "deva",
+        "gu" => "gujr",
+        "pa" => "guru",
+        "kn" => "knda",
+        "ml" => "mlym",
+        "or" => "orya",
+        "ta" => "tamldec",
+        "te" => "telu",
+        "th" => "thai",
+        "my" => "mymr",
+        "km" => "khmr",
+        "lo" => "laoo",
+        "bo" => "tibt",
+        _ => "latn",
+    }
+}
+
 fn is_supported_numbering_system(ns: &str) -> bool {
     matches!(
         ns,
@@ -5582,8 +5611,9 @@ impl Interpreter {
                 };
                 let calendar = calendar_raw;
 
-                // NumberingSystem: option > locale extension > default
+                // NumberingSystem: option > locale extension > locale default
                 let ns_opt_lower = ns_opt.map(|n| n.to_ascii_lowercase());
+                let locale_default_ns = default_numbering_system_for_locale(&resolved_locale);
                 let numbering_system = if let Some(ref no) = ns_opt_lower {
                     if is_supported_numbering_system(no) {
                         no.clone()
@@ -5591,19 +5621,19 @@ impl Interpreter {
                         if is_supported_numbering_system(ln) {
                             ln.clone()
                         } else {
-                            "latn".to_string()
+                            locale_default_ns.to_string()
                         }
                     } else {
-                        "latn".to_string()
+                        locale_default_ns.to_string()
                     }
                 } else if let Some(ref ln) = locale_nu {
                     if is_supported_numbering_system(ln) {
                         ln.clone()
                     } else {
-                        "latn".to_string()
+                        locale_default_ns.to_string()
                     }
                 } else {
-                    "latn".to_string()
+                    locale_default_ns.to_string()
                 };
 
                 // hourCycle resolution: option > locale extension > locale default
