@@ -2023,7 +2023,7 @@ impl Interpreter {
 
                         // AdjustRoundedDurationDays for ZDT
                         if let Some((base_ens, tz)) = &zdt_info {
-                            let time_ns: i128 = rh as i128 * 3_600_000_000_000
+                            let mut time_ns: i128 = rh as i128 * 3_600_000_000_000
                                 + rmi as i128 * 60_000_000_000
                                 + rs as i128 * 1_000_000_000
                                 + rms as i128 * 1_000_000
@@ -2036,7 +2036,7 @@ impl Interpreter {
                             } else {
                                 0
                             };
-                            if direction != 0 {
+                            while direction != 0 {
                                 let day_start = add_duration_to_zdt_epoch_ns(
                                     y, mo, w, rd, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, by, bm, bd,
                                     *base_ens, tz,
@@ -2060,28 +2060,32 @@ impl Interpreter {
                                     tz,
                                 )
                                 .unwrap_or(*base_ens);
-                                let day_length_ns = day_end - day_start;
-                                if day_length_ns > 0 {
-                                    let one_day_less = time_ns - day_length_ns;
-                                    // Adjust if time >= one day (direction>0: time_ns >= day_length, direction<0: time_ns <= -day_length)
-                                    let less_sign = if one_day_less > 0 {
-                                        1i128
-                                    } else if one_day_less < 0 {
-                                        -1
-                                    } else {
-                                        0
-                                    };
-                                    if less_sign != -direction {
-                                        // Time exceeds one day: carry
-                                        rd += direction as f64;
-                                        let r = unbalance_time_ns_i128(one_day_less, "hour");
-                                        rh = r.1 as f64;
-                                        rmi = r.2 as f64;
-                                        rs = r.3 as f64;
-                                        rms = r.4 as f64;
-                                        rus = r.5 as f64;
-                                        rns = r.6 as f64;
-                                    }
+                                let day_length_ns = (day_end - day_start).abs();
+                                if day_length_ns == 0 {
+                                    // Skipped day (e.g., Samoa 2011-12-30): advance past it
+                                    rd += direction as f64;
+                                    continue;
+                                }
+                                let one_day_less = time_ns - direction * day_length_ns;
+                                let less_sign = if one_day_less > 0 {
+                                    1i128
+                                } else if one_day_less < 0 {
+                                    -1
+                                } else {
+                                    0
+                                };
+                                if less_sign != -direction {
+                                    rd += direction as f64;
+                                    let r = unbalance_time_ns_i128(one_day_less, "hour");
+                                    time_ns = one_day_less;
+                                    rh = r.1 as f64;
+                                    rmi = r.2 as f64;
+                                    rs = r.3 as f64;
+                                    rms = r.4 as f64;
+                                    rus = r.5 as f64;
+                                    rns = r.6 as f64;
+                                } else {
+                                    break;
                                 }
                             }
                         }
