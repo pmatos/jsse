@@ -98,9 +98,7 @@ fn create_segment_object(
     obj.borrow_mut().insert_property(
         "segment".to_string(),
         PropertyDescriptor::data(
-            JsValue::String(JsString {
-                code_units: segment.to_vec(),
-            }),
+            JsValue::String(JsString::from_vec(segment.to_vec())),
             true,
             true,
             true,
@@ -113,9 +111,7 @@ fn create_segment_object(
     obj.borrow_mut().insert_property(
         "input".to_string(),
         PropertyDescriptor::data(
-            JsValue::String(JsString {
-                code_units: input.to_vec(),
-            }),
+            JsValue::String(JsString::from_vec(input.to_vec())),
             true,
             true,
             true,
@@ -389,7 +385,7 @@ impl Interpreter {
                         iter_obj.borrow_mut().iterator_state =
                             Some(IteratorState::SegmentIterator {
                                 segments: seg_data,
-                                input: std::rc::Rc::new(input_clone.clone()),
+                                input: std::rc::Rc::new(input_clone.as_ref().clone()),
                                 position: 0,
                                 done: false,
                             });

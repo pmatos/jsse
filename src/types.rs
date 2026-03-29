@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub enum JsValue {
@@ -13,15 +14,22 @@ pub enum JsValue {
 }
 
 // UTF-16 code unit string per spec §6.1.4
+// Uses Arc<Vec<u16>> so cloning (e.g. env.get) is O(1).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct JsString {
-    pub code_units: Vec<u16>,
+    pub code_units: Arc<Vec<u16>>,
 }
 
 impl JsString {
     pub fn from_str(s: &str) -> Self {
         Self {
-            code_units: s.encode_utf16().collect(),
+            code_units: Arc::new(s.encode_utf16().collect()),
+        }
+    }
+
+    pub fn from_vec(v: Vec<u16>) -> Self {
+        Self {
+            code_units: Arc::new(v),
         }
     }
 
@@ -35,6 +43,12 @@ impl JsString {
 
     pub fn to_rust_string(&self) -> String {
         String::from_utf16_lossy(&self.code_units)
+    }
+
+    /// Get mutable access to code_units, cloning only if shared.
+    /// Take ownership of the inner Vec (clones if shared).
+    pub fn into_vec(self) -> Vec<u16> {
+        Arc::try_unwrap(self.code_units).unwrap_or_else(|arc| (*arc).clone())
     }
 }
 

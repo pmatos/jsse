@@ -1820,13 +1820,11 @@ impl Interpreter {
             JsFunction::native("decodeURI".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let code_units = match interp.to_js_string(&val) {
-                    Ok(s) => s.code_units,
+                    Ok(s) => s.code_units.to_vec(),
                     Err(e) => return Completion::Throw(e),
                 };
                 match decode_uri_string(&code_units, true) {
-                    Ok(decoded) => Completion::Normal(JsValue::String(JsString {
-                        code_units: decoded,
-                    })),
+                    Ok(decoded) => Completion::Normal(JsValue::String(JsString::from_vec(decoded))),
                     Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
                 }
             }),
@@ -1841,13 +1839,13 @@ impl Interpreter {
                 |interp, _this, args| {
                     let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let code_units = match interp.to_js_string(&val) {
-                        Ok(s) => s.code_units,
+                        Ok(s) => s.code_units.to_vec(),
                         Err(e) => return Completion::Throw(e),
                     };
                     match decode_uri_string(&code_units, false) {
-                        Ok(decoded) => Completion::Normal(JsValue::String(JsString {
-                            code_units: decoded,
-                        })),
+                        Ok(decoded) => {
+                            Completion::Normal(JsValue::String(JsString::from_vec(decoded)))
+                        }
                         Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
                     }
                 },
@@ -1937,7 +1935,7 @@ impl Interpreter {
                     }
                     i += 1;
                 }
-                Completion::Normal(JsValue::String(JsString { code_units: result }))
+                Completion::Normal(JsValue::String(JsString::from_vec(result)))
             }),
         );
 
@@ -3739,7 +3737,7 @@ impl Interpreter {
                             };
                             code_units.push(cu);
                         }
-                        Completion::Normal(JsValue::String(JsString { code_units }))
+                        Completion::Normal(JsValue::String(JsString::from_vec(code_units)))
                     },
                 ));
                 let from_code_point = self.create_function(JsFunction::native(
@@ -3777,7 +3775,7 @@ impl Interpreter {
                                 code_units.push(cp as u16);
                             }
                         }
-                        Completion::Normal(JsValue::String(JsString { code_units }))
+                        Completion::Normal(JsValue::String(JsString::from_vec(code_units)))
                     },
                 ));
                 if let Some(obj) = self.get_object(o.id) {
@@ -8676,9 +8674,7 @@ impl Interpreter {
                             "getOwnPropertyDescriptor",
                             vec![
                                 interp.get_proxy_target_val(o.id),
-                                JsValue::String(crate::types::JsString {
-                                    code_units: "length".encode_utf16().collect(),
-                                }),
+                                JsValue::String(crate::types::JsString::from_str("length")),
                             ],
                         ) {
                             Ok(Some(v)) => !matches!(v, JsValue::Undefined),
