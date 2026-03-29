@@ -301,8 +301,8 @@ cg_diff cachegrind.out.before cachegrind.out.after
 - `D1mw` / `DLmw` -- L1/LL data write cache miss rate
 
 **Interpretation:**
-- High D1 miss rate on a loop → data doesn't fit in L1, consider restructuring for locality
-- High LL miss rate → working set doesn't fit in LLC, reduce data size or improve access patterns
+- High D1 miss rate on a loop -- data doesn't fit in L1, consider restructuring for locality
+- High LL miss rate -- working set doesn't fit in LLC, reduce data size or improve access patterns
 
 ### callgrind
 
