@@ -306,6 +306,7 @@ impl Interpreter {
             is_method: false,
             source_text: f.source_text.clone(),
             captured_new_target: None,
+            uses_arguments: func_uses_arguments(&f.params, &f.body),
         };
         let val = self.create_function(func);
         if is_global {
@@ -2033,9 +2034,10 @@ impl Interpreter {
             }
         };
 
+        let gc_frame = self.gc_root_frame();
         self.gc_root_value(&iterator);
         let result = self.exec_for_of_loop(fo, env, &iterator, label);
-        self.gc_unroot_value(&iterator);
+        self.gc_unroot_frame(gc_frame);
         result
     }
 
@@ -2266,6 +2268,7 @@ impl Interpreter {
                         is_method: false,
                         source_text: f.source_text.clone(),
                         captured_new_target: None,
+                        uses_arguments: func_uses_arguments(&f.params, &f.body),
                     };
                     let val = self.create_function(func);
                     let _ = switch_env.borrow_mut().set(&f.name, val);

@@ -625,6 +625,19 @@ impl Interpreter {
         }
     }
 
+    /// Save the current GC temp-root stack depth. Call gc_unroot_frame()
+    /// with the returned value to bulk-unroot everything pushed since.
+    #[inline(always)]
+    pub(crate) fn gc_root_frame(&self) -> usize {
+        self.gc_temp_roots.len()
+    }
+
+    /// Bulk-unroot: truncate temp roots back to a saved frame marker. O(1).
+    #[inline(always)]
+    pub(crate) fn gc_unroot_frame(&mut self, frame: usize) {
+        self.gc_temp_roots.truncate(frame);
+    }
+
     pub(crate) fn gc_unroot_value(&mut self, val: &JsValue) {
         if let JsValue::Object(o) = val
             && let Some(pos) = self.gc_temp_roots.iter().rposition(|&id| id == o.id)
@@ -633,6 +646,7 @@ impl Interpreter {
         }
     }
 
+    #[allow(dead_code)]
     pub(crate) fn gc_unroot_args(&mut self, args: &[JsValue]) {
         for v in args {
             self.gc_unroot_value(v);
@@ -3790,6 +3804,7 @@ impl Interpreter {
                     is_method: false,
                     source_text: f.source_text.clone(),
                     captured_new_target: None,
+                    uses_arguments: func_uses_arguments(&f.params, &f.body),
                 };
                 let val = self.create_function(func);
                 let _ = env.borrow_mut().set(&f.name, val);
@@ -3837,6 +3852,7 @@ impl Interpreter {
                     is_method: false,
                     source_text: f.source_text.clone(),
                     captured_new_target: None,
+                    uses_arguments: func_uses_arguments(&f.params, &f.body),
                 };
                 let val = self.create_function(func);
                 env.borrow_mut().initialize_binding(&name, val);
@@ -4015,6 +4031,7 @@ impl Interpreter {
                     is_method: false,
                     source_text: func.source_text.clone(),
                     captured_new_target: None,
+                    uses_arguments: func_uses_arguments(&func.params, &func.body),
                 };
                 let fn_obj = self.create_function(js_func);
                 if !func.name.is_empty() {
@@ -4064,13 +4081,12 @@ impl Interpreter {
         loop {
             if !self.microtask_queue.is_empty() {
                 let (roots, job) = self.microtask_queue.remove(0);
+                let mt_frame = self.gc_root_frame();
                 for val in &roots {
                     self.gc_root_value(val);
                 }
                 let _ = job(self);
-                for val in &roots {
-                    self.gc_unroot_value(val);
-                }
+                self.gc_unroot_frame(mt_frame);
                 iterations += 1;
                 // Periodically check agent async completions (e.g. waitAsync timeouts)
                 // so they get processed even when the microtask queue stays busy
@@ -4105,13 +4121,12 @@ impl Interpreter {
         loop {
             while !self.microtask_queue.is_empty() {
                 let (roots, job) = self.microtask_queue.remove(0);
+                let mt_frame = self.gc_root_frame();
                 for val in &roots {
                     self.gc_root_value(val);
                 }
                 let _ = job(self);
-                for val in &roots {
-                    self.gc_unroot_value(val);
-                }
+                self.gc_unroot_frame(mt_frame);
             }
             let completions: Vec<_> = {
                 let mut lock = self.agent_async_completions.0.lock().unwrap();
