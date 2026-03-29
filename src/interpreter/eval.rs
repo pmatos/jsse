@@ -435,6 +435,7 @@ impl Interpreter {
                     is_method: force_method,
                     source_text: f.source_text.clone(),
                     captured_new_target: None,
+                    uses_arguments: func_uses_arguments(&f.params, &f.body),
                 };
                 let func_val = self.create_function(func);
                 if let Some(name) = &f.name {
@@ -462,6 +463,7 @@ impl Interpreter {
                     is_method: false,
                     source_text: af.source_text.clone(),
                     captured_new_target: self.new_target.clone(),
+                    uses_arguments: false, // arrows never have own arguments
                 };
                 Completion::Normal(self.create_function(func))
             }
@@ -823,6 +825,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     };
+                    let gc_frame = self.gc_root_frame();
                     if let JsValue::Object(o) = &iterator {
                         self.gc_temp_roots.push(o.id);
                     }
@@ -830,7 +833,7 @@ impl Interpreter {
                         let next_result = match self.iterator_next(&iterator) {
                             Ok(v) => v,
                             Err(e) => {
-                                self.gc_unroot_value(&iterator);
+                                self.gc_unroot_frame(gc_frame);
                                 return Completion::Throw(e);
                             }
                         };
@@ -838,11 +841,11 @@ impl Interpreter {
                             match self.await_value(&next_result) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => {
-                                    self.gc_unroot_value(&iterator);
+                                    self.gc_unroot_frame(gc_frame);
                                     return Completion::Throw(e);
                                 }
                                 other => {
-                                    self.gc_unroot_value(&iterator);
+                                    self.gc_unroot_frame(gc_frame);
                                     return other;
                                 }
                             }
@@ -852,14 +855,14 @@ impl Interpreter {
                         let done = match self.iterator_complete(&next_result) {
                             Ok(d) => d,
                             Err(e) => {
-                                self.gc_unroot_value(&iterator);
+                                self.gc_unroot_frame(gc_frame);
                                 return Completion::Throw(e);
                             }
                         };
                         let value = match self.iterator_value(&next_result) {
                             Ok(v) => v,
                             Err(e) => {
-                                self.gc_unroot_value(&iterator);
+                                self.gc_unroot_frame(gc_frame);
                                 return Completion::Throw(e);
                             }
                         };
@@ -875,26 +878,26 @@ impl Interpreter {
                             if current == ctx.target_yield {
                                 match &ctx.resume_kind {
                                     GeneratorResumeKind::Next => {
-                                        self.gc_unroot_value(&iterator);
+                                        self.gc_unroot_frame(gc_frame);
                                         return Completion::Yield(value);
                                     }
                                     GeneratorResumeKind::Return(v) => {
                                         let v = v.clone();
-                                        self.gc_unroot_value(&iterator);
+                                        self.gc_unroot_frame(gc_frame);
                                         return Completion::Return(v);
                                     }
                                     GeneratorResumeKind::Throw(e) => {
                                         let e = e.clone();
-                                        self.gc_unroot_value(&iterator);
+                                        self.gc_unroot_frame(gc_frame);
                                         return Completion::Throw(e);
                                     }
                                 }
                             }
                         }
-                        self.gc_unroot_value(&iterator);
+                        self.gc_unroot_frame(gc_frame);
                         return Completion::Yield(value);
                     };
-                    self.gc_unroot_value(&iterator);
+                    self.gc_unroot_frame(gc_frame);
                     result
                 } else {
                     let value = if let Some(e) = expr {
@@ -4912,38 +4915,33 @@ impl Interpreter {
             } else {
                 env.borrow().get("__super__").unwrap_or(JsValue::Undefined)
             };
+            let gc_frame = self.gc_root_frame();
             let arg_vals = match self.eval_spread_args(args, env) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
             };
             let this_in_tdz = Self::this_is_in_tdz(env);
             if this_in_tdz {
-                // Derived constructor: use Construct semantics
-                // Per spec §13.3.7.1: super() must forward the derived class's new.target
                 let current_new_target = self.new_target.clone().unwrap_or(super_ctor.clone());
                 let saved_new_target = self.new_target.clone();
                 let result =
                     self.construct_with_new_target(&super_ctor, &arg_vals, current_new_target);
                 self.new_target = saved_new_target;
-                self.gc_unroot_args(&arg_vals);
+                self.gc_unroot_frame(gc_frame);
                 if let Completion::Normal(ref v) = result {
-                    // Bind this in the function environment
                     Self::initialize_this_binding(env, v.clone());
-                    // Initialize instance elements (private/public fields) for the current class
                     if let Err(e) = self.initialize_instance_elements(v.clone(), env) {
                         return Completion::Throw(e);
                     }
                 }
                 return result;
             } else {
-                // this is already bound — second super() call in derived constructor
-                // Per spec: Construct runs first, then BindThisValue throws
                 let current_new_target = self.new_target.clone().unwrap_or(super_ctor.clone());
                 let saved_new_target = self.new_target.clone();
                 let result =
                     self.construct_with_new_target(&super_ctor, &arg_vals, current_new_target);
                 self.new_target = saved_new_target;
-                self.gc_unroot_args(&arg_vals);
+                self.gc_unroot_frame(gc_frame);
                 if let Completion::Throw(_) = result {
                     return result;
                 }
@@ -5174,32 +5172,31 @@ impl Interpreter {
         if matches!(callee, Expression::Identifier(n) if n == "eval")
             && self.is_builtin_eval(&func_val)
         {
+            let gc_frame = self.gc_root_frame();
             let evaluated_args = match self.eval_spread_args(args, env) {
                 Ok(args) => args,
                 Err(e) => return Completion::Throw(e),
             };
             let caller_strict = env.borrow().strict;
             let result = self.perform_eval(&evaluated_args, caller_strict, true, env);
-            self.gc_unroot_args(&evaluated_args);
+            self.gc_unroot_frame(gc_frame);
             return result;
         }
 
         // Root func_val and this_val before evaluating args (which may trigger GC)
+        let gc_frame = self.gc_root_frame();
         self.gc_root_value(&func_val);
         self.gc_root_value(&this_val);
         let evaluated_args = match self.eval_spread_args(args, env) {
             Ok(args) => args,
             Err(e) => {
-                self.gc_unroot_value(&this_val);
-                self.gc_unroot_value(&func_val);
+                self.gc_unroot_frame(gc_frame);
                 return Completion::Throw(e);
             }
         };
 
         if saved_tail && !self.is_builtin_eval(&func_val) {
-            self.gc_unroot_value(&this_val);
-            self.gc_unroot_value(&func_val);
-            self.gc_unroot_args(&evaluated_args);
+            self.gc_unroot_frame(gc_frame);
             return Completion::TailCall {
                 func: func_val,
                 this: this_val,
@@ -5207,9 +5204,7 @@ impl Interpreter {
             };
         }
         let result = self.call_function(&func_val, &this_val, &evaluated_args);
-        self.gc_unroot_value(&this_val);
-        self.gc_unroot_value(&func_val);
-        self.gc_unroot_args(&evaluated_args);
+        self.gc_unroot_frame(gc_frame);
         result
     }
 
@@ -11685,8 +11680,16 @@ impl Interpreter {
         if let JsValue::Object(o) = func_val
             && let Some(obj) = self.get_object(o.id)
         {
-            // Proxy apply trap (also check revoked proxy)
-            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+            // Single borrow to check proxy/wrapped/class-ctor status
+            let (is_proxy_or_revoked, has_wrapped_target, is_class_ctor) = {
+                let b = obj.borrow();
+                (
+                    b.is_proxy() || b.proxy_revoked,
+                    b.wrapped_target_function_id.is_some(),
+                    b.is_class_constructor,
+                )
+            };
+            if is_proxy_or_revoked {
                 let target_val = self.get_proxy_target_val(o.id);
                 let args_array = self.create_array(args.to_vec());
                 match self.invoke_proxy_trap(
@@ -11696,18 +11699,14 @@ impl Interpreter {
                 ) {
                     Ok(Some(v)) => return Completion::Normal(v),
                     Ok(None) => {
-                        // No trap, call target directly
                         return self.call_function(&target_val, _this_val, args);
                     }
                     Err(e) => return Completion::Throw(e),
                 }
             }
-            // Wrapped function [[Call]]
-            let has_wrapped_target = obj.borrow().wrapped_target_function_id.is_some();
             if has_wrapped_target {
                 return self.call_wrapped_function(o.id, _this_val, args);
             }
-            let is_class_ctor = obj.borrow().is_class_constructor;
             if is_class_ctor && self.new_target.is_none() {
                 let caller_realm = self.current_realm_id;
                 if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
@@ -11750,8 +11749,7 @@ impl Interpreter {
                         if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
                             self.current_realm_id = fn_realm;
                         }
-                        // Root args and this_val so GC doesn't collect them
-                        // during native function execution (e.g. Array.prototype.map callback)
+                        let gc_frame = self.gc_root_frame();
                         self.gc_root_value(_this_val);
                         for a in args.iter() {
                             self.gc_root_value(a);
@@ -11760,10 +11758,7 @@ impl Interpreter {
                         let result = f(self, _this_val, args);
                         self.last_call_this_value = saved_this;
                         self.last_call_had_explicit_return = true;
-                        for a in args.iter().rev() {
-                            self.gc_unroot_value(a);
-                        }
-                        self.gc_unroot_value(_this_val);
+                        self.gc_unroot_frame(gc_frame);
                         self.current_realm_id = caller_realm;
                         result
                     }
@@ -11775,6 +11770,7 @@ impl Interpreter {
                         is_strict,
                         is_generator,
                         is_async,
+                        uses_arguments,
                         ..
                     } => {
                         // §10.2.1.1 PrepareForOrdinaryCall: switch to function's realm
@@ -11793,6 +11789,7 @@ impl Interpreter {
                                 _this_val,
                                 args,
                                 func_val,
+                                uses_arguments,
                             );
                             self.current_realm_id = caller_realm;
                             return result;
@@ -11812,34 +11809,39 @@ impl Interpreter {
                             );
                             let is_simple_ag =
                                 params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
-                            let env_strict_ag = func_env.borrow().strict;
-                            let use_mapped_ag = is_simple_ag && !is_strict && !env_strict_ag;
-                            let param_names_ag: Vec<String> = if use_mapped_ag {
-                                params
-                                    .iter()
-                                    .filter_map(|p| {
-                                        if let Pattern::Identifier(name) = p {
-                                            Some(name.clone())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect()
+                            if uses_arguments {
+                                let env_strict_ag = func_env.borrow().strict;
+                                let use_mapped_ag = is_simple_ag && !is_strict && !env_strict_ag;
+                                let param_names_ag: Vec<String> = if use_mapped_ag {
+                                    params
+                                        .iter()
+                                        .filter_map(|p| {
+                                            if let Pattern::Identifier(name) = p {
+                                                Some(name.clone())
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect()
+                                } else {
+                                    Vec::new()
+                                };
+                                let mapped_env_ag =
+                                    if use_mapped_ag { Some(&func_env) } else { None };
+                                let arguments_obj = self.create_arguments_object(
+                                    args,
+                                    func_val.clone(),
+                                    is_strict,
+                                    mapped_env_ag,
+                                    &param_names_ag,
+                                );
+                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                                let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+                                if is_strict || !is_simple_ag {
+                                    func_env.borrow_mut().arguments_immutable = true;
+                                }
                             } else {
-                                Vec::new()
-                            };
-                            let mapped_env_ag = if use_mapped_ag { Some(&func_env) } else { None };
-                            let arguments_obj = self.create_arguments_object(
-                                args,
-                                func_val.clone(),
-                                is_strict,
-                                mapped_env_ag,
-                                &param_names_ag,
-                            );
-                            func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                            let _ = func_env.borrow_mut().set("arguments", arguments_obj);
-                            if is_strict || !is_simple_ag {
-                                func_env.borrow_mut().arguments_immutable = true;
+                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             }
                             if !is_simple_ag {
                                 func_env.borrow_mut().has_parameter_expressions = true;
@@ -11999,34 +12001,39 @@ impl Interpreter {
                             );
                             let is_simple_g =
                                 params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
-                            let env_strict_g = func_env.borrow().strict;
-                            let use_mapped_g = is_simple_g && !is_strict && !env_strict_g;
-                            let param_names_g: Vec<String> = if use_mapped_g {
-                                params
-                                    .iter()
-                                    .filter_map(|p| {
-                                        if let Pattern::Identifier(name) = p {
-                                            Some(name.clone())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect()
+                            if uses_arguments {
+                                let env_strict_g = func_env.borrow().strict;
+                                let use_mapped_g = is_simple_g && !is_strict && !env_strict_g;
+                                let param_names_g: Vec<String> = if use_mapped_g {
+                                    params
+                                        .iter()
+                                        .filter_map(|p| {
+                                            if let Pattern::Identifier(name) = p {
+                                                Some(name.clone())
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect()
+                                } else {
+                                    Vec::new()
+                                };
+                                let mapped_env_g =
+                                    if use_mapped_g { Some(&func_env) } else { None };
+                                let arguments_obj = self.create_arguments_object(
+                                    args,
+                                    func_val.clone(),
+                                    is_strict,
+                                    mapped_env_g,
+                                    &param_names_g,
+                                );
+                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                                let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+                                if is_strict || !is_simple_g {
+                                    func_env.borrow_mut().arguments_immutable = true;
+                                }
                             } else {
-                                Vec::new()
-                            };
-                            let mapped_env_g = if use_mapped_g { Some(&func_env) } else { None };
-                            let arguments_obj = self.create_arguments_object(
-                                args,
-                                func_val.clone(),
-                                is_strict,
-                                mapped_env_g,
-                                &param_names_g,
-                            );
-                            func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                            let _ = func_env.borrow_mut().set("arguments", arguments_obj);
-                            if is_strict || !is_simple_g {
-                                func_env.borrow_mut().arguments_immutable = true;
+                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             }
                             if !is_simple_g {
                                 func_env.borrow_mut().has_parameter_expressions = true;
@@ -12201,35 +12208,39 @@ impl Interpreter {
                                     },
                                 );
                             }
-                            let env_strict = func_env.borrow().strict;
-                            let use_mapped = is_simple && !is_strict && !env_strict;
-                            let param_names: Vec<String> = if use_mapped {
-                                params
-                                    .iter()
-                                    .filter_map(|p| {
-                                        if let Pattern::Identifier(name) = p {
-                                            Some(name.clone())
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .collect()
+                            if uses_arguments {
+                                let env_strict = func_env.borrow().strict;
+                                let use_mapped = is_simple && !is_strict && !env_strict;
+                                let param_names: Vec<String> = if use_mapped {
+                                    params
+                                        .iter()
+                                        .filter_map(|p| {
+                                            if let Pattern::Identifier(name) = p {
+                                                Some(name.clone())
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect()
+                                } else {
+                                    Vec::new()
+                                };
+                                let mapped_env = if use_mapped { Some(&func_env) } else { None };
+                                let arguments_obj = self.create_arguments_object(
+                                    args,
+                                    func_val.clone(),
+                                    is_strict,
+                                    mapped_env,
+                                    &param_names,
+                                );
+                                call_frame_args = arguments_obj.clone();
+                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                                let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+                                if is_strict || !is_simple {
+                                    func_env.borrow_mut().arguments_immutable = true;
+                                }
                             } else {
-                                Vec::new()
-                            };
-                            let mapped_env = if use_mapped { Some(&func_env) } else { None };
-                            let arguments_obj = self.create_arguments_object(
-                                args,
-                                func_val.clone(),
-                                is_strict,
-                                mapped_env,
-                                &param_names,
-                            );
-                            call_frame_args = arguments_obj.clone();
-                            func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                            let _ = func_env.borrow_mut().set("arguments", arguments_obj);
-                            if is_strict || !is_simple {
-                                func_env.borrow_mut().arguments_immutable = true;
+                                func_env.borrow_mut().declare("arguments", BindingKind::Var);
                             }
                         }
                         // For arrows with non-simple params and "arguments" parameter,
@@ -12370,23 +12381,10 @@ impl Interpreter {
             if let Expression::Spread(inner) = arg {
                 let val = match self.eval_expr(inner, env) {
                     Completion::Normal(v) => v,
-                    Completion::Throw(e) => {
-                        for v in &evaluated {
-                            self.gc_unroot_value(v);
-                        }
-                        return Err(e);
-                    }
+                    Completion::Throw(e) => return Err(e),
                     _ => JsValue::Undefined,
                 };
-                let items = match self.iterate_to_vec(&val) {
-                    Ok(items) => items,
-                    Err(e) => {
-                        for v in &evaluated {
-                            self.gc_unroot_value(v);
-                        }
-                        return Err(e);
-                    }
-                };
+                let items = self.iterate_to_vec(&val)?;
                 for item in &items {
                     self.gc_root_value(item);
                 }
@@ -12394,19 +12392,13 @@ impl Interpreter {
             } else {
                 let val = match self.eval_expr(arg, env) {
                     Completion::Normal(v) => v,
-                    Completion::Throw(e) => {
-                        for v in &evaluated {
-                            self.gc_unroot_value(v);
-                        }
-                        return Err(e);
-                    }
+                    Completion::Throw(e) => return Err(e),
                     _ => JsValue::Undefined,
                 };
                 self.gc_root_value(&val);
                 evaluated.push(val);
             }
         }
-        // Args are returned still rooted — callers must call gc_unroot_args after consuming them
         Ok(evaluated)
     }
 
@@ -13090,6 +13082,7 @@ impl Interpreter {
                 is_method: false,
                 source_text: f.source_text.clone(),
                 captured_new_target: None,
+                uses_arguments: func_uses_arguments(&f.params, &f.body),
             };
             let val = self.create_function(func);
             if is_global {
@@ -13252,6 +13245,7 @@ impl Interpreter {
     }
 
     fn eval_new(&mut self, callee: &Expression, args: &[Expression], env: &EnvRef) -> Completion {
+        let gc_frame = self.gc_root_frame();
         let callee_val = match self.eval_expr(callee, env) {
             Completion::Normal(v) => v,
             other => return other,
@@ -13260,7 +13254,7 @@ impl Interpreter {
         let evaluated_args = match self.eval_spread_args(args, env) {
             Ok(args) => args,
             Err(e) => {
-                self.gc_unroot_value(&callee_val);
+                self.gc_unroot_frame(gc_frame);
                 return Completion::Throw(e);
             }
         };
@@ -13287,16 +13281,14 @@ impl Interpreter {
                         None => String::new(),
                     };
                     drop(b);
-                    self.gc_unroot_args(&evaluated_args);
-                    self.gc_unroot_value(&callee_val);
+                    self.gc_unroot_frame(gc_frame);
                     return Completion::Throw(
                         self.create_type_error(&format!("{} is not a constructor", name)),
                     );
                 }
             }
         } else {
-            self.gc_unroot_args(&evaluated_args);
-            self.gc_unroot_value(&callee_val);
+            self.gc_unroot_frame(gc_frame);
             return Completion::Throw(
                 self.create_type_error(&format!("{:?} is not a constructor", callee_val)),
             );
@@ -13308,8 +13300,7 @@ impl Interpreter {
             let target_val = self.get_proxy_target_val(co.id);
             let args_array = self.create_array(evaluated_args.clone());
             let new_target = callee_val.clone();
-            self.gc_unroot_args(&evaluated_args);
-            self.gc_unroot_value(&callee_val);
+            self.gc_unroot_frame(gc_frame);
             match self.invoke_proxy_trap(
                 co.id,
                 "construct",
@@ -13339,8 +13330,7 @@ impl Interpreter {
             && let Some(func_obj) = self.get_object(co.id)
             && func_obj.borrow().bound_target_function.is_some()
         {
-            self.gc_unroot_args(&evaluated_args);
-            self.gc_unroot_value(&callee_val);
+            self.gc_unroot_frame(gc_frame);
             return self.construct_with_new_target(
                 &callee_val,
                 &evaluated_args,
@@ -13381,8 +13371,7 @@ impl Interpreter {
                 };
                 let prev_new_target = self.new_target.take();
                 self.new_target = Some(callee_val.clone());
-                self.gc_unroot_args(&evaluated_args);
-                self.gc_unroot_value(&callee_val);
+                self.gc_unroot_frame(gc_frame);
                 let result = self.construct_with_new_target(
                     &super_ctor,
                     &evaluated_args,
@@ -13411,8 +13400,7 @@ impl Interpreter {
             self.constructing_derived = true;
             self.calling_as_construct = true;
             let result = self.call_function(&callee_val, &JsValue::Undefined, &evaluated_args);
-            self.gc_unroot_args(&evaluated_args);
-            self.gc_unroot_value(&callee_val);
+            self.gc_unroot_frame(gc_frame);
             self.constructing_derived = prev_constructing_derived;
             let had_explicit_return = self.last_call_had_explicit_return;
             let final_this = self.last_call_this_value.take();
@@ -13623,8 +13611,7 @@ impl Interpreter {
             self.last_call_this_value = None;
             self.calling_as_construct = true;
             let result = self.call_function(&callee_val, &this_val, &evaluated_args);
-            self.gc_unroot_args(&evaluated_args);
-            self.gc_unroot_value(&callee_val);
+            self.gc_unroot_frame(gc_frame);
             let had_explicit_return = self.last_call_had_explicit_return;
             let final_this = self.last_call_this_value.take().unwrap_or(this_val.clone());
             self.new_target = prev_new_target;
@@ -15949,7 +15936,9 @@ impl Interpreter {
         this_val: &JsValue,
         args: &[JsValue],
         func_val: &JsValue,
+        uses_arguments: bool,
     ) -> Completion {
+        let gc_frame = self.gc_root_frame();
         let promise = self.create_promise_object();
         let promise_id = if let JsValue::Object(ref o) = promise {
             o.id
@@ -15996,35 +15985,39 @@ impl Interpreter {
                     deletable: false,
                 },
             );
-            let is_simple = params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
-            let env_strict = func_env.borrow().strict;
-            let use_mapped = is_simple && !is_strict && !env_strict;
-            let param_names: Vec<String> = if use_mapped {
-                params
-                    .iter()
-                    .filter_map(|p| {
-                        if let Pattern::Identifier(name) = p {
-                            Some(name.clone())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect()
+            if uses_arguments {
+                let is_simple = params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+                let env_strict = func_env.borrow().strict;
+                let use_mapped = is_simple && !is_strict && !env_strict;
+                let param_names: Vec<String> = if use_mapped {
+                    params
+                        .iter()
+                        .filter_map(|p| {
+                            if let Pattern::Identifier(name) = p {
+                                Some(name.clone())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let mapped_env = if use_mapped { Some(&func_env) } else { None };
+                let arguments_obj = self.create_arguments_object(
+                    args,
+                    func_val.clone(),
+                    is_strict,
+                    mapped_env,
+                    &param_names,
+                );
+                func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+                if is_strict || !is_simple {
+                    func_env.borrow_mut().arguments_immutable = true;
+                }
             } else {
-                Vec::new()
-            };
-            let mapped_env = if use_mapped { Some(&func_env) } else { None };
-            let arguments_obj = self.create_arguments_object(
-                args,
-                func_val.clone(),
-                is_strict,
-                mapped_env,
-                &param_names,
-            );
-            func_env.borrow_mut().declare("arguments", BindingKind::Var);
-            let _ = func_env.borrow_mut().set("arguments", arguments_obj);
-            if is_strict || !is_simple {
-                func_env.borrow_mut().arguments_immutable = true;
+                func_env.borrow_mut().declare("arguments", BindingKind::Var);
             }
         }
         {
@@ -16040,9 +16033,7 @@ impl Interpreter {
                 if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
                     let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                     self.drain_microtasks();
-                    self.gc_unroot_value(&reject_fn);
-                    self.gc_unroot_value(&resolve_fn);
-                    self.gc_unroot_value(&promise);
+                    self.gc_unroot_frame(gc_frame);
                     return Completion::Normal(promise);
                 }
                 break;
@@ -16051,9 +16042,7 @@ impl Interpreter {
             if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
                 let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                 self.drain_microtasks();
-                self.gc_unroot_value(&reject_fn);
-                self.gc_unroot_value(&resolve_fn);
-                self.gc_unroot_value(&promise);
+                self.gc_unroot_frame(gc_frame);
                 return Completion::Normal(promise);
             }
         }
@@ -16098,7 +16087,7 @@ impl Interpreter {
 
         self.async_function_resume(async_id, JsValue::Undefined, false);
 
-        self.gc_unroot_value(&promise);
+        self.gc_unroot_frame(gc_frame);
         Completion::Normal(promise)
     }
 
@@ -17117,6 +17106,7 @@ impl Interpreter {
             0
         };
 
+        let gc_frame = self.gc_root_frame();
         self.gc_root_value(&promise);
 
         let done = Rc::new(Cell::new(false));
@@ -17199,7 +17189,7 @@ impl Interpreter {
                 }
             }
             None => {
-                self.gc_unroot_value(&promise);
+                self.gc_unroot_frame(gc_frame);
                 return Completion::Normal(val.clone());
             }
         }
@@ -17215,13 +17205,12 @@ impl Interpreter {
             }
             if !self.microtask_queue.is_empty() {
                 let (roots, job) = self.microtask_queue.remove(0);
+                let mt_frame = self.gc_root_frame();
                 for val in &roots {
                     self.gc_root_value(val);
                 }
                 let _ = job(self);
-                for val in &roots {
-                    self.gc_unroot_value(val);
-                }
+                self.gc_unroot_frame(mt_frame);
                 continue;
             }
             // Check agent async completions
@@ -17255,7 +17244,7 @@ impl Interpreter {
             break;
         }
 
-        self.gc_unroot_value(&promise);
+        self.gc_unroot_frame(gc_frame);
 
         match result.borrow_mut().take() {
             Some(Ok(v)) => Completion::Normal(v),

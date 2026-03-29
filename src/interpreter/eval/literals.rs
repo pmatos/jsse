@@ -316,19 +316,22 @@ impl Interpreter {
                 is_method: false,
                 source_text: class_source_text.clone(),
                 captured_new_target: None,
+                uses_arguments: func_uses_arguments(&cm.value.params, &cm.value.body),
             }
         } else if super_val.is_some() {
+            let default_body = vec![Statement::Expression(Expression::Call(
+                Box::new(Expression::Super),
+                vec![Expression::Spread(Box::new(Expression::Identifier(
+                    "args".into(),
+                )))],
+            ))];
+            let uses_args = stmts_use_arguments(&default_body);
             JsFunction::User {
                 name: Some(name.to_string()),
                 params: Rc::new(vec![Pattern::Rest(Box::new(Pattern::Identifier(
                     "args".into(),
                 )))]),
-                body: Rc::new(vec![Statement::Expression(Expression::Call(
-                    Box::new(Expression::Super),
-                    vec![Expression::Spread(Box::new(Expression::Identifier(
-                        "args".into(),
-                    )))],
-                ))]),
+                body: Rc::new(default_body),
                 closure: class_env.clone(),
                 is_arrow: false,
                 is_strict: true,
@@ -337,6 +340,7 @@ impl Interpreter {
                 is_method: false,
                 source_text: class_source_text.clone(),
                 captured_new_target: None,
+                uses_arguments: uses_args,
             }
         } else {
             JsFunction::User {
@@ -351,6 +355,7 @@ impl Interpreter {
                 is_method: false,
                 source_text: class_source_text.clone(),
                 captured_new_target: None,
+                uses_arguments: false,
             }
         };
 
@@ -563,6 +568,7 @@ impl Interpreter {
                                 is_method: true,
                                 source_text: m.value.source_text.clone(),
                                 captured_new_target: None,
+                                uses_arguments: func_uses_arguments(&m.value.params, &m.value.body),
                             };
                             let method_val = self.create_function(method_func);
 
@@ -736,6 +742,7 @@ impl Interpreter {
                         is_method: true,
                         source_text: m.value.source_text.clone(),
                         captured_new_target: None,
+                        uses_arguments: func_uses_arguments(&m.value.params, &m.value.body),
                     };
                     let method_val = self.create_function(method_func);
 

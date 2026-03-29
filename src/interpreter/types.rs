@@ -1139,6 +1139,7 @@ pub enum JsFunction {
         is_method: bool,
         source_text: Option<SourceText>,
         captured_new_target: Option<JsValue>,
+        uses_arguments: bool,
     },
     Native(
         String,
@@ -1181,6 +1182,7 @@ impl Clone for JsFunction {
                 is_method,
                 source_text,
                 captured_new_target,
+                uses_arguments,
             } => JsFunction::User {
                 name: name.clone(),
                 params: params.clone(),
@@ -1193,6 +1195,7 @@ impl Clone for JsFunction {
                 is_method: *is_method,
                 source_text: source_text.clone(),
                 captured_new_target: captured_new_target.clone(),
+                uses_arguments: *uses_arguments,
             },
             JsFunction::Native(name, arity, f, is_ctor) => {
                 JsFunction::Native(name.clone(), *arity, f.clone(), *is_ctor)
