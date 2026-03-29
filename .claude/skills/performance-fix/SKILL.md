@@ -11,21 +11,24 @@ version: 0.1.0
 
 # Performance Engineer
 
-Implement targeted fixes for performance bottlenecks identified in a report. This role modifies code: **one fix at a time, re-measure after each.**
+Fix exactly **one** performance bottleneck per invocation. If the target issue is unclear, interview the user before writing any code.
 
 ## Workflow
 
-1. **Read report** — Load `perf-report.md` (or a user-specified report file) and parse the recommendations
-2. **Prioritise** — Work through bottlenecks in the order listed (highest impact first)
-3. **For each bottleneck:**
-   a. Understand the root cause from the report
+1. **Identify the target** — Determine which single bottleneck to fix:
+   - If the user named a specific hotspot or issue number from the report, use that
+   - If the user's request is vague ("fix performance", "speed this up"), load `perf-report.md` and **ask the user which hotspot to tackle** — list the hotspots with their severity and let them choose
+   - If `perf-report.md` does not exist or does not contain the issue the user describes, **interview the user**: ask what is slow, how they observe it, what workload triggers it, and what "fast enough" means — then suggest running `/performance-analyse` first
+   - Never guess which issue to fix. Always confirm the target with the user before writing code.
+2. **Fix one bottleneck:**
+   a. Understand the root cause from the report (or from the user interview)
    b. Implement a minimal, targeted fix
    c. Build in release mode
    d. Re-measure using the same benchmark from the report
    e. Record before/after numbers
    f. If improvement is <2% or not statistically significant, reconsider the approach
-4. **Update report** — Append results to the report with before/after measurements
-5. **Summarise** — Present total improvement vs original baseline
+3. **Update report** — Append the fix result to `perf-report.md` with before/after measurements
+4. **Done** — Present the result. Do not proceed to the next bottleneck unless the user explicitly asks
 
 ## Fix Strategies by Bottleneck Type
 
@@ -77,29 +80,21 @@ Append to the report:
 ```markdown
 ## Fix Results
 
-### Fix 1: <description>
+### Fix: <description>
 - **Bottleneck:** Hotspot N from report
 - **Change:** <what was modified>
 - **Before:** X.XXms (median)
 - **After:** X.XXms (median)
 - **Speedup:** X.Xx
 - **Commit:** <hash>
-
-### Fix 2: ...
-
-## Overall
-
-| Metric | Before | After | Improvement |
-|--------|--------|-------|-------------|
-| Wall-clock (median) | X.XXs | X.XXs | X.Xx faster |
 ```
 
 ## Principles
 
-- **One fix at a time** — never bundle multiple optimisations in one step; each must be independently measured
+- **One fix per invocation** — fix exactly one bottleneck, then stop. The user invokes again for the next one.
+- **Clarify before coding** — if the target is ambiguous or missing from the report, ask. Never assume.
 - **Minimal changes** — change only what the bottleneck requires; do not refactor surrounding code
 - **Data over intuition** — if the measurement shows no improvement, revert
-- **Stop when done** — if the target metric is met or no dominant hotspot remains, stop
 - **No premature optimisation** — only fix what the report identifies; do not speculatively optimise other areas
 
 ## Additional Resources
