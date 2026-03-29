@@ -179,7 +179,7 @@ pub(crate) fn regex_output_to_js_string(s: &str) -> JsString {
             code_units.extend_from_slice(encoded);
         }
     }
-    JsString { code_units }
+    JsString::from_vec(code_units)
 }
 
 /// Convert UTF-16 code units that may contain PUA-encoded surrogates back to
@@ -382,12 +382,12 @@ fn to_regex_input_with_units(
     match val {
         JsValue::String(s) => Ok((
             js_string_to_regex_input(&s.code_units),
-            s.code_units.clone(),
+            s.code_units.to_vec(),
         )),
         _ => {
             let s = interp.to_string_value(val)?;
             let js = JsString::from_str(&s);
-            Ok((js_string_to_regex_input(&js.code_units), js.code_units))
+            Ok((js_string_to_regex_input(&js.code_units), js.into_vec()))
         }
     }
 }
@@ -458,7 +458,7 @@ fn escape_regexp_pattern_code_units(code_units: &[u16]) -> JsString {
             }
         }
     }
-    JsString { code_units: result }
+    JsString::from_vec(result)
 }
 
 // ECMAScript binary Unicode properties (with aliases) — §Table 67
@@ -6263,9 +6263,7 @@ fn regexp_exec_abstract(
         let result = interp.call_function(
             &exec_val,
             &rx_val,
-            &[JsValue::String(JsString {
-                code_units: code_units.to_vec(),
-            })],
+            &[JsValue::String(JsString::from_vec(code_units.to_vec()))],
         );
         match result {
             Completion::Normal(ref v) => {
@@ -8833,9 +8831,7 @@ impl Interpreter {
                     }
                     is_first = false;
                 }
-                Completion::Normal(JsValue::String(JsString {
-                    code_units: result_units,
-                }))
+                Completion::Normal(JsValue::String(JsString::from_vec(result_units)))
             },
         ));
 

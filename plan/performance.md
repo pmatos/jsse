@@ -45,18 +45,26 @@
 - `src/interpreter/helpers.rs:105-110` — `js_value_to_code_units()` clones `s.code_units` via `.clone()`
 - `src/interpreter/eval.rs:1927-1928` — BinaryOp::Add creates a new `Vec<u16>` from cloned left, then extends with cloned right
 
-**Fix strategy:** Avoid cloning the left operand when it's consumed by the `+=` operation. Options:
-- Take ownership of the left `Vec<u16>` instead of cloning when possible
-- Use `Cow<[u16]>` or similar to defer cloning
-- Consider a rope or builder for repeated concatenation patterns
+**Fix strategy (implemented):**
+1. Changed `JsString.code_units` from `Vec<u16>` to `Arc<Vec<u16>>` — cloning is now O(1)
+2. Added fast path in `apply_compound_assign` for `AddAssign` on primitive strings — skips `eval_binary`/`to_primitive`/`js_value_to_code_units` clone chain
+3. Added fast path in binary `Expression::Binary(Add, ...)` for primitive strings — zero-copy when both operands are owned primitives
+4. Changed `eval_binary` `BinaryOp::Add` to move `lprim.code_units` instead of cloning via `js_value_to_code_units`
 
-**Expected impact:** 10-50x improvement on string-heavy SunSpider benchmarks. Should cut SunSpider total by ~60%.
+**Actual impact:**
+- string-validate-input: 4,354ms → 1,376ms (**3.2x faster**)
+- string-base64: 527ms → 241ms (**2.2x faster**)
+- string-tagcloud: 12,252ms → 10,995ms (10% faster — mostly JSON/sort overhead, not string-concat)
+- string-unpack-code: minimal improvement (dominated by regex replacement — Phase 3 target)
+- SunSpider total: 83,512ms → 76,296ms (**9% faster**)
 
-**Status:** Not started
+**Status:** Complete
 
 **Post-phase results:**
-- SunSpider total: _pending_
-- test262 pass rate: _pending_
+- SunSpider total: 76,296ms (was 83,512ms)
+- Kraken total (passing): 327,702ms (was 326,500ms — within noise)
+- Octane total (passing): 373,337ms (was 383,051ms — 3% faster)
+- test262 pass rate: 100% (22 intl402 dayPeriod flakes are pre-existing, confirmed on baseline)
 
 ---
 
@@ -156,7 +164,7 @@ After each phase:
 | Phase | SunSpider | Kraken (passing) | Octane (passing) | test262 |
 |-------|-----------|-----------------|------------------|---------|
 | Baseline | 83,512ms | 326,500ms | 383,051ms | 100% |
-| Phase 1 | _pending_ | _pending_ | _pending_ | _pending_ |
+| Phase 1 | 76,296ms | 327,702ms | 373,337ms | 100% |
 | Phase 2 | _pending_ | _pending_ | _pending_ | _pending_ |
 | Phase 3 | _pending_ | _pending_ | _pending_ | _pending_ |
 | Phase 4 | _pending_ | _pending_ | _pending_ | _pending_ |

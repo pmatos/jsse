@@ -384,6 +384,28 @@ impl Interpreter {
                 if *op == BinaryOp::Instanceof {
                     return self.eval_instanceof(&lval, &rval);
                 }
+                // Fast path for string + on owned primitive values:
+                // skip eval_binary → to_primitive → js_value_to_code_units clone chain.
+                if *op == BinaryOp::Add
+                    && !matches!(&lval, JsValue::Object(_))
+                    && !matches!(&rval, JsValue::Object(_))
+                    && (matches!(&lval, JsValue::String(_)) || matches!(&rval, JsValue::String(_)))
+                {
+                    if matches!(&lval, JsValue::Symbol(_)) || matches!(&rval, JsValue::Symbol(_)) {
+                        return Completion::Throw(
+                            self.create_type_error("Cannot convert a Symbol value to a string"),
+                        );
+                    }
+                    let mut code_units = match lval {
+                        JsValue::String(s) => s.into_vec(),
+                        ref other => js_value_to_code_units(other),
+                    };
+                    match rval {
+                        JsValue::String(s) => code_units.extend_from_slice(&s.code_units),
+                        ref other => code_units.extend(js_value_to_code_units(other)),
+                    };
+                    return Completion::Normal(JsValue::String(JsString::from_vec(code_units)));
+                }
                 self.eval_binary(*op, &lval, &rval)
             }
             Expression::Logical(op, left, right) => self.eval_logical(*op, left, right, env),
@@ -1195,7 +1217,7 @@ impl Interpreter {
                         code_units.extend(str_val.encode_utf16());
                     }
                 }
-                Completion::Normal(JsValue::String(JsString { code_units }))
+                Completion::Normal(JsValue::String(JsString::from_vec(code_units)))
             }
             Expression::OptionalChain(base, prop) => {
                 let (base_val, base_this) = match self.eval_oc_base(base, prop, env) {
@@ -1283,9 +1305,9 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(s.len() as f64))
                 } else if let Ok(idx) = name.parse::<usize>() {
                     if idx < s.code_units.len() {
-                        Completion::Normal(JsValue::String(JsString {
-                            code_units: vec![s.code_units[idx]],
-                        }))
+                        Completion::Normal(JsValue::String(JsString::from_vec(vec![
+                            s.code_units[idx],
+                        ])))
                     } else {
                         Completion::Normal(JsValue::Undefined)
                     }
@@ -1924,9 +1946,15 @@ impl Interpreter {
                     );
                 }
                 if is_string(&lprim) || is_string(&rprim) {
-                    let mut code_units = js_value_to_code_units(&lprim);
-                    code_units.extend(js_value_to_code_units(&rprim));
-                    Completion::Normal(JsValue::String(JsString { code_units }))
+                    let mut code_units = match lprim {
+                        JsValue::String(s) => s.into_vec(),
+                        ref other => js_value_to_code_units(other),
+                    };
+                    match rprim {
+                        JsValue::String(s) => code_units.extend_from_slice(&s.code_units),
+                        ref other => code_units.extend(js_value_to_code_units(other)),
+                    };
+                    Completion::Normal(JsValue::String(JsString::from_vec(code_units)))
                 } else if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
                     Completion::Normal(JsValue::BigInt(JsBigInt {
                         value: bigint_ops::add(&a.value, &b.value),
@@ -2720,7 +2748,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                let final_val = match self.apply_compound_assign(op, &lval, &rval) {
+                let final_val = match self.apply_compound_assign(op, lval, rval) {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
@@ -2795,7 +2823,7 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let final_val = match self.apply_compound_assign(op, &lval, &rval) {
+                        let final_val = match self.apply_compound_assign(op, lval, rval) {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
@@ -2828,7 +2856,7 @@ impl Interpreter {
                                             } else {
                                                 JsValue::Undefined
                                             };
-                                            match self.apply_compound_assign(op, &lval, &rval) {
+                                            match self.apply_compound_assign(op, lval, rval) {
                                                 Completion::Normal(v) => v,
                                                 other => return other,
                                             }
@@ -2856,7 +2884,7 @@ impl Interpreter {
                                                 } else {
                                                     JsValue::Undefined
                                                 };
-                                                match self.apply_compound_assign(op, &lval, &rval) {
+                                                match self.apply_compound_assign(op, lval, rval) {
                                                     Completion::Normal(v) => v,
                                                     other => return other,
                                                 }
@@ -2986,7 +3014,7 @@ impl Interpreter {
                     let final_val = if op == AssignOp::Assign {
                         rval
                     } else {
-                        match self.apply_compound_assign(op, &lval_for_compound.unwrap(), &rval) {
+                        match self.apply_compound_assign(op, lval_for_compound.unwrap(), rval) {
                             Completion::Normal(v) => v,
                             other => return other,
                         }
@@ -3201,7 +3229,7 @@ impl Interpreter {
                 let final_val = if op == AssignOp::Assign {
                     rval
                 } else {
-                    match self.apply_compound_assign(op, &lval_for_compound.unwrap(), &rval) {
+                    match self.apply_compound_assign(op, lval_for_compound.unwrap(), rval) {
                         Completion::Normal(v) => v,
                         other => return other,
                     }
@@ -3783,26 +3811,44 @@ impl Interpreter {
         }
     }
 
-    fn apply_compound_assign(
-        &mut self,
-        op: AssignOp,
-        lval: &JsValue,
-        rval: &JsValue,
-    ) -> Completion {
+    fn apply_compound_assign(&mut self, op: AssignOp, lval: JsValue, rval: JsValue) -> Completion {
         match op {
-            AssignOp::AddAssign => self.eval_binary(BinaryOp::Add, lval, rval),
-            AssignOp::SubAssign => self.eval_binary(BinaryOp::Sub, lval, rval),
-            AssignOp::MulAssign => self.eval_binary(BinaryOp::Mul, lval, rval),
-            AssignOp::DivAssign => self.eval_binary(BinaryOp::Div, lval, rval),
-            AssignOp::ModAssign => self.eval_binary(BinaryOp::Mod, lval, rval),
-            AssignOp::ExpAssign => self.eval_binary(BinaryOp::Exp, lval, rval),
-            AssignOp::LShiftAssign => self.eval_binary(BinaryOp::LShift, lval, rval),
-            AssignOp::RShiftAssign => self.eval_binary(BinaryOp::RShift, lval, rval),
-            AssignOp::URShiftAssign => self.eval_binary(BinaryOp::URShift, lval, rval),
-            AssignOp::BitAndAssign => self.eval_binary(BinaryOp::BitAnd, lval, rval),
-            AssignOp::BitOrAssign => self.eval_binary(BinaryOp::BitOr, lval, rval),
-            AssignOp::BitXorAssign => self.eval_binary(BinaryOp::BitXor, lval, rval),
-            _ => Completion::Normal(rval.clone()),
+            AssignOp::AddAssign => {
+                // Fast path: both primitives and at least one is a string — avoid
+                // to_primitive/js_value_to_code_units clones in eval_binary.
+                if !matches!(&lval, JsValue::Object(_))
+                    && !matches!(&rval, JsValue::Object(_))
+                    && (matches!(&lval, JsValue::String(_)) || matches!(&rval, JsValue::String(_)))
+                {
+                    if matches!(&lval, JsValue::Symbol(_)) || matches!(&rval, JsValue::Symbol(_)) {
+                        return Completion::Throw(
+                            self.create_type_error("Cannot convert a Symbol value to a string"),
+                        );
+                    }
+                    let mut code_units = match lval {
+                        JsValue::String(s) => s.into_vec(),
+                        ref other => js_value_to_code_units(other),
+                    };
+                    match rval {
+                        JsValue::String(s) => code_units.extend_from_slice(&s.code_units),
+                        ref other => code_units.extend(js_value_to_code_units(other)),
+                    };
+                    return Completion::Normal(JsValue::String(JsString::from_vec(code_units)));
+                }
+                self.eval_binary(BinaryOp::Add, &lval, &rval)
+            }
+            AssignOp::SubAssign => self.eval_binary(BinaryOp::Sub, &lval, &rval),
+            AssignOp::MulAssign => self.eval_binary(BinaryOp::Mul, &lval, &rval),
+            AssignOp::DivAssign => self.eval_binary(BinaryOp::Div, &lval, &rval),
+            AssignOp::ModAssign => self.eval_binary(BinaryOp::Mod, &lval, &rval),
+            AssignOp::ExpAssign => self.eval_binary(BinaryOp::Exp, &lval, &rval),
+            AssignOp::LShiftAssign => self.eval_binary(BinaryOp::LShift, &lval, &rval),
+            AssignOp::RShiftAssign => self.eval_binary(BinaryOp::RShift, &lval, &rval),
+            AssignOp::URShiftAssign => self.eval_binary(BinaryOp::URShift, &lval, &rval),
+            AssignOp::BitAndAssign => self.eval_binary(BinaryOp::BitAnd, &lval, &rval),
+            AssignOp::BitOrAssign => self.eval_binary(BinaryOp::BitOr, &lval, &rval),
+            AssignOp::BitXorAssign => self.eval_binary(BinaryOp::BitXor, &lval, &rval),
+            _ => Completion::Normal(rval),
         }
     }
 

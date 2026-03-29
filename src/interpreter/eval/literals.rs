@@ -13,9 +13,7 @@ impl Interpreter {
             .quasis
             .iter()
             .map(|q| match q {
-                Some(cu) => JsValue::String(JsString {
-                    code_units: cu.clone(),
-                }),
+                Some(cu) => JsValue::String(JsString::from_vec(cu.clone())),
                 None => JsValue::Undefined,
             })
             .collect();
@@ -78,7 +76,7 @@ impl Interpreter {
             Literal::String(s) => {
                 let code_units =
                     crate::interpreter::builtins::regexp::pua_code_units_to_surrogates(s);
-                JsValue::String(JsString { code_units })
+                JsValue::String(JsString::from_vec(code_units))
             }
             Literal::BigInt(s) => {
                 use num_bigint::BigInt;
