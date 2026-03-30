@@ -118,6 +118,7 @@ pub struct Interpreter {
     /// drain_microtasks_until_idle to decide whether pending host work is
     /// actually awaited by JS code (Promise has reactions) versus detached.
     pub(crate) pending_async_promise_ids: Arc<std::sync::Mutex<std::collections::HashSet<u64>>>,
+    pub(crate) regex_cache: HashMap<(String, String), Rc<builtins::regexp::CachedRegex>>,
     pub(crate) iterator_next_cache: FxHashMap<u64, JsValue>,
     last_identifier_with_base: Option<u64>,
     pub(crate) async_gen_queues: FxHashMap<u64, std::collections::VecDeque<AsyncGenRequest>>,
@@ -266,6 +267,7 @@ impl Interpreter {
             pending_async_promise_ids: Arc::new(std::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),
+            regex_cache: HashMap::new(),
             iterator_next_cache: FxHashMap::default(),
             last_identifier_with_base: None,
             async_gen_queues: FxHashMap::default(),
