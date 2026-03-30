@@ -57,9 +57,11 @@ fn encode_for_regexp_escape(c: char) -> String {
 
 /// Convert a byte offset in a UTF-8 string to a UTF-16 code unit offset
 fn byte_offset_to_utf16(s: &str, byte_offset: usize) -> usize {
+    if s.is_ascii() {
+        return byte_offset;
+    }
     let mut utf16_offset = 0;
     for c in s[..byte_offset].chars() {
-        // PUA characters that map to surrogates count as 1 UTF-16 code unit
         if pua_to_surrogate(c).is_some() {
             utf16_offset += 1;
         } else {
@@ -71,12 +73,14 @@ fn byte_offset_to_utf16(s: &str, byte_offset: usize) -> usize {
 
 /// Convert a UTF-16 code unit offset to a byte offset in a UTF-8 string
 fn utf16_to_byte_offset(s: &str, utf16_offset: usize) -> usize {
+    if s.is_ascii() {
+        return utf16_offset.min(s.len());
+    }
     let mut utf16_count = 0;
     for (byte_idx, c) in s.char_indices() {
         if utf16_count >= utf16_offset {
             return byte_idx;
         }
-        // PUA characters that map to surrogates count as 1 UTF-16 code unit
         if pua_to_surrogate(c).is_some() {
             utf16_count += 1;
         } else {
@@ -4592,6 +4596,36 @@ enum CompiledRegex {
     },
 }
 
+pub(crate) struct CachedRegex {
+    compiled: CompiledRegex,
+    dup_map: DupGroupMap,
+    name_order: Vec<String>,
+}
+
+const REGEX_CACHE_MAX: usize = 256;
+
+fn build_regex_cached(
+    interp: &mut Interpreter,
+    source: &str,
+    flags: &str,
+) -> Result<std::rc::Rc<CachedRegex>, String> {
+    let key = (source.to_string(), flags.to_string());
+    if let Some(cached) = interp.regex_cache.get(&key) {
+        return Ok(std::rc::Rc::clone(cached));
+    }
+    let (compiled, dup_map, name_order) = build_regex_ex(source, flags)?;
+    let entry = std::rc::Rc::new(CachedRegex {
+        compiled,
+        dup_map,
+        name_order,
+    });
+    if interp.regex_cache.len() >= REGEX_CACHE_MAX {
+        interp.regex_cache.clear();
+    }
+    interp.regex_cache.insert(key, std::rc::Rc::clone(&entry));
+    Ok(entry)
+}
+
 struct RegexMatch {
     start: usize,
     end: usize,
@@ -6184,6 +6218,59 @@ fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(Str
     }
 }
 
+/// Fast path: read flags directly from internal slots for pristine RegExp objects.
+/// Returns None if the object isn't a RegExp with internal flags set.
+fn get_flags_fast(interp: &Interpreter, rx_id: u64) -> Option<String> {
+    if let Some(obj) = interp.get_object(rx_id) {
+        let b = obj.borrow();
+        if b.class_name == "RegExp" {
+            if let Some(ref flags) = b.regexp_original_flags {
+                return Some(flags.to_rust_string());
+            }
+        }
+    }
+    None
+}
+
+/// Check if a RegExp object is "pristine": standard prototype, exec not overridden.
+/// Used to enable fast paths in Symbol.match/replace that bypass JS-level dispatch.
+fn is_pristine_regexp(interp: &Interpreter, rx_id: u64) -> bool {
+    let Some(obj) = interp.get_object(rx_id) else {
+        return false;
+    };
+    let b = obj.borrow();
+    if b.class_name != "RegExp" {
+        return false;
+    }
+    // Must not have own "exec" property (overriding prototype's)
+    if b.properties.contains_key("exec") {
+        return false;
+    }
+    // Prototype must be the builtin RegExp.prototype
+    let Some(ref proto) = b.prototype else {
+        return false;
+    };
+    let Some(ref realm_proto) = interp.realm().regexp_prototype else {
+        return false;
+    };
+    if !std::rc::Rc::ptr_eq(proto, realm_proto) {
+        return false;
+    }
+    // Verify the prototype still has the original exec
+    let Some(builtin_exec_id) = interp.realm().builtin_regexp_exec_id else {
+        return false;
+    };
+    let bp = realm_proto.borrow();
+    if let Some(pd) = bp.properties.get("exec") {
+        if let Some(ref val) = pd.value {
+            if let JsValue::Object(o) = val {
+                return o.id == builtin_exec_id;
+            }
+        }
+    }
+    false
+}
+
 /// Spec-compliant Set(O, P, V, Throw) — invokes setters and Proxy traps
 fn spec_set(
     interp: &mut Interpreter,
@@ -6566,12 +6653,12 @@ fn regexp_exec_raw(
     } else {
         0
     };
-    let (re, dup_map, name_order) = match build_regex_ex(source, flags) {
+    let cached = match build_regex_cached(interp, source, flags) {
         Ok(r) => r,
         Err(_) => return Completion::Normal(JsValue::Null),
     };
 
-    let is_bytes_mode = matches!(re, CompiledRegex::Bytes(_));
+    let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
     let wtf8_bytes = if is_bytes_mode {
         js_code_units_to_wtf8(input_code_units)
     } else {
@@ -6584,7 +6671,7 @@ fn regexp_exec_raw(
     };
 
     let mut caps = if is_bytes_mode {
-        if let CompiledRegex::Bytes(ref bytes_re) = re {
+        if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
             match bytes_regex_captures_at(bytes_re, &wtf8_bytes, last_index_byte) {
                 Some(c) => c,
                 None => {
@@ -6600,7 +6687,7 @@ fn regexp_exec_raw(
             unreachable!()
         }
     } else {
-        match regex_captures_at(&re, input, last_index_byte) {
+        match regex_captures_at(&cached.compiled, input, last_index_byte) {
             Some(c) => c,
             None => {
                 if (global || sticky)
@@ -6613,9 +6700,11 @@ fn regexp_exec_raw(
         }
     };
 
-    clear_stale_dup_captures(&mut caps, &dup_map);
+    clear_stale_dup_captures(&mut caps, &cached.dup_map);
     strip_renamed_qi_captures(&mut caps);
     reset_quantifier_inner_captures(&mut caps, source);
+    let dup_map = &cached.dup_map;
+    let name_order = &cached.name_order;
 
     let full_match = caps.get(0).unwrap();
     // Convert absolute byte offsets to UTF-16 code unit offsets
@@ -6685,8 +6774,8 @@ fn regexp_exec_raw(
         let groups_obj = interp.create_object();
         groups_obj.borrow_mut().prototype = None;
         // Insert properties in source order using name_order
-        for orig_name in &name_order {
-            if let Some(variants) = dup_map.get(orig_name) {
+        for orig_name in name_order {
+            if let Some(variants) = dup_map.get(orig_name as &str) {
                 // Duplicate named group: find which variant matched
                 let mut matched_val = JsValue::Undefined;
                 for (internal_name, _) in variants {
@@ -6773,8 +6862,8 @@ fn regexp_exec_raw(
             if has_named {
                 let idx_groups = interp.create_object();
                 idx_groups.borrow_mut().prototype = None;
-                for orig_name in &name_order {
-                    if let Some(variants) = dup_map.get(orig_name) {
+                for orig_name in name_order {
+                    if let Some(variants) = dup_map.get(orig_name as &str) {
                         let mut matched_val = JsValue::Undefined;
                         for (internal_name, _) in variants {
                             let sanitized = sanitize_group_name(internal_name);
@@ -6898,6 +6987,9 @@ impl Interpreter {
                 Completion::Normal(JsValue::Null)
             },
         ));
+        if let JsValue::Object(ref o) = exec_fn {
+            self.realm_mut().builtin_regexp_exec_id = Some(o.id);
+        }
         regexp_proto
             .borrow_mut()
             .insert_builtin("exec".to_string(), exec_fn);
@@ -7156,14 +7248,18 @@ impl Interpreter {
                 };
 
                 // 4. Let flags be ? ToString(? Get(rx, "flags")).
-                let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
-                let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                let flags_str = match interp.to_string_value(&flags_val) {
-                    Ok(s) => s,
-                    Err(e) => return Completion::Throw(e),
+                let flags_str = if let Some(f) = get_flags_fast(interp, rx_id) {
+                    f
+                } else {
+                    let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
+                    let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    match interp.to_string_value(&flags_val) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    }
                 };
 
                 // 5. If flags does not contain "g", then
@@ -7180,6 +7276,102 @@ impl Interpreter {
                     return Completion::Throw(e);
                 }
 
+                // Fast path: for pristine RegExp, bypass JS dispatch and use regex directly
+                if is_pristine_regexp(interp, rx_id) {
+                    let (source, flags_owned) = {
+                        let obj = interp.get_object(rx_id).unwrap();
+                        let b = obj.borrow();
+                        let src = js_string_to_regex_input(
+                            &b.regexp_original_source.as_ref().unwrap().code_units,
+                        );
+                        let fl = b.regexp_original_flags.as_ref().unwrap().to_rust_string();
+                        (src, fl)
+                    };
+                    let cached = match build_regex_cached(interp, &source, &flags_owned) {
+                        Ok(r) => r,
+                        Err(_) => return Completion::Normal(JsValue::Null),
+                    };
+                    let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
+                    let non_unicode_input;
+                    let unicode = flags_owned.contains('u') || flags_owned.contains('v');
+                    let input = if is_bytes_mode {
+                        &s
+                    } else if !unicode {
+                        non_unicode_input = split_surrogates_for_non_unicode(&s);
+                        &non_unicode_input
+                    } else {
+                        &s
+                    };
+                    let wtf8_bytes = if is_bytes_mode {
+                        js_code_units_to_wtf8(&s_cu)
+                    } else {
+                        Vec::new()
+                    };
+                    let input_utf16_len: usize = input
+                        .chars()
+                        .map(|c| {
+                            if pua_to_surrogate(c).is_some() {
+                                1
+                            } else {
+                                c.len_utf16()
+                            }
+                        })
+                        .sum();
+                    let mut results: Vec<JsValue> = Vec::new();
+                    let mut last_index_utf16: usize = 0;
+                    loop {
+                        if last_index_utf16 > input_utf16_len {
+                            break;
+                        }
+                        let last_index_byte = if is_bytes_mode {
+                            utf16_to_wtf8_byte_offset(&wtf8_bytes, last_index_utf16)
+                        } else {
+                            utf16_to_byte_offset(input, last_index_utf16)
+                        };
+                        let caps = if is_bytes_mode {
+                            if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
+                                bytes_regex_captures_at(bytes_re, &wtf8_bytes, last_index_byte)
+                            } else {
+                                unreachable!()
+                            }
+                        } else {
+                            regex_captures_at(&cached.compiled, input, last_index_byte)
+                        };
+                        let Some(caps) = caps else { break };
+                        let full_match = caps.get(0).unwrap();
+                        let match_text = &full_match.text;
+                        let match_end_utf16 = if is_bytes_mode {
+                            wtf8_byte_offset_to_utf16(&wtf8_bytes, full_match.end)
+                        } else {
+                            byte_offset_to_utf16(input, full_match.end)
+                        };
+
+                        results.push(JsValue::String(regex_output_to_js_string(match_text)));
+
+                        if match_text.is_empty() {
+                            let match_start_utf16 = if is_bytes_mode {
+                                wtf8_byte_offset_to_utf16(&wtf8_bytes, full_match.start)
+                            } else {
+                                byte_offset_to_utf16(input, full_match.start)
+                            };
+                            last_index_utf16 =
+                                advance_string_index(input, match_start_utf16, full_unicode);
+                        } else {
+                            last_index_utf16 = match_end_utf16;
+                        }
+                    }
+                    // Update lastIndex to 0 (spec requires it after global match completes)
+                    if let Err(e) = set_last_index_strict(interp, rx_id, 0.0) {
+                        return Completion::Throw(e);
+                    }
+                    return if results.is_empty() {
+                        Completion::Normal(JsValue::Null)
+                    } else {
+                        Completion::Normal(interp.create_array(results))
+                    };
+                }
+
+                // Slow path: go through regexp_exec_abstract
                 let mut results: Vec<JsValue> = Vec::new();
                 loop {
                     let result = regexp_exec_abstract(interp, rx_id, &s, &s_cu);
@@ -7384,14 +7576,18 @@ impl Interpreter {
                 };
 
                 // 7. Let flags be ? ToString(? Get(rx, "flags")).
-                let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
-                let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                let flags = match interp.to_string_value(&flags_val) {
-                    Ok(s) => s,
-                    Err(e) => return Completion::Throw(e),
+                let flags = if let Some(f) = get_flags_fast(interp, rx_id) {
+                    f
+                } else {
+                    let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
+                    let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    match interp.to_string_value(&flags_val) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    }
                 };
 
                 // 8. Let global be (flags contains "g").
@@ -7409,7 +7605,222 @@ impl Interpreter {
                     }
                 }
 
-                // 10-11. Collect results
+                // Fast path: for pristine RegExp with global + string replacement,
+                // bypass JS dispatch and build replacement directly from regex matches
+                if global && !functional_replace && is_pristine_regexp(interp, rx_id) {
+                    let (source, flags_owned) = {
+                        let obj = interp.get_object(rx_id).unwrap();
+                        let b = obj.borrow();
+                        let src = js_string_to_regex_input(
+                            &b.regexp_original_source.as_ref().unwrap().code_units,
+                        );
+                        let fl = b.regexp_original_flags.as_ref().unwrap().to_rust_string();
+                        (src, fl)
+                    };
+                    let cached = match build_regex_cached(interp, &source, &flags_owned) {
+                        Ok(r) => r,
+                        Err(_) => {
+                            return Completion::Normal(JsValue::String(regex_output_to_js_string(
+                                &s_slice,
+                            )));
+                        }
+                    };
+                    let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
+                    let unicode = flags_owned.contains('u') || flags_owned.contains('v');
+                    let non_unicode_input;
+                    let input = if is_bytes_mode {
+                        &s
+                    } else if !unicode {
+                        non_unicode_input = split_surrogates_for_non_unicode(&s);
+                        &non_unicode_input
+                    } else {
+                        &s
+                    };
+                    let wtf8_bytes = if is_bytes_mode {
+                        js_code_units_to_wtf8(&s_cu)
+                    } else {
+                        Vec::new()
+                    };
+                    let input_utf16_len: usize = input
+                        .chars()
+                        .map(|c| {
+                            if pua_to_surrogate(c).is_some() {
+                                1
+                            } else {
+                                c.len_utf16()
+                            }
+                        })
+                        .sum();
+                    let template = replace_str.as_ref().unwrap();
+                    let mut accumulated_result = String::new();
+                    let mut next_source_position: usize = 0;
+                    let mut last_index_utf16: usize = 0;
+
+                    loop {
+                        if last_index_utf16 > input_utf16_len {
+                            break;
+                        }
+                        let last_index_byte = if is_bytes_mode {
+                            utf16_to_wtf8_byte_offset(&wtf8_bytes, last_index_utf16)
+                        } else {
+                            utf16_to_byte_offset(input, last_index_utf16)
+                        };
+                        let mut caps = if is_bytes_mode {
+                            if let CompiledRegex::Bytes(ref bytes_re) = cached.compiled {
+                                match bytes_regex_captures_at(
+                                    bytes_re,
+                                    &wtf8_bytes,
+                                    last_index_byte,
+                                ) {
+                                    Some(c) => c,
+                                    None => break,
+                                }
+                            } else {
+                                unreachable!()
+                            }
+                        } else {
+                            match regex_captures_at(&cached.compiled, input, last_index_byte) {
+                                Some(c) => c,
+                                None => break,
+                            }
+                        };
+                        clear_stale_dup_captures(&mut caps, &cached.dup_map);
+                        strip_renamed_qi_captures(&mut caps);
+                        reset_quantifier_inner_captures(&mut caps, &source);
+
+                        let full_match = caps.get(0).unwrap();
+                        let matched = &full_match.text;
+                        let match_start_utf16 = if is_bytes_mode {
+                            wtf8_byte_offset_to_utf16(&wtf8_bytes, full_match.start)
+                        } else {
+                            byte_offset_to_utf16(input, full_match.start)
+                        };
+                        let match_end_utf16 = if is_bytes_mode {
+                            wtf8_byte_offset_to_utf16(&wtf8_bytes, full_match.end)
+                        } else {
+                            byte_offset_to_utf16(input, full_match.end)
+                        };
+                        let match_length_utf16 =
+                            regex_output_to_js_string(matched).code_units.len();
+                        let position_utf16 = match_start_utf16;
+                        let position = utf16_to_byte_offset(&s_slice, position_utf16).min(length_s);
+
+                        // Build captures as JsValues for get_substitution
+                        let mut capture_vals: Vec<JsValue> = Vec::new();
+                        for i in 1..caps.len() {
+                            match caps.get(i) {
+                                Some(m) => capture_vals
+                                    .push(JsValue::String(regex_output_to_js_string(&m.text))),
+                                None => capture_vals.push(JsValue::Undefined),
+                            }
+                        }
+
+                        // Named captures
+                        let has_named = caps.names.iter().any(|n| n.is_some());
+                        let named_captures_obj = if has_named {
+                            let groups_obj = interp.create_object();
+                            groups_obj.borrow_mut().prototype = None;
+                            for orig_name in &cached.name_order {
+                                if let Some(variants) = cached.dup_map.get(orig_name as &str) {
+                                    let mut matched_val = JsValue::Undefined;
+                                    for (internal_name, _) in variants {
+                                        let sanitized = sanitize_group_name(internal_name);
+                                        for (i, name_opt) in caps.names.iter().enumerate() {
+                                            if let Some(n) = name_opt
+                                                && *n == sanitized
+                                                && let Some(m) = caps.get(i)
+                                            {
+                                                matched_val = JsValue::String(
+                                                    regex_output_to_js_string(&m.text),
+                                                );
+                                                break;
+                                            }
+                                        }
+                                        if !matches!(matched_val, JsValue::Undefined) {
+                                            break;
+                                        }
+                                    }
+                                    groups_obj
+                                        .borrow_mut()
+                                        .insert_value(orig_name.clone(), matched_val);
+                                } else {
+                                    let sanitized = sanitize_group_name(orig_name);
+                                    let mut val = JsValue::Undefined;
+                                    for (i, name_opt) in caps.names.iter().enumerate() {
+                                        if let Some(n) = name_opt
+                                            && *n == sanitized
+                                        {
+                                            val = match caps.get(i) {
+                                                Some(m) => JsValue::String(
+                                                    regex_output_to_js_string(&m.text),
+                                                ),
+                                                None => JsValue::Undefined,
+                                            };
+                                            break;
+                                        }
+                                    }
+                                    groups_obj.borrow_mut().insert_value(orig_name.clone(), val);
+                                }
+                            }
+                            let groups_id = groups_obj.borrow().id.unwrap();
+                            JsValue::Object(crate::types::JsObject { id: groups_id })
+                        } else {
+                            JsValue::Undefined
+                        };
+
+                        let named_captures_for_sub = if !named_captures_obj.is_undefined() {
+                            match interp.to_object(&named_captures_obj) {
+                                Completion::Normal(v) => v,
+                                _ => JsValue::Undefined,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
+                        let tail_pos = utf16_to_byte_offset(
+                            &s_slice,
+                            (position_utf16 + match_length_utf16).min(s_utf16_len),
+                        );
+                        let replacement = match get_substitution(
+                            interp,
+                            matched,
+                            &s_slice,
+                            position,
+                            tail_pos,
+                            &capture_vals,
+                            &named_captures_for_sub,
+                            template,
+                        ) {
+                            Ok(s) => s,
+                            Err(e) => return Completion::Throw(e),
+                        };
+
+                        if position >= next_source_position {
+                            accumulated_result.push_str(&s_slice[next_source_position..position]);
+                            accumulated_result.push_str(&replacement);
+                            next_source_position = tail_pos;
+                        }
+
+                        // Advance past match
+                        if matched.is_empty() {
+                            last_index_utf16 =
+                                advance_string_index(input, match_start_utf16, full_unicode);
+                        } else {
+                            last_index_utf16 = match_end_utf16;
+                        }
+                    }
+                    // Update lastIndex to 0
+                    if let Err(e) = set_last_index_strict(interp, rx_id, 0.0) {
+                        return Completion::Throw(e);
+                    }
+                    if next_source_position < length_s {
+                        accumulated_result.push_str(&s_slice[next_source_position..]);
+                    }
+                    return Completion::Normal(JsValue::String(regex_output_to_js_string(
+                        &accumulated_result,
+                    )));
+                }
+
+                // 10-11. Collect results (slow path)
                 let mut results: Vec<JsValue> = Vec::new();
                 let gc_root_start = interp.gc_temp_roots.len();
                 loop {
@@ -7750,13 +8161,17 @@ impl Interpreter {
                 };
 
                 // 4. Let flags be ? ToString(? Get(rx, "flags")).
-                let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                let flags_str = match interp.to_string_value(&flags_val) {
-                    Ok(s) => s,
-                    Err(e) => return Completion::Throw(e),
+                let flags_str = if let Some(f) = get_flags_fast(interp, rx_id) {
+                    f
+                } else {
+                    let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    match interp.to_string_value(&flags_val) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    }
                 };
 
                 // 5-6. unicodeMatching, newFlags
@@ -8000,13 +8415,17 @@ impl Interpreter {
                 };
 
                 // 4. Let flags be ? ToString(? Get(R, "flags")).
-                let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                let flags = match interp.to_string_value(&flags_val) {
-                    Ok(s) => s,
-                    Err(e) => return Completion::Throw(e),
+                let flags = if let Some(f) = get_flags_fast(interp, rx_id) {
+                    f
+                } else {
+                    let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    match interp.to_string_value(&flags_val) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    }
                 };
 
                 // 5. Let matcher be ? Construct(C, « R, flags »).
