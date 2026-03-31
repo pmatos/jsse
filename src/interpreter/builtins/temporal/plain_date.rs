@@ -1112,18 +1112,18 @@ impl Interpreter {
                     );
                 }
                 // Non-ISO: get calendar monthCode+day, find reference year
-                if let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal) {
-                    if let Some((iso_y, iso_m, iso_d)) = super::calendar_month_day_to_iso(
+                if let Some(cf) = super::iso_to_calendar_fields(y, m, d, &cal)
+                    && let Some((iso_y, iso_m, iso_d)) = super::calendar_month_day_to_iso(
                         &cf.month_code,
                         cf.day,
                         None,
                         &cal,
                         "constrain",
-                    ) {
-                        return super::plain_month_day::create_plain_month_day_result(
-                            interp, iso_m, iso_d, iso_y, &cal,
-                        );
-                    }
+                    )
+                {
+                    return super::plain_month_day::create_plain_month_day_result(
+                        interp, iso_m, iso_d, iso_y, &cal,
+                    );
                 }
                 Completion::Throw(
                     interp.create_range_error("Invalid calendar fields for PlainMonthDay"),
