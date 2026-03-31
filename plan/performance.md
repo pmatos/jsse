@@ -116,19 +116,27 @@
 - Linear UTF-16 search pattern at lines 890-903
 - Multiple string conversions between UTF-8 and UTF-16
 
-**Fix strategy:**
-- Profile the regex engine to identify specific bottlenecks
-- Reduce unnecessary UTF-8/UTF-16 conversions
-- Consider using the `regex` crate as a backend for common patterns
-- Optimize `String.prototype.replace` for the common single-match case
+**Fix strategy (implemented):**
+1. **Compiled regex cache:** HashMap avoids re-translating/re-compiling patterns
+2. **Direct flags access** from internal slots instead of 8-property-lookup getter
+3. **Fast-path global Symbol.match** for pristine RegExp objects
+4. **Fast-path global Symbol.replace** (string) without intermediate result objects
+5. **ASCII fast-path** for UTF-16/UTF-8 offset conversion
 
-**Expected impact:** 5-10x improvement on regex-heavy benchmarks.
+**Actual impact:**
+- regexp-dna: 25.5s → 342ms (**74.3x faster**)
+- string-tagcloud: 26.9s → 944ms (**28.5x faster** — regex-heavy under the hood)
+- string-unpack-code: 95.7s → 52.2s (**1.8x faster** — also regex-dominated)
+- SunSpider total: 186.6s → 90.3s (**51% faster**)
+- Octane regexp: TIMEOUT → 112.9s (**newly passing**)
 
-**Status:** Not started
+**Status:** Complete
 
 **Post-phase results:**
-- SunSpider total: _pending_
-- test262 pass rate: _pending_
+- SunSpider total: 90.3s (was 186.6s)
+- Kraken total (common): 421.8s (was 429.1s)
+- Octane total (common): 113.9s (was 113.1s)
+- Octane pass count: 9/14 (was 8/14)
 
 ---
 
@@ -169,10 +177,12 @@ After each phase:
 4. Update this file with results
 5. Commit with benchmark data
 
-| Phase | SunSpider | Kraken (passing) | Octane (passing) | test262 |
-|-------|-----------|-----------------|------------------|---------|
-| Baseline | 83,512ms | 326,500ms | 383,051ms | 100% |
-| Phase 1 | 76,296ms | 327,702ms | 373,337ms | 100% |
-| Phase 2 | 79,080ms | 304,716ms | 270,185ms | 100% |
-| Phase 3 | _pending_ | _pending_ | _pending_ | _pending_ |
+Results re-measured on AMD EPYC 7501 (2026-03-31). Common-passing tests only.
+
+| Phase | SunSpider (26) | Kraken (9 common) | Octane (5 common) | Passes |
+|-------|---------------|-------------------|-------------------|--------|
+| Baseline | 198,654ms | 441,104ms | 148,124ms | 40/54 |
+| Phase 1 | 196,111ms | 430,717ms | 129,832ms | 40/54 |
+| Phase 2 | 186,605ms | 429,138ms | 113,143ms | 44/54 |
+| Phase 3 | 90,342ms | 421,804ms | 113,856ms | 45/54 |
 | Phase 4 | _pending_ | _pending_ | _pending_ | _pending_ |

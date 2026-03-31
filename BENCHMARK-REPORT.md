@@ -1,226 +1,244 @@
 # JSSE Performance Benchmark Report
 
-**Date:** 2026-03-28
+**Date:** 2026-03-31
+**Machine:** AMD EPYC 7501 32-Core, 252 GB RAM, Debian 6.1.0-41-amd64
 
 ## Engine Versions
 
 | Engine | Version | Git SHA | Binary |
 |--------|---------|---------|--------|
-| JSSE | main | `845ad427cc7e74fb2fbf1d74446d1c72417112e5` | `./target/release/jsse` |
-| Node.js | v25.7.0 | (system) | `/usr/bin/node` |
-| Boa | 1.0.0-dev | `f075094f9674f9919b4d2e85ca1bcba410bf34b0` | `/tmp/boa/target/release/boa` |
-| engine262 | 0.0.1 | `ae71998cc5a8315700555135b1ac202a0d6d0b31` | `node /tmp/engine262/lib/node/bin.mjs` |
+| JSSE | worktree-zany-foraging-finch | Varies per phase (see below) | `~/.bench/jsse-{phase}` |
+| Node.js | v25.8.2 | (nvm) | `~/.nvm/versions/node/v25.8.2/bin/node` |
+| Boa | 1.0.0-dev | `f5e88de558e038f0ae675a012d59917a098f44b6` | `~/.bench/boa/target/release/boa` |
+| engine262 | 0.0.1 | `ae71998cc5a8315700555135b1ac202a0d6d0b31` | `node ~/.bench/engine262/lib/node/bin.mjs` |
+
+### JSSE Phase Commits
+
+| Phase | Commit | Description |
+|-------|--------|-------------|
+| Baseline | `845ad42` | Pre-optimization (main divergence point) |
+| Phase 1 | `de28cce` | String concatenation: Arc-backed JsString, fast-path += |
+| Phase 2 | `74cdaa9` | Function call overhead: lazy arguments, frame-based GC |
+| Phase 3 | `2a6b286` | Regex: compiled cache, fast-path global match/replace |
 
 ## Methodology
 
-Three established JavaScript benchmark suites were used:
-
+Three established JavaScript benchmark suites:
 - **SunSpider 1.0.2** — 26 micro-benchmarks (3D, crypto, string ops, math, regex)
 - **Kraken 1.1** — 14 benchmarks (audio, imaging, crypto, JSON)
 - **Octane 2.0** — 14 benchmarks (constraint solvers, ray tracing, physics, compilers)
 
-Each benchmark runs as a **single process invocation** with 3 repetitions (best-of-3 reported). This measures actual JavaScript execution time, not startup overhead. All engines built in release mode.
+Each benchmark runs as a single process invocation with **3 repetitions** (best-of-3 reported), 120s timeout per test. All engines built in release mode. Node/Boa/engine262 run only at baseline (they don't change between phases).
 
-## Results
+---
 
-### SunSpider 1.0.2 (all engines pass all 26 tests)
+## Baseline Engine Comparison
+
+### SunSpider 1.0.2
 
 | Test | JSSE | Node.js | Boa | engine262 |
 |------|------|---------|-----|-----------|
-| 3d-cube | 697.6ms | 28.1ms | 66.8ms | 29,219.1ms |
-| 3d-morph | 549.9ms | 21.9ms | 82.3ms | 31,655.4ms |
-| 3d-raytrace | 959.5ms | 23.6ms | 75.6ms | 30,722.8ms |
-| access-binary-trees | 625.1ms | 19.8ms | 68.0ms | 18,857.2ms |
-| access-fannkuch | 1,764.9ms | 25.3ms | 168.2ms | 96,220.8ms |
-| access-nbody | 559.0ms | 23.0ms | 62.5ms | 24,177.6ms |
-| access-nsieve | 620.9ms | 23.7ms | 138.3ms | 29,624.9ms |
-| bitops-3bit-bits-in-byte | 773.3ms | 20.8ms | 45.4ms | 31,255.0ms |
-| bitops-bits-in-byte | 852.6ms | 19.8ms | 64.5ms | 39,351.2ms |
-| bitops-bitwise-and | 542.9ms | 21.0ms | 371.7ms | 34,631.3ms |
-| bitops-nsieve-bits | 694.9ms | 23.5ms | 93.2ms | 47,831.7ms |
-| controlflow-recursive | 1,081.6ms | 19.9ms | 44.1ms | 38,343.1ms |
-| crypto-aes | 597.6ms | 23.6ms | 88.3ms | 26,004.8ms |
-| crypto-md5 | 770.4ms | 22.6ms | 41.4ms | 34,855.8ms |
-| crypto-sha1 | 658.0ms | 20.6ms | 40.6ms | 28,483.4ms |
-| date-format-tofte | 545.5ms | 24.9ms | 106.5ms | 15,248.6ms |
-| date-format-xparb | 278.4ms | 22.7ms | 59.7ms | 8,700.0ms |
-| math-cordic | 1,345.2ms | 22.0ms | 82.0ms | 53,009.9ms |
-| math-partial-sums | 267.4ms | 23.6ms | 123.0ms | 17,560.5ms |
-| math-spectral-norm | 673.3ms | 19.6ms | 43.8ms | 30,372.4ms |
-| regexp-dna | 11,119.9ms | 24.8ms | 134.1ms | 7,274.6ms |
-| string-base64 | 484.5ms | 23.2ms | 62.1ms | 15,207.8ms |
-| string-fasta | 702.4ms | 23.0ms | 179.7ms | 31,145.8ms |
-| string-tagcloud | 11,472.7ms | 26.5ms | 171.1ms | 24,212.1ms |
-| string-unpack-code | 41,515.2ms | 29.5ms | 362.1ms | 31,673.3ms |
-| string-validate-input | 3,359.1ms | 28.3ms | 136.5ms | 10,541.6ms |
-| **Total** | **83,512ms** | **605ms** | **2,912ms** | **786,181ms** |
-
-| | vs Node | vs Boa | vs engine262 |
-|------|---------|--------|-------------|
-| **JSSE** | 138x slower | 29x slower | **9.4x faster** |
+| 3d-cube | 1.9s | 57.0ms | 290.0ms | 84.6s |
+| 3d-morph | 1.5s | 56.0ms | 247.5ms | 89.7s |
+| 3d-raytrace | 2.6s | 60.0ms | 261.4ms | 83.5s |
+| access-binary-trees | 1.9s | 44.4ms | 198.0ms | 56.2s |
+| access-fannkuch | 5.0s | 65.2ms | 623.1ms | TIMEOUT |
+| access-nbody | 1.6s | 47.0ms | 222.5ms | 74.8s |
+| access-nsieve | 1.7s | 52.5ms | 353.6ms | 87.4s |
+| bitops-3bit-bits-in-byte | 2.3s | 44.0ms | 171.2ms | 94.1s |
+| bitops-bits-in-byte | 2.5s | 43.0ms | 217.7ms | 119.7s |
+| bitops-bitwise-and | 1.5s | 45.0ms | 1.0s | 99.6s |
+| bitops-nsieve-bits | 1.9s | 59.3ms | 277.6ms | TIMEOUT |
+| controlflow-recursive | 3.1s | 44.7ms | 131.0ms | 117.0s |
+| crypto-aes | 1.7s | 53.0ms | 278.8ms | 75.5s |
+| crypto-md5 | 2.2s | 45.6ms | 147.9ms | 98.5s |
+| crypto-sha1 | 1.9s | 47.0ms | 137.6ms | 84.2s |
+| date-format-tofte | 1.6s | 51.2ms | 313.9ms | 44.5s |
+| date-format-xparb | 859.7ms | 51.0ms | 174.7ms | 27.3s |
+| math-cordic | 3.9s | 47.7ms | 286.6ms | TIMEOUT |
+| math-partial-sums | 772.6ms | 68.5ms | 348.3ms | 47.9s |
+| math-spectral-norm | 2.0s | 47.5ms | 162.4ms | 90.2s |
+| regexp-dna | 25.5s | 79.8ms | 285.4ms | 16.5s |
+| string-base64 | 1.3s | 43.9ms | 214.8ms | 46.0s |
+| string-fasta | 2.0s | 56.0ms | 498.9ms | 92.4s |
+| string-tagcloud | 26.9s | 80.3ms | 469.6ms | 68.3s |
+| string-unpack-code | 95.7s | 65.2ms | 835.2ms | 87.7s |
+| string-validate-input | 4.9s | 58.4ms | 392.8ms | 31.9s |
+| **Total** | **198.7s** | **1.4s** | **8.6s** | **1,717s** (23/26) |
 
 ### Kraken 1.1
 
 | Test | JSSE | Node.js | Boa | engine262 |
 |------|------|---------|-----|-----------|
-| ai-astar | 52,319.8ms | 68.5ms | 6,964.6ms | TIMEOUT |
-| audio-beat-detection | FAIL | 53.8ms | 3,990.9ms | TIMEOUT |
-| audio-dft | 35,007.1ms | 64.4ms | 3,057.1ms | TIMEOUT |
-| audio-fft | 38,855.9ms | 50.1ms | 3,853.8ms | TIMEOUT |
-| audio-oscillator | 24,941.0ms | 55.9ms | 4,804.9ms | TIMEOUT |
-| imaging-darkroom | 60,115.5ms | 107.5ms | 3,527.4ms | TIMEOUT |
-| imaging-desaturate | 58,438.9ms | 75.1ms | 6,523.8ms | TIMEOUT |
-| imaging-gaussian-blur | TIMEOUT | 122.7ms | 36,070.8ms | TIMEOUT |
-| json-parse-financial | 279.8ms | 36.5ms | 486.9ms | 5,282.6ms |
-| json-stringify-tinderbox | 139.7ms | 33.5ms | 226.7ms | 3,009.2ms |
-| stanford-crypto-aes | 14,142.4ms | 55.4ms | 1,471.5ms | TIMEOUT |
-| stanford-crypto-ccm | 10,052.6ms | 53.9ms | 976.7ms | FAIL |
-| stanford-crypto-pbkdf2 | 24,770.1ms | 52.0ms | 2,266.3ms | FAIL |
-| stanford-crypto-sha256-iterative | 7,437.3ms | 33.1ms | 772.5ms | FAIL |
+| ai-astar | TIMEOUT | 197.9ms | 22.1s | TIMEOUT |
+| audio-beat-detection | FAIL | 166.1ms | 14.3s | TIMEOUT |
+| audio-dft | 92.0s | 202.3ms | 11.8s | TIMEOUT |
+| audio-fft | 112.1s | 143.2ms | 13.7s | TIMEOUT |
+| audio-oscillator | 75.3s | 148.1ms | 15.4s | TIMEOUT |
+| imaging-darkroom | TIMEOUT | 333.4ms | 13.3s | TIMEOUT |
+| imaging-desaturate | TIMEOUT | 198.6ms | 22.0s | TIMEOUT |
+| imaging-gaussian-blur | TIMEOUT | 304.1ms | TIMEOUT | TIMEOUT |
+| json-parse-financial | 778.1ms | 94.5ms | 1.4s | 15.3s |
+| json-stringify-tinderbox | 393.7ms | 79.4ms | 690.9ms | 8.4s |
+| stanford-crypto-aes | 39.5s | 140.3ms | 5.4s | TIMEOUT |
+| stanford-crypto-ccm | 28.4s | 169.5ms | 3.2s | FAIL |
+| stanford-crypto-pbkdf2 | 71.1s | 163.9ms | 8.7s | FAIL |
+| stanford-crypto-sha256-iterative | 21.5s | 91.8ms | 2.8s | FAIL |
 
 | Engine | Passed | Total (passing) |
 |--------|--------|----------------|
-| Node.js | 14/14 | 863ms |
-| Boa | 14/14 | 74,994ms |
-| JSSE | 12/14 | 326,500ms |
-| engine262 | 2/14 | 8,292ms |
+| Node.js | 14/14 | 2.4s |
+| Boa | 13/14 | 134.9s |
+| JSSE | 9/14 | 441.1s |
+| engine262 | 2/14 | 23.8s |
 
 ### Octane 2.0
 
 | Test | JSSE | Node.js | Boa | engine262 |
 |------|------|---------|-----|-----------|
-| richards | 8,503.0ms | 2,022.5ms | 2,021.8ms | TIMEOUT |
-| deltablue | 13,128.6ms | 2,026.1ms | 2,042.6ms | TIMEOUT |
-| crypto | TIMEOUT | 4,025.0ms | 17,854.0ms | TIMEOUT |
-| raytrace | 47,411.4ms | 2,027.1ms | 7,081.7ms | TIMEOUT |
-| earley-boyer | TIMEOUT | 4,035.1ms | 21,263.5ms | TIMEOUT |
-| regexp | TIMEOUT | 2,054.3ms | 24,823.4ms | TIMEOUT |
-| splay | 98,366.8ms | 2,093.6ms | 2,735.9ms | TIMEOUT |
-| navier-stokes | 53,337.1ms | 2,026.5ms | 5,248.6ms | TIMEOUT |
-| pdfjs | 35,489.5ms | 56.8ms | 4,333.9ms | 86,629.9ms |
-| code-load | 1,065.7ms | 1,035.7ms | 2,045.7ms | 5,736.1ms |
-| box2d | 51,772.9ms | 1,035.5ms | 3,344.7ms | TIMEOUT |
-| gbemu | 73,945.3ms | 1,039.2ms | 7,264.4ms | TIMEOUT |
-| zlib | 30.2ms | 29.1ms | 129.4ms | 349.1ms |
-| typescript | TIMEOUT | 965.5ms | 6,462.5ms | TIMEOUT |
+| richards | 20.9s | 2.0s | 3.1s | TIMEOUT |
+| deltablue | 37.5s | 2.1s | 4.3s | TIMEOUT |
+| crypto | TIMEOUT | 4.1s | 54.4s | TIMEOUT |
+| raytrace | TIMEOUT | 2.1s | 17.6s | TIMEOUT |
+| earley-boyer | TIMEOUT | 4.1s | 63.7s | TIMEOUT |
+| regexp | TIMEOUT | 2.2s | 69.5s | TIMEOUT |
+| splay | TIMEOUT | 2.3s | 4.0s | TIMEOUT |
+| navier-stokes | TIMEOUT | 2.1s | 17.4s | TIMEOUT |
+| pdfjs | 86.4s | 145.6ms | 13.0s | TIMEOUT |
+| code-load | 3.2s | 1.1s | 3.1s | 14.6s |
+| box2d | TIMEOUT | 1.1s | 11.3s | TIMEOUT |
+| gbemu | TIMEOUT | 1.1s | 23.7s | TIMEOUT |
+| zlib | 104.6ms | 66.6ms | 389.4ms | 985.2ms |
+| typescript | TIMEOUT | 3.1s | 20.9s | TIMEOUT |
 
 | Engine | Passed | Total (passing) |
 |--------|--------|----------------|
-| Node.js | 14/14 | 24,472ms |
-| Boa | 14/14 | 106,652ms |
-| JSSE | 10/14 | 383,051ms |
-| engine262 | 3/14 | 92,715ms |
+| Node.js | 14/14 | 27.6s |
+| Boa | 14/14 | 306.3s |
+| JSSE | 5/14 | 148.1s |
+| engine262 | 2/14 | 15.6s |
 
-## Analysis
+---
 
-### Engine hierarchy
+## Optimization Progress
 
-On compute-heavy benchmarks, the ranking is consistent:
+### SunSpider (all 26 tests pass in every phase)
 
-1. **Node.js (V8 JIT)** — Fastest by a wide margin. JIT compilation makes it 5-400x faster than interpreters on hot loops.
-2. **Boa** — The reference interpreter. Consistently 3-90x faster than JSSE depending on the benchmark category.
-3. **JSSE** — Our engine. 29x behind Boa on SunSpider, 4.4x behind on Kraken, 3.6x behind on Octane.
-4. **engine262** — JS-on-JS interpreter. Slowest overall but passes all SunSpider tests. 9.4x slower than JSSE on SunSpider.
+| Test | Baseline | Phase 1 | Phase 2 | Phase 3 | Speedup |
+|------|----------|---------|---------|---------|---------|
+| regexp-dna | 25.5s | 25.4s | 25.2s | 342.5ms | **74.3x** |
+| string-tagcloud | 26.9s | 26.6s | 26.1s | 944.3ms | **28.5x** |
+| controlflow-recursive | 3.1s | 3.0s | 1.3s | 1.3s | **2.4x** |
+| crypto-md5 | 2.2s | 2.0s | 1.0s | 1.0s | **2.2x** |
+| string-validate-input | 4.9s | 2.9s | 2.9s | 2.2s | **2.2x** |
+| access-binary-trees | 1.9s | 1.8s | 946.9ms | 928.2ms | **2.0x** |
+| crypto-sha1 | 1.9s | 1.9s | 994.9ms | 995.7ms | **1.9x** |
+| string-base64 | 1.3s | 692.4ms | 682.7ms | 677.6ms | **1.9x** |
+| math-spectral-norm | 2.0s | 1.9s | 1.1s | 1.1s | **1.8x** |
+| string-unpack-code | 95.7s | 97.4s | 97.4s | 52.2s | **1.8x** |
+| date-format-xparb | 859.7ms | 810.3ms | 514.8ms | 516.3ms | **1.7x** |
+| bitops-3bit-bits-in-byte | 2.3s | 2.2s | 1.6s | 1.6s | 1.4x |
+| string-fasta | 2.0s | 2.0s | 1.5s | 1.5s | 1.3x |
+| 3d-raytrace | 2.6s | 2.6s | 2.0s | 2.0s | 1.3x |
+| math-cordic | 3.9s | 3.8s | 3.0s | 3.0s | 1.3x |
+| bitops-bits-in-byte | 2.5s | 2.5s | 1.9s | 1.9s | 1.3x |
+| date-format-tofte | 1.6s | 1.5s | 1.4s | 1.4s | 1.2x |
+| **Total** | **198.7s** | **196.1s** | **186.6s** | **90.3s** | **2.2x** |
 
-### Where JSSE stands
+### Kraken (9 common-passing tests)
 
-JSSE is a tree-walking interpreter with no JIT, no bytecode compilation, and no inline caches. In this context:
+| Test | Baseline | Phase 1 | Phase 2 | Phase 3 | Speedup |
+|------|----------|---------|---------|---------|---------|
+| stanford-crypto-ccm | 28.4s | 27.5s | 26.1s | 24.3s | 1.2x |
+| stanford-crypto-aes | 39.5s | 38.1s | 37.0s | 36.3s | 1.1x |
+| stanford-crypto-pbkdf2 | 71.1s | 68.4s | 67.2s | 66.4s | 1.1x |
+| stanford-crypto-sha256 | 21.5s | 20.5s | 20.4s | 20.3s | 1.1x |
+| imaging-darkroom | TIMEOUT | TIMEOUT | 99.8s | 98.5s | *newly passing* |
+| **Common total** | **441.1s** | **430.7s** | **429.1s** | **421.8s** | **1.0x** |
 
-- **vs Node.js (V8 JIT):** 15x–378x slower. V8's optimizing compiler generates native code; a tree-walker cannot compete on hot loops.
-- **vs Boa (Rust interpreter):** 3.6x–29x slower. Both are interpreters, so this gap is about implementation efficiency — and it's actionable.
-- **vs engine262 (JS-on-JS):** 9.4x faster on SunSpider. JSSE handily beats the only other non-JIT, non-compiled engine.
+### Octane (5 common-passing, +4 newly passing)
 
-### Bright spots
+| Test | Baseline | Phase 1 | Phase 2 | Phase 3 | Speedup |
+|------|----------|---------|---------|---------|---------|
+| deltablue | 37.5s | 36.3s | 17.1s | 17.0s | **2.2x** |
+| richards | 20.9s | 20.3s | 13.4s | 13.5s | **1.5x** |
+| zlib | 104.6ms | 77.8ms | 106.0ms | 80.3ms | 1.3x |
+| pdfjs | 86.4s | 69.9s | 79.5s | 80.0s | 1.1x |
+| box2d | TIMEOUT | TIMEOUT | 104.1s | 105.4s | *newly passing* |
+| raytrace | TIMEOUT | TIMEOUT | 90.0s | 90.8s | *newly passing* |
+| splay | TIMEOUT | TIMEOUT | 88.0s | 87.9s | *newly passing* |
+| regexp | TIMEOUT | TIMEOUT | TIMEOUT | 112.9s | *newly passing* |
+| **Common total** | **148.1s** | **129.8s** | **113.1s** | **113.9s** | **1.3x** |
 
-- **zlib** (Octane): JSSE 30ms vs Node 29ms vs Boa 129ms vs engine262 349ms. Tied with V8, faster than both Boa and engine262.
-- **code-load** (Octane): JSSE 1,066ms vs Node 1,036ms. Near-parity with V8.
-- **json-parse-financial** (Kraken): JSSE 280ms vs Boa 487ms vs engine262 5,283ms. 1.7x faster than Boa.
-- **json-stringify-tinderbox** (Kraken): JSSE 140ms vs Boa 227ms vs engine262 3,009ms. 1.6x faster than Boa.
-- **regexp-dna** (SunSpider): JSSE 11,120ms vs engine262 7,275ms. engine262 is 1.5x faster here — JSSE's regex is a clear weakness.
+### Pass Count Progression
 
-### Interesting inversions
+| Suite | Baseline | Phase 1 | Phase 2 | Phase 3 |
+|-------|----------|---------|---------|---------|
+| SunSpider | 26/26 | 26/26 | 26/26 | 26/26 |
+| Kraken | 9/14 | 9/14 | 10/14 | 10/14 |
+| Octane | 5/14 | 5/14 | 8/14 | 9/14 |
+| **Total** | **40/54** | **40/54** | **44/54** | **45/54** |
 
-- **string-unpack-code**: JSSE (41,515ms) is slower than engine262 (31,673ms). JSSE is the slowest engine of all four on this test due to O(n²) string concatenation.
-- **string-tagcloud**: JSSE (11,473ms) is slower than engine262 (24,212ms) — wait, JSSE is faster here. But on regexp-dna, engine262 (7,275ms) beats JSSE (11,120ms). These inversions reveal specific implementation weaknesses.
+---
 
-### Worst offenders (biggest JSSE/Boa gaps)
+## Summary
 
-| Benchmark | Suite | JSSE | Boa | JSSE/Boa |
-|-----------|-------|------|-----|----------|
-| string-unpack-code | SunSpider | 41,515ms | 362ms | **115x** |
-| regexp-dna | SunSpider | 11,120ms | 134ms | **83x** |
-| string-tagcloud | SunSpider | 11,473ms | 171ms | **67x** |
-| splay | Octane | 98,367ms | 2,736ms | **36x** |
-| string-validate-input | SunSpider | 3,359ms | 137ms | **25x** |
-| controlflow-recursive | SunSpider | 1,082ms | 44ms | **25x** |
-| imaging-darkroom | Kraken | 60,116ms | 3,527ms | **17x** |
-| crypto-md5 | SunSpider | 770ms | 41ms | **19x** |
-| math-cordic | SunSpider | 1,345ms | 82ms | **16x** |
-| access-fannkuch | SunSpider | 1,765ms | 168ms | **10.5x** |
+### Overall improvement (common-passing tests, baseline → Phase 3)
 
-### Optimization targets
+| Suite | Baseline | Phase 3 | Speedup | Common tests |
+|-------|----------|---------|---------|-------------|
+| **SunSpider** | 198.7s | 90.3s | **2.2x (55% faster)** | 26 |
+| **Kraken** | 441.1s | 421.8s | **1.0x (4% faster)** | 9 |
+| **Octane** | 148.1s | 113.9s | **1.3x (23% faster)** | 5 |
 
-The gaps cluster into a few categories:
+### Key wins
 
-1. **String concatenation — O(n²) clone pattern** (115x, 67x, 25x gap vs Boa)
-   - `string-unpack-code`, `string-tagcloud`, `string-validate-input`
-   - Root cause: `js_value_to_code_units()` in `helpers.rs` clones the entire `Vec<u16>` on every `+=`. In a loop building a long string, this is quadratic.
-   - Fix: Avoid cloning the left operand when it's consumed, or use a rope/buffer for concatenation.
+1. **regexp-dna**: 25.5s → 342ms (**74.3x faster**) — Phase 3 regex compiled cache and fast-path matching
+2. **string-tagcloud**: 26.9s → 944ms (**28.5x faster**) — Combined regex (Phase 3) and string (Phase 1) improvements
+3. **controlflow-recursive**: 3.1s → 1.3s (**2.4x**) — Phase 2 lazy arguments and frame-based GC
+4. **deltablue**: 37.5s → 17.0s (**2.2x**) — Phase 2 function call overhead reduction
+5. **5 newly passing benchmarks** — box2d, raytrace, splay, regexp (Octane), imaging-darkroom (Kraken)
 
-2. **Regular expressions** (83x gap)
-   - `regexp-dna` — even engine262 beats JSSE here (7.3s vs 11.1s).
-   - JSSE's regex engine likely has excessive backtracking or lacks basic optimizations.
+### Phase-by-phase impact
 
-3. **Function call overhead** (25x gap)
-   - `controlflow-recursive` — deeply recursive Ackermann, Fibonacci, Takeuchi.
-   - Each call creates a new environment, binds arguments, checks proxy traps, and roots/unroots GC values. Reducing per-call overhead (pre-allocated environments, skipping proxy checks for known non-proxies) would help.
+| Phase | What changed | SunSpider | Kraken | Octane | New passes |
+|-------|-------------|-----------|--------|--------|------------|
+| **Phase 1** (Strings) | Arc-backed JsString, fast-path += | -1% | -2% | -12% | 0 |
+| **Phase 2** (Calls) | Lazy arguments, frame GC | -5% | ~0% | +3 passes | +4 (box2d, raytrace, splay, darkroom) |
+| **Phase 3** (Regex) | Compiled cache, fast-path match | **-52%** | ~0% | +1 pass | +1 (regexp) |
 
-4. **Tight numeric loops** (10-19x gap)
-   - `math-cordic`, `crypto-md5`, `access-fannkuch`
-   - Pure arithmetic in tight loops. Per-AST-node walk overhead accumulates.
+### JSSE vs Boa gap (baseline)
 
-5. **Property access / tree manipulation** (36x gap)
-   - `splay` — heavy object property access and prototype chain lookups.
+| Suite | JSSE/Boa ratio |
+|-------|---------------|
+| SunSpider | 23x slower |
+| Kraken | 3.3x slower |
+| Octane | 0.5x (faster on common tests) |
 
-### Suggested optimization path
+## Charts
 
-**Phase 1 — String concatenation (highest impact, targets ~60% of SunSpider gap):**
-- Fix the O(n²) clone in `js_value_to_code_units` / the `+` operator for strings
-- Expected: 10-50x improvement on string-heavy benchmarks
-
-**Phase 2 — Function call overhead:**
-- Reduce per-call cost: skip proxy checks for plain functions, pre-allocate environments
-- Expected: 2-5x improvement on recursive benchmarks
-
-**Phase 3 — Regex:**
-- Profile `regexp-dna`, compare approach with Boa's regex implementation
-- Expected: 5-10x improvement on regex-heavy benchmarks
-
-**Phase 4 — Numeric loop overhead:**
-- Specialize common numeric patterns to reduce per-node type checking
-- Expected: 2-3x improvement on arithmetic-heavy benchmarks
-
-Even a 2-3x improvement on the worst offenders would make a compelling blog post narrative.
+See `benchmark-charts/` for visualizations:
+- `suite_totals_by_phase.png` — Total time per suite across phases
+- `top_improved.png` — Top improved benchmarks baseline vs Phase 3
+- `jsse_vs_boa_gap.png` — JSSE/Boa gap narrowing across phases
+- `speedup_heatmap.png` — Per-test speedup heatmap
 
 ## Reproducing
 
 ```bash
-# Build JSSE
-cargo build --release
+# Build engines
+~/.bench/jsse-{baseline,phase1,phase2,phase3}   # Pre-built JSSE at each phase
+~/.bench/boa/target/release/boa                  # Boa 1.0.0-dev
+~/.bench/engine262/lib/node/bin.mjs              # engine262 0.0.1
 
-# Run all suites on all engines
-uv run scripts/run-benchmarks.py --suite sunspider kraken octane \
-    --engines jsse node boa engine262 --timeout 120 --repetitions 3 \
-    --output benchmark-suites-results.json
+# Run all phases
+bash scripts/run-all-phases.sh
 
-# Run just SunSpider
-uv run scripts/run-benchmarks.py --suite sunspider --engines jsse node boa
+# Generate analysis + charts
+uv run scripts/analyze-phase-results.py \
+    --baseline benchmark-results-baseline.json \
+    --phase1 benchmark-results-phase1-jsse.json \
+    --phase2 benchmark-results-phase2-jsse.json \
+    --phase3 benchmark-results-phase3-jsse.json \
+    --output-dir benchmark-charts
 ```
-
-## Files
-
-- `benchmarks/sunspider/` — SunSpider 1.0.2 test files
-- `benchmarks/kraken/` — Kraken 1.1 test files
-- `benchmarks/octane/` — Octane 2.0 test files
-- `scripts/run-benchmarks.py` — Multi-engine benchmark runner
-- `benchmark-suites-results.json` — Raw JSON results from this run

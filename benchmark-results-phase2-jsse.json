@@ -1,0 +1,500 @@
+{
+  "sunspider": {
+    "jsse": [
+      {
+        "name": "3d-cube",
+        "passed": true,
+        "avg_ms": 1782.48,
+        "min_ms": 1767.42,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "3d-morph",
+        "passed": true,
+        "avg_ms": 1492.24,
+        "min_ms": 1483.84,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "3d-raytrace",
+        "passed": true,
+        "avg_ms": 2016.42,
+        "min_ms": 2004.88,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "access-binary-trees",
+        "passed": true,
+        "avg_ms": 951.94,
+        "min_ms": 946.92,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "access-fannkuch",
+        "passed": true,
+        "avg_ms": 4980.93,
+        "min_ms": 4963.3,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "access-nbody",
+        "passed": true,
+        "avg_ms": 1571.81,
+        "min_ms": 1567.2,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "access-nsieve",
+        "passed": true,
+        "avg_ms": 1649.37,
+        "min_ms": 1641.56,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "bitops-3bit-bits-in-byte",
+        "passed": true,
+        "avg_ms": 1655.6,
+        "min_ms": 1632.99,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "bitops-bits-in-byte",
+        "passed": true,
+        "avg_ms": 1885.99,
+        "min_ms": 1874.41,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "bitops-bitwise-and",
+        "passed": true,
+        "avg_ms": 1437.31,
+        "min_ms": 1430.87,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "bitops-nsieve-bits",
+        "passed": true,
+        "avg_ms": 1827.0,
+        "min_ms": 1823.75,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "controlflow-recursive",
+        "passed": true,
+        "avg_ms": 1310.14,
+        "min_ms": 1298.27,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "crypto-aes",
+        "passed": true,
+        "avg_ms": 1581.99,
+        "min_ms": 1572.32,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "crypto-md5",
+        "passed": true,
+        "avg_ms": 1011.27,
+        "min_ms": 1008.83,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "crypto-sha1",
+        "passed": true,
+        "avg_ms": 1003.44,
+        "min_ms": 994.94,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "date-format-tofte",
+        "passed": true,
+        "avg_ms": 1418.48,
+        "min_ms": 1400.04,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "date-format-xparb",
+        "passed": true,
+        "avg_ms": 515.73,
+        "min_ms": 514.79,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "math-cordic",
+        "passed": true,
+        "avg_ms": 3001.38,
+        "min_ms": 2984.77,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "math-partial-sums",
+        "passed": true,
+        "avg_ms": 745.83,
+        "min_ms": 744.86,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "math-spectral-norm",
+        "passed": true,
+        "avg_ms": 1124.49,
+        "min_ms": 1105.62,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "regexp-dna",
+        "passed": true,
+        "avg_ms": 26170.11,
+        "min_ms": 25209.6,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "string-base64",
+        "passed": true,
+        "avg_ms": 685.6,
+        "min_ms": 682.66,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "string-fasta",
+        "passed": true,
+        "avg_ms": 1558.53,
+        "min_ms": 1547.48,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "string-tagcloud",
+        "passed": true,
+        "avg_ms": 26366.53,
+        "min_ms": 26112.03,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "string-unpack-code",
+        "passed": true,
+        "avg_ms": 97653.57,
+        "min_ms": 97406.09,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "string-validate-input",
+        "passed": true,
+        "avg_ms": 2933.56,
+        "min_ms": 2885.11,
+        "runs": 3,
+        "score": null,
+        "error": null
+      }
+    ]
+  },
+  "kraken": {
+    "jsse": [
+      {
+        "name": "ai-astar",
+        "passed": false,
+        "avg_ms": 120109.66,
+        "min_ms": 120109.66,
+        "runs": 0,
+        "score": null,
+        "error": "timeout"
+      },
+      {
+        "name": "audio-beat-detection",
+        "passed": false,
+        "avg_ms": 57.0,
+        "min_ms": 57.0,
+        "runs": 0,
+        "score": null,
+        "error": "SyntaxError: Identifier 'console' has already been declared"
+      },
+      {
+        "name": "audio-dft",
+        "passed": true,
+        "avg_ms": 91910.08,
+        "min_ms": 91633.68,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "audio-fft",
+        "passed": true,
+        "avg_ms": 112384.75,
+        "min_ms": 112362.76,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "audio-oscillator",
+        "passed": true,
+        "avg_ms": 74334.4,
+        "min_ms": 73923.6,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "imaging-darkroom",
+        "passed": true,
+        "avg_ms": 100245.05,
+        "min_ms": 99784.56,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "imaging-desaturate",
+        "passed": false,
+        "avg_ms": 120115.38,
+        "min_ms": 120115.38,
+        "runs": 0,
+        "score": null,
+        "error": "timeout"
+      },
+      {
+        "name": "imaging-gaussian-blur",
+        "passed": false,
+        "avg_ms": 120112.4,
+        "min_ms": 120112.4,
+        "runs": 0,
+        "score": null,
+        "error": "timeout"
+      },
+      {
+        "name": "json-parse-financial",
+        "passed": true,
+        "avg_ms": 777.7,
+        "min_ms": 766.67,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "json-stringify-tinderbox",
+        "passed": true,
+        "avg_ms": 366.07,
+        "min_ms": 365.48,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "stanford-crypto-aes",
+        "passed": true,
+        "avg_ms": 37013.12,
+        "min_ms": 36961.68,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "stanford-crypto-ccm",
+        "passed": true,
+        "avg_ms": 26283.6,
+        "min_ms": 26146.5,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "stanford-crypto-pbkdf2",
+        "passed": true,
+        "avg_ms": 67210.61,
+        "min_ms": 67201.51,
+        "runs": 3,
+        "score": null,
+        "error": null
+      },
+      {
+        "name": "stanford-crypto-sha256-iterative",
+        "passed": true,
+        "avg_ms": 20431.51,
+        "min_ms": 20387.15,
+        "runs": 3,
+        "score": null,
+        "error": null
+      }
+    ]
+  },
+  "octane": {
+    "jsse": [
+      {
+        "name": "richards",
+        "passed": true,
+        "avg_ms": 13412.76,
+        "min_ms": 13379.99,
+        "runs": 3,
+        "score": 9.47,
+        "error": null
+      },
+      {
+        "name": "deltablue",
+        "passed": true,
+        "avg_ms": 17129.51,
+        "min_ms": 17085.09,
+        "runs": 3,
+        "score": 14.0,
+        "error": null
+      },
+      {
+        "name": "crypto",
+        "passed": false,
+        "avg_ms": 120104.76,
+        "min_ms": 120104.76,
+        "runs": 0,
+        "score": null,
+        "error": "timeout"
+      },
+      {
+        "name": "raytrace",
+        "passed": true,
+        "avg_ms": 90200.68,
+        "min_ms": 89967.54,
+        "runs": 3,
+        "score": 27.2,
+        "error": null
+      },
+      {
+        "name": "earley-boyer",
+        "passed": false,
+        "avg_ms": 120124.26,
+        "min_ms": 120124.26,
+        "runs": 0,
+        "score": null,
+        "error": "timeout"
+      },
+      {
+        "name": "regexp",
+        "passed": false,
+        "avg_ms": 120107.67,
+        "min_ms": 120107.67,
+        "runs": 0,
+        "score": null,
+        "error": "timeout"
+      },
+      {
+        "name": "splay",
+        "passed": true,
+        "avg_ms": 88264.73,
+        "min_ms": 87980.88,
+        "runs": 3,
+        "score": 25.4,
+        "error": null
+      },
+      {
+        "name": "navier-stokes",
+        "passed": false,
+        "avg_ms": 120111.9,
+        "min_ms": 120111.9,
+        "runs": 0,
+        "score": null,
+        "error": "timeout"
+      },
+      {
+        "name": "pdfjs",
+        "passed": true,
+        "avg_ms": 79937.34,
+        "min_ms": 79478.33,
+        "runs": 3,
+        "score": 53.1,
+        "error": null
+      },
+      {
+        "name": "code-load",
+        "passed": true,
+        "avg_ms": 3125.78,
+        "min_ms": 3122.01,
+        "runs": 3,
+        "score": 938.0,
+        "error": null
+      },
+      {
+        "name": "box2d",
+        "passed": true,
+        "avg_ms": 104876.22,
+        "min_ms": 104133.91,
+        "runs": 3,
+        "score": 41.4,
+        "error": null
+      },
+      {
+        "name": "gbemu",
+        "passed": false,
+        "avg_ms": 120123.95,
+        "min_ms": 120123.95,
+        "runs": 0,
+        "score": null,
+        "error": "timeout"
+      },
+      {
+        "name": "zlib",
+        "passed": true,
+        "avg_ms": 106.85,
+        "min_ms": 105.97,
+        "runs": 3,
+        "score": NaN,
+        "error": null
+      },
+      {
+        "name": "typescript",
+        "passed": false,
+        "avg_ms": 120126.99,
+        "min_ms": 120126.99,
+        "runs": 0,
+        "score": null,
+        "error": "timeout"
+      }
+    ]
+  }
+}
