@@ -168,16 +168,47 @@ class BoaAdapter(EngineAdapter):
         return False
 
 
+class Engine262Adapter(EngineAdapter):
+    def __init__(self, binary: str):
+        super().__init__(binary)
+        self.engine262_bin = os.environ.get(
+            "ENGINE262_BIN", "/tmp/engine262/bin/engine262.js"
+        )
+
+    def build_command(self, test_file, tmp_path, harness_files, is_module, flags=None):
+        cmd = [self.binary, self.engine262_bin]
+        if is_module:
+            cmd.append("--module")
+        cmd.append(tmp_path)
+        return cmd
+
+    def needs_harness_in_source(self, is_module):
+        return True
+
+    def is_parse_error(self, exit_code, stderr):
+        return "SyntaxError" in stderr
+
+    def skip_module(self):
+        return False
+
+    def setup_preexec(self):
+        mem_limit = 4 * 1024 * 1024 * 1024  # 4 GB — engine262 runs on Node
+        resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
+        _set_pdeathsig()
+
+
 _ADAPTER_CLASSES = {
     "jsse": JsseAdapter,
     "node": NodeAdapter,
     "boa": BoaAdapter,
+    "engine262": Engine262Adapter,
 }
 
 _DEFAULT_BINARIES = {
     "jsse": "./target/release/jsse",
     "node": "node",
     "boa": "boa",
+    "engine262": "node",
 }
 
 
@@ -482,7 +513,7 @@ examples:
     )
     parser.add_argument(
         "--engine",
-        choices=["jsse", "node", "boa"],
+        choices=["jsse", "node", "boa", "engine262"],
         default="jsse",
         help="Engine to test (default: jsse)",
     )
@@ -606,10 +637,15 @@ def main():
         binary = _DEFAULT_BINARIES[engine_name]
 
     binary_path = Path(binary)
-    if engine_name == "jsse" and not binary_path.is_file():
-        print(f"Error: jsse binary not found at {binary_path}", file=sys.stderr)
-        print("Build it first: cargo build --release", file=sys.stderr)
-        sys.exit(2)
+    if not binary_path.is_file():
+        import shutil
+        found = shutil.which(binary)
+        if found:
+            binary_path = Path(found)
+        elif engine_name == "jsse":
+            print(f"Error: jsse binary not found at {binary_path}", file=sys.stderr)
+            print("Build it first: cargo build --release", file=sys.stderr)
+            sys.exit(2)
 
     test262 = Path(args.test262)
     if not (test262 / "test").is_dir():
