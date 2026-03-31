@@ -67,11 +67,13 @@ Fix exactly **one** performance bottleneck per invocation. If the target issue i
 
 After each fix:
 
-1. Build with `cargo build --release`
-2. Run the exact same workload/benchmark from the report
-3. Compare against the report's baseline (not the previous fix)
-4. Record: function/area, what changed, before time, after time, speedup factor
-5. If criterion is available, check that `p < 0.05` (statistically significant)
+1. **Before the fix** — measure the current state with the same workload/benchmark from the report
+2. Apply the fix and build with `cargo build --release`
+3. **After the fix** — re-run the exact same workload/benchmark
+4. Compare the before/after numbers from steps 1 and 3 to isolate this fix's impact
+5. Also record cumulative improvement vs the original report baseline
+6. Record: function/area, what changed, pre-fix time, post-fix time, speedup factor, cumulative speedup vs original
+7. If criterion is available, check that `p < 0.05` (statistically significant)
 
 ## Results Format
 

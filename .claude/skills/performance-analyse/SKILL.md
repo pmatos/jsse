@@ -18,7 +18,7 @@ The output is a structured `perf-report.md` file that the performance engineer (
 ## Workflow
 
 1. **Scope** — Confirm with the user which areas to analyse (specific modules, the whole binary, a particular workload)
-2. **Build** — `cargo build --release` with debug info enabled (`[profile.release] debug = true` in Cargo.toml)
+2. **Build** — `CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release` (enables debug info without modifying Cargo.toml)
 3. **Baseline** — Measure end-to-end wall-clock time with `hyperfine`
 4. **Hardware counters** — Run `perf stat` to classify the workload (CPU-bound, memory-bound, branch-bound)
 5. **CPU profile** — Generate a flamegraph with `cargo-flamegraph` or `perf record` + `perf report`

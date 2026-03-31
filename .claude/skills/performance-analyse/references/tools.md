@@ -95,8 +95,9 @@ hyperfine --export-markdown results.md './target/release/my_program'
 hyperfine --min-runs 20 './target/release/my_program'
 
 # Prepare command (run before each timing run)
-hyperfine --prepare 'sync; echo 3 | sudo tee /proc/sys/vm/drop_caches' \
-  './target/release/my_program'
+# To flush page cache before each run (requires root — ask the user to run manually if needed):
+#   sync; echo 3 | sudo tee /proc/sys/vm/drop_caches
+hyperfine --warmup 3 './target/release/my_program'
 ```
 
 ### cargo bench (built-in)
@@ -155,13 +156,11 @@ perf record -p <PID> --call-graph dwarf sleep 10
 rustflags = ["-C", "force-frame-pointers=yes"]
 ```
 
-**Enable debug info in release builds** (for better symbols):
-```toml
-# Cargo.toml
-[profile.release]
-debug = true      # Full debug info
+**Enable debug info in release builds** (for better symbols, without modifying Cargo.toml):
+```bash
+CARGO_PROFILE_RELEASE_DEBUG=true cargo build --release   # Full debug info
 # or
-debug = 1         # Line tables only (smaller, usually sufficient)
+CARGO_PROFILE_RELEASE_DEBUG=1 cargo build --release      # Line tables only (smaller, usually sufficient)
 ```
 
 ### cargo-flamegraph

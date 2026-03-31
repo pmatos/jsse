@@ -34,10 +34,11 @@ For reliable benchmarks:
 
 ```bash
 # Pin CPU frequency (prevents turbo boost variance)
-sudo cpupower frequency-set -g performance
+# Requires root — ask the user to run this manually:
+#   sudo cpupower frequency-set -g performance
 
-# Disable address space layout randomization
-echo 0 | sudo tee /proc/sys/kernel/randomize_va_space
+# Disable ASLR for a single process (no root needed)
+setarch -R ./target/release/my_program
 
 # Isolate CPU cores (boot parameter or cset)
 taskset -c 2 ./target/release/my_program
