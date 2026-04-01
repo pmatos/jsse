@@ -660,9 +660,9 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(s.len() as f64))
                 } else if let Ok(idx) = key.parse::<usize>() {
                     if idx < s.code_units.len() {
-                        Completion::Normal(JsValue::String(JsString {
-                            code_units: vec![s.code_units[idx]],
-                        }))
+                        Completion::Normal(JsValue::String(JsString::from_vec(vec![
+                            s.code_units[idx],
+                        ])))
                     } else {
                         Completion::Normal(JsValue::Undefined)
                     }

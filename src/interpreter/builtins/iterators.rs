@@ -1232,9 +1232,7 @@ impl Interpreter {
                                 position: position + advance,
                                 done: false,
                             });
-                            let result_js_str = JsString {
-                                code_units: result_units,
-                            };
+                            let result_js_str = JsString::from_vec(result_units);
                             Completion::Normal(
                                 interp.create_iter_result_object(
                                     JsValue::String(result_js_str),

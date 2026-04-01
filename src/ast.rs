@@ -473,3 +473,159 @@ pub struct TemplateLiteral {
     pub raw_quasis: Vec<String>,
     pub expressions: Vec<Expression>,
 }
+
+/// Check if a function (body + params) references the `arguments` identifier.
+/// Also checks parameter default expressions (which can reference arguments).
+pub fn func_uses_arguments(params: &[Pattern], body: &[Statement]) -> bool {
+    params_use_arguments(params) || stmts_use_arguments(body)
+}
+
+fn params_use_arguments(params: &[Pattern]) -> bool {
+    params.iter().any(|p| pattern_uses_arguments(p))
+}
+
+/// Check if a function body references the `arguments` identifier.
+/// Recurses into arrow functions (they inherit arguments) but not into
+/// regular functions, generators, or class methods (they have their own).
+pub fn stmts_use_arguments(stmts: &[Statement]) -> bool {
+    stmts.iter().any(|s| stmt_uses_arguments(s))
+}
+
+fn stmt_uses_arguments(stmt: &Statement) -> bool {
+    match stmt {
+        Statement::Expression(e) => expr_uses_arguments(e),
+        Statement::Block(stmts) => stmts.iter().any(|s| stmt_uses_arguments(s)),
+        Statement::Variable(decl) => decl.declarations.iter().any(|d| {
+            pattern_uses_arguments(&d.pattern)
+                || d.init.as_ref().is_some_and(|e| expr_uses_arguments(e))
+        }),
+        Statement::If(i) => {
+            expr_uses_arguments(&i.test)
+                || stmt_uses_arguments(&i.consequent)
+                || i.alternate.as_ref().is_some_and(|s| stmt_uses_arguments(s))
+        }
+        Statement::While(w) => expr_uses_arguments(&w.test) || stmt_uses_arguments(&w.body),
+        Statement::DoWhile(d) => stmt_uses_arguments(&d.body) || expr_uses_arguments(&d.test),
+        Statement::For(f) => {
+            f.init.as_ref().is_some_and(|i| match i {
+                ForInit::Expression(e) => expr_uses_arguments(e),
+                ForInit::Variable(d) => d.declarations.iter().any(|d| {
+                    pattern_uses_arguments(&d.pattern)
+                        || d.init.as_ref().is_some_and(|e| expr_uses_arguments(e))
+                }),
+            }) || f.test.as_ref().is_some_and(|e| expr_uses_arguments(e))
+                || f.update.as_ref().is_some_and(|e| expr_uses_arguments(e))
+                || stmt_uses_arguments(&f.body)
+        }
+        Statement::ForIn(f) => expr_uses_arguments(&f.right) || stmt_uses_arguments(&f.body),
+        Statement::ForOf(f) => expr_uses_arguments(&f.right) || stmt_uses_arguments(&f.body),
+        Statement::Return(e) => e.as_ref().is_some_and(|e| expr_uses_arguments(e)),
+        Statement::Throw(e) => expr_uses_arguments(e),
+        Statement::Try(t) => {
+            stmts_use_arguments(&t.block)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| stmts_use_arguments(&h.body))
+                || t.finalizer.as_ref().is_some_and(|f| stmts_use_arguments(f))
+        }
+        Statement::Switch(s) => {
+            expr_uses_arguments(&s.discriminant)
+                || s.cases.iter().any(|c| {
+                    c.test.as_ref().is_some_and(|e| expr_uses_arguments(e))
+                        || stmts_use_arguments(&c.consequent)
+                })
+        }
+        Statement::Labeled(_, s) => stmt_uses_arguments(s),
+        Statement::With(e, s) => expr_uses_arguments(e) || stmt_uses_arguments(s),
+        // Don't recurse into nested function declarations (they have their own arguments)
+        Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
+        Statement::Empty | Statement::Break(_) | Statement::Continue(_) | Statement::Debugger => {
+            false
+        }
+    }
+}
+
+fn expr_uses_arguments(expr: &Expression) -> bool {
+    match expr {
+        Expression::Identifier(name) => name == "arguments",
+        Expression::Literal(_)
+        | Expression::This
+        | Expression::Super
+        | Expression::ImportMeta
+        | Expression::NewTarget
+        | Expression::PrivateIdentifier(_) => false,
+        // Don't recurse into regular functions or classes (they have own arguments)
+        Expression::Function(_) | Expression::Class(_) => false,
+        // DO recurse into arrow functions (they inherit arguments)
+        Expression::ArrowFunction(a) => match &a.body {
+            ArrowBody::Expression(e) => expr_uses_arguments(e),
+            ArrowBody::Block(stmts) => stmts_use_arguments(stmts),
+        },
+        Expression::Array(elems, _) => elems
+            .iter()
+            .any(|e| e.as_ref().is_some_and(|e| expr_uses_arguments(e))),
+        Expression::Object(props) => props.iter().any(|p| {
+            expr_uses_arguments(&p.value)
+                || matches!(&p.key, PropertyKey::Computed(e) if expr_uses_arguments(e))
+        }),
+        Expression::Unary(_, e)
+        | Expression::Update(_, _, e)
+        | Expression::Spread(e)
+        | Expression::Yield(Some(e), _)
+        | Expression::Await(e)
+        | Expression::Typeof(e)
+        | Expression::Void(e)
+        | Expression::Delete(e) => expr_uses_arguments(e),
+        Expression::Yield(None, _) => false,
+        Expression::Binary(_, l, r)
+        | Expression::Logical(_, l, r)
+        | Expression::Assign(_, l, r) => expr_uses_arguments(l) || expr_uses_arguments(r),
+        Expression::Conditional(t, c, a) => {
+            expr_uses_arguments(t) || expr_uses_arguments(c) || expr_uses_arguments(a)
+        }
+        Expression::Call(callee, args) | Expression::New(callee, args) => {
+            expr_uses_arguments(callee) || args.iter().any(|a| expr_uses_arguments(a))
+        }
+        Expression::Member(obj, prop) => {
+            expr_uses_arguments(obj)
+                || matches!(prop, MemberProperty::Computed(e) if expr_uses_arguments(e))
+        }
+        Expression::OptionalChain(base, chain) => {
+            expr_uses_arguments(base) || expr_uses_arguments(chain)
+        }
+        Expression::Comma(exprs) | Expression::Sequence(exprs) => {
+            exprs.iter().any(|e| expr_uses_arguments(e))
+        }
+        Expression::TaggedTemplate(tag, tpl) => {
+            expr_uses_arguments(tag) || tpl.expressions.iter().any(|e| expr_uses_arguments(e))
+        }
+        Expression::Template(tpl) => tpl.expressions.iter().any(|e| expr_uses_arguments(e)),
+        Expression::Import(spec, opts)
+        | Expression::ImportDefer(spec, opts)
+        | Expression::ImportSource(spec, opts) => {
+            expr_uses_arguments(spec) || opts.as_ref().is_some_and(|e| expr_uses_arguments(e))
+        }
+    }
+}
+
+fn pattern_uses_arguments(pat: &Pattern) -> bool {
+    match pat {
+        Pattern::Identifier(name) => name == "arguments",
+        Pattern::Array(elems) => elems.iter().any(|e| {
+            e.as_ref().is_some_and(|e| match e {
+                ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                    pattern_uses_arguments(p)
+                }
+            })
+        }),
+        Pattern::Object(props) => props.iter().any(|p| match p {
+            ObjectPatternProperty::KeyValue(_, pat) | ObjectPatternProperty::Rest(pat) => {
+                pattern_uses_arguments(pat)
+            }
+            ObjectPatternProperty::Shorthand(name) => name == "arguments",
+        }),
+        Pattern::Assign(pat, expr) => pattern_uses_arguments(pat) || expr_uses_arguments(expr),
+        Pattern::Rest(pat) => pattern_uses_arguments(pat),
+        Pattern::MemberExpression(e) => expr_uses_arguments(e),
+    }
+}

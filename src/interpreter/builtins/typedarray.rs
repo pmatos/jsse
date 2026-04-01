@@ -4920,9 +4920,10 @@ impl Interpreter {
         &mut self,
         val: &JsValue,
     ) -> Result<Vec<JsValue>, Completion> {
+        let gc_frame = self.gc_root_frame();
         self.gc_root_value(val);
         let result = self.collect_iterable_or_arraylike_inner(val);
-        self.gc_unroot_value(val);
+        self.gc_unroot_frame(gc_frame);
         result
     }
 
