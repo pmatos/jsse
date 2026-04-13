@@ -18,6 +18,38 @@ Per the test262 specification ([INTERPRETING.md](https://github.com/tc39/test262
 
 *ES Modules now supported with dynamic `import()` and `import.meta`. Async tests run with Promise/async-await support.*
 
+## Performance (JetStream 3)
+
+We use [JetStream 3](https://github.com/WebKit/JetStream) (the current cross-vendor JS benchmark suite) for performance tracking. Only pure-JS workloads are included — Wasm and Worker-dependent benchmarks are skipped.
+
+**Baseline (1 iteration, tree-walking interpreter):**
+
+| Metric | Value |
+|--------|-------|
+| Overall score (geometric mean) | **0.5** |
+| Passing benchmarks | 25 / 48 |
+| Timeouts (>120s) | 4 |
+| Errors | 19 |
+
+For reference, JIT engines like V8 score 200-400 on JetStream 3. A tree-walking interpreter is ~400-800x slower, as expected.
+
+**Top benchmarks by score:**
+
+| Benchmark | Score | Time |
+|-----------|------:|-----:|
+| octane-code-load | 79.4 | 63ms |
+| json-stringify-inspector | 8.3 | 604ms |
+| json-parse-inspector | 3.4 | 1.5s |
+| FlightPlanner | 1.6 | 3.1s |
+| regexp-octane | 0.7 | 7.4s |
+
+```bash
+# Run JetStream 3 benchmarks
+gh repo clone WebKit/JetStream /tmp/JetStream -- --depth 1
+cargo build --release
+uv run python scripts/run-jetstream.py --json results.json
+```
+
 ## Structure
 
 - `spec/` — ECMAScript specification (submodule from [tc39/ecma262](https://github.com/tc39/ecma262))
