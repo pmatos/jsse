@@ -410,9 +410,24 @@ impl Interpreter {
                 }
                 IteratorState::MapIterator { map_id, .. } => worklist.push(*map_id),
                 IteratorState::SetIterator { set_id, .. } => worklist.push(*set_id),
-                IteratorState::Generator { func_env, .. }
-                | IteratorState::AsyncGenerator { func_env, .. } => {
+                IteratorState::Generator {
+                    func_env,
+                    execution_state,
+                    ..
+                }
+                | IteratorState::AsyncGenerator {
+                    func_env,
+                    execution_state,
+                    ..
+                } => {
                     Self::collect_env_roots(func_env, worklist);
+                    if let GeneratorExecutionState::SuspendedYield { prev_sent, .. } =
+                        execution_state
+                    {
+                        for v in prev_sent {
+                            Self::collect_value_roots(v, worklist);
+                        }
+                    }
                 }
                 IteratorState::StateMachineGenerator {
                     func_env,
