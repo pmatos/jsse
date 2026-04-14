@@ -308,6 +308,7 @@ pub struct Realm {
     pub(crate) number_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) boolean_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) regexp_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    pub(crate) builtin_regexp_exec_id: Option<u64>,
     pub(crate) regexp_string_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
     pub(crate) array_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
@@ -403,6 +404,7 @@ impl Realm {
             number_prototype: None,
             boolean_prototype: None,
             regexp_prototype: None,
+            builtin_regexp_exec_id: None,
             regexp_string_iterator_prototype: None,
             iterator_prototype: None,
             array_iterator_prototype: None,
@@ -1106,6 +1108,7 @@ pub enum JsFunction {
         is_method: bool,
         source_text: Option<String>,
         captured_new_target: Option<JsValue>,
+        uses_arguments: bool,
     },
     Native(
         String,
@@ -1148,6 +1151,7 @@ impl Clone for JsFunction {
                 is_method,
                 source_text,
                 captured_new_target,
+                uses_arguments,
             } => JsFunction::User {
                 name: name.clone(),
                 params: params.clone(),
@@ -1160,6 +1164,7 @@ impl Clone for JsFunction {
                 is_method: *is_method,
                 source_text: source_text.clone(),
                 captured_new_target: captured_new_target.clone(),
+                uses_arguments: *uses_arguments,
             },
             JsFunction::Native(name, arity, f, is_ctor) => {
                 JsFunction::Native(name.clone(), *arity, f.clone(), *is_ctor)
@@ -1765,9 +1770,9 @@ impl JsObjectData {
             if let Ok(idx) = key.parse::<usize>()
                 && idx < units.len()
             {
-                return Some(JsValue::String(crate::types::JsString {
-                    code_units: vec![units[idx]],
-                }));
+                return Some(JsValue::String(crate::types::JsString::from_vec(vec![
+                    units[idx],
+                ])));
             }
         }
         None
@@ -1887,9 +1892,9 @@ impl JsObjectData {
                 && idx < units.len()
             {
                 return Some(PropertyDescriptor {
-                    value: Some(JsValue::String(crate::types::JsString {
-                        code_units: vec![units[idx]],
-                    })),
+                    value: Some(JsValue::String(crate::types::JsString::from_vec(vec![
+                        units[idx],
+                    ]))),
                     writable: Some(false),
                     enumerable: Some(true),
                     configurable: Some(false),
@@ -1964,9 +1969,9 @@ impl JsObjectData {
                 && idx < units.len()
             {
                 return Some(PropertyDescriptor {
-                    value: Some(JsValue::String(crate::types::JsString {
-                        code_units: vec![units[idx]],
-                    })),
+                    value: Some(JsValue::String(crate::types::JsString::from_vec(vec![
+                        units[idx],
+                    ]))),
                     writable: Some(false),
                     enumerable: Some(true),
                     configurable: Some(false),
@@ -2058,9 +2063,7 @@ impl JsObjectData {
                 && idx < s.code_units.len()
             {
                 return Some(PropertyDescriptor::data(
-                    JsValue::String(JsString {
-                        code_units: vec![s.code_units[idx]],
-                    }),
+                    JsValue::String(JsString::from_vec(vec![s.code_units[idx]])),
                     false,
                     true,
                     false,
@@ -2206,9 +2209,8 @@ impl JsObjectData {
                 return false;
             }
             if let Some(ref v) = desc.value {
-                let char_val = JsValue::String(crate::types::JsString {
-                    code_units: vec![s.code_units[idx]],
-                });
+                let char_val =
+                    JsValue::String(crate::types::JsString::from_vec(vec![s.code_units[idx]]));
                 if !same_value(v, &char_val) {
                     return false;
                 }

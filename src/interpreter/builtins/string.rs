@@ -163,9 +163,9 @@ impl Interpreter {
                     if idx < 0 || idx as usize >= units.len() {
                         return Completion::Normal(JsValue::String(JsString::from_str("")));
                     }
-                    Completion::Normal(JsValue::String(JsString {
-                        code_units: vec![units[idx as usize]],
-                    }))
+                    Completion::Normal(JsValue::String(JsString::from_vec(vec![
+                        units[idx as usize],
+                    ])))
                 }),
             ),
             (
@@ -480,9 +480,9 @@ impl Interpreter {
                     if from >= to {
                         return Completion::Normal(JsValue::String(JsString::from_str("")));
                     }
-                    Completion::Normal(JsValue::String(JsString {
-                        code_units: units[from..to].to_vec(),
-                    }))
+                    Completion::Normal(JsValue::String(JsString::from_vec(
+                        units[from..to].to_vec(),
+                    )))
                 }),
             ),
             (
@@ -684,7 +684,7 @@ impl Interpreter {
                     let pad: Vec<u16> = fill_units.iter().copied().cycle().take(fill_len).collect();
                     let mut result = pad;
                     result.extend_from_slice(&s_units);
-                    Completion::Normal(JsValue::String(JsString { code_units: result }))
+                    Completion::Normal(JsValue::String(JsString::from_vec(result)))
                 }),
             ),
             (
@@ -720,7 +720,7 @@ impl Interpreter {
                     let pad: Vec<u16> = fill_units.iter().copied().cycle().take(fill_len).collect();
                     let mut result = s_units;
                     result.extend_from_slice(&pad);
-                    Completion::Normal(JsValue::String(JsString { code_units: result }))
+                    Completion::Normal(JsValue::String(JsString::from_vec(result)))
                 }),
             ),
             (
@@ -1138,9 +1138,9 @@ impl Interpreter {
                     if actual < 0 || actual >= len {
                         return Completion::Normal(JsValue::Undefined);
                     }
-                    Completion::Normal(JsValue::String(JsString {
-                        code_units: vec![units[actual as usize]],
-                    }))
+                    Completion::Normal(JsValue::String(JsString::from_vec(vec![
+                        units[actual as usize],
+                    ])))
                 }),
             ),
             (
@@ -1471,7 +1471,7 @@ impl Interpreter {
                             i += 1;
                         }
                     }
-                    Completion::Normal(JsValue::String(JsString { code_units: result }))
+                    Completion::Normal(JsValue::String(JsString::from_vec(result)))
                 }),
             ),
         ];
@@ -1646,9 +1646,9 @@ impl Interpreter {
                         _ => units.len(),
                     };
                     let end = (start + result_len).min(units.len());
-                    Completion::Normal(JsValue::String(JsString {
-                        code_units: units[start..end].to_vec(),
-                    }))
+                    Completion::Normal(JsValue::String(JsString::from_vec(
+                        units[start..end].to_vec(),
+                    )))
                 }),
                 false,
             ));

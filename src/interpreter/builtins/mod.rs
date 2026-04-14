@@ -1826,13 +1826,11 @@ impl Interpreter {
             JsFunction::native("decodeURI".to_string(), 1, |interp, _this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let code_units = match interp.to_js_string(&val) {
-                    Ok(s) => s.code_units,
+                    Ok(s) => s.code_units.to_vec(),
                     Err(e) => return Completion::Throw(e),
                 };
                 match decode_uri_string(&code_units, true) {
-                    Ok(decoded) => Completion::Normal(JsValue::String(JsString {
-                        code_units: decoded,
-                    })),
+                    Ok(decoded) => Completion::Normal(JsValue::String(JsString::from_vec(decoded))),
                     Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
                 }
             }),
@@ -1847,13 +1845,13 @@ impl Interpreter {
                 |interp, _this, args| {
                     let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let code_units = match interp.to_js_string(&val) {
-                        Ok(s) => s.code_units,
+                        Ok(s) => s.code_units.to_vec(),
                         Err(e) => return Completion::Throw(e),
                     };
                     match decode_uri_string(&code_units, false) {
-                        Ok(decoded) => Completion::Normal(JsValue::String(JsString {
-                            code_units: decoded,
-                        })),
+                        Ok(decoded) => {
+                            Completion::Normal(JsValue::String(JsString::from_vec(decoded)))
+                        }
                         Err(msg) => Completion::Throw(interp.create_error("URIError", &msg)),
                     }
                 },
@@ -1943,7 +1941,7 @@ impl Interpreter {
                     }
                     i += 1;
                 }
-                Completion::Normal(JsValue::String(JsString { code_units: result }))
+                Completion::Normal(JsValue::String(JsString::from_vec(result)))
             }),
         );
 
@@ -2533,6 +2531,7 @@ impl Interpreter {
                             is_method: false,
                             source_text: Some(fn_source_text),
                             captured_new_target: None,
+                            uses_arguments: true, // conservative for dynamic Function()
                         };
                         // Create function in the Function constructor's realm
                         let old_realm = interp.current_realm_id;
@@ -3095,6 +3094,7 @@ impl Interpreter {
                             is_method: false,
                             source_text: Some(fn_source_text),
                             captured_new_target: None,
+                            uses_arguments: true, // conservative for dynamic AsyncFunction()
                         };
                         let fn_val = interp.create_function(js_func);
                         // Apply GetPrototypeFromConstructor(newTarget, "%AsyncFunction.prototype%")
@@ -3252,6 +3252,7 @@ impl Interpreter {
                             is_method: false,
                             source_text: Some(fn_source_text),
                             captured_new_target: None,
+                            uses_arguments: true, // conservative for dynamic GeneratorFunction()
                         };
                         let fn_val = interp.create_function(js_func);
                         // Apply GetPrototypeFromConstructor(newTarget, "%GeneratorFunction.prototype%")
@@ -3411,6 +3412,7 @@ impl Interpreter {
                             is_method: false,
                             source_text: Some(fn_source_text),
                             captured_new_target: None,
+                            uses_arguments: true, // conservative for dynamic AsyncGeneratorFunction()
                         };
                         let fn_val = interp.create_function(js_func);
                         // Apply GetPrototypeFromConstructor(newTarget, "%AsyncGeneratorFunction.prototype%")
@@ -3719,7 +3721,7 @@ impl Interpreter {
                             };
                             code_units.push(cu);
                         }
-                        Completion::Normal(JsValue::String(JsString { code_units }))
+                        Completion::Normal(JsValue::String(JsString::from_vec(code_units)))
                     },
                 ));
                 let from_code_point = self.create_function(JsFunction::native(
@@ -3757,7 +3759,7 @@ impl Interpreter {
                                 code_units.push(cp as u16);
                             }
                         }
-                        Completion::Normal(JsValue::String(JsString { code_units }))
+                        Completion::Normal(JsValue::String(JsString::from_vec(code_units)))
                     },
                 ));
                 if let Some(obj) = self.get_object(o.id) {
@@ -6590,20 +6592,21 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
+                    let gc_frame = interp.gc_root_frame();
                     interp.gc_root_value(&iterator);
                     loop {
                         let step = match interp.iterator_step(&iterator) {
                             Ok(Some(result)) => result,
                             Ok(None) => break,
                             Err(e) => {
-                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_frame(gc_frame);
                                 return Completion::Throw(e);
                             }
                         };
                         let next_item = match interp.iterator_value(&step) {
                             Ok(v) => v,
                             Err(e) => {
-                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_frame(gc_frame);
                                 return Completion::Throw(e);
                             }
                         };
@@ -6611,7 +6614,7 @@ impl Interpreter {
                         let item_id = if let JsValue::Object(ref vo) = next_item {
                             vo.id
                         } else {
-                            interp.gc_unroot_value(&iterator);
+                            interp.gc_unroot_frame(gc_frame);
                             let err = interp.create_type_error("Iterator value is not an object");
                             interp.iterator_close(&iterator, err.clone());
                             return Completion::Throw(err);
@@ -6620,7 +6623,7 @@ impl Interpreter {
                         let key_raw = match interp.get_object_property(item_id, "0", &next_item) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
-                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_frame(gc_frame);
                                 interp.iterator_close(&iterator, e.clone());
                                 return Completion::Throw(e);
                             }
@@ -6630,7 +6633,7 @@ impl Interpreter {
                         let value = match interp.get_object_property(item_id, "1", &next_item) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
-                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_frame(gc_frame);
                                 interp.iterator_close(&iterator, e.clone());
                                 return Completion::Throw(e);
                             }
@@ -6640,7 +6643,7 @@ impl Interpreter {
                         let key = match interp.to_property_key(&key_raw) {
                             Ok(k) => k,
                             Err(e) => {
-                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_frame(gc_frame);
                                 interp.iterator_close(&iterator, e.clone());
                                 return Completion::Throw(e);
                             }
@@ -6649,7 +6652,7 @@ impl Interpreter {
                             obj_data.borrow_mut().insert_value(key, value);
                         }
                     }
-                    interp.gc_unroot_value(&iterator);
+                    interp.gc_unroot_frame(gc_frame);
                     Completion::Normal(obj_val)
                 },
             ));
@@ -8687,9 +8690,7 @@ impl Interpreter {
                             "getOwnPropertyDescriptor",
                             vec![
                                 interp.get_proxy_target_val(o.id),
-                                JsValue::String(crate::types::JsString {
-                                    code_units: "length".encode_utf16().collect(),
-                                }),
+                                JsValue::String(crate::types::JsString::from_str("length")),
                             ],
                         ) {
                             Ok(Some(v)) => !matches!(v, JsValue::Undefined),

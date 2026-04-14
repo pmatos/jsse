@@ -168,16 +168,41 @@ class BoaAdapter(EngineAdapter):
         return False
 
 
+class Engine262Adapter(EngineAdapter):
+    def build_command(self, test_file, tmp_path, harness_files, is_module, flags=None):
+        cmd = ["node", self.binary, "--features=all", "--no-inspector"]
+        if is_module:
+            cmd.append("-m")
+        cmd.append(tmp_path)
+        return cmd
+
+    def needs_harness_in_source(self, is_module):
+        return True
+
+    def is_parse_error(self, exit_code, stderr):
+        return "SyntaxError" in stderr
+
+    def skip_module(self):
+        return False
+
+    def setup_preexec(self):
+        mem_limit = 4 * 1024 * 1024 * 1024  # 4 GB — engine262 runs on Node
+        resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
+        _set_pdeathsig()
+
+
 _ADAPTER_CLASSES = {
     "jsse": JsseAdapter,
     "node": NodeAdapter,
     "boa": BoaAdapter,
+    "engine262": Engine262Adapter,
 }
 
 _DEFAULT_BINARIES = {
     "jsse": "./target/release/jsse",
     "node": "node",
     "boa": "boa",
+    "engine262": "/tmp/engine262/lib/node/bin.mjs",
 }
 
 
@@ -482,7 +507,7 @@ examples:
     )
     parser.add_argument(
         "--engine",
-        choices=["jsse", "node", "boa"],
+        choices=["jsse", "node", "boa", "engine262"],
         default="jsse",
         help="Engine to test (default: jsse)",
     )
