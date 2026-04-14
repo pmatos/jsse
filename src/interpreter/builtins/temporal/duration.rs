@@ -2036,56 +2036,58 @@ impl Interpreter {
                             } else {
                                 0
                             };
-                            while direction != 0 {
-                                let day_start = add_duration_to_zdt_epoch_ns(
-                                    y, mo, w, rd, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, by, bm, bd,
-                                    *base_ens, tz,
-                                )
-                                .unwrap_or(*base_ens);
-                                let day_end = add_duration_to_zdt_epoch_ns(
-                                    y,
-                                    mo,
-                                    w,
-                                    rd + direction as f64,
-                                    0.0,
-                                    0.0,
-                                    0.0,
-                                    0.0,
-                                    0.0,
-                                    0.0,
-                                    by,
-                                    bm,
-                                    bd,
-                                    *base_ens,
-                                    tz,
-                                )
-                                .unwrap_or(*base_ens);
-                                let day_length_ns = (day_end - day_start).abs();
-                                if day_length_ns == 0 {
-                                    // Skipped day (e.g., Samoa 2011-12-30): advance past it
-                                    rd += direction as f64;
-                                    continue;
-                                }
-                                let one_day_less = time_ns - direction * day_length_ns;
-                                let less_sign = if one_day_less > 0 {
-                                    1i128
-                                } else if one_day_less < 0 {
-                                    -1
-                                } else {
-                                    0
-                                };
-                                if less_sign != -direction {
-                                    rd += direction as f64;
-                                    let r = unbalance_time_ns_i128(one_day_less, "hour");
-                                    time_ns = one_day_less;
-                                    rh = r.1 as f64;
-                                    rmi = r.2 as f64;
-                                    rs = r.3 as f64;
-                                    rms = r.4 as f64;
-                                    rus = r.5 as f64;
-                                    rns = r.6 as f64;
-                                } else {
-                                    break;
+                            if direction != 0 {
+                                loop {
+                                    let day_start = add_duration_to_zdt_epoch_ns(
+                                        y, mo, w, rd, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, by, bm, bd,
+                                        *base_ens, tz,
+                                    )
+                                    .unwrap_or(*base_ens);
+                                    let day_end = add_duration_to_zdt_epoch_ns(
+                                        y,
+                                        mo,
+                                        w,
+                                        rd + direction as f64,
+                                        0.0,
+                                        0.0,
+                                        0.0,
+                                        0.0,
+                                        0.0,
+                                        0.0,
+                                        by,
+                                        bm,
+                                        bd,
+                                        *base_ens,
+                                        tz,
+                                    )
+                                    .unwrap_or(*base_ens);
+                                    let day_length_ns = (day_end - day_start).abs();
+                                    if day_length_ns == 0 {
+                                        // Skipped day (e.g., Samoa 2011-12-30): advance past it
+                                        rd += direction as f64;
+                                        continue;
+                                    }
+                                    let one_day_less = time_ns - direction * day_length_ns;
+                                    let less_sign = if one_day_less > 0 {
+                                        1i128
+                                    } else if one_day_less < 0 {
+                                        -1
+                                    } else {
+                                        0
+                                    };
+                                    if less_sign != -direction {
+                                        rd += direction as f64;
+                                        let r = unbalance_time_ns_i128(one_day_less, "hour");
+                                        time_ns = one_day_less;
+                                        rh = r.1 as f64;
+                                        rmi = r.2 as f64;
+                                        rs = r.3 as f64;
+                                        rms = r.4 as f64;
+                                        rus = r.5 as f64;
+                                        rns = r.6 as f64;
+                                    } else {
+                                        break;
+                                    }
                                 }
                             }
                         }
