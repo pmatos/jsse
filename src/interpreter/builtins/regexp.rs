@@ -4197,16 +4197,23 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                                 source
                             ));
                         }
-                        if let (Some(start_val), Some(end_val)) = (prev_value, val)
-                            && start_val > end_val
-                        {
-                            return Err(format!(
-                                "Invalid regular expression: /{}/ : Range out of order in character class",
-                                source
-                            ));
+                        if let (Some(start_val), Some(end_val)) = (prev_value, val) {
+                            if start_val > end_val {
+                                return Err(format!(
+                                    "Invalid regular expression: /{}/ : Range out of order in character class",
+                                    source
+                                ));
+                            }
+                            // Valid range: both endpoints are consumed, neither
+                            // is available as the start of a new range.
+                            prev_value = None;
+                            prev_is_class_escape = false;
+                        } else {
+                            // Degenerate range (class escape endpoint in non-unicode Annex B):
+                            // the end atom remains a standalone literal.
+                            prev_value = val;
+                            prev_is_class_escape = is_class_esc;
                         }
-                        prev_value = val;
-                        prev_is_class_escape = is_class_esc;
                         continue;
                     }
 
