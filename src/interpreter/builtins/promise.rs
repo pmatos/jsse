@@ -974,6 +974,7 @@ impl Interpreter {
             then_fn.clone(),
             resolve_fn.clone(),
             reject_fn.clone(),
+            JsValue::Object(crate::types::JsObject { id: promise_id }),
         ];
         self.microtask_queue.push((
             roots,
