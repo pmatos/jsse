@@ -110,6 +110,9 @@ impl Interpreter {
             if let Some(ref v) = afs.saved_finally_exception {
                 Self::collect_value_roots(v, &mut worklist);
             }
+            if let Some(ref env) = afs.for_of_iter_env {
+                Self::collect_env_roots(env, &mut worklist);
+            }
         }
 
         // Mark phase (BFS)
@@ -407,11 +410,53 @@ impl Interpreter {
                 }
                 IteratorState::MapIterator { map_id, .. } => worklist.push(*map_id),
                 IteratorState::SetIterator { set_id, .. } => worklist.push(*set_id),
-                IteratorState::Generator { func_env, .. }
-                | IteratorState::AsyncGenerator { func_env, .. }
-                | IteratorState::StateMachineGenerator { func_env, .. }
-                | IteratorState::StateMachineAsyncGenerator { func_env, .. } => {
+                IteratorState::Generator {
+                    func_env,
+                    execution_state,
+                    ..
+                }
+                | IteratorState::AsyncGenerator {
+                    func_env,
+                    execution_state,
+                    ..
+                } => {
                     Self::collect_env_roots(func_env, worklist);
+                    if let GeneratorExecutionState::SuspendedYield { prev_sent, .. } =
+                        execution_state
+                    {
+                        for v in prev_sent {
+                            Self::collect_value_roots(v, worklist);
+                        }
+                    }
+                }
+                IteratorState::StateMachineGenerator {
+                    func_env,
+                    delegated_iterator,
+                    pending_exception,
+                    pending_return,
+                    _sent_value,
+                    ..
+                }
+                | IteratorState::StateMachineAsyncGenerator {
+                    func_env,
+                    delegated_iterator,
+                    pending_exception,
+                    pending_return,
+                    _sent_value,
+                    ..
+                } => {
+                    Self::collect_env_roots(func_env, worklist);
+                    Self::collect_value_roots(_sent_value, worklist);
+                    if let Some(di) = delegated_iterator {
+                        Self::collect_value_roots(&di.iterator, worklist);
+                        Self::collect_value_roots(&di.next_method, worklist);
+                    }
+                    if let Some(v) = pending_exception {
+                        Self::collect_value_roots(v, worklist);
+                    }
+                    if let Some(v) = pending_return {
+                        Self::collect_value_roots(v, worklist);
+                    }
                 }
                 _ => {}
             }
