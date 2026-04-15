@@ -901,6 +901,12 @@ impl Interpreter {
             if let Some(ref h) = reaction.handler {
                 roots.push(h.clone());
             }
+            // Root the downstream promise so GC can trace it from the microtask queue.
+            // The resolve/reject closures only capture promise_id as a u64, which is
+            // invisible to the GC tracer.
+            if let Some(pid) = reaction.promise_id {
+                roots.push(JsValue::Object(crate::types::JsObject { id: pid }));
+            }
             self.microtask_queue.push((
                 roots,
                 Box::new(move |interp| {
@@ -968,6 +974,7 @@ impl Interpreter {
             then_fn.clone(),
             resolve_fn.clone(),
             reject_fn.clone(),
+            JsValue::Object(crate::types::JsObject { id: promise_id }),
         ];
         self.microtask_queue.push((
             roots,
