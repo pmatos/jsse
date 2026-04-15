@@ -1374,7 +1374,7 @@ impl<'a> Parser<'a> {
         self.in_block_or_function = prev_block;
         self.in_switch_case = prev_sc;
         self.in_static_block = prev_static_block;
-        self.function_param_names = saved_param_names;
+        self.function_param_names = None;
         self.eat(&Token::RightBrace)?;
         self.set_strict(prev_strict);
         Ok((stmts, was_strict))
