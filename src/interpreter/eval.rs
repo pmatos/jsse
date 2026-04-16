@@ -2292,7 +2292,9 @@ impl Interpreter {
                     };
                     let new_val = JsValue::Number(new_num);
                     drop(env_borrow);
-                    let _ = env.borrow_mut().set(name, new_val);
+                    if let Err(e) = env.borrow_mut().set(name, new_val) {
+                        return Completion::Throw(e);
+                    }
                     return Completion::Normal(JsValue::Number(if prefix {
                         new_num
                     } else {
