@@ -2609,31 +2609,28 @@ impl Interpreter {
                             Completion::Throw(e) => return Err(e),
                             _ => return Ok(()),
                         };
-                        // Fast path: numeric index on typed array — skip to_property_key
+                        // Fast path: non-negative integer index on typed array
                         if let JsValue::Number(index) = &v
                             && let JsValue::Object(ref o) = obj_val
                             && let Some(obj) = self.get_object(o.id)
                             && obj.borrow().typed_array_info.is_some()
                         {
-                            let is_bigint = obj
-                                .borrow()
-                                .typed_array_info
-                                .as_ref()
-                                .map(|ta| ta.kind.is_bigint())
-                                .unwrap_or(false);
-                            let num_val = if is_bigint {
-                                self.to_bigint_value(&value)?
-                            } else {
-                                JsValue::Number(self.to_number_value(&value)?)
-                            };
                             let obj_ref = obj.borrow();
                             let ta = obj_ref.typed_array_info.as_ref().unwrap();
                             if is_valid_integer_index(ta, *index) {
+                                let is_bigint = ta.kind.is_bigint();
                                 let ta_clone = ta.clone();
                                 drop(obj_ref);
+                                let num_val = if is_bigint {
+                                    self.to_bigint_value(&value)?
+                                } else {
+                                    JsValue::Number(self.to_number_value(&value)?)
+                                };
                                 typed_array_set_index(&ta_clone, *index as usize, &num_val);
+                                return Ok(());
                             }
-                            return Ok(());
+                            // Invalid index (e.g. -0, NaN, fractional) — fall through
+                            // to to_property_key which may canonicalize the key
                         }
                         self.to_property_key(&v)?
                     }
@@ -2762,8 +2759,10 @@ impl Interpreter {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
-                            let _ = env.borrow_mut().set(name, rval.clone());
-                            return Completion::Normal(rval);
+                            match env.borrow_mut().set(name, rval.clone()) {
+                                Ok(()) => return Completion::Normal(rval),
+                                Err(e) => return Completion::Throw(e),
+                            }
                         }
                     }
 
