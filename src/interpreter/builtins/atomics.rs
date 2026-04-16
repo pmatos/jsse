@@ -1,7 +1,7 @@
 use super::super::*;
 use crate::interpreter::types::{BufferData, SharedBufferInner};
 use crate::types::{JsBigInt, JsObject, JsString, JsValue};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::atomic::{
     AtomicI8, AtomicI16, AtomicI32, AtomicI64, AtomicU8, AtomicU16, AtomicU32, Ordering,
 };
@@ -12,7 +12,7 @@ struct WaiterEntry {
 }
 
 static WAITER_MAP: LazyLock<Mutex<HashMap<(u64, usize), Vec<WaiterEntry>>>> =
-    LazyLock::new(|| Mutex::new(HashMap::new()));
+    LazyLock::new(|| Mutex::new(HashMap::default()));
 
 fn check_ta_detached(interp: &mut Interpreter, ta_val: &JsValue) -> Result<(), JsValue> {
     if let JsValue::Object(o) = ta_val

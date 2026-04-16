@@ -456,7 +456,7 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         for name in &bound {
             if !seen.insert(name.as_str()) {
                 return Err(ParseError {
@@ -1058,7 +1058,7 @@ impl<'a> Parser<'a> {
                         for d in &decls {
                             Self::collect_bound_names(&d.pattern, &mut names);
                         }
-                        let mut seen = std::collections::HashSet::new();
+                        let mut seen = HashSet::default();
                         for name in &names {
                             if !seen.insert(name.clone()) {
                                 return Err(self.error(format!(
@@ -1141,7 +1141,7 @@ impl<'a> Parser<'a> {
                     for d in &decls {
                         Self::collect_bound_names(&d.pattern, &mut names);
                     }
-                    let mut seen = std::collections::HashSet::new();
+                    let mut seen = HashSet::default();
                     for name in &names {
                         if !seen.insert(name.clone()) {
                             return Err(self
@@ -1350,7 +1350,7 @@ impl<'a> Parser<'a> {
             if let Some(ref p) = param {
                 let mut bound = Vec::new();
                 Self::collect_bound_names(p, &mut bound);
-                let mut seen = std::collections::HashSet::new();
+                let mut seen = HashSet::default();
                 for name in &bound {
                     if !seen.insert(name.as_str()) {
                         return Err(

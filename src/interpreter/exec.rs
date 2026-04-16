@@ -239,7 +239,7 @@ impl Interpreter {
         }
 
         // §16.1.7 step 6: For each var name, check HasLexicalDeclaration
-        let mut var_names = std::collections::HashSet::new();
+        let mut var_names = HashSet::default();
         Self::collect_var_names_from_stmts(stmts, &mut var_names);
         for name in &var_names {
             if let Some(binding) = env.borrow().bindings.get(name)
@@ -296,8 +296,8 @@ impl Interpreter {
         let enclosing_strict = env.borrow().strict;
         let func = JsFunction::User {
             name: Some(f.name.clone()),
-            params: f.params.clone(),
-            body: f.body.clone(),
+            params: Rc::new(f.params.clone()),
+            body: Rc::new(f.body.clone()),
             closure: env.clone(),
             is_arrow: false,
             is_strict: f.body_is_strict || enclosing_strict,
@@ -512,10 +512,7 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn collect_var_names_from_pattern(
-        pat: &Pattern,
-        out: &mut std::collections::HashSet<String>,
-    ) {
+    pub(crate) fn collect_var_names_from_pattern(pat: &Pattern, out: &mut HashSet<String>) {
         match pat {
             Pattern::Identifier(name) => {
                 out.insert(name.clone());
@@ -548,16 +545,13 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn collect_var_names_from_stmts(
-        stmts: &[Statement],
-        out: &mut std::collections::HashSet<String>,
-    ) {
+    pub(crate) fn collect_var_names_from_stmts(stmts: &[Statement], out: &mut HashSet<String>) {
         for stmt in stmts {
             Self::collect_var_names_from_stmt(stmt, out);
         }
     }
 
-    fn collect_var_names_from_stmt(stmt: &Statement, out: &mut std::collections::HashSet<String>) {
+    fn collect_var_names_from_stmt(stmt: &Statement, out: &mut HashSet<String>) {
         match stmt {
             Statement::Variable(decl) if decl.kind == VarKind::Var => {
                 for d in &decl.declarations {
@@ -949,7 +943,7 @@ impl Interpreter {
                 if let JsValue::Object(obj_ref) = &obj_val {
                     if let Some(obj_data) = self.get_object(obj_ref.id) {
                         let with_env = Rc::new(RefCell::new(Environment {
-                            bindings: HashMap::new(),
+                            bindings: HashMap::default(),
                             parent: Some(env.clone()),
                             strict: env.borrow().strict,
                             is_function_scope: false,
@@ -971,7 +965,10 @@ impl Interpreter {
                             indirect_bindings: None,
                             module_path: None,
                         }));
+                        self.with_scope_depth += 1;
+                        self.has_ever_entered_with = true;
                         let c = self.exec_statement(body, &with_env);
+                        self.with_scope_depth -= 1;
                         // UpdateEmpty(C, undefined) per §14.11.2 step 9
                         match c {
                             Completion::Empty => Completion::Normal(JsValue::Undefined),
@@ -1075,7 +1072,8 @@ impl Interpreter {
             // §13.3.2.4 step 2: ResolveBinding BEFORE evaluating Initializer
             // Pre-resolve with-scope binding so the reference is captured before
             // side effects in the initializer can change it.
-            let pre_resolved_with = if decl.kind == VarKind::Var
+            let pre_resolved_with = if (self.with_scope_depth > 0 || self.has_ever_entered_with)
+                && decl.kind == VarKind::Var
                 && d.init.is_some()
                 && let Pattern::Identifier(ref name) = d.pattern
             {
@@ -1177,13 +1175,17 @@ impl Interpreter {
                         var_scope.borrow_mut().declare(name, kind);
                     }
                     // For var initializers inside with-scopes, write through with-object
-                    match self.resolve_with_has_binding(name, env) {
-                        Ok(Some(obj_id)) => {
-                            let strict = env.borrow().strict;
-                            self.with_set_mutable_binding(obj_id, name, val, strict)
+                    if self.with_scope_depth > 0 || self.has_ever_entered_with {
+                        match self.resolve_with_has_binding(name, env) {
+                            Ok(Some(obj_id)) => {
+                                let strict = env.borrow().strict;
+                                self.with_set_mutable_binding(obj_id, name, val, strict)
+                            }
+                            Ok(None) => env.borrow_mut().set(name, val),
+                            Err(e) => Err(e),
                         }
-                        Ok(None) => env.borrow_mut().set(name, val),
-                        Err(e) => Err(e),
+                    } else {
+                        env.borrow_mut().set(name, val)
                     }
                 } else {
                     env.borrow_mut().declare(name, kind);
@@ -1425,7 +1427,12 @@ impl Interpreter {
                                 if !already {
                                     var_scope.borrow_mut().declare(binding_name, kind);
                                 }
-                                let resolved = self.resolve_with_has_binding(binding_name, env)?;
+                                let resolved =
+                                    if self.with_scope_depth > 0 || self.has_ever_entered_with {
+                                        self.resolve_with_has_binding(binding_name, env)?
+                                    } else {
+                                        None
+                                    };
 
                                 // Step 3: v = GetV(value, propertyName)
                                 let mut v = if let JsValue::Object(o) = &obj_val {
@@ -2256,8 +2263,8 @@ impl Interpreter {
                     let enclosing_strict = switch_env.borrow().strict;
                     let func = JsFunction::User {
                         name: Some(f.name.clone()),
-                        params: f.params.clone(),
-                        body: f.body.clone(),
+                        params: Rc::new(f.params.clone()),
+                        body: Rc::new(f.body.clone()),
                         closure: switch_env.clone(),
                         is_arrow: false,
                         is_strict: f.body_is_strict || enclosing_strict,

@@ -190,7 +190,7 @@ pub(crate) fn typeof_val<'a>(
     }
 }
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 fn json_quote(s: &str) -> String {
     json_quote_units(&s.encode_utf16().collect::<Vec<u16>>())
@@ -771,7 +771,7 @@ pub(crate) fn json_parse_value_with_source(
     interp: &mut Interpreter,
     s: &str,
 ) -> (Completion, SourceTextMap) {
-    let mut source_map = SourceTextMap::new();
+    let mut source_map = SourceTextMap::default();
     let result = json_parse_value_inner(interp, s, Some(&mut source_map));
     (result, source_map)
 }

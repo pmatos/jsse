@@ -208,7 +208,7 @@ impl Interpreter {
     ) -> Completion {
         let brand_id = self.next_class_brand_id;
         self.next_class_brand_id += 1;
-        let mut pn_set = std::collections::HashMap::new();
+        let mut pn_set = HashMap::default();
         for elem in body {
             match elem {
                 ClassElement::Method(m) => {
@@ -312,8 +312,8 @@ impl Interpreter {
         let ctor_func = if let Some(cm) = ctor_method {
             JsFunction::User {
                 name: Some(name.to_string()),
-                params: cm.value.params.clone(),
-                body: cm.value.body.clone(),
+                params: Rc::new(cm.value.params.clone()),
+                body: Rc::new(cm.value.body.clone()),
                 closure: class_env.clone(),
                 is_arrow: false,
                 is_strict: true,
@@ -326,13 +326,15 @@ impl Interpreter {
         } else if super_val.is_some() {
             JsFunction::User {
                 name: Some(name.to_string()),
-                params: vec![Pattern::Rest(Box::new(Pattern::Identifier("args".into())))],
-                body: vec![Statement::Expression(Expression::Call(
+                params: Rc::new(vec![Pattern::Rest(Box::new(Pattern::Identifier(
+                    "args".into(),
+                )))]),
+                body: Rc::new(vec![Statement::Expression(Expression::Call(
                     Box::new(Expression::Super),
                     vec![Expression::Spread(Box::new(Expression::Identifier(
                         "args".into(),
                     )))],
-                ))],
+                ))]),
                 closure: class_env.clone(),
                 is_arrow: false,
                 is_strict: true,
@@ -345,8 +347,8 @@ impl Interpreter {
         } else {
             JsFunction::User {
                 name: Some(name.to_string()),
-                params: vec![],
-                body: vec![],
+                params: Rc::new(vec![]),
+                body: Rc::new(vec![]),
                 closure: class_env.clone(),
                 is_arrow: false,
                 is_strict: true,
@@ -560,8 +562,8 @@ impl Interpreter {
                                 .initialize_binding("__home_object__", priv_home_target);
                             let method_func = JsFunction::User {
                                 name: Some(format!("#{name}")),
-                                params: m.value.params.clone(),
-                                body: m.value.body.clone(),
+                                params: Rc::new(m.value.params.clone()),
+                                body: Rc::new(m.value.body.clone()),
                                 closure: method_closure,
                                 is_arrow: false,
                                 is_strict: true,
@@ -733,8 +735,8 @@ impl Interpreter {
                         .initialize_binding("__home_object__", home_target);
                     let method_func = JsFunction::User {
                         name: Some(method_display_name),
-                        params: m.value.params.clone(),
-                        body: m.value.body.clone(),
+                        params: Rc::new(m.value.params.clone()),
+                        body: Rc::new(m.value.body.clone()),
                         closure: method_closure,
                         is_arrow: false,
                         is_strict: true,

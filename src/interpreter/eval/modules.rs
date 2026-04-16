@@ -15,7 +15,7 @@ impl Interpreter {
             env,
             module_path,
             original_key,
-            &mut std::collections::HashSet::new(),
+            &mut HashSet::default(),
         )
     }
 
@@ -25,7 +25,7 @@ impl Interpreter {
         env: &crate::interpreter::types::EnvRef,
         module_path: Option<&std::path::Path>,
         original_key: &str,
-        visited: &mut std::collections::HashSet<(std::path::PathBuf, String)>,
+        visited: &mut HashSet<(std::path::PathBuf, String)>,
     ) -> Result<JsValue, JsValue> {
         if let Some(mp) = module_path {
             let key = (mp.to_path_buf(), binding_name.to_string());
@@ -212,7 +212,7 @@ impl Interpreter {
         }
 
         // Check ReadyForSyncExecution
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         if !self.ready_for_sync_execution(&module_path, &mut seen) {
             return Err(self.create_type_error(
                 "Cannot synchronously evaluate a module with top-level await or that is currently being evaluated",
