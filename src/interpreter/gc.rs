@@ -198,6 +198,8 @@ impl Interpreter {
                 self.objects[i] = None;
                 self.free_list.push(i);
                 self.function_realm_map.remove(&(i as u64));
+                self.iterator_next_cache.remove(&(i as u64));
+                self.generator_inline_iters.remove(&(i as u64));
             }
         }
         // Adaptive threshold: scale next GC budget from live heap size
