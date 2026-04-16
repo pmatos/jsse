@@ -11594,6 +11594,13 @@ impl Interpreter {
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
+                            for lv in &state_machine.local_vars {
+                                if !exec_env.borrow().bindings.contains_key(&lv.name)
+                                    && !func_env.borrow().bindings.contains_key(&lv.name)
+                                {
+                                    exec_env.borrow_mut().declare(&lv.name, BindingKind::Var);
+                                }
+                            }
                             gen_obj.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
                                     state_machine,
@@ -11762,6 +11769,13 @@ impl Interpreter {
                             let state_machine = Rc::new(transform_generator(&body, &params));
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
+                            }
+                            for lv in &state_machine.local_vars {
+                                if !exec_env.borrow().bindings.contains_key(&lv.name)
+                                    && !func_env.borrow().bindings.contains_key(&lv.name)
+                                {
+                                    exec_env.borrow_mut().declare(&lv.name, BindingKind::Var);
+                                }
                             }
                             gen_obj.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineGenerator {
