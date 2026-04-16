@@ -2064,10 +2064,8 @@ pub(super) fn format_plain_date(y: i32, m: u8, d: u8, cal: &str, show_calendar: 
         "critical" => {
             result.push_str(&format!("[!u-ca={cal}]"));
         }
-        "auto" => {
-            if cal != "iso8601" {
-                result.push_str(&format!("[u-ca={cal}]"));
-            }
+        "auto" if cal != "iso8601" => {
+            result.push_str(&format!("[u-ca={cal}]"));
         }
         _ => {} // "never"
     }

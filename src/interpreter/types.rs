@@ -2583,7 +2583,7 @@ impl JsObjectData {
                                 .map(|idx| (idx, k.clone()))
                         })
                         .collect();
-                    idx_keys.sort_by(|a, b| b.0.cmp(&a.0));
+                    idx_keys.sort_by_key(|a| std::cmp::Reverse(a.0));
 
                     for (idx, k) in &idx_keys {
                         let is_non_configurable = self

@@ -1937,18 +1937,23 @@ pub(super) fn translate_js_pattern_ex(
                 '\\' if j + 1 < len => {
                     j += 1;
                 }
-                '(' if !in_cc && j + 2 < len && chars[j + 1] == '?' && chars[j + 2] == '<' => {
-                    if j + 3 < len && chars[j + 3] != '=' && chars[j + 3] != '!' {
-                        // Named group — extract name
-                        let name_start = j + 3;
-                        let mut k = name_start;
-                        while k < len && chars[k] != '>' {
-                            k += 1;
-                        }
-                        if k < len {
-                            let name = decode_group_name_raw(&chars[name_start..k]);
-                            all_group_names.push(name);
-                        }
+                '(' if !in_cc
+                    && j + 2 < len
+                    && chars[j + 1] == '?'
+                    && chars[j + 2] == '<'
+                    && j + 3 < len
+                    && chars[j + 3] != '='
+                    && chars[j + 3] != '!' =>
+                {
+                    // Named group — extract name
+                    let name_start = j + 3;
+                    let mut k = name_start;
+                    while k < len && chars[k] != '>' {
+                        k += 1;
+                    }
+                    if k < len {
+                        let name = decode_group_name_raw(&chars[name_start..k]);
+                        all_group_names.push(name);
                     }
                 }
                 _ => {}

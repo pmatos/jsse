@@ -7260,10 +7260,8 @@ impl Interpreter {
                 return Err(self.create_type_error("iterator.return is not a function"));
             }
             match self.call_function(&return_val, iterator, &[]) {
-                Completion::Normal(inner_result) => {
-                    if !matches!(inner_result, JsValue::Object(_)) {
-                        return Err(self.create_type_error("Iterator result is not an object"));
-                    }
+                Completion::Normal(inner_result) if !matches!(inner_result, JsValue::Object(_)) => {
+                    return Err(self.create_type_error("Iterator result is not an object"));
                 }
                 Completion::Throw(e) => return Err(e),
                 _ => {}

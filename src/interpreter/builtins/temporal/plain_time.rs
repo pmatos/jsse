@@ -229,7 +229,7 @@ impl Interpreter {
                     };
 
                     let is_neg = rounded < 0;
-                    let abs_ns = if is_neg { -rounded } else { rounded } as i128;
+                    let abs_ns = if is_neg { -rounded } else { rounded };
                     let sign_f = if is_neg {
                         -1.0
                     } else if abs_ns == 0 {

@@ -1147,15 +1147,12 @@ pub(crate) fn json_internalize(
                 JsValue::Number(n) => src
                     .parse::<f64>()
                     .is_ok_and(|parsed| (parsed.is_nan() && n.is_nan()) || parsed == *n),
-                JsValue::String(s) => {
+                JsValue::String(s)
                     // Source includes quotes, parse it to compare
-                    if src.starts_with('"') && src.ends_with('"') {
+                    if src.starts_with('"') && src.ends_with('"') => {
                         let inner = &src[1..src.len() - 1];
                         json_unescape_string(inner) == s.to_rust_string()
-                    } else {
-                        false
                     }
-                }
                 _ => false,
             };
             if source_matches {
@@ -2185,7 +2182,7 @@ pub(crate) fn decode_uri_string(
         i += 3;
 
         if first_byte <= 0x7F {
-            let c = first_byte as u8 as char;
+            let c = first_byte as char;
             if preserve_reserved && is_uri_reserved(c) {
                 result.push(0x25); // '%'
                 result.push(code_units[i - 2]);
@@ -2206,7 +2203,7 @@ pub(crate) fn decode_uri_string(
             return Err("URI malformed".to_string());
         };
 
-        let mut utf8_bytes = vec![first_byte as u8];
+        let mut utf8_bytes = vec![first_byte];
         let start_i = i - 3;
         for _ in 1..expected_len {
             if i >= len || code_units[i] != 0x25 || i + 2 >= len {
@@ -2218,7 +2215,7 @@ pub(crate) fn decode_uri_string(
             if cont & 0xC0 != 0x80 {
                 return Err("URI malformed".to_string());
             }
-            utf8_bytes.push(cont as u8);
+            utf8_bytes.push(cont);
             i += 3;
         }
 

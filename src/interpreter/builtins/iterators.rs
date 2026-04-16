@@ -1563,15 +1563,14 @@ impl Interpreter {
                                 &JsValue::Undefined,
                                 &[value, JsValue::Number(counter)],
                             ) {
-                                Completion::Normal(v) => {
-                                    if interp.to_boolean_val(&v) {
+                                Completion::Normal(v)
+                                    if interp.to_boolean_val(&v) => {
                                         // Propagate IteratorClose errors
                                         if let Err(e) = iterator_close_getter(interp, &iter) {
                                             return Completion::Throw(e);
                                         }
                                         return Completion::Normal(JsValue::Boolean(true));
                                     }
-                                }
                                 Completion::Throw(e) => {
                                     let _ = iterator_close_with_completion(interp, &iter, Err(e.clone()));
                                     return Completion::Throw(e);
@@ -1619,14 +1618,13 @@ impl Interpreter {
                                 &JsValue::Undefined,
                                 &[value, JsValue::Number(counter)],
                             ) {
-                                Completion::Normal(v) => {
-                                    if !interp.to_boolean_val(&v) {
+                                Completion::Normal(v)
+                                    if !interp.to_boolean_val(&v) => {
                                         if let Err(e) = iterator_close_getter(interp, &iter) {
                                             return Completion::Throw(e);
                                         }
                                         return Completion::Normal(JsValue::Boolean(false));
                                     }
-                                }
                                 Completion::Throw(e) => {
                                     let _ = iterator_close_with_completion(interp, &iter, Err(e.clone()));
                                     return Completion::Throw(e);
@@ -1674,14 +1672,13 @@ impl Interpreter {
                                 &JsValue::Undefined,
                                 &[value.clone(), JsValue::Number(counter)],
                             ) {
-                                Completion::Normal(v) => {
-                                    if interp.to_boolean_val(&v) {
+                                Completion::Normal(v)
+                                    if interp.to_boolean_val(&v) => {
                                         if let Err(e) = iterator_close_getter(interp, &iter) {
                                             return Completion::Throw(e);
                                         }
                                         return Completion::Normal(value);
                                     }
-                                }
                                 Completion::Throw(e) => {
                                     let _ = iterator_close_with_completion(interp, &iter, Err(e.clone()));
                                     return Completion::Throw(e);
@@ -1965,13 +1962,12 @@ impl Interpreter {
                                         counter += 1.0;
                                         state_next.borrow_mut().3 = counter;
                                         match test_result {
-                                            Completion::Normal(v) => {
-                                                if interp.to_boolean_val(&v) {
+                                            Completion::Normal(v)
+                                                if interp.to_boolean_val(&v) => {
                                                     return Completion::Normal(
                                                         interp.create_iter_result_object(value, false),
                                                     );
                                                 }
-                                            }
                                             Completion::Throw(e) => {
                                                 state_next.borrow_mut().4 = false;
                                                 let _ = iterator_close_getter(interp, &iter);

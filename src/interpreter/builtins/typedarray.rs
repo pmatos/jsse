@@ -2051,7 +2051,7 @@ impl Interpreter {
                         );
                     }
                     // Use original len for count (per spec), but bound copy by actual buffer
-                    let _cur_len = typed_array_length(&ta) as usize;
+                    let _cur_len = typed_array_length(&ta);
                     let count = if end <= start || target >= len as usize {
                         0
                     } else {

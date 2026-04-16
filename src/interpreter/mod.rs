@@ -2680,8 +2680,8 @@ impl Interpreter {
             if pending == 0 {
                 self.execute_async_module(&canon);
             }
-        } else if let Err(e) = self.execute_module_body_sync(&canon) {
-            return Err(e);
+        } else {
+            self.execute_module_body_sync(&canon)?
         }
 
         let my_dfs = module.borrow().dfs_index.unwrap_or(0);
@@ -2862,15 +2862,11 @@ impl Interpreter {
     fn module_has_tla(program: &crate::ast::Program) -> bool {
         for item in &program.module_items {
             match item {
-                ModuleItem::Statement(stmt) => {
-                    if Self::stmt_has_tla(stmt) {
-                        return true;
-                    }
+                ModuleItem::Statement(stmt) if Self::stmt_has_tla(stmt) => {
+                    return true;
                 }
-                ModuleItem::ExportDeclaration(export) => {
-                    if Self::export_has_tla(export) {
-                        return true;
-                    }
+                ModuleItem::ExportDeclaration(export) if Self::export_has_tla(export) => {
+                    return true;
                 }
                 _ => {}
             }
@@ -4258,7 +4254,7 @@ impl Interpreter {
                         .map(|idx| (idx, k.clone()))
                 })
                 .collect();
-            idx_keys.sort_by(|a, b| b.0.cmp(&a.0));
+            idx_keys.sort_by_key(|a| std::cmp::Reverse(a.0));
 
             for (idx, k) in &idx_keys {
                 let is_non_configurable = obj
