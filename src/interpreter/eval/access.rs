@@ -644,6 +644,42 @@ impl Interpreter {
                     ));
                     return Completion::Throw(err);
                 }
+                // Fast path: numeric index on typed array or array object
+                if let JsValue::Number(index) = &v
+                    && let JsValue::Object(o) = &obj_val
+                    && let Some(obj_rc) = self.get_object(o.id)
+                {
+                    let obj_borrow = obj_rc.borrow();
+                    // Typed array: direct element access
+                    if let Some(ref ta) = obj_borrow.typed_array_info {
+                        use crate::interpreter::types::{
+                            is_valid_integer_index, typed_array_get_index,
+                        };
+                        if is_valid_integer_index(ta, *index) {
+                            let result = typed_array_get_index(ta, *index as usize);
+                            return Completion::Normal(result);
+                        }
+                        // Any canonical numeric index on typed array that's
+                        // out of range returns undefined (no prototype walk)
+                        let trunc = index.trunc();
+                        if *index == trunc && !index.is_nan() && !index.is_sign_negative() {
+                            return Completion::Normal(JsValue::Undefined);
+                        }
+                    }
+                    // Array: direct element access (skip if index overridden by defineProperty)
+                    if let Some(ref elems) = obj_borrow.array_elements {
+                        let trunc = index.trunc();
+                        if *index == trunc && *index >= 0.0 && (*index as usize) < elems.len() {
+                            let idx = *index as usize;
+                            let key_str = (idx as u32).to_string();
+                            if !obj_borrow.properties.contains_key(&key_str)
+                                && !matches!(elems[idx], JsValue::Undefined)
+                            {
+                                return Completion::Normal(elems[idx].clone());
+                            }
+                        }
+                    }
+                }
                 let key = match self.to_property_key(&v) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),

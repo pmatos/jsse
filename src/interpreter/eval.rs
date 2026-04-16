@@ -298,24 +298,7 @@ impl Interpreter {
             Expression::Identifier(name) => {
                 let strict = env.borrow().strict;
                 self.last_identifier_with_base = None;
-                match self.resolve_with_has_binding(name, env) {
-                    Ok(Some(obj_id)) => {
-                        self.last_identifier_with_base = Some(obj_id);
-                        return self.with_get_binding_value(obj_id, name, strict);
-                    }
-                    Ok(None) => {}
-                    Err(e) => return Completion::Throw(e),
-                }
-                if let Some(result) = self.resolve_global_getter(name, env) {
-                    return result;
-                }
-                match env.borrow().get(name) {
-                    Some(val) => Completion::Normal(val),
-                    None => {
-                        let err = self.create_reference_error(&format!("{name} is not defined"));
-                        Completion::Throw(err)
-                    }
-                }
+                self.resolve_identifier(name, env, strict)
             }
 
             Expression::This => {
@@ -1908,6 +1891,67 @@ impl Interpreter {
     }
 
     fn eval_binary(&mut self, op: BinaryOp, left: &JsValue, right: &JsValue) -> Completion {
+        // Fast path: both operands are Number — skip ToPrimitive/ToNumeric/BigInt checks
+        if let (JsValue::Number(ln), JsValue::Number(rn)) = (left, right) {
+            return match op {
+                BinaryOp::Add => Completion::Normal(JsValue::Number(number_ops::add(*ln, *rn))),
+                BinaryOp::Sub => {
+                    Completion::Normal(JsValue::Number(number_ops::subtract(*ln, *rn)))
+                }
+                BinaryOp::Mul => {
+                    Completion::Normal(JsValue::Number(number_ops::multiply(*ln, *rn)))
+                }
+                BinaryOp::Div => Completion::Normal(JsValue::Number(number_ops::divide(*ln, *rn))),
+                BinaryOp::Mod => {
+                    Completion::Normal(JsValue::Number(number_ops::remainder(*ln, *rn)))
+                }
+                BinaryOp::Exp => {
+                    Completion::Normal(JsValue::Number(number_ops::exponentiate(*ln, *rn)))
+                }
+                BinaryOp::LShift => {
+                    Completion::Normal(JsValue::Number(number_ops::left_shift(*ln, *rn)))
+                }
+                BinaryOp::RShift => {
+                    Completion::Normal(JsValue::Number(number_ops::signed_right_shift(*ln, *rn)))
+                }
+                BinaryOp::URShift => {
+                    Completion::Normal(JsValue::Number(number_ops::unsigned_right_shift(*ln, *rn)))
+                }
+                BinaryOp::BitAnd => {
+                    Completion::Normal(JsValue::Number(number_ops::bitwise_and(*ln, *rn)))
+                }
+                BinaryOp::BitOr => {
+                    Completion::Normal(JsValue::Number(number_ops::bitwise_or(*ln, *rn)))
+                }
+                BinaryOp::BitXor => {
+                    Completion::Normal(JsValue::Number(number_ops::bitwise_xor(*ln, *rn)))
+                }
+                BinaryOp::Lt => Completion::Normal(JsValue::Boolean(
+                    number_ops::less_than(*ln, *rn) == Some(true),
+                )),
+                BinaryOp::Gt => Completion::Normal(JsValue::Boolean(
+                    number_ops::less_than(*rn, *ln) == Some(true),
+                )),
+                BinaryOp::LtEq => Completion::Normal(JsValue::Boolean(
+                    number_ops::less_than(*rn, *ln) == Some(false),
+                )),
+                BinaryOp::GtEq => Completion::Normal(JsValue::Boolean(
+                    number_ops::less_than(*ln, *rn) == Some(false),
+                )),
+                BinaryOp::Eq | BinaryOp::StrictEq => {
+                    Completion::Normal(JsValue::Boolean(number_ops::equal(*ln, *rn)))
+                }
+                BinaryOp::NotEq | BinaryOp::StrictNotEq => {
+                    Completion::Normal(JsValue::Boolean(!number_ops::equal(*ln, *rn)))
+                }
+                // In, Instanceof — fall through to general path
+                _ => self.eval_binary_slow(op, left, right),
+            };
+        }
+        self.eval_binary_slow(op, left, right)
+    }
+
+    fn eval_binary_slow(&mut self, op: BinaryOp, left: &JsValue, right: &JsValue) -> Completion {
         match op {
             BinaryOp::Add => {
                 let lprim = match self.to_primitive(left, "default") {
@@ -2230,6 +2274,33 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         if let Expression::Identifier(name) = arg {
+            // Fast path: identifier is a Number in the local scope chain (no with/module)
+            {
+                let env_borrow = env.borrow();
+                if env_borrow.with_object.is_none()
+                    && let Some(binding) = env_borrow.bindings.get(name)
+                    && binding.initialized
+                    && binding.kind != BindingKind::Const
+                    && binding.kind != BindingKind::FunctionName
+                    && binding.kind != BindingKind::ImmutableValue
+                    && let JsValue::Number(n) = &binding.value
+                {
+                    let old_num = *n;
+                    let new_num = match op {
+                        UpdateOp::Increment => old_num + 1.0,
+                        UpdateOp::Decrement => old_num - 1.0,
+                    };
+                    let new_val = JsValue::Number(new_num);
+                    drop(env_borrow);
+                    let _ = env.borrow_mut().set(name, new_val);
+                    return Completion::Normal(JsValue::Number(if prefix {
+                        new_num
+                    } else {
+                        old_num
+                    }));
+                }
+            }
+
             let strict = env.borrow().strict;
             let id_ref = match self.resolve_identifier_ref(name, env) {
                 Ok(r) => r,
@@ -2538,6 +2609,32 @@ impl Interpreter {
                             Completion::Throw(e) => return Err(e),
                             _ => return Ok(()),
                         };
+                        // Fast path: numeric index on typed array — skip to_property_key
+                        if let JsValue::Number(index) = &v
+                            && let JsValue::Object(ref o) = obj_val
+                            && let Some(obj) = self.get_object(o.id)
+                            && obj.borrow().typed_array_info.is_some()
+                        {
+                            let is_bigint = obj
+                                .borrow()
+                                .typed_array_info
+                                .as_ref()
+                                .map(|ta| ta.kind.is_bigint())
+                                .unwrap_or(false);
+                            let num_val = if is_bigint {
+                                self.to_bigint_value(&value)?
+                            } else {
+                                JsValue::Number(self.to_number_value(&value)?)
+                            };
+                            let obj_ref = obj.borrow();
+                            let ta = obj_ref.typed_array_info.as_ref().unwrap();
+                            if is_valid_integer_index(ta, *index) {
+                                let ta_clone = ta.clone();
+                                drop(obj_ref);
+                                typed_array_set_index(&ta_clone, *index as usize, &num_val);
+                            }
+                            return Ok(());
+                        }
                         self.to_property_key(&v)?
                     }
                     MemberProperty::Private(_) => unreachable!(),
@@ -2649,6 +2746,27 @@ impl Interpreter {
         match left {
             Expression::Identifier(name) => {
                 if op == AssignOp::Assign {
+                    // Fast path: simple assignment to a local binding (no with, no class RHS)
+                    if !matches!(right, Expression::Class(_))
+                        && !right.is_anonymous_function_definition()
+                    {
+                        let has_mutable_local = {
+                            let eb = env.borrow();
+                            eb.with_object.is_none()
+                                && eb.bindings.get(name).is_some_and(|b| {
+                                    b.kind == BindingKind::Var || b.kind == BindingKind::Let
+                                })
+                        };
+                        if has_mutable_local {
+                            let rval = match self.eval_expr(right, env) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
+                            let _ = env.borrow_mut().set(name, rval.clone());
+                            return Completion::Normal(rval);
+                        }
+                    }
+
                     // Capture reference BEFORE evaluating RHS (Bug B fix)
                     let id_ref = match self.resolve_identifier_ref(name, env) {
                         Ok(r) => r,
@@ -2679,6 +2797,38 @@ impl Interpreter {
                         v
                     };
                     return self.put_value_by_ref(name, rval, &id_ref, env);
+                }
+                // Fast path: compound assignment on a local binding (no with)
+                {
+                    let has_mutable_local = {
+                        let eb = env.borrow();
+                        eb.with_object.is_none()
+                            && eb.bindings.get(name).is_some_and(|b| {
+                                b.kind == BindingKind::Var || b.kind == BindingKind::Let
+                            })
+                    };
+                    if has_mutable_local {
+                        let lval = match env.borrow().get(name) {
+                            Some(v) => v,
+                            None => {
+                                return Completion::Throw(
+                                    self.create_reference_error(&format!("{name} is not defined")),
+                                );
+                            }
+                        };
+                        let rval = match self.eval_expr(right, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        let final_val = match self.apply_compound_assign(op, &lval, &rval) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        match env.borrow_mut().set(name, final_val.clone()) {
+                            Ok(()) => return Completion::Normal(final_val),
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    }
                 }
                 // Compound assignment: capture reference, read, eval RHS, write
                 let id_ref = match self.resolve_identifier_ref(name, env) {
@@ -14088,6 +14238,102 @@ impl Interpreter {
                 }
             }
         }
+    }
+
+    /// Single-pass identifier resolution: combines with-scope check, binding lookup,
+    /// and global getter resolution into one scope chain walk.
+    fn resolve_identifier(&mut self, name: &str, env: &EnvRef, strict: bool) -> Completion {
+        let mut current = Some(env.clone());
+        while let Some(env_ref) = current {
+            let env_borrow = env_ref.borrow();
+
+            // 1. Check with-object at this scope level
+            if let Some(ref with) = env_borrow.with_object {
+                let obj_id = with.obj_id;
+                drop(env_borrow);
+                match self.proxy_has_property(obj_id, name) {
+                    Ok(true) => {
+                        match self.check_unscopables_dynamic(obj_id, name) {
+                            Ok(true) => {
+                                // Unscopable — skip this with scope, continue walking
+                            }
+                            Ok(false) => {
+                                self.last_identifier_with_base = Some(obj_id);
+                                return self.with_get_binding_value(obj_id, name, strict);
+                            }
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    }
+                    Ok(false) => {}
+                    Err(e) => return Completion::Throw(e),
+                }
+                current = env_ref.borrow().parent.clone();
+                continue;
+            }
+
+            // 2. Check indirect bindings (module imports)
+            if let Some(resolved) = env_borrow.resolve_indirect_binding(name) {
+                return match resolved {
+                    Some(val) => Completion::Normal(val),
+                    None => {
+                        // TDZ for indirect binding
+                        drop(env_borrow);
+                        Completion::Throw(self.create_reference_error(&format!(
+                            "Cannot access '{name}' before initialization"
+                        )))
+                    }
+                };
+            }
+
+            // 3. Check local bindings
+            if let Some(binding) = env_borrow.bindings.get(name) {
+                if !binding.initialized {
+                    drop(env_borrow);
+                    return Completion::Throw(self.create_reference_error(&format!(
+                        "Cannot access '{name}' before initialization"
+                    )));
+                }
+                return Completion::Normal(binding.value.clone());
+            }
+
+            // 4. Check global object (at the bottom of the scope chain)
+            if let Some(ref global_obj) = env_borrow.global_object {
+                let global_obj_clone = global_obj.clone();
+                let global_id = global_obj_clone.borrow().id;
+                drop(env_borrow);
+                if let Some(gid) = global_id {
+                    // Check own property first
+                    let own_prop = self
+                        .get_object(gid)
+                        .and_then(|o| o.borrow().get_own_property(name));
+                    if let Some(ref desc) = own_prop {
+                        if desc.get.is_some() {
+                            let this_val = JsValue::Object(crate::types::JsObject { id: gid });
+                            return self.get_object_property(gid, name, &this_val);
+                        }
+                        return Completion::Normal(
+                            desc.value.clone().unwrap_or(JsValue::Undefined),
+                        );
+                    }
+                    // Check prototype chain
+                    match self.proxy_has_property(gid, name) {
+                        Ok(true) => {
+                            let this_val = JsValue::Object(crate::types::JsObject { id: gid });
+                            return self.get_object_property(gid, name, &this_val);
+                        }
+                        Ok(false) => {}
+                        Err(e) => return Completion::Throw(e),
+                    }
+                }
+                // Not found on global object either
+                let err = self.create_reference_error(&format!("{name} is not defined"));
+                return Completion::Throw(err);
+            }
+
+            current = env_borrow.parent.clone();
+        }
+
+        Completion::Throw(self.create_reference_error(&format!("{name} is not defined")))
     }
 
     /// Resolve a global object property for reading, walking the prototype chain.

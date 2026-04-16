@@ -258,6 +258,72 @@ impl Interpreter {
         key: &str,
         this_val: &JsValue,
     ) -> Completion {
+        // Single-borrow fast path: classify object and check own property in one borrow
+        if let Some(obj) = self.get_object(obj_id) {
+            let b = obj.borrow();
+            let is_proxy = b.proxy_target.is_some() || b.proxy_revoked;
+            let has_module_ns = b.module_namespace.is_some();
+
+            if !is_proxy && !has_module_ns {
+                // Fast path for ordinary objects (the common case)
+                let is_ta = b.typed_array_info.is_some();
+
+                // TypedArray: canonical numeric index strings must not walk prototype
+                if is_ta
+                    && let Some(index) =
+                        crate::interpreter::types::canonical_numeric_index_string(key)
+                {
+                    use crate::interpreter::types::{
+                        is_valid_integer_index, typed_array_get_index,
+                    };
+                    let ta = b.typed_array_info.as_ref().unwrap();
+                    if is_valid_integer_index(ta, index) {
+                        return Completion::Normal(typed_array_get_index(ta, index as usize));
+                    }
+                    return Completion::Normal(JsValue::Undefined);
+                }
+
+                // Check own property
+                let own_desc = b.get_own_property_full(key);
+                match own_desc {
+                    Some(ref d)
+                        if d.get.is_some() && !matches!(d.get, Some(JsValue::Undefined)) =>
+                    {
+                        let getter = d.get.clone().unwrap();
+                        drop(b);
+                        return self.call_function(&getter, this_val, &[]);
+                    }
+                    Some(ref d) if d.get.is_some() => {
+                        return Completion::Normal(JsValue::Undefined);
+                    }
+                    Some(ref d) => {
+                        return Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined));
+                    }
+                    None => {}
+                }
+
+                // Own property not found — walk prototype chain
+                let proto = b.prototype.clone();
+                drop(b);
+                if let Some(proto_rc) = proto {
+                    let proto_id = proto_rc.borrow().id.unwrap();
+                    return self.get_object_property(proto_id, key, this_val);
+                }
+                return Completion::Normal(JsValue::Undefined);
+            }
+            drop(b);
+        }
+
+        // Slow path: proxy or module namespace objects
+        self.get_object_property_slow(obj_id, key, this_val)
+    }
+
+    fn get_object_property_slow(
+        &mut self,
+        obj_id: u64,
+        key: &str,
+        this_val: &JsValue,
+    ) -> Completion {
         // Check if object is a proxy
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
@@ -346,16 +412,7 @@ impl Interpreter {
             }
         }
 
-        // TypedArray [[Get]]: canonical numeric index strings MUST NOT walk prototype
-        let is_typed_array_numeric = if let Some(obj) = self.get_object(obj_id) {
-            let b = obj.borrow();
-            b.typed_array_info.is_some()
-                && crate::interpreter::types::canonical_numeric_index_string(key).is_some()
-        } else {
-            false
-        };
-
-        // Check own property first, then walk prototype chain proxy-aware
+        // Fallback: own property + prototype chain (for rare non-proxy, non-module cases)
         let own_desc = if let Some(obj) = self.get_object(obj_id) {
             obj.borrow().get_own_property_full(key)
         } else {
@@ -369,11 +426,6 @@ impl Interpreter {
             Some(ref d) if d.get.is_some() => Completion::Normal(JsValue::Undefined),
             Some(ref d) => Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined)),
             None => {
-                // TypedArray: numeric index strings must not walk prototype chain
-                if is_typed_array_numeric {
-                    return Completion::Normal(JsValue::Undefined);
-                }
-                // Walk prototype chain with proxy awareness
                 let proto = if let Some(obj) = self.get_object(obj_id) {
                     obj.borrow().prototype.clone()
                 } else {
