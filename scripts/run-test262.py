@@ -477,18 +477,23 @@ def run_single_test(
 
     if negative:
         phase = negative.get("phase", "runtime")
+        neg_type = negative.get("type", "")
         if phase == "parse":
             passed = adapter.is_parse_error(exit_code, stderr_text)
+        elif phase == "resolution":
+            stdout_text = result.stdout.decode("utf-8", errors="replace")
+            output = stdout_text + stderr_text
+            passed = exit_code != 0 and neg_type != "" and neg_type in output
         else:
             passed = exit_code != 0
     elif is_async:
         stdout = result.stdout.decode("utf-8", errors="replace")
-        if "Test262:AsyncTestComplete" in stdout:
-            passed = exit_code == 0
-        elif "Test262:AsyncTestFailure" in stdout:
+        if "Test262:AsyncTestFailure" in stdout:
             passed = False
-        else:
+        elif "Test262:AsyncTestComplete" in stdout:
             passed = exit_code == 0
+        else:
+            passed = False
     else:
         passed = exit_code == 0
 
