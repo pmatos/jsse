@@ -1250,10 +1250,8 @@ fn format_month_day(m: u8, d: u8, ref_year: i32, cal: &str, show_calendar: &str)
         "critical" => {
             result.push_str(&format!("[!u-ca={cal}]"));
         }
-        "auto" => {
-            if cal != "iso8601" {
-                result.push_str(&format!("[u-ca={cal}]"));
-            }
+        "auto" if cal != "iso8601" => {
+            result.push_str(&format!("[u-ca={cal}]"));
         }
         _ => {}
     }

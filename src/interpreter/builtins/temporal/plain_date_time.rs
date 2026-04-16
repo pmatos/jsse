@@ -531,10 +531,8 @@ fn format_plain_date_time(
         "critical" => {
             result.push_str(&format!("[!u-ca={cal}]"));
         }
-        "auto" => {
-            if cal != "iso8601" {
-                result.push_str(&format!("[u-ca={cal}]"));
-            }
+        "auto" if cal != "iso8601" => {
+            result.push_str(&format!("[u-ca={cal}]"));
         }
         _ => {} // "never"
     }

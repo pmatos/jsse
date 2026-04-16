@@ -129,20 +129,14 @@ fn duration_to_fractional(dur: &DurationRecord, exponent: u32) -> String {
     let nanoseconds = dur.nanoseconds;
 
     match exponent {
-        9 => {
-            if milliseconds == 0.0 && microseconds == 0.0 && nanoseconds == 0.0 {
-                return format_f64_no_trailing(seconds);
-            }
+        9 if milliseconds == 0.0 && microseconds == 0.0 && nanoseconds == 0.0 => {
+            return format_f64_no_trailing(seconds);
         }
-        6 => {
-            if microseconds == 0.0 && nanoseconds == 0.0 {
-                return format_f64_no_trailing(milliseconds);
-            }
+        6 if microseconds == 0.0 && nanoseconds == 0.0 => {
+            return format_f64_no_trailing(milliseconds);
         }
-        3 => {
-            if nanoseconds == 0.0 {
-                return format_f64_no_trailing(microseconds);
-            }
+        3 if nanoseconds == 0.0 => {
+            return format_f64_no_trailing(microseconds);
         }
         _ => {}
     }

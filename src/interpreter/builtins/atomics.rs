@@ -1494,20 +1494,14 @@ fn converted_number_to_i64(kind: TypedArrayKind, val: &JsValue) -> i64 {
 
 fn write_i64_to_buffer(buf: &mut [u8], offset: usize, kind: TypedArrayKind, val: i64) {
     match kind {
-        TypedArrayKind::Int8 => {
-            if offset < buf.len() {
-                buf[offset] = val as i8 as u8;
-            }
+        TypedArrayKind::Int8 if offset < buf.len() => {
+            buf[offset] = val as i8 as u8;
         }
-        TypedArrayKind::Uint8 => {
-            if offset < buf.len() {
-                buf[offset] = val as u8;
-            }
+        TypedArrayKind::Uint8 if offset < buf.len() => {
+            buf[offset] = val as u8;
         }
-        TypedArrayKind::Uint8Clamped => {
-            if offset < buf.len() {
-                buf[offset] = val as u8;
-            }
+        TypedArrayKind::Uint8Clamped if offset < buf.len() => {
+            buf[offset] = val as u8;
         }
         TypedArrayKind::Int16 => {
             let bytes = (val as i16).to_le_bytes();

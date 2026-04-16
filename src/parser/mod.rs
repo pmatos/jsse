@@ -1307,19 +1307,19 @@ impl<'a> Parser<'a> {
                 }
             }
             // In modules, function/class/generator declarations are lexically scoped
-            Statement::FunctionDeclaration(f) => {
-                if !f.name.is_empty() && !names.insert(f.name.clone()) {
-                    return Err(
-                        self.error(format!("Identifier '{}' has already been declared", f.name))
-                    );
-                }
+            Statement::FunctionDeclaration(f)
+                if !f.name.is_empty() && !names.insert(f.name.clone()) =>
+            {
+                return Err(
+                    self.error(format!("Identifier '{}' has already been declared", f.name))
+                );
             }
-            Statement::ClassDeclaration(c) => {
-                if !c.name.is_empty() && !names.insert(c.name.clone()) {
-                    return Err(
-                        self.error(format!("Identifier '{}' has already been declared", c.name))
-                    );
-                }
+            Statement::ClassDeclaration(c)
+                if !c.name.is_empty() && !names.insert(c.name.clone()) =>
+            {
+                return Err(
+                    self.error(format!("Identifier '{}' has already been declared", c.name))
+                );
             }
             _ => {}
         }
@@ -1348,19 +1348,19 @@ impl<'a> Parser<'a> {
             } => {
                 self.collect_module_lex_names(decl, names)?;
             }
-            ExportDeclaration::DefaultFunction(f) => {
-                if !f.name.is_empty() && !names.insert(f.name.clone()) {
-                    return Err(
-                        self.error(format!("Identifier '{}' has already been declared", f.name))
-                    );
-                }
+            ExportDeclaration::DefaultFunction(f)
+                if !f.name.is_empty() && !names.insert(f.name.clone()) =>
+            {
+                return Err(
+                    self.error(format!("Identifier '{}' has already been declared", f.name))
+                );
             }
-            ExportDeclaration::DefaultClass(c) => {
-                if !c.name.is_empty() && !names.insert(c.name.clone()) {
-                    return Err(
-                        self.error(format!("Identifier '{}' has already been declared", c.name))
-                    );
-                }
+            ExportDeclaration::DefaultClass(c)
+                if !c.name.is_empty() && !names.insert(c.name.clone()) =>
+            {
+                return Err(
+                    self.error(format!("Identifier '{}' has already been declared", c.name))
+                );
             }
             _ => {}
         }

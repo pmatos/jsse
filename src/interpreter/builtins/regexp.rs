@@ -108,6 +108,18 @@ const SURROGATE_START: u32 = 0xD800;
 const SURROGATE_END: u32 = 0xDFFF;
 const SURROGATE_PUA_BASE: u32 = 0xF0000;
 
+fn pua_aware_utf16_len(s: &str) -> usize {
+    s.chars()
+        .map(|c| {
+            if pua_to_surrogate(c).is_some() {
+                1
+            } else {
+                c.len_utf16()
+            }
+        })
+        .sum()
+}
+
 fn is_surrogate(cp: u32) -> bool {
     (SURROGATE_START..=SURROGATE_END).contains(&cp)
 }
@@ -1915,18 +1927,23 @@ pub(super) fn translate_js_pattern_ex(
                 '\\' if j + 1 < len => {
                     j += 1;
                 }
-                '(' if !in_cc && j + 2 < len && chars[j + 1] == '?' && chars[j + 2] == '<' => {
-                    if j + 3 < len && chars[j + 3] != '=' && chars[j + 3] != '!' {
-                        // Named group — extract name
-                        let name_start = j + 3;
-                        let mut k = name_start;
-                        while k < len && chars[k] != '>' {
-                            k += 1;
-                        }
-                        if k < len {
-                            let name = decode_group_name_raw(&chars[name_start..k]);
-                            all_group_names.push(name);
-                        }
+                '(' if !in_cc
+                    && j + 2 < len
+                    && chars[j + 1] == '?'
+                    && chars[j + 2] == '<'
+                    && j + 3 < len
+                    && chars[j + 3] != '='
+                    && chars[j + 3] != '!' =>
+                {
+                    // Named group — extract name
+                    let name_start = j + 3;
+                    let mut k = name_start;
+                    while k < len && chars[k] != '>' {
+                        k += 1;
+                    }
+                    if k < len {
+                        let name = decode_group_name_raw(&chars[name_start..k]);
+                        all_group_names.push(name);
                     }
                 }
                 _ => {}
@@ -3190,7 +3207,6 @@ fn validate_modifier_group(chars: &[char], start: usize, source: &str) -> Result
     let len = chars.len();
     let mut j = start;
     let mut add_flags: Vec<char> = Vec::new();
-    let mut has_dash = false;
     let mut remove_flags: Vec<char> = Vec::new();
 
     // Parse add flags
@@ -3214,7 +3230,6 @@ fn validate_modifier_group(chars: &[char], start: usize, source: &str) -> Result
     }
 
     if j < len && chars[j] == '-' {
-        has_dash = true;
         j += 1;
         // Parse remove flags
         while j < len && chars[j] != ':' && chars[j] != ')' {
@@ -3261,14 +3276,6 @@ fn validate_modifier_group(chars: &[char], start: usize, source: &str) -> Result
                 source
             ));
         }
-    }
-
-    // If has dash but both sections can't be empty (already checked above for no dash case)
-    if has_dash && add_flags.is_empty() && remove_flags.is_empty() {
-        return Err(format!(
-            "Invalid regular expression: /{}/ : Invalid flags in modifier group",
-            source
-        ));
     }
 
     Ok(())
@@ -3703,16 +3710,16 @@ fn validate_v_flag_class_inner(
     err("Unterminated character class")
 }
 
-pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), String> {
-    let _unicode = _flags.contains('u') || _flags.contains('v');
-    let v_flag = _flags.contains('v');
+pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), String> {
+    let unicode = flags.contains('u') || flags.contains('v');
+    let v_flag = flags.contains('v');
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
     let mut i = 0;
     let mut has_atom = false;
 
     // Pre-count capturing groups for backreference validation in unicode mode
-    let total_capturing_groups = if _unicode {
+    let total_capturing_groups = if unicode {
         let mut count = 0u32;
         let mut j = 0;
         let mut in_class = false;
@@ -3785,7 +3792,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     let save_pos = i;
                     i += 1; // skip '<'
                     if i < len && chars[i] != '>' {
-                        match parse_regexp_group_name(&chars, i, source, _unicode) {
+                        match parse_regexp_group_name(&chars, i, source, unicode) {
                             Ok((name, new_i)) => {
                                 backref_names.push(name);
                                 i = new_i;
@@ -3815,24 +3822,24 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     i += 1;
                     if i < len && chars[i].is_ascii_hexdigit() {
                         i += 1;
-                    } else if _unicode {
+                    } else if unicode {
                         return Err(format!(
                             "Invalid regular expression: /{}/ : Invalid escape",
                             source
                         ));
                     }
-                } else if _unicode {
+                } else if unicode {
                     return Err(format!(
                         "Invalid regular expression: /{}/ : Invalid escape",
                         source
                     ));
                 }
             } else if after_escape == 'u' {
-                if _unicode && i < len && chars[i] == '{' {
+                if unicode && i < len && chars[i] == '{' {
                     i += 1;
                     let hex_start = i;
                     while i < len && chars[i] != '}' {
-                        if _unicode && !chars[i].is_ascii_hexdigit() {
+                        if unicode && !chars[i].is_ascii_hexdigit() {
                             return Err(format!(
                                 "Invalid regular expression: /{}/ : Invalid Unicode escape",
                                 source
@@ -3841,14 +3848,14 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                         i += 1;
                     }
                     if i >= len {
-                        if _unicode {
+                        if unicode {
                             return Err(format!(
                                 "Invalid regular expression: /{}/ : Invalid Unicode escape",
                                 source
                             ));
                         }
                     } else {
-                        if _unicode {
+                        if unicode {
                             let hex_str: String = chars[hex_start..i].iter().collect();
                             if hex_str.is_empty() {
                                 return Err(format!(
@@ -3878,7 +3885,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                         i += 1;
                         count += 1;
                     }
-                    if _unicode && count < 4 {
+                    if unicode && count < 4 {
                         return Err(format!(
                             "Invalid regular expression: /{}/ : Invalid Unicode escape",
                             source
@@ -3888,7 +3895,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
             } else if after_escape == 'c' {
                 if i < len && chars[i].is_ascii_alphabetic() {
                     i += 1;
-                } else if _unicode {
+                } else if unicode {
                     return Err(format!(
                         "Invalid regular expression: /{}/ : Invalid escape",
                         source
@@ -3901,7 +3908,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     end += 1;
                 }
                 if end < len {
-                    if _unicode {
+                    if unicode {
                         let content: String = chars[start..end].iter().collect();
                         validate_unicode_property_escape(&content).map_err(|_| {
                             format!(
@@ -3938,7 +3945,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                 } else {
                     i = end;
                 }
-            } else if _unicode {
+            } else if unicode {
                 // In unicode mode, only specific escape sequences are valid.
                 // Backreferences \1-\9 are only valid if the referenced group exists.
                 if ('1'..='9').contains(&after_escape) {
@@ -4022,7 +4029,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                 let mut expecting_range_end = false;
 
                 while i < len && chars[i] != ']' {
-                    if _unicode && chars[i] == '\\' && i + 1 < len {
+                    if unicode && chars[i] == '\\' && i + 1 < len {
                         let esc_char = chars[i + 1];
                         if esc_char == 'x' {
                             if !(i + 3 < len
@@ -4149,7 +4156,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                             && i + 1 < len
                             && chars[i + 1] != ']'
                         {
-                            if _unicode && prev_is_class_escape {
+                            if unicode && prev_is_class_escape {
                                 return Err(format!(
                                     "Invalid regular expression: /{}/ : Invalid class escape in range",
                                     source
@@ -4178,7 +4185,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
 
                     if expecting_range_end {
                         expecting_range_end = false;
-                        if _unicode && is_class_esc {
+                        if unicode && is_class_esc {
                             return Err(format!(
                                 "Invalid regular expression: /{}/ : Invalid class escape in range",
                                 source
@@ -4213,7 +4220,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
 
                 if i < len {
                     i += 1; // skip ']'
-                } else if _unicode {
+                } else if unicode {
                     return Err(format!(
                         "Invalid regular expression: /{}/ : Unterminated character class",
                         source
@@ -4245,7 +4252,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                         '<' if i + 1 < len && chars[i + 1] != '=' && chars[i + 1] != '!' => {
                             i += 1; // skip '<'
                             let (name, new_i) =
-                                parse_regexp_group_name(&chars, i, source, _unicode)?;
+                                parse_regexp_group_name(&chars, i, source, unicode)?;
                             has_any_named_group = true;
                             let current_alt = if group_depth < alt_ids.len() {
                                 alt_ids[group_depth]
@@ -4278,7 +4285,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
         }
 
         if c == ')' {
-            if group_kind_stack.is_empty() && _unicode {
+            if group_kind_stack.is_empty() && unicode {
                 return Err(format!(
                     "Invalid regular expression: /{}/ : Unmatched ')'",
                     source
@@ -4291,7 +4298,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                 // Assertion group: check if next is a quantifier
                 // Lookbehinds (kind=2): always reject quantifiers
                 // Lookaheads (kind=1): reject in unicode mode only (Annex B allows in non-unicode)
-                let reject = kind == 2 || _unicode;
+                let reject = kind == 2 || unicode;
                 if reject {
                     if i < len {
                         let qc = chars[i];
@@ -4360,7 +4367,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                         j += 1;
                     }
                     if !is_quant {
-                        if _unicode {
+                        if unicode {
                             return Err(format!(
                                 "Invalid regular expression: /{}/ : Lone quantifier brackets",
                                 source
@@ -4394,7 +4401,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     j += 1;
                 }
                 if !found_close {
-                    if _unicode {
+                    if unicode {
                         return Err(format!(
                             "Invalid regular expression: /{}/ : Lone quantifier brackets",
                             source
@@ -4428,7 +4435,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     _ => false,
                 };
                 if !valid {
-                    if _unicode {
+                    if unicode {
                         return Err(format!(
                             "Invalid regular expression: /{}/ : Lone quantifier brackets",
                             source
@@ -4492,7 +4499,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
             continue;
         }
 
-        if _unicode && (c == '}' || c == ']') {
+        if unicode && (c == '}' || c == ']') {
             return Err(format!(
                 "Invalid regular expression: /{}/ : Lone quantifier brackets",
                 source
@@ -4524,7 +4531,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
     }
 
     // \k without < is an error if the pattern has named groups or is in unicode mode
-    if has_bare_k_escape && (_unicode || has_any_named_group) {
+    if has_bare_k_escape && (unicode || has_any_named_group) {
         return Err(format!(
             "Invalid regular expression: /{}/ : Invalid escape",
             source
@@ -4532,7 +4539,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
     }
 
     // \k<name without closing > is an error if pattern has named groups or in unicode mode
-    if has_incomplete_backref && (_unicode || has_any_named_group) {
+    if has_incomplete_backref && (unicode || has_any_named_group) {
         return Err(format!(
             "Invalid regular expression: /{}/ : Invalid named reference",
             source
@@ -4544,7 +4551,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
         let defined_names: HashSet<&str> =
             named_groups.iter().map(|(n, _, _)| n.as_str()).collect();
         for bref in &backref_names {
-            if !defined_names.contains(bref.as_str()) && (_unicode || has_any_named_group) {
+            if !defined_names.contains(bref.as_str()) && (unicode || has_any_named_group) {
                 return Err(format!(
                     "Invalid regular expression: /{}/ : Invalid named reference",
                     source
@@ -4562,8 +4569,8 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
     }
 
     // Validate property escapes by running translate_js_pattern
-    if _unicode {
-        translate_js_pattern(source, _flags)?;
+    if unicode {
+        translate_js_pattern(source, flags)?;
     }
 
     Ok(())
@@ -4982,26 +4989,20 @@ fn build_quantified_parent_map(
         let children = groups_info[group_idx].children.clone();
         for &child_idx in &children {
             if let Some(cap_idx) = groups_info[child_idx].capture_index {
-                let mut found_capturing_ancestor = false;
-                // Find nearest quantified ancestor with a capture index
                 for &anc in ancestor_stack.iter().rev() {
                     if groups_info[anc].is_quantified {
                         if let Some(anc_cap) = groups_info[anc].capture_index {
                             result.push((cap_idx, anc_cap));
-                            found_capturing_ancestor = true;
                             break;
                         }
-                        // Non-capturing quantified ancestor with min=0 and zero-width content
                         if groups_info[anc].quantifier_min_zero
                             && is_group_zero_width_only(chars, &groups_info[anc])
                         {
                             zero_width_clears.push(cap_idx);
-                            found_capturing_ancestor = true;
                             break;
                         }
                     }
                 }
-                let _ = found_capturing_ancestor;
             }
             ancestor_stack.push(child_idx);
             collect_pairs(
@@ -5567,7 +5568,7 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
                 let c2 = chars[i + 2];
                 if c2 == '=' || c2 == '!' {
                     // Lookahead (?= or (?! — find matching close
-                    if let Some(close) = find_matching_close(&chars[..len], i) {
+                    if let Some(close) = find_matching_close_paren(&chars[..len], i) {
                         i = close + 1;
                         continue;
                     }
@@ -5575,7 +5576,7 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
                 }
                 if c2 == '<' && i + 3 < len && (chars[i + 3] == '=' || chars[i + 3] == '!') {
                     // Lookbehind (?<= or (?<! — find matching close
-                    if let Some(close) = find_matching_close(&chars[..len], i) {
+                    if let Some(close) = find_matching_close_paren(&chars[..len], i) {
                         i = close + 1;
                         continue;
                     }
@@ -5583,7 +5584,7 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
                 }
                 // Non-capturing group (?:...) — check recursively
                 if c2 == ':'
-                    && let Some(close) = find_matching_close(&chars[..len], i)
+                    && let Some(close) = find_matching_close_paren(&chars[..len], i)
                 {
                     if !is_assertion_only_content(chars, i + 3, close) {
                         return false;
@@ -5614,31 +5615,6 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
         }
     }
     true
-}
-
-/// Find the closing ')' matching '(' at position `open`.
-fn find_matching_close(chars: &[char], open: usize) -> Option<usize> {
-    let mut depth = 0;
-    let mut i = open;
-    let len = chars.len();
-    while i < len {
-        match chars[i] {
-            '\\' if i + 1 < len => {
-                i += 2;
-                continue;
-            }
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    None
 }
 
 /// Per spec §22.2.2.6.1 step 2.b: when a nullable group body (one that can
@@ -6010,23 +5986,26 @@ fn extract_named_groups_from_content(content: &str) -> Vec<(usize, String)> {
     result
 }
 
+macro_rules! build_captures {
+    ($caps:expr, $names_iter:expr) => {{
+        let names: Vec<Option<String>> = $names_iter.map(|n| n.map(|s| s.to_string())).collect();
+        let mut groups = Vec::new();
+        for i in 0..$caps.len() {
+            groups.push($caps.get(i).map(|m| RegexMatch {
+                start: m.start(),
+                end: m.end(),
+                text: m.as_str().to_string(),
+            }));
+        }
+        Some(RegexCaptures { groups, names })
+    }};
+}
+
 fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<RegexCaptures> {
     match re {
         CompiledRegex::Fancy(r) => {
             let caps = r.captures_from_pos(text, pos).ok()??;
-            let names: Vec<Option<String>> = r
-                .capture_names()
-                .map(|n| n.map(|s| s.to_string()))
-                .collect();
-            let mut groups = Vec::new();
-            for i in 0..caps.len() {
-                groups.push(caps.get(i).map(|m| RegexMatch {
-                    start: m.start(),
-                    end: m.end(),
-                    text: m.as_str().to_string(),
-                }));
-            }
-            Some(RegexCaptures { groups, names })
+            build_captures!(caps, r.capture_names())
         }
         CompiledRegex::Standard(r) => {
             let caps = if pos == 0 {
@@ -6034,19 +6013,7 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
             } else {
                 r.captures_at(text, pos)?
             };
-            let names: Vec<Option<String>> = r
-                .capture_names()
-                .map(|n| n.map(|s| s.to_string()))
-                .collect();
-            let mut groups = Vec::new();
-            for i in 0..caps.len() {
-                groups.push(caps.get(i).map(|m| RegexMatch {
-                    start: m.start(),
-                    end: m.end(),
-                    text: m.as_str().to_string(),
-                }));
-            }
-            Some(RegexCaptures { groups, names })
+            build_captures!(caps, r.capture_names())
         }
         CompiledRegex::FancyWithCustomLookbehind {
             outer_regex,
@@ -6101,7 +6068,7 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
                     while names.len() <= global_idx {
                         names.push(None);
                     }
-                    names[global_idx] = Some(name);
+                    names[global_idx] = Some(sanitize_group_name(&name));
                 }
             }
 
@@ -6313,16 +6280,7 @@ fn advance_string_index(s: &str, index: usize, unicode: bool) -> usize {
     if !unicode {
         return index + 1;
     }
-    let utf16_len: usize = s
-        .chars()
-        .map(|c| {
-            if pua_to_surrogate(c).is_some() {
-                1
-            } else {
-                c.len_utf16()
-            }
-        })
-        .sum();
+    let utf16_len = pua_aware_utf16_len(s);
     if index + 1 >= utf16_len {
         return index + 1;
     }
@@ -6478,6 +6436,44 @@ fn split_surrogates_for_non_unicode(input: &str) -> String {
     result
 }
 
+fn resolve_named_group_matches<'a>(
+    caps: &'a RegexCaptures,
+    dup_map: &DupGroupMap,
+    name_order: &[String],
+) -> Vec<(String, Option<&'a RegexMatch>)> {
+    name_order
+        .iter()
+        .map(|orig_name| {
+            let found = if let Some(variants) = dup_map.get(orig_name) {
+                variants.iter().find_map(|(internal_name, _)| {
+                    let sanitized = sanitize_group_name(internal_name);
+                    caps.names.iter().enumerate().find_map(|(i, name_opt)| {
+                        if name_opt.as_deref() == Some(&sanitized) {
+                            caps.get(i)
+                        } else {
+                            None
+                        }
+                    })
+                })
+            } else {
+                let sanitized = sanitize_group_name(orig_name);
+                caps.names
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, name_opt)| {
+                        if name_opt.as_deref() == Some(&sanitized) {
+                            Some(caps.get(i))
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten()
+            };
+            (orig_name.clone(), found)
+        })
+        .collect()
+}
+
 fn regexp_exec_raw(
     interp: &mut Interpreter,
     this_id: u64,
@@ -6540,16 +6536,7 @@ fn regexp_exec_raw(
     };
 
     // lastIndex is in UTF-16 code units; convert to byte offset for string slicing
-    let input_utf16_len: usize = input
-        .chars()
-        .map(|c| {
-            if pua_to_surrogate(c).is_some() {
-                1
-            } else {
-                c.len_utf16()
-            }
-        })
-        .sum();
+    let input_utf16_len = pua_aware_utf16_len(input);
     let last_index_utf16 = if global || sticky {
         let li_int = li_length as i64;
         if li_int < 0 || li_int as usize > input_utf16_len {
@@ -6677,49 +6664,20 @@ fn regexp_exec_raw(
     }
 
     let has_named = caps.names.iter().any(|n| n.is_some());
-    let groups_val = if has_named {
+    let resolved_named = if has_named {
+        Some(resolve_named_group_matches(&caps, &dup_map, &name_order))
+    } else {
+        None
+    };
+    let groups_val = if let Some(ref resolved) = resolved_named {
         let groups_obj = interp.create_object();
         groups_obj.borrow_mut().prototype = None;
-        // Insert properties in source order using name_order
-        for orig_name in &name_order {
-            if let Some(variants) = dup_map.get(orig_name) {
-                // Duplicate named group: find which variant matched
-                let mut matched_val = JsValue::Undefined;
-                for (internal_name, _) in variants {
-                    let sanitized = sanitize_group_name(internal_name);
-                    for (i, name_opt) in caps.names.iter().enumerate() {
-                        if let Some(n) = name_opt
-                            && *n == sanitized
-                            && let Some(m) = caps.get(i)
-                        {
-                            matched_val = JsValue::String(regex_output_to_js_string(&m.text));
-                            break;
-                        }
-                    }
-                    if !matches!(matched_val, JsValue::Undefined) {
-                        break;
-                    }
-                }
-                groups_obj
-                    .borrow_mut()
-                    .insert_value(orig_name.clone(), matched_val);
-            } else {
-                // Non-duplicate: find by sanitized name match in caps.names
-                let sanitized = sanitize_group_name(orig_name);
-                let mut val = JsValue::Undefined;
-                for (i, name_opt) in caps.names.iter().enumerate() {
-                    if let Some(n) = name_opt
-                        && *n == sanitized
-                    {
-                        val = match caps.get(i) {
-                            Some(m) => JsValue::String(regex_output_to_js_string(&m.text)),
-                            None => JsValue::Undefined,
-                        };
-                        break;
-                    }
-                }
-                groups_obj.borrow_mut().insert_value(orig_name.clone(), val);
-            }
+        for (name, m) in resolved {
+            let val = match m {
+                Some(m) => JsValue::String(regex_output_to_js_string(&m.text)),
+                None => JsValue::Undefined,
+            };
+            groups_obj.borrow_mut().insert_value(name.clone(), val);
         }
         let id = groups_obj.borrow().id.unwrap();
         JsValue::Object(crate::types::JsObject { id })
@@ -6766,58 +6724,22 @@ fn regexp_exec_raw(
                 }
             }
             let indices_arr = interp.create_array(index_pairs);
-            if has_named {
+            if let Some(ref resolved) = resolved_named {
                 let idx_groups = interp.create_object();
                 idx_groups.borrow_mut().prototype = None;
-                for orig_name in &name_order {
-                    if let Some(variants) = dup_map.get(orig_name) {
-                        let mut matched_val = JsValue::Undefined;
-                        for (internal_name, _) in variants {
-                            let sanitized = sanitize_group_name(internal_name);
-                            for (i, name_opt) in caps.names.iter().enumerate() {
-                                if let Some(n) = name_opt
-                                    && *n == sanitized
-                                    && let Some(m) = caps.get(i)
-                                {
-                                    let cap_start = cap_byte_to_utf16(m.start);
-                                    let cap_end = cap_byte_to_utf16(m.end);
-                                    matched_val = interp.create_array(vec![
-                                        JsValue::Number(cap_start as f64),
-                                        JsValue::Number(cap_end as f64),
-                                    ]);
-                                    break;
-                                }
-                            }
-                            if !matches!(matched_val, JsValue::Undefined) {
-                                break;
-                            }
+                for (name, m) in resolved {
+                    let val = match m {
+                        Some(m) => {
+                            let cap_start = cap_byte_to_utf16(m.start);
+                            let cap_end = cap_byte_to_utf16(m.end);
+                            interp.create_array(vec![
+                                JsValue::Number(cap_start as f64),
+                                JsValue::Number(cap_end as f64),
+                            ])
                         }
-                        idx_groups
-                            .borrow_mut()
-                            .insert_value(orig_name.clone(), matched_val);
-                    } else {
-                        let sanitized = sanitize_group_name(orig_name);
-                        let mut val = JsValue::Undefined;
-                        for (i, name_opt) in caps.names.iter().enumerate() {
-                            if let Some(n) = name_opt
-                                && *n == sanitized
-                            {
-                                val = match caps.get(i) {
-                                    Some(m) => {
-                                        let cap_start = cap_byte_to_utf16(m.start);
-                                        let cap_end = cap_byte_to_utf16(m.end);
-                                        interp.create_array(vec![
-                                            JsValue::Number(cap_start as f64),
-                                            JsValue::Number(cap_end as f64),
-                                        ])
-                                    }
-                                    None => JsValue::Undefined,
-                                };
-                                break;
-                            }
-                        }
-                        idx_groups.borrow_mut().insert_value(orig_name.clone(), val);
-                    }
+                        None => JsValue::Undefined,
+                    };
+                    idx_groups.borrow_mut().insert_value(name.clone(), val);
                 }
                 let idx_groups_id = idx_groups.borrow().id.unwrap();
                 if let JsValue::Object(ref io) = indices_arr
@@ -7354,16 +7276,7 @@ impl Interpreter {
                     _ => s.clone(),
                 };
                 let length_s = s_slice.len();
-                let s_utf16_len: usize = s_slice
-                    .chars()
-                    .map(|c| {
-                        if pua_to_surrogate(c).is_some() {
-                            1
-                        } else {
-                            c.len_utf16()
-                        }
-                    })
-                    .sum();
+                let s_utf16_len = pua_aware_utf16_len(&s_slice);
 
                 // 5. Let functionalReplace be IsCallable(replaceValue).
                 let replace_value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -7806,18 +7719,7 @@ impl Interpreter {
                     return Completion::Normal(interp.create_array(a));
                 }
 
-                // Use UTF-16 code unit length for spec positions
-                // PUA-encoded surrogates count as 1 UTF-16 code unit
-                let size: usize = s
-                    .chars()
-                    .map(|c| {
-                        if pua_to_surrogate(c).is_some() {
-                            1
-                        } else {
-                            c.len_utf16()
-                        }
-                    })
-                    .sum();
+                let size = pua_aware_utf16_len(&s);
 
                 // 12. If size = 0, then
                 if size == 0 {

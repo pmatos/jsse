@@ -536,7 +536,7 @@ pub fn match_rtl(
         }
         LbAtom::Backref(num) => {
             let n = *num as usize;
-            let ref_text = get_backref_text(captures, ext_caps, n, input, full_offset);
+            let ref_text = get_backref_text(captures, ext_caps, n, input);
             let ref_chars: Vec<char> = ref_text.chars().collect();
             let ref_len = ref_chars.len();
             if end_pos < ref_len {
@@ -1043,7 +1043,7 @@ fn match_ltr(
         }
         LbAtom::Backref(num) => {
             let n = *num as usize;
-            let ref_text = get_backref_text_ltr(captures, ext_caps, n, input);
+            let ref_text = get_backref_text(captures, ext_caps, n, input);
             let ref_chars: Vec<char> = ref_text.chars().collect();
             if start_pos + ref_chars.len() > input.len() {
                 return None;
@@ -1293,26 +1293,6 @@ fn get_backref_text(
     ext_caps: &[Option<String>],
     n: usize,
     input: &[char],
-    _full_offset: usize,
-) -> String {
-    // Try internal captures first (char-index based)
-    if n < captures.len()
-        && let Some((start, end)) = captures[n]
-    {
-        return input[start..end].iter().collect();
-    }
-    // Fall through to external captures (string-based) if internal is absent
-    if n < ext_caps.len() {
-        return ext_caps[n].clone().unwrap_or_default();
-    }
-    String::new()
-}
-
-fn get_backref_text_ltr(
-    captures: &[Option<(usize, usize)>],
-    ext_caps: &[Option<String>],
-    n: usize,
-    input: &[char],
 ) -> String {
     if n < captures.len()
         && let Some((start, end)) = captures[n]
@@ -1480,7 +1460,6 @@ pub fn extract_lookbehinds_remaining(source: &str) -> (Vec<LookbehindInfo>, Stri
     let mut remaining = String::new();
     let mut i = 0;
     let mut in_char_class = false;
-    let mut _group_count: u32 = 0;
 
     while i < len {
         if chars[i] == '[' && !in_char_class {
@@ -1523,18 +1502,6 @@ pub fn extract_lookbehinds_remaining(source: &str) -> (Vec<LookbehindInfo>, Stri
                     j += 1;
                 } else if chars[j] == '(' && !in_cc {
                     depth += 1;
-                    if j + 1 < len && chars[j + 1] == '?' {
-                        if j + 2 < len
-                            && chars[j + 2] == '<'
-                            && j + 3 < len
-                            && chars[j + 3] != '='
-                            && chars[j + 3] != '!'
-                        {
-                            _group_count += 1;
-                        }
-                    } else {
-                        _group_count += 1;
-                    }
                 } else if chars[j] == ')' && !in_cc {
                     depth -= 1;
                 }
@@ -1553,21 +1520,6 @@ pub fn extract_lookbehinds_remaining(source: &str) -> (Vec<LookbehindInfo>, Stri
             // Skip lookbehind — don't add to remaining
             i = j + 1;
             continue;
-        }
-
-        if !in_char_class && chars[i] == '(' {
-            if i + 1 < len && chars[i + 1] == '?' {
-                if i + 2 < len
-                    && chars[i + 2] == '<'
-                    && i + 3 < len
-                    && chars[i + 3] != '='
-                    && chars[i + 3] != '!'
-                {
-                    _group_count += 1;
-                }
-            } else {
-                _group_count += 1;
-            }
         }
 
         remaining.push(chars[i]);

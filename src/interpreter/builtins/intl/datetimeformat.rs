@@ -4005,15 +4005,13 @@ fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, 
             let mut first = true;
             for component in order {
                 match component {
-                    'y' => {
-                        if opts.year.is_some() {
-                            if !first {
-                                parts.push(("literal".to_string(), sep.to_string()));
-                            }
-                            emit_year_parts(&mut parts);
-                            emit_era(&mut parts);
-                            first = false;
+                    'y' if opts.year.is_some() => {
+                        if !first {
+                            parts.push(("literal".to_string(), sep.to_string()));
                         }
+                        emit_year_parts(&mut parts);
+                        emit_era(&mut parts);
+                        first = false;
                     }
                     'm' => {
                         if let Some(ref s) = month_str {

@@ -341,10 +341,8 @@ impl Interpreter {
                         }
                     }
                 }
-                Statement::ClassDeclaration(c) => {
-                    if !c.name.is_empty() {
-                        env.borrow_mut().declare(&c.name, BindingKind::Const);
-                    }
+                Statement::ClassDeclaration(c) if !c.name.is_empty() => {
+                    env.borrow_mut().declare(&c.name, BindingKind::Const);
                 }
                 _ => {}
             }
@@ -2480,15 +2478,13 @@ impl Interpreter {
                 self.call_function(&resource.dispose_method, &resource.value, &[])
             };
             match result {
-                Completion::Normal(v) => {
-                    if resource.hint == DisposeHint::Async {
-                        match self.await_value(&v) {
-                            Completion::Normal(_) => {}
-                            Completion::Throw(e) => {
-                                current_error = Some(self.wrap_suppressed_error(e, current_error));
-                            }
-                            _ => {}
+                Completion::Normal(v) if resource.hint == DisposeHint::Async => {
+                    match self.await_value(&v) {
+                        Completion::Normal(_) => {}
+                        Completion::Throw(e) => {
+                            current_error = Some(self.wrap_suppressed_error(e, current_error));
                         }
+                        _ => {}
                     }
                 }
                 Completion::Throw(e) => {
