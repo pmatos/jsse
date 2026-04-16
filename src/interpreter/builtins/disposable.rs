@@ -562,10 +562,10 @@ impl Interpreter {
                             hint: DisposeHint::Async,
                             dispose_method: JsValue::Undefined,
                         };
-                        if let Some(obj2) = interp.get_object(o.id) {
-                            if let Some(ds) = &mut obj2.borrow_mut().disposable_stack {
-                                ds.stack.push(resource);
-                            }
+                        if let Some(obj2) = interp.get_object(o.id)
+                            && let Some(ds) = &mut obj2.borrow_mut().disposable_stack
+                        {
+                            ds.stack.push(resource);
                         }
                         return Completion::Normal(value);
                     }

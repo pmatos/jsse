@@ -2279,7 +2279,7 @@ impl Interpreter {
         module_env
             .borrow_mut()
             .initialize_binding("*default*", value.clone());
-        let loaded = Rc::new(RefCell::new(LoadedModule {
+        Rc::new(RefCell::new(LoadedModule {
             path: canon_path,
             env: module_env,
             exports: {
@@ -2310,8 +2310,7 @@ impl Interpreter {
             top_level_capability: None,
             dfs_index: None,
             dfs_ancestor_index: None,
-        }));
-        loaded
+        }))
     }
 
     fn load_text_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {

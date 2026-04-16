@@ -1502,14 +1502,6 @@ pub fn extract_lookbehinds_remaining(source: &str) -> (Vec<LookbehindInfo>, Stri
                     j += 1;
                 } else if chars[j] == '(' && !in_cc {
                     depth += 1;
-                    if j + 1 < len && chars[j + 1] == '?' {
-                        if j + 2 < len
-                            && chars[j + 2] == '<'
-                            && j + 3 < len
-                            && chars[j + 3] != '='
-                            && chars[j + 3] != '!'
-                        {}
-                    }
                 } else if chars[j] == ')' && !in_cc {
                     depth -= 1;
                 }
@@ -1528,17 +1520,6 @@ pub fn extract_lookbehinds_remaining(source: &str) -> (Vec<LookbehindInfo>, Stri
             // Skip lookbehind — don't add to remaining
             i = j + 1;
             continue;
-        }
-
-        if !in_char_class && chars[i] == '(' {
-            if i + 1 < len && chars[i + 1] == '?' {
-                if i + 2 < len
-                    && chars[i + 2] == '<'
-                    && i + 3 < len
-                    && chars[i + 3] != '='
-                    && chars[i + 3] != '!'
-                {}
-            }
         }
 
         remaining.push(chars[i]);

@@ -6069,7 +6069,7 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
                     while names.len() <= global_idx {
                         names.push(None);
                     }
-                    names[global_idx] = Some(name);
+                    names[global_idx] = Some(sanitize_group_name(&name));
                 }
             }
 
@@ -6442,41 +6442,37 @@ fn resolve_named_group_matches<'a>(
     dup_map: &DupGroupMap,
     name_order: &[String],
 ) -> Vec<(String, Option<&'a RegexMatch>)> {
-    let mut result = Vec::new();
-    for orig_name in name_order {
-        if let Some(variants) = dup_map.get(orig_name) {
-            let mut found: Option<&RegexMatch> = None;
-            for (internal_name, _) in variants {
-                let sanitized = sanitize_group_name(internal_name);
-                for (i, name_opt) in caps.names.iter().enumerate() {
-                    if let Some(n) = name_opt
-                        && *n == sanitized
-                        && let Some(m) = caps.get(i)
-                    {
-                        found = Some(m);
-                        break;
-                    }
-                }
-                if found.is_some() {
-                    break;
-                }
-            }
-            result.push((orig_name.clone(), found));
-        } else {
-            let sanitized = sanitize_group_name(orig_name);
-            let mut found: Option<&RegexMatch> = None;
-            for (i, name_opt) in caps.names.iter().enumerate() {
-                if let Some(n) = name_opt
-                    && *n == sanitized
-                {
-                    found = caps.get(i);
-                    break;
-                }
-            }
-            result.push((orig_name.clone(), found));
-        }
-    }
-    result
+    name_order
+        .iter()
+        .map(|orig_name| {
+            let found = if let Some(variants) = dup_map.get(orig_name) {
+                variants.iter().find_map(|(internal_name, _)| {
+                    let sanitized = sanitize_group_name(internal_name);
+                    caps.names.iter().enumerate().find_map(|(i, name_opt)| {
+                        if name_opt.as_deref() == Some(&sanitized) {
+                            caps.get(i)
+                        } else {
+                            None
+                        }
+                    })
+                })
+            } else {
+                let sanitized = sanitize_group_name(orig_name);
+                caps.names
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, name_opt)| {
+                        if name_opt.as_deref() == Some(&sanitized) {
+                            Some(caps.get(i))
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten()
+            };
+            (orig_name.clone(), found)
+        })
+        .collect()
 }
 
 fn regexp_exec_raw(
@@ -6669,11 +6665,15 @@ fn regexp_exec_raw(
     }
 
     let has_named = caps.names.iter().any(|n| n.is_some());
-    let groups_val = if has_named {
-        let resolved = resolve_named_group_matches(&caps, &dup_map, &name_order);
+    let resolved_named = if has_named {
+        Some(resolve_named_group_matches(&caps, &dup_map, &name_order))
+    } else {
+        None
+    };
+    let groups_val = if let Some(ref resolved) = resolved_named {
         let groups_obj = interp.create_object();
         groups_obj.borrow_mut().prototype = None;
-        for (name, m) in &resolved {
+        for (name, m) in resolved {
             let val = match m {
                 Some(m) => JsValue::String(regex_output_to_js_string(&m.text)),
                 None => JsValue::Undefined,
@@ -6725,11 +6725,10 @@ fn regexp_exec_raw(
                 }
             }
             let indices_arr = interp.create_array(index_pairs);
-            if has_named {
-                let resolved = resolve_named_group_matches(&caps, &dup_map, &name_order);
+            if let Some(ref resolved) = resolved_named {
                 let idx_groups = interp.create_object();
                 idx_groups.borrow_mut().prototype = None;
-                for (name, m) in &resolved {
+                for (name, m) in resolved {
                     let val = match m {
                         Some(m) => {
                             let cap_start = cap_byte_to_utf16(m.start);
