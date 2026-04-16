@@ -11598,7 +11598,14 @@ impl Interpreter {
                                 if !exec_env.borrow().bindings.contains_key(&lv.name)
                                     && !func_env.borrow().bindings.contains_key(&lv.name)
                                 {
-                                    exec_env.borrow_mut().declare(&lv.name, BindingKind::Var);
+                                    let bk = match lv.kind {
+                                        crate::ast::VarKind::Let
+                                        | crate::ast::VarKind::Const
+                                        | crate::ast::VarKind::Using
+                                        | crate::ast::VarKind::AwaitUsing => BindingKind::Let,
+                                        _ => BindingKind::Var,
+                                    };
+                                    exec_env.borrow_mut().declare(&lv.name, bk);
                                 }
                             }
                             gen_obj.borrow_mut().iterator_state =
@@ -11774,7 +11781,14 @@ impl Interpreter {
                                 if !exec_env.borrow().bindings.contains_key(&lv.name)
                                     && !func_env.borrow().bindings.contains_key(&lv.name)
                                 {
-                                    exec_env.borrow_mut().declare(&lv.name, BindingKind::Var);
+                                    let bk = match lv.kind {
+                                        crate::ast::VarKind::Let
+                                        | crate::ast::VarKind::Const
+                                        | crate::ast::VarKind::Using
+                                        | crate::ast::VarKind::AwaitUsing => BindingKind::Let,
+                                        _ => BindingKind::Var,
+                                    };
+                                    exec_env.borrow_mut().declare(&lv.name, bk);
                                 }
                             }
                             gen_obj.borrow_mut().iterator_state =
