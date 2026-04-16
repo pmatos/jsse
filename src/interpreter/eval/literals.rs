@@ -122,6 +122,13 @@ impl Interpreter {
 
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_property_key(&mut self, val: &JsValue) -> Result<String, JsValue> {
+        // Fast path: non-negative integer Number → integer string (avoids ryu_js)
+        if let JsValue::Number(n) = val {
+            let trunc = n.trunc();
+            if *n == trunc && trunc >= 0.0 && trunc <= u32::MAX as f64 {
+                return Ok((trunc as u32).to_string());
+            }
+        }
         match val {
             JsValue::Symbol(s) => Ok(s.to_property_key()),
             JsValue::Object(_) => {
