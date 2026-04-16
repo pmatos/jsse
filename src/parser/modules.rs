@@ -168,7 +168,7 @@ impl<'a> Parser<'a> {
         if is_with && !self.prev_line_terminator {
             self.advance()?; // with
             self.eat(&Token::LeftBrace)?;
-            let mut seen_keys = std::collections::HashSet::new();
+            let mut seen_keys = HashSet::default();
             let mut attributes = Vec::new();
             while self.current != Token::RightBrace {
                 // AttributeKey: IdentifierName | StringLiteral

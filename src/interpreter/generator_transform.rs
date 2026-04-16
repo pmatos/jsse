@@ -1,7 +1,7 @@
 use crate::ast::*;
 use crate::interpreter::generator_analysis::*;
 use crate::types::JsValue;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -151,8 +151,8 @@ impl TransformContext {
             analysis,
             yield_counter: 0,
             temp_counter: 0,
-            break_targets: HashMap::new(),
-            continue_targets: HashMap::new(),
+            break_targets: HashMap::default(),
+            continue_targets: HashMap::default(),
             try_stack: Vec::new(),
             temp_vars: Vec::new(),
             is_async,

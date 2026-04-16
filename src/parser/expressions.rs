@@ -9,7 +9,7 @@ fn validate_regexp_literal(pattern: &str, flags: &str) -> Result<(), ParseError>
             });
         }
     }
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::default();
     for c in flags.chars() {
         if !seen.insert(c) {
             return Err(ParseError {

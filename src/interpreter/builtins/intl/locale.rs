@@ -71,7 +71,7 @@ fn is_valid_variants_value(s: &str) -> bool {
         return false;
     }
     let parts: Vec<&str> = s.split('-').collect();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::default();
     for part in &parts {
         let lower = part.to_ascii_lowercase();
         if !seen.insert(lower) {

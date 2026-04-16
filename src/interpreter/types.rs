@@ -2,8 +2,8 @@ use crate::ast::*;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
 use crate::interpreter::helpers::same_value;
 use crate::types::{JsString, JsValue};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -395,7 +395,7 @@ impl Realm {
             global_env,
             global_object: None,
             throw_type_error: None,
-            template_cache: HashMap::new(),
+            template_cache: HashMap::default(),
             builtin_eval_id: None,
             object_prototype: None,
             array_prototype: None,
@@ -614,7 +614,7 @@ pub struct Environment {
     pub(crate) global_object: Option<Rc<RefCell<JsObjectData>>>,
     // Annex B.3.3: names registered for block-level function var hoisting
     pub(crate) annexb_function_names: Option<Vec<String>>,
-    pub(crate) class_private_names: Option<std::collections::HashMap<String, String>>,
+    pub(crate) class_private_names: Option<HashMap<String, String>>,
     pub(crate) is_field_initializer: bool,
     pub(crate) arguments_immutable: bool,
     pub(crate) has_parameter_expressions: bool,
@@ -698,7 +698,7 @@ impl Environment {
     pub fn new(parent: Option<EnvRef>) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::new(),
+            bindings: HashMap::default(),
             parent,
             strict,
             is_function_scope: false,
@@ -722,7 +722,7 @@ impl Environment {
     pub fn new_function_scope(parent: Option<EnvRef>) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::new(),
+            bindings: HashMap::default(),
             parent,
             strict,
             is_function_scope: true,
@@ -793,7 +793,7 @@ impl Environment {
         source_env: EnvRef,
         source_name: String,
     ) {
-        let map = self.indirect_bindings.get_or_insert_with(HashMap::new);
+        let map = self.indirect_bindings.get_or_insert_with(HashMap::default);
         map.insert(local_name.to_string(), (source_env, source_name));
     }
 
@@ -1096,8 +1096,8 @@ impl Environment {
 pub enum JsFunction {
     User {
         name: Option<String>,
-        params: Vec<Pattern>,
-        body: Vec<Statement>,
+        params: Rc<Vec<Pattern>>,
+        body: Rc<Vec<Statement>>,
         closure: EnvRef,
         is_arrow: bool,
         is_strict: bool,
@@ -1299,7 +1299,7 @@ pub enum IteratorState {
         done: bool,
     },
     Generator {
-        body: Vec<Statement>,
+        body: Rc<Vec<Statement>>,
         func_env: EnvRef,
         is_strict: bool,
         execution_state: GeneratorExecutionState,
@@ -1317,7 +1317,7 @@ pub enum IteratorState {
         pending_return: Option<JsValue>,
     },
     AsyncGenerator {
-        body: Vec<Statement>,
+        body: Rc<Vec<Statement>>,
         func_env: EnvRef,
         is_strict: bool,
         execution_state: GeneratorExecutionState,
@@ -1695,7 +1695,7 @@ impl JsObjectData {
     pub(crate) fn new() -> Self {
         Self {
             id: None,
-            properties: HashMap::new(),
+            properties: HashMap::default(),
             property_order: Vec::new(),
             prototype: None,
             callable: None,
@@ -1703,7 +1703,7 @@ impl JsObjectData {
             class_name: "Object".to_string(),
             extensible: true,
             primitive_value: None,
-            private_fields: HashMap::new(),
+            private_fields: HashMap::default(),
             class_instance_field_defs: Vec::new(),
             iterator_state: None,
             parameter_map: None,
@@ -2100,7 +2100,7 @@ impl JsObjectData {
     }
 
     pub fn enumerable_keys_with_proto(&self) -> Vec<String> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         let mut keys = Vec::new();
 
         // Collect own keys, separating integer indices from string keys

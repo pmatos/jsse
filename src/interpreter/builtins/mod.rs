@@ -2523,8 +2523,8 @@ impl Interpreter {
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
-                            params: fe.params.clone(),
-                            body: fe.body.clone(),
+                            params: Rc::new(fe.params.clone()),
+                            body: Rc::new(fe.body.clone()),
                             closure: dynamic_fn_env,
                             is_arrow: false,
                             is_strict,
@@ -3085,8 +3085,8 @@ impl Interpreter {
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
-                            params: fe.params.clone(),
-                            body: fe.body.clone(),
+                            params: Rc::new(fe.params.clone()),
+                            body: Rc::new(fe.body.clone()),
                             closure: dynamic_fn_env,
                             is_arrow: false,
                             is_strict,
@@ -3242,8 +3242,8 @@ impl Interpreter {
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
-                            params: fe.params.clone(),
-                            body: fe.body.clone(),
+                            params: Rc::new(fe.params.clone()),
+                            body: Rc::new(fe.body.clone()),
                             closure: dynamic_fn_env,
                             is_arrow: false,
                             is_strict,
@@ -3401,8 +3401,8 @@ impl Interpreter {
                         dynamic_fn_env.borrow_mut().strict = false;
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
-                            params: fe.params.clone(),
-                            body: fe.body.clone(),
+                            params: Rc::new(fe.params.clone()),
+                            body: Rc::new(fe.body.clone()),
                             closure: dynamic_fn_env,
                             is_arrow: false,
                             is_strict,
@@ -7885,8 +7885,7 @@ impl Interpreter {
                     }
                     let property_order = obj.borrow().property_order.clone();
                     // Collect keys already in property_order into virtual_indices set for dedup
-                    let existing_keys: std::collections::HashSet<String> =
-                        property_order.iter().cloned().collect();
+                    let existing_keys: HashSet<String> = property_order.iter().cloned().collect();
                     // OrdinaryOwnPropertyKeys: indices ascending, then strings, then symbols
                     let mut indices: Vec<(u32, usize)> = Vec::new();
                     let mut strings: Vec<(String, usize)> = Vec::new();

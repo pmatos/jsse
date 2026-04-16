@@ -397,7 +397,7 @@ impl Interpreter {
             Expression::Function(f) => {
                 let closure_env = if let Some(ref name) = f.name {
                     let func_env = Rc::new(RefCell::new(Environment {
-                        bindings: HashMap::new(),
+                        bindings: HashMap::default(),
                         parent: Some(env.clone()),
                         strict: env.borrow().strict || f.body_is_strict,
                         is_function_scope: false,
@@ -427,8 +427,8 @@ impl Interpreter {
                 let force_method = self.next_function_is_method;
                 let func = JsFunction::User {
                     name: f.name.clone(),
-                    params: f.params.clone(),
-                    body: f.body.clone(),
+                    params: Rc::new(f.params.clone()),
+                    body: Rc::new(f.body.clone()),
                     closure: closure_env.clone(),
                     is_arrow: false,
                     is_strict: f.body_is_strict || enclosing_strict,
@@ -454,8 +454,8 @@ impl Interpreter {
                 };
                 let func = JsFunction::User {
                     name: None,
-                    params: af.params.clone(),
-                    body: body_stmts.clone(),
+                    params: Rc::new(af.params.clone()),
+                    body: Rc::new(body_stmts),
                     closure: env.clone(),
                     is_arrow: true,
                     is_strict: af.body_is_strict || enclosing_strict,
@@ -481,17 +481,19 @@ impl Interpreter {
             Expression::Typeof(operand) => {
                 if let Expression::Identifier(name) = operand.as_ref() {
                     let strict = env.borrow().strict;
-                    match self.resolve_with_has_binding(name, env) {
-                        Ok(Some(obj_id)) => {
-                            return match self.with_get_binding_value(obj_id, name, strict) {
-                                Completion::Normal(val) => Completion::Normal(JsValue::String(
-                                    JsString::from_str(typeof_val(&val, &self.objects)),
-                                )),
-                                other => other,
-                            };
+                    if self.with_scope_depth > 0 || self.has_ever_entered_with {
+                        match self.resolve_with_has_binding(name, env) {
+                            Ok(Some(obj_id)) => {
+                                return match self.with_get_binding_value(obj_id, name, strict) {
+                                    Completion::Normal(val) => Completion::Normal(JsValue::String(
+                                        JsString::from_str(typeof_val(&val, &self.objects)),
+                                    )),
+                                    other => other,
+                                };
+                            }
+                            Ok(None) => {}
+                            Err(e) => return Completion::Throw(e),
                         }
-                        Ok(None) => {}
-                        Err(e) => return Completion::Throw(e),
                     }
                     if let Some(result) = self.resolve_global_getter(name, env) {
                         return match result {
@@ -711,15 +713,17 @@ impl Interpreter {
                 }
                 Expression::Identifier(name) => {
                     // Check with-scopes first (Bug C fix)
-                    match self.resolve_with_has_binding(name, env) {
-                        Ok(Some(obj_id)) => {
-                            return match self.proxy_delete_property(obj_id, name) {
-                                Ok(b) => Completion::Normal(JsValue::Boolean(b)),
-                                Err(e) => Completion::Throw(e),
-                            };
+                    if self.with_scope_depth > 0 || self.has_ever_entered_with {
+                        match self.resolve_with_has_binding(name, env) {
+                            Ok(Some(obj_id)) => {
+                                return match self.proxy_delete_property(obj_id, name) {
+                                    Ok(b) => Completion::Normal(JsValue::Boolean(b)),
+                                    Err(e) => Completion::Throw(e),
+                                };
+                            }
+                            Ok(None) => {}
+                            Err(e) => return Completion::Throw(e),
                         }
-                        Ok(None) => {}
-                        Err(e) => return Completion::Throw(e),
                     }
 
                     let mut current = Some(env.clone());
@@ -11719,10 +11723,10 @@ impl Interpreter {
                                     Environment::new_function_scope(Some(func_env.clone()));
                                 body_env.borrow_mut().strict = func_env.borrow().strict;
                                 body_env.borrow_mut().has_simple_params = false;
-                                let mut var_names = std::collections::HashSet::new();
+                                let mut var_names = HashSet::default();
                                 Self::collect_var_names_from_stmts(&body, &mut var_names);
-                                let mut param_names_set = std::collections::HashSet::new();
-                                for p in &params {
+                                let mut param_names_set = HashSet::default();
+                                for p in params.iter() {
                                     Self::collect_var_names_from_pattern(p, &mut param_names_set);
                                 }
                                 for name in &var_names {
@@ -11888,10 +11892,10 @@ impl Interpreter {
                                     Environment::new_function_scope(Some(func_env.clone()));
                                 body_env.borrow_mut().strict = func_env.borrow().strict;
                                 body_env.borrow_mut().has_simple_params = false;
-                                let mut var_names = std::collections::HashSet::new();
+                                let mut var_names = HashSet::default();
                                 Self::collect_var_names_from_stmts(&body, &mut var_names);
-                                let mut param_names_set = std::collections::HashSet::new();
-                                for p in &params {
+                                let mut param_names_set = HashSet::default();
+                                for p in params.iter() {
                                     Self::collect_var_names_from_pattern(p, &mut param_names_set);
                                 }
                                 for name in &var_names {
@@ -12056,10 +12060,10 @@ impl Interpreter {
                             let body_env = Environment::new_function_scope(Some(func_env.clone()));
                             body_env.borrow_mut().strict = func_env.borrow().strict;
                             body_env.borrow_mut().has_simple_params = false;
-                            let mut var_names = std::collections::HashSet::new();
+                            let mut var_names = HashSet::default();
                             Self::collect_var_names_from_stmts(&body, &mut var_names);
-                            let mut param_names = std::collections::HashSet::new();
-                            for p in &params {
+                            let mut param_names = HashSet::default();
+                            for p in params.iter() {
                                 Self::collect_var_names_from_pattern(p, &mut param_names);
                             }
                             for name in &var_names {
@@ -12468,8 +12472,7 @@ impl Interpreter {
                     function_boundary_count += 1;
                 }
                 if let Some(ref names) = borrowed.class_private_names {
-                    let name_set: std::collections::HashSet<String> =
-                        names.keys().cloned().collect();
+                    let name_set: HashSet<String> = names.keys().cloned().collect();
                     p.set_eval_in_class_with_names(name_set);
                     break;
                 }
@@ -12672,7 +12675,7 @@ impl Interpreter {
         }
         // Per spec: reverse order, keep last occurrence of each name
         funcs.reverse();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         funcs.retain(|f| seen.insert(f.name.clone()));
         funcs
     }
@@ -12698,7 +12701,7 @@ impl Interpreter {
         let mut all_var_names = Vec::new();
         Self::collect_eval_var_names(body, &mut all_var_names);
         let declared_var_names: Vec<String> = {
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = HashSet::default();
             all_var_names
                 .into_iter()
                 .filter(|n| !declared_func_names.contains(n) && seen.insert(n.clone()))
@@ -12864,8 +12867,8 @@ impl Interpreter {
             let enclosing_strict = lex_env.borrow().strict;
             let func = JsFunction::User {
                 name: Some(f.name.clone()),
-                params: f.params.clone(),
-                body: f.body.clone(),
+                params: Rc::new(f.params.clone()),
+                body: Rc::new(f.body.clone()),
                 closure: lex_env.clone(),
                 is_arrow: false,
                 is_strict: f.body_is_strict || enclosing_strict,
@@ -13911,8 +13914,7 @@ impl Interpreter {
                     .collect();
                 (nc, c)
             };
-            let trap_set: std::collections::HashSet<&str> =
-                trap_keys.iter().map(|s| s.as_str()).collect();
+            let trap_set: HashSet<&str> = trap_keys.iter().map(|s| s.as_str()).collect();
 
             for key in &target_nonconfig {
                 if !trap_set.contains(key.as_str()) {
@@ -13923,7 +13925,7 @@ impl Interpreter {
             }
 
             if !target_extensible {
-                let target_keys: std::collections::HashSet<&str> = target_nonconfig
+                let target_keys: HashSet<&str> = target_nonconfig
                     .iter()
                     .chain(target_config.iter())
                     .map(|s| s.as_str())
@@ -14048,40 +14050,39 @@ impl Interpreter {
         name: &str,
         env: &EnvRef,
     ) -> Result<IdentifierRef, JsValue> {
-        match self.resolve_with_has_binding(name, env)? {
-            Some(obj_id) => Ok(IdentifierRef::WithObject(obj_id)),
-            None => {
-                if let Some(specific_env) = Environment::find_binding_env(env, name) {
-                    let (has_binding, global_obj_id) = {
-                        let e = specific_env.borrow();
-                        let in_bindings =
-                            e.bindings.contains_key(name) || e.is_indirect_binding(name);
-                        if in_bindings {
-                            (true, None)
-                        } else if let Some(ref global_obj) = e.global_object {
-                            let own = global_obj.borrow().properties.contains_key(name);
-                            let gid = global_obj.borrow().id;
-                            (own, if !own { gid } else { None })
-                        } else {
-                            (false, None)
-                        }
-                    };
-                    if has_binding {
-                        Ok(IdentifierRef::SpecificEnv(specific_env))
-                    } else if let Some(gid) = global_obj_id {
-                        // Check prototype chain (handles Proxy has traps)
-                        if self.proxy_has_property(gid, name)? {
-                            Ok(IdentifierRef::SpecificEnv(specific_env))
-                        } else {
-                            Ok(IdentifierRef::Unresolvable)
-                        }
-                    } else {
-                        Ok(IdentifierRef::Unresolvable)
-                    }
+        if (self.with_scope_depth > 0 || self.has_ever_entered_with)
+            && let Some(obj_id) = self.resolve_with_has_binding(name, env)?
+        {
+            return Ok(IdentifierRef::WithObject(obj_id));
+        }
+        if let Some(specific_env) = Environment::find_binding_env(env, name) {
+            let (has_binding, global_obj_id) = {
+                let e = specific_env.borrow();
+                let in_bindings = e.bindings.contains_key(name) || e.is_indirect_binding(name);
+                if in_bindings {
+                    (true, None)
+                } else if let Some(ref global_obj) = e.global_object {
+                    let own = global_obj.borrow().properties.contains_key(name);
+                    let gid = global_obj.borrow().id;
+                    (own, if !own { gid } else { None })
+                } else {
+                    (false, None)
+                }
+            };
+            if has_binding {
+                Ok(IdentifierRef::SpecificEnv(specific_env))
+            } else if let Some(gid) = global_obj_id {
+                // Check prototype chain (handles Proxy has traps)
+                if self.proxy_has_property(gid, name)? {
+                    Ok(IdentifierRef::SpecificEnv(specific_env))
                 } else {
                     Ok(IdentifierRef::Unresolvable)
                 }
+            } else {
+                Ok(IdentifierRef::Unresolvable)
             }
+        } else {
+            Ok(IdentifierRef::Unresolvable)
         }
     }
 
@@ -15206,7 +15207,7 @@ impl Interpreter {
                                 ));
                             }
                         }
-                        let mut seen = std::collections::HashSet::new();
+                        let mut seen = HashSet::default();
                         for key in &keys {
                             let key_str = to_property_key_string(key);
                             if !seen.insert(key_str) {
@@ -15325,7 +15326,7 @@ impl Interpreter {
         &mut self,
         obj_id: u64,
     ) -> Result<Vec<String>, JsValue> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         let mut keys = Vec::new();
         let mut current_id = Some(obj_id);
 

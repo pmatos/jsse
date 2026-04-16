@@ -1,8 +1,8 @@
 use crate::ast::*;
 use crate::parser;
 use crate::types::{JsBigInt, JsString, JsValue, bigint_ops, number_ops};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -81,7 +81,7 @@ pub struct Interpreter {
     pub(crate) call_stack_frames: Vec<CallFrame>,
     pub(crate) gc_temp_roots: Vec<u64>,
     // microtask roots are now stored inline in the microtask_queue tuples
-    pub(crate) class_private_names: Vec<std::collections::HashMap<String, String>>,
+    pub(crate) class_private_names: Vec<HashMap<String, String>>,
     next_class_brand_id: u64,
     next_auto_accessor_id: u64,
     pub(crate) regexp_legacy_input: String,
@@ -115,6 +115,8 @@ pub struct Interpreter {
     pub(crate) static_module_load_depth: u32,
     module_async_evaluation_count: u64,
     module_async_info: HashMap<u64, PathBuf>,
+    pub(crate) with_scope_depth: u32,
+    pub(crate) has_ever_entered_with: bool,
 }
 
 pub(crate) struct CallFrame {
@@ -193,8 +195,8 @@ impl Interpreter {
             realms: vec![realm],
             current_realm_id: 0,
             objects: Vec::new(),
-            global_symbol_registry: HashMap::new(),
-            well_known_symbols: HashMap::new(),
+            global_symbol_registry: HashMap::default(),
+            well_known_symbols: HashMap::default(),
             next_symbol_id: 1,
             new_target: None,
             free_list: Vec::new(),
@@ -206,11 +208,11 @@ impl Interpreter {
             generator_context: None,
             destructuring_yield: false,
             pending_iter_close: Vec::new(),
-            generator_inline_iters: HashMap::new(),
+            generator_inline_iters: HashMap::default(),
             microtask_queue: Vec::new(),
             cached_has_instance_key: None,
-            module_registry: HashMap::new(),
-            synthetic_module_registry: HashMap::new(),
+            module_registry: HashMap::default(),
+            synthetic_module_registry: HashMap::default(),
             current_module_path: None,
             loading_deferred: false,
             last_call_had_explicit_return: false,
@@ -230,7 +232,7 @@ impl Interpreter {
             regexp_legacy_right_context: String::new(),
             regexp_legacy_parens: Default::default(),
             regexp_constructor_id: None,
-            function_realm_map: HashMap::new(),
+            function_realm_map: HashMap::default(),
             in_tail_position: false,
             in_state_machine: false,
             next_function_is_method: false,
@@ -244,16 +246,18 @@ impl Interpreter {
                 std::sync::Mutex::new(Vec::new()),
                 std::sync::Condvar::new(),
             )),
-            iterator_next_cache: HashMap::new(),
+            iterator_next_cache: HashMap::default(),
             last_identifier_with_base: None,
-            async_gen_queues: HashMap::new(),
+            async_gen_queues: HashMap::default(),
             async_gen_yield_pending: false,
-            async_function_states: HashMap::new(),
+            async_function_states: HashMap::default(),
             next_async_function_id: 0,
             pending_async_dispose_await: false,
             static_module_load_depth: 0,
             module_async_evaluation_count: 0,
-            module_async_info: HashMap::new(),
+            module_async_info: HashMap::default(),
+            with_scope_depth: 0,
+            has_ever_entered_with: false,
         };
         interp.setup_globals();
         interp
@@ -1141,8 +1145,8 @@ impl Interpreter {
                     },
                 );
 
-                let mut map = HashMap::new();
-                let mut mapped_names: HashSet<&str> = HashSet::new();
+                let mut map = HashMap::default();
+                let mut mapped_names: HashSet<&str> = HashSet::default();
                 for i in (0..param_names.len()).rev() {
                     let name = &param_names[i];
                     if mapped_names.contains(name.as_str()) {
@@ -1320,13 +1324,13 @@ impl Interpreter {
         let loaded_module = Rc::new(RefCell::new(LoadedModule {
             path: canon_path_entry.clone(),
             env: module_env.clone(),
-            exports: HashMap::new(),
-            export_bindings: HashMap::new(),
+            exports: HashMap::default(),
+            export_bindings: HashMap::default(),
             cached_namespace: None,
             cached_deferred_namespace: None,
             cached_import_meta: None,
             error: None,
-            namespace_imports: HashMap::new(),
+            namespace_imports: HashMap::default(),
             star_export_sources: Vec::new(),
             evaluated: false,
             is_evaluating: false,
@@ -1628,7 +1632,7 @@ impl Interpreter {
         }
         let has_export = binding_info.is_some();
         if has_export {
-            let mut visited = std::collections::HashSet::new();
+            let mut visited = HashSet::default();
             match self.resolve_export_binding(resolved, imported, &mut visited) {
                 Ok((source_env, binding_name)) => {
                     if binding_name == "*namespace*" {
@@ -1696,13 +1700,13 @@ impl Interpreter {
                         // — check if they resolve to the same (module, binding)
                         if existing != &new_reexport {
                             let is_ambiguous = if let Some(ref mp) = module_path {
-                                let mut v1 = std::collections::HashSet::new();
+                                let mut v1 = HashSet::default();
                                 let r1 = self.resolve_export_binding(mp, &export_name, &mut v1);
                                 module
                                     .borrow_mut()
                                     .export_bindings
                                     .insert(export_name.clone(), new_reexport.clone());
-                                let mut v2 = std::collections::HashSet::new();
+                                let mut v2 = HashSet::default();
                                 let r2 = self.resolve_export_binding(mp, &export_name, &mut v2);
                                 module
                                     .borrow_mut()
@@ -1825,12 +1829,12 @@ impl Interpreter {
                 path: canon_path.clone(),
                 env: module_env.clone(),
                 exports: {
-                    let mut m = HashMap::new();
+                    let mut m = HashMap::default();
                     m.insert("default".to_string(), parsed.clone());
                     m
                 },
                 export_bindings: {
-                    let mut m = HashMap::new();
+                    let mut m = HashMap::default();
                     m.insert("default".to_string(), "*default*".to_string());
                     m
                 },
@@ -1838,7 +1842,7 @@ impl Interpreter {
                 cached_deferred_namespace: None,
                 cached_import_meta: None,
                 error: None,
-                namespace_imports: HashMap::new(),
+                namespace_imports: HashMap::default(),
                 star_export_sources: Vec::new(),
                 evaluated: true,
                 is_evaluating: false,
@@ -1903,13 +1907,13 @@ impl Interpreter {
         let loaded_module = Rc::new(RefCell::new(LoadedModule {
             path: canon_path.clone(),
             env: module_env.clone(),
-            exports: HashMap::new(),
-            export_bindings: HashMap::new(),
+            exports: HashMap::default(),
+            export_bindings: HashMap::default(),
             cached_namespace: None,
             cached_deferred_namespace: None,
             cached_import_meta: None,
             error: None,
-            namespace_imports: HashMap::new(),
+            namespace_imports: HashMap::default(),
             star_export_sources: Vec::new(),
             evaluated: false,
             is_evaluating: false,
@@ -2116,13 +2120,13 @@ impl Interpreter {
         let loaded_module = Rc::new(RefCell::new(LoadedModule {
             path: canon_path.clone(),
             env: module_env.clone(),
-            exports: HashMap::new(),
-            export_bindings: HashMap::new(),
+            exports: HashMap::default(),
+            export_bindings: HashMap::default(),
             cached_namespace: None,
             cached_deferred_namespace: None,
             cached_import_meta: None,
             error: None,
-            namespace_imports: HashMap::new(),
+            namespace_imports: HashMap::default(),
             star_export_sources: Vec::new(),
             evaluated: false,
             is_evaluating: false,
@@ -2283,12 +2287,12 @@ impl Interpreter {
             path: canon_path,
             env: module_env,
             exports: {
-                let mut m = HashMap::new();
+                let mut m = HashMap::default();
                 m.insert("default".to_string(), value);
                 m
             },
             export_bindings: {
-                let mut m = HashMap::new();
+                let mut m = HashMap::default();
                 m.insert("default".to_string(), "*default*".to_string());
                 m
             },
@@ -2296,7 +2300,7 @@ impl Interpreter {
             cached_deferred_namespace: None,
             cached_import_meta: None,
             error: None,
-            namespace_imports: HashMap::new(),
+            namespace_imports: HashMap::default(),
             star_export_sources: Vec::new(),
             evaluated: true,
             is_evaluating: false,
@@ -2610,7 +2614,7 @@ impl Interpreter {
         for (dep_canon, is_deferred) in &dep_paths {
             if *is_deferred {
                 let mut to_eval = Vec::new();
-                let mut seen = std::collections::HashSet::new();
+                let mut seen = HashSet::default();
                 self.gather_async_transitive_deps(dep_canon, &mut to_eval, &mut seen);
                 for async_dep in to_eval {
                     if !evaluation_list.contains(&async_dep) {
@@ -3027,7 +3031,7 @@ impl Interpreter {
     /// Eagerly evaluate async transitive dependencies of a deferred module
     fn evaluate_async_transitive_deps(&mut self, deferred_path: &Path) {
         let mut to_eval = Vec::new();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         self.gather_async_transitive_deps(deferred_path, &mut to_eval, &mut seen);
 
         for path in to_eval {
@@ -3044,7 +3048,7 @@ impl Interpreter {
         &self,
         module_path: &Path,
         result: &mut Vec<PathBuf>,
-        seen: &mut std::collections::HashSet<PathBuf>,
+        seen: &mut HashSet<PathBuf>,
     ) {
         let canon = module_path
             .canonicalize()
@@ -3128,11 +3132,7 @@ impl Interpreter {
     }
 
     /// Check if a module and all its transitive deps are ready for synchronous execution
-    fn ready_for_sync_execution(
-        &self,
-        path: &Path,
-        seen: &mut std::collections::HashSet<PathBuf>,
-    ) -> bool {
+    fn ready_for_sync_execution(&self, path: &Path, seen: &mut HashSet<PathBuf>) -> bool {
         let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if !seen.insert(canon.clone()) {
             return true; // cycle — spec says return true
@@ -3195,7 +3195,7 @@ impl Interpreter {
         let resolved = self.resolve_module_specifier(source, Some(current_module))?;
 
         for spec in specifiers {
-            let mut visited = std::collections::HashSet::new();
+            let mut visited = HashSet::default();
             self.resolve_export(&resolved, &spec.local, &mut visited)?;
         }
         Ok(())
@@ -3207,7 +3207,7 @@ impl Interpreter {
         &mut self,
         module_path: &Path,
         export_name: &str,
-        visited: &mut std::collections::HashSet<(PathBuf, String)>,
+        visited: &mut HashSet<(PathBuf, String)>,
     ) -> Result<(EnvRef, String), JsValue> {
         let canon_path = module_path
             .canonicalize()
@@ -3303,7 +3303,7 @@ impl Interpreter {
         &mut self,
         module_path: &Path,
         export_name: &str,
-        visited: &mut std::collections::HashSet<(PathBuf, String)>,
+        visited: &mut HashSet<(PathBuf, String)>,
     ) -> Result<(), JsValue> {
         let canon_path = module_path
             .canonicalize()
@@ -3377,13 +3377,13 @@ impl Interpreter {
                 if found_in_star {
                     // §16.2.1.6.3 step 10.d.ii: ambiguous — same name from multiple stars
                     // Check if they resolve to the same (module, binding)
-                    let mut va = std::collections::HashSet::new();
+                    let mut va = HashSet::default();
                     let ra = self.resolve_export_binding(
                         first_star_source.as_ref().unwrap(),
                         export_name,
                         &mut va,
                     );
-                    let mut vb = std::collections::HashSet::new();
+                    let mut vb = HashSet::default();
                     let rb = self.resolve_export_binding(&resolved, export_name, &mut vb);
                     match (ra, rb) {
                         (Ok((env1, name1)), Ok((env2, name2))) => {
@@ -3779,8 +3779,8 @@ impl Interpreter {
                 env.borrow_mut().declare(&f.name, BindingKind::Var);
                 let func = JsFunction::User {
                     name: Some(f.name.clone()),
-                    params: f.params.clone(),
-                    body: f.body.clone(),
+                    params: Rc::new(f.params.clone()),
+                    body: Rc::new(f.body.clone()),
                     closure: env.clone(),
                     is_arrow: false,
                     is_strict: true, // Module code is always strict
@@ -3826,8 +3826,8 @@ impl Interpreter {
                     } else {
                         f.name.clone()
                     }),
-                    params: f.params.clone(),
-                    body: f.body.clone(),
+                    params: Rc::new(f.params.clone()),
+                    body: Rc::new(f.body.clone()),
                     closure: env.clone(),
                     is_arrow: false,
                     is_strict: true,
@@ -4004,8 +4004,8 @@ impl Interpreter {
                 let enclosing_strict = env.borrow().strict;
                 let js_func = JsFunction::User {
                     name: Some(name),
-                    params: func.params.clone(),
-                    body: func.body.clone(),
+                    params: Rc::new(func.params.clone()),
+                    body: Rc::new(func.body.clone()),
                     closure: env.clone(),
                     is_arrow: false,
                     is_strict: func.body_is_strict || enclosing_strict,
