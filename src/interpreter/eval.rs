@@ -11595,16 +11595,22 @@ impl Interpreter {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
                             for lv in &state_machine.local_vars {
+                                let bk = match lv.kind {
+                                    crate::ast::VarKind::Let
+                                    | crate::ast::VarKind::Const
+                                    | crate::ast::VarKind::Using
+                                    | crate::ast::VarKind::AwaitUsing => {
+                                        // Block-scoped bindings must not be hoisted to function level
+                                        if lv.scope_depth > 0 {
+                                            continue;
+                                        }
+                                        BindingKind::Let
+                                    }
+                                    _ => BindingKind::Var,
+                                };
                                 if !exec_env.borrow().bindings.contains_key(&lv.name)
                                     && !func_env.borrow().bindings.contains_key(&lv.name)
                                 {
-                                    let bk = match lv.kind {
-                                        crate::ast::VarKind::Let
-                                        | crate::ast::VarKind::Const
-                                        | crate::ast::VarKind::Using
-                                        | crate::ast::VarKind::AwaitUsing => BindingKind::Let,
-                                        _ => BindingKind::Var,
-                                    };
                                     exec_env.borrow_mut().declare(&lv.name, bk);
                                 }
                             }
@@ -11778,16 +11784,22 @@ impl Interpreter {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
                             for lv in &state_machine.local_vars {
+                                let bk = match lv.kind {
+                                    crate::ast::VarKind::Let
+                                    | crate::ast::VarKind::Const
+                                    | crate::ast::VarKind::Using
+                                    | crate::ast::VarKind::AwaitUsing => {
+                                        // Block-scoped bindings must not be hoisted to function level
+                                        if lv.scope_depth > 0 {
+                                            continue;
+                                        }
+                                        BindingKind::Let
+                                    }
+                                    _ => BindingKind::Var,
+                                };
                                 if !exec_env.borrow().bindings.contains_key(&lv.name)
                                     && !func_env.borrow().bindings.contains_key(&lv.name)
                                 {
-                                    let bk = match lv.kind {
-                                        crate::ast::VarKind::Let
-                                        | crate::ast::VarKind::Const
-                                        | crate::ast::VarKind::Using
-                                        | crate::ast::VarKind::AwaitUsing => BindingKind::Let,
-                                        _ => BindingKind::Var,
-                                    };
                                     exec_env.borrow_mut().declare(&lv.name, bk);
                                 }
                             }
