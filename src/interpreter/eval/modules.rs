@@ -709,7 +709,7 @@ impl Interpreter {
         let reject_root = reject.clone();
 
         self.microtask_queue.push((
-            vec![promise_root],
+            vec![promise_root, resolve_root.clone(), reject_root.clone()],
             Box::new(move |interp: &mut Interpreter| {
                 match interp.load_module(&resolved_path) {
                     Ok(m) => {
