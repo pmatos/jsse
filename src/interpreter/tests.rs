@@ -166,6 +166,97 @@ fn module_cycle_preserves_live_bindings_and_reuses_registry_entries() {
 }
 
 #[test]
+fn transitive_module_import_link_error_aborts_parent_before_evaluation() {
+    let dir = temp_case_dir("module-link-import-error");
+    let main_path = write_case_file(
+        &dir,
+        "main.mjs",
+        r#"
+        import "./broken.mjs";
+        globalThis.marker = "ran";
+        "#,
+    );
+    let broken_path = write_case_file(
+        &dir,
+        "broken.mjs",
+        r#"
+        import { nonExistent } from "./broken.mjs";
+        "#,
+    );
+
+    let program = parse_module_program(&fs::read_to_string(&main_path).unwrap());
+    let mut interp = Interpreter::new();
+    let result = interp.run_with_path(&program, &main_path);
+
+    let err = match result {
+        Completion::Throw(err) => interp.format_value(&err),
+        other => panic!("expected module linking error, got {other:?}"),
+    };
+    assert!(err.contains("SyntaxError"), "unexpected error: {err}");
+    assert!(err.contains("nonExistent"), "unexpected error: {err}");
+    assert!(interp.realm().global_env.borrow().get("marker").is_none());
+
+    let broken_canon = broken_path.canonicalize().unwrap_or(broken_path.clone());
+    let cached = interp
+        .module_registry
+        .get(&broken_canon)
+        .expect("broken module registry entry")
+        .borrow()
+        .error
+        .clone()
+        .expect("cached module error");
+    let cached_text = interp.format_value(&cached);
+    assert!(
+        cached_text.contains("SyntaxError"),
+        "unexpected cached error: {cached_text}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn transitive_reexport_link_error_aborts_parent_before_evaluation() {
+    let dir = temp_case_dir("module-link-reexport-error");
+    let main_path = write_case_file(
+        &dir,
+        "main.mjs",
+        r#"
+        export {} from "./a.mjs";
+        globalThis.marker = "ran";
+        "#,
+    );
+    write_case_file(
+        &dir,
+        "a.mjs",
+        r#"
+        export * from "./broken.mjs";
+        "#,
+    );
+    write_case_file(
+        &dir,
+        "broken.mjs",
+        r#"
+        import { nonExistent } from "./broken.mjs";
+        export const ok = 1;
+        "#,
+    );
+
+    let program = parse_module_program(&fs::read_to_string(&main_path).unwrap());
+    let mut interp = Interpreter::new();
+    let result = interp.run_with_path(&program, &main_path);
+
+    let err = match result {
+        Completion::Throw(err) => interp.format_value(&err),
+        other => panic!("expected module linking error, got {other:?}"),
+    };
+    assert!(err.contains("SyntaxError"), "unexpected error: {err}");
+    assert!(err.contains("nonExistent"), "unexpected error: {err}");
+    assert!(interp.realm().global_env.borrow().get("marker").is_none());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
     let mut interp = Interpreter::new();
     let obj = interp.create_object();
