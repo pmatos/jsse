@@ -6,6 +6,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct AgentBroadcastMsg {
     pub sab_shared: Arc<types::SharedBufferInner>,
@@ -97,7 +98,10 @@ pub struct Interpreter {
     pub(crate) next_function_is_method: bool,
     pub(crate) is_agent_thread: bool,
     pub(crate) can_block: bool,
-    pub(crate) agent_reports: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+    pub(crate) agent_reports: std::sync::Arc<(
+        std::sync::Mutex<std::collections::VecDeque<String>>,
+        std::sync::Condvar,
+    )>,
     pub(crate) agent_broadcast_txs: Vec<std::sync::mpsc::Sender<AgentBroadcastMsg>>,
     pub(crate) agent_handles: Vec<std::thread::JoinHandle<()>>,
     pub(crate) agent_broadcast_rx: Option<std::sync::mpsc::Receiver<AgentBroadcastMsg>>,
@@ -105,6 +109,8 @@ pub struct Interpreter {
         std::sync::Mutex<Vec<Box<dyn FnOnce(&mut Interpreter) + Send>>>,
         std::sync::Condvar,
     )>,
+    pub(crate) pending_async_jobs: Arc<AtomicUsize>,
+    pub(crate) pending_promise_roots: HashSet<u64>,
     pub(crate) iterator_next_cache: HashMap<u64, JsValue>,
     last_identifier_with_base: Option<u64>,
     pub(crate) async_gen_queues: HashMap<u64, std::collections::VecDeque<AsyncGenRequest>>,
@@ -238,7 +244,10 @@ impl Interpreter {
             next_function_is_method: false,
             is_agent_thread: false,
             can_block: false,
-            agent_reports: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+            agent_reports: Arc::new((
+                std::sync::Mutex::new(std::collections::VecDeque::new()),
+                std::sync::Condvar::new(),
+            )),
             agent_broadcast_txs: Vec::new(),
             agent_handles: Vec::new(),
             agent_broadcast_rx: None,
@@ -246,6 +255,8 @@ impl Interpreter {
                 std::sync::Mutex::new(Vec::new()),
                 std::sync::Condvar::new(),
             )),
+            pending_async_jobs: Arc::new(AtomicUsize::new(0)),
+            pending_promise_roots: HashSet::default(),
             iterator_next_cache: HashMap::default(),
             last_identifier_with_base: None,
             async_gen_queues: HashMap::default(),
@@ -501,7 +512,8 @@ impl Interpreter {
             "getReport".to_string(),
             0,
             |interp, _this, _args| {
-                let mut reports = interp.agent_reports.lock().unwrap();
+                let (ref reports_lock, _) = *interp.agent_reports;
+                let mut reports = reports_lock.lock().unwrap();
                 if let Some(report) = reports.pop_front() {
                     Completion::Normal(JsValue::String(JsString::from_str(&report)))
                 } else {
@@ -512,6 +524,62 @@ impl Interpreter {
         agent_obj
             .borrow_mut()
             .insert_builtin("getReport".to_string(), get_report_fn);
+
+        // $262.agent.getReportAsync()
+        let get_report_async_fn = self.create_function(JsFunction::native(
+            "getReportAsync".to_string(),
+            0,
+            |interp, _this, _args| {
+                let (resolve_fn, _reject_fn, promise_val) = interp.create_promise_parts();
+                interp.gc_root_value(&resolve_fn);
+
+                let immediate_report = {
+                    let (ref reports_lock, _) = *interp.agent_reports;
+                    reports_lock.lock().unwrap().pop_front()
+                };
+                if let Some(report) = immediate_report {
+                    let report_val = JsValue::String(JsString::from_str(&report));
+                    let _ = interp.call_function(&resolve_fn, &JsValue::Undefined, &[report_val]);
+                    interp.gc_unroot_value(&resolve_fn);
+                    return Completion::Normal(promise_val);
+                }
+
+                interp.pending_async_jobs.fetch_add(1, Ordering::SeqCst);
+                let reports = interp.agent_reports.clone();
+                let resolve = resolve_fn;
+                let pending = interp.agent_async_completions.clone();
+                let pending_jobs = interp.pending_async_jobs.clone();
+
+                std::thread::spawn(move || {
+                    let report = {
+                        let (ref reports_lock, ref reports_cvar) = *reports;
+                        let mut queue = reports_lock.lock().unwrap();
+                        loop {
+                            if let Some(report) = queue.pop_front() {
+                                break report;
+                            }
+                            queue = reports_cvar.wait(queue).unwrap();
+                        }
+                    };
+                    let report_val = JsValue::String(JsString::from_str(&report));
+                    let (ref mtx, ref completion_cvar) = *pending;
+                    mtx.lock()
+                        .unwrap()
+                        .push(Box::new(move |interp: &mut Interpreter| {
+                            let _ =
+                                interp.call_function(&resolve, &JsValue::Undefined, &[report_val]);
+                            interp.gc_unroot_value(&resolve);
+                        }));
+                    pending_jobs.fetch_sub(1, Ordering::SeqCst);
+                    completion_cvar.notify_one();
+                });
+
+                Completion::Normal(promise_val)
+            },
+        ));
+        agent_obj
+            .borrow_mut()
+            .insert_builtin("getReportAsync".to_string(), get_report_async_fn);
 
         // $262.agent.sleep(ms)
         let sleep_fn = self.create_function(JsFunction::native(
@@ -1272,7 +1340,7 @@ impl Interpreter {
             }
             SourceType::Module => self.run_module(program, None),
         };
-        self.drain_microtasks();
+        self.drain_microtasks_until_idle();
         result
     }
 
@@ -1288,7 +1356,7 @@ impl Interpreter {
                 }
                 let r = self.exec_statements(&program.body, &global);
                 // Drain microtasks before restoring path so async callbacks can use relative imports
-                self.drain_microtasks();
+                self.drain_microtasks_until_idle();
                 self.current_module_path = prev;
                 r
             }
@@ -1297,7 +1365,7 @@ impl Interpreter {
                 // Keep path set during microtask draining so async callbacks can use relative imports
                 let prev = self.current_module_path.take();
                 self.current_module_path = Some(path.to_path_buf());
-                self.drain_microtasks();
+                self.drain_microtasks_until_idle();
                 self.current_module_path = prev;
                 r
             }
@@ -4093,6 +4161,43 @@ impl Interpreter {
         }
     }
 
+    /// Drain already-queued jobs, then wait briefly for host async jobs such as
+    /// Atomics.waitAsync/getReportAsync when the top-level program is still pending them.
+    pub(crate) fn drain_microtasks_until_idle(&mut self) {
+        self.drain_microtasks();
+        if self.pending_async_jobs.load(Ordering::SeqCst) == 0 {
+            return;
+        }
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            self.drain_microtasks();
+            if self.pending_async_jobs.load(Ordering::SeqCst) == 0 {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+
+            let (ref mtx, ref cvar) = *self.agent_async_completions;
+            let lock = mtx.lock().unwrap();
+            if !lock.is_empty() {
+                drop(lock);
+                continue;
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let (_guard, _timeout_result) = cvar
+                .wait_timeout(lock, remaining.min(std::time::Duration::from_millis(100)))
+                .unwrap();
+            drop(_guard);
+        }
+
+        self.drain_microtasks();
+    }
+
     /// Like drain_microtasks but blocks waiting for async completions via Condvar.
     /// Used by agent threads that need to wait for waitAsync resolutions.
     pub(crate) fn drain_microtasks_blocking(&mut self) {
@@ -4501,7 +4606,9 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                 Ok(s) => s,
                 Err(e) => return Completion::Throw(e),
             };
-            interp.agent_reports.lock().unwrap().push_back(s);
+            let (ref reports_lock, ref reports_cvar) = *interp.agent_reports;
+            reports_lock.lock().unwrap().push_back(s);
+            reports_cvar.notify_one();
             Completion::Normal(JsValue::Undefined)
         },
     ));

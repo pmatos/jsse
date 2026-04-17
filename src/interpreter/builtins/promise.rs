@@ -754,6 +754,7 @@ impl Interpreter {
         data.promise_data = Some(PromiseData::new());
         let obj = Rc::new(RefCell::new(data));
         let id = self.allocate_object_slot(obj);
+        self.pending_promise_roots.insert(id);
         JsValue::Object(crate::types::JsObject { id })
     }
 
@@ -863,6 +864,7 @@ impl Interpreter {
         } else {
             return;
         };
+        self.pending_promise_roots.remove(&promise_id);
         self.trigger_promise_reactions(reactions, value);
     }
 
@@ -883,6 +885,7 @@ impl Interpreter {
         } else {
             return;
         };
+        self.pending_promise_roots.remove(&promise_id);
         self.trigger_promise_reactions(reactions, reason);
     }
 
