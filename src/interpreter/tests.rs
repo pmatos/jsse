@@ -166,6 +166,33 @@ fn module_cycle_preserves_live_bindings_and_reuses_registry_entries() {
 }
 
 #[test]
+fn missing_named_module_import_throws_syntax_error() {
+    let dir = temp_case_dir("module-missing-named-import");
+    let main_path = write_case_file(
+        &dir,
+        "main.js",
+        r#"
+        import { missing } from "./dep.js";
+        globalThis.value = missing;
+        "#,
+    );
+    write_case_file(&dir, "dep.js", r#"export const present = 1;"#);
+
+    let program = parse_module_program(&fs::read_to_string(&main_path).unwrap());
+    let mut interp = Interpreter::new();
+    let result = interp.run_with_path(&program, &main_path);
+    let err = match result {
+        Completion::Throw(err) => err,
+        other => panic!("expected thrown completion, got {other:?}"),
+    };
+    let message = interp.format_value(&err);
+    assert!(message.starts_with("SyntaxError: "));
+    assert!(message.contains("has no export named 'missing'"));
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
     let mut interp = Interpreter::new();
     let obj = interp.create_object();

@@ -1648,11 +1648,14 @@ impl Interpreter {
                 Err(e) => return Err(e),
             }
         } else {
-            return Err(JsValue::String(JsString::from_str(&format!(
-                "Module '{}' has no export named '{}'",
-                loaded.borrow().path.display(),
-                imported
-            ))));
+            return Err(self.create_error(
+                "SyntaxError",
+                &format!(
+                    "Module '{}' has no export named '{}'",
+                    loaded.borrow().path.display(),
+                    imported
+                ),
+            ));
         }
         Ok(())
     }
