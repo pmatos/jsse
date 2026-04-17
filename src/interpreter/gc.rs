@@ -62,6 +62,11 @@ impl Interpreter {
             for val in m.exports.values() {
                 Self::collect_value_roots(val, &mut worklist);
             }
+            if let Some((promise, resolve, reject)) = &m.top_level_capability {
+                Self::collect_value_roots(promise, &mut worklist);
+                Self::collect_value_roots(resolve, &mut worklist);
+                Self::collect_value_roots(reject, &mut worklist);
+            }
         }
         for module in self.synthetic_module_registry.values() {
             let m = module.borrow();

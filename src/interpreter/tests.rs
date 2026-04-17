@@ -166,6 +166,148 @@ fn module_cycle_preserves_live_bindings_and_reuses_registry_entries() {
 }
 
 #[test]
+fn dynamic_import_waits_for_async_module_fulfillment_in_leaf_to_root_order() {
+    let dir = temp_case_dir("issue-79-fulfillment");
+    let main_path = write_case_file(
+        &dir,
+        "main.js",
+        r#"
+        import { p1, pA_start, pB_start } from "./setup.js";
+
+        globalThis.result = "pending";
+        let logs = [];
+        const importsP = Promise.all([
+          pB_start.promise
+            .then(() => import("./a.js").finally(() => logs.push("A")))
+            .catch(() => {}),
+          import("./b.js").finally(() => logs.push("B")).catch(() => {}),
+        ]);
+
+        Promise.all([pA_start.promise, pB_start.promise]).then(p1.resolve);
+        importsP.then(() => { globalThis.result = logs.join(","); });
+        "#,
+    );
+    write_case_file(
+        &dir,
+        "setup.js",
+        r#"
+        export const p1 = Promise.withResolvers();
+        export const pA_start = Promise.withResolvers();
+        export const pB_start = Promise.withResolvers();
+        "#,
+    );
+    write_case_file(
+        &dir,
+        "a.js",
+        r#"
+        import "./a-sentinel.js";
+        import "./b.js";
+        "#,
+    );
+    write_case_file(
+        &dir,
+        "a-sentinel.js",
+        r#"
+        import { pA_start } from "./setup.js";
+        pA_start.resolve();
+        "#,
+    );
+    write_case_file(
+        &dir,
+        "b.js",
+        r#"
+        import "./b-sentinel.js";
+        import { p1 } from "./setup.js";
+        await p1.promise;
+        "#,
+    );
+    write_case_file(
+        &dir,
+        "b-sentinel.js",
+        r#"
+        import { pB_start } from "./setup.js";
+        pB_start.resolve();
+        "#,
+    );
+
+    let interp = run_module_with_path(&fs::read_to_string(&main_path).unwrap(), &main_path);
+    assert_eq!(global_string(&interp, "result"), "B,A");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn dynamic_import_waits_for_async_module_rejection_in_leaf_to_root_order() {
+    let dir = temp_case_dir("issue-79-rejection");
+    let main_path = write_case_file(
+        &dir,
+        "main.js",
+        r#"
+        import { p1, pA_start, pB_start } from "./setup.js";
+
+        globalThis.result = "pending";
+        let logs = [];
+        const importsP = Promise.all([
+          pB_start.promise
+            .then(() => import("./a.js").finally(() => logs.push("A")))
+            .catch(() => {}),
+          import("./b.js").finally(() => logs.push("B")).catch(() => {}),
+        ]);
+
+        Promise.all([pA_start.promise, pB_start.promise]).then(p1.reject);
+        importsP.then(() => { globalThis.result = logs.join(","); });
+        "#,
+    );
+    write_case_file(
+        &dir,
+        "setup.js",
+        r#"
+        export const p1 = Promise.withResolvers();
+        export const pA_start = Promise.withResolvers();
+        export const pB_start = Promise.withResolvers();
+        "#,
+    );
+    write_case_file(
+        &dir,
+        "a.js",
+        r#"
+        import "./a-sentinel.js";
+        import "./b.js";
+        "#,
+    );
+    write_case_file(
+        &dir,
+        "a-sentinel.js",
+        r#"
+        import { pA_start } from "./setup.js";
+        pA_start.resolve();
+        "#,
+    );
+    write_case_file(
+        &dir,
+        "b.js",
+        r#"
+        import "./b-sentinel.js";
+        import { p1 } from "./setup.js";
+        await p1.promise;
+        "#,
+    );
+    write_case_file(
+        &dir,
+        "b-sentinel.js",
+        r#"
+        import { pB_start } from "./setup.js";
+        pB_start.resolve();
+        "#,
+    );
+
+    let interp = run_module_with_path(&fs::read_to_string(&main_path).unwrap(), &main_path);
+    assert_eq!(global_string(&interp, "result"), "B,A");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
     let mut interp = Interpreter::new();
     let obj = interp.create_object();
