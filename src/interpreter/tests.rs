@@ -257,6 +257,48 @@ fn transitive_reexport_link_error_aborts_parent_before_evaluation() {
 }
 
 #[test]
+fn default_cannot_be_reexported_through_star_resolution() {
+    let dir = temp_case_dir("module-default-through-star");
+    let main_path = write_case_file(
+        &dir,
+        "main.mjs",
+        r#"
+        export { default } from "./indirect.mjs";
+        globalThis.marker = "ran";
+        "#,
+    );
+    write_case_file(
+        &dir,
+        "indirect.mjs",
+        r#"
+        export * from "./defaulted.mjs";
+        "#,
+    );
+    write_case_file(
+        &dir,
+        "defaulted.mjs",
+        r#"
+        const x = 1;
+        export { x as default };
+        "#,
+    );
+
+    let program = parse_module_program(&fs::read_to_string(&main_path).unwrap());
+    let mut interp = Interpreter::new();
+    let result = interp.run_with_path(&program, &main_path);
+
+    let err = match result {
+        Completion::Throw(err) => interp.format_value(&err),
+        other => panic!("expected module linking error, got {other:?}"),
+    };
+    assert!(err.contains("SyntaxError"), "unexpected error: {err}");
+    assert!(err.contains("default"), "unexpected error: {err}");
+    assert!(interp.realm().global_env.borrow().get("marker").is_none());
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
     let mut interp = Interpreter::new();
     let obj = interp.create_object();

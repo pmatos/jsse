@@ -3400,6 +3400,18 @@ impl Interpreter {
             return self.resolve_export(&resolved, &source_export, visited);
         }
 
+        // A default export cannot be provided by `export *`.
+        if export_name == "default" {
+            return Err(self.create_error(
+                "SyntaxError",
+                &format!(
+                    "Module '{}' has no export named '{}'",
+                    canon_path.display(),
+                    export_name
+                ),
+            ));
+        }
+
         // §16.2.1.6.3 step 8: check star re-exports
         let mut found_in_star = false;
         let mut first_star_source: Option<PathBuf> = None;
