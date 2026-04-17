@@ -7709,6 +7709,7 @@ impl Interpreter {
         gen_this: &JsValue,
         gen_id: u64,
         awaited_result: JsValue,
+        promise: &JsValue,
         resolve_fn: &JsValue,
         reject_fn: &JsValue,
         is_rejection: bool,
@@ -7831,7 +7832,22 @@ impl Interpreter {
                             pending_exception: Some(e),
                             pending_return: None,
                         });
-                    let _ = self.async_generator_next_state_machine(gen_this, JsValue::Undefined);
+                    self.async_gen_yield_pending = false;
+                    let _ = self.async_generator_next_state_machine_with_promise(
+                        gen_this,
+                        JsValue::Undefined,
+                        promise.clone(),
+                        resolve_fn.clone(),
+                        reject_fn.clone(),
+                    );
+                    if self.async_gen_yield_pending {
+                        self.async_gen_yield_pending = false;
+                        return;
+                    }
+                    if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+                        queue.pop_front();
+                    }
+                    self.async_gen_process_queue(gen_this);
                     return;
                 }
                 obj_rc.borrow_mut().iterator_state =
@@ -7886,7 +7902,22 @@ impl Interpreter {
                 pending_exception: None,
                 pending_return: None,
             });
-            let _ = self.async_generator_next_state_machine(gen_this, value);
+            self.async_gen_yield_pending = false;
+            let _ = self.async_generator_next_state_machine_with_promise(
+                gen_this,
+                value,
+                promise.clone(),
+                resolve_fn.clone(),
+                reject_fn.clone(),
+            );
+            if self.async_gen_yield_pending {
+                self.async_gen_yield_pending = false;
+                return;
+            }
+            if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+                queue.pop_front();
+            }
+            self.async_gen_process_queue(gen_this);
             return;
         }
 
@@ -8317,23 +8348,6 @@ impl Interpreter {
         }
     }
 
-    fn async_generator_next_state_machine(
-        &mut self,
-        this: &JsValue,
-        sent_value: JsValue,
-    ) -> Completion {
-        let promise = self.create_promise_object();
-        let promise_id = if let JsValue::Object(ref po) = promise {
-            po.id
-        } else {
-            0
-        };
-        let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-        self.async_generator_next_state_machine_with_promise(
-            this, sent_value, promise, resolve_fn, reject_fn,
-        )
-    }
-
     fn async_generator_next_state_machine_with_promise(
         &mut self,
         this: &JsValue,
@@ -8730,8 +8744,13 @@ impl Interpreter {
                                     pending_exception: None,
                                     pending_return: None,
                                 });
-                            return self
-                                .async_generator_next_state_machine(this, JsValue::Undefined);
+                            return self.async_generator_next_state_machine_with_promise(
+                                this,
+                                JsValue::Undefined,
+                                promise,
+                                resolve_fn,
+                                reject_fn,
+                            );
                         } else {
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
@@ -8893,9 +8912,12 @@ impl Interpreter {
                                             pending_exception: Some(e),
                                             pending_return: None,
                                         });
-                                    return self.async_generator_next_state_machine(
+                                    return self.async_generator_next_state_machine_with_promise(
                                         this,
                                         JsValue::Undefined,
+                                        promise,
+                                        resolve_fn,
+                                        reject_fn,
                                     );
                                 }
                             }
@@ -9151,6 +9173,29 @@ impl Interpreter {
                 // Check pending_return before executing state (handles .return() with no try/catch)
                 if let Some(ret_val) = pending_return.take() {
                     if current_try_stack.is_empty() {
+                        if let Some(iters) = self.generator_inline_iters.remove(&o.id) {
+                            for iter in iters {
+                                if let Err(e) = self.iterator_close_result(&iter) {
+                                    obj_rc.borrow_mut().iterator_state =
+                                        Some(IteratorState::StateMachineAsyncGenerator {
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                            execution_state: StateMachineExecutionState::Completed,
+                                            _sent_value: JsValue::Undefined,
+                                            try_stack: vec![],
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        });
+                                    let _ =
+                                        self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                    self.drain_microtasks();
+                                    return Completion::Normal(promise);
+                                }
+                            }
+                        }
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -9345,6 +9390,10 @@ impl Interpreter {
                     }
                     _ => yield_val,
                 };
+                let pending = std::mem::take(&mut self.pending_iter_close);
+                if !pending.is_empty() {
+                    self.generator_inline_iters.insert(o.id, pending);
+                }
                 // Any Completion::Yield from exec_statements is an inline yield:
                 // it came from a loop body or complex control flow that isn't
                 // decomposed by the state machine transformer. Use InlineYield
@@ -9564,6 +9613,7 @@ impl Interpreter {
                                 pending_return: None,
                             });
 
+                        let promise_c = promise.clone();
                         let resolve_fn_c = resolve_fn.clone();
                         let reject_fn_c = reject_fn.clone();
                         let gen_this = this.clone();
@@ -9581,6 +9631,7 @@ impl Interpreter {
                                     &gen_this,
                                     gen_id,
                                     awaited_result,
+                                    &promise_c,
                                     &resolve_fn_c,
                                     &reject_fn_c,
                                     false,
@@ -9589,6 +9640,7 @@ impl Interpreter {
                             },
                         ));
 
+                        let promise_c2 = promise.clone();
                         let reject_fn_c2 = reject_fn.clone();
                         let gen_this2 = this.clone();
                         let gen_id2 = o.id;
@@ -9601,6 +9653,7 @@ impl Interpreter {
                                     &gen_this2,
                                     gen_id2,
                                     reason,
+                                    &promise_c2,
                                     &JsValue::Undefined,
                                     &reject_fn_c2,
                                     true,
@@ -9695,6 +9748,10 @@ impl Interpreter {
                     let wrapped_state = self.get_promise_state(wrapped_id);
 
                     if matches!(wrapped_state, Some(PromiseState::Pending)) {
+                        let pending = std::mem::take(&mut self.pending_iter_close);
+                        if !pending.is_empty() {
+                            self.generator_inline_iters.insert(o.id, pending);
+                        }
                         // Suspend generator and register callbacks for when promise resolves
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
@@ -9797,13 +9854,31 @@ impl Interpreter {
                                 pending_exception: None,
                                 pending_return: None,
                             });
-                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                        let reject_fn_c2 = reject_fn.clone();
+                        let gen_this3 = this.clone();
+                        let gen_id3 = o.id;
+                        self.microtask_queue.push((
+                            vec![e.clone(), reject_fn_c2.clone(), gen_this3.clone()],
+                            Box::new(move |interp| {
+                                let _ =
+                                    interp.call_function(&reject_fn_c2, &JsValue::Undefined, &[e]);
+                                if let Some(queue) = interp.async_gen_queues.get_mut(&gen_id3) {
+                                    queue.pop_front();
+                                }
+                                interp.async_gen_process_queue(&gen_this3);
+                                Completion::Normal(JsValue::Undefined)
+                            }),
+                        ));
                         self.async_gen_yield_pending = true;
                         return Completion::Normal(promise);
                     } else {
                         yield_val
                     };
 
+                    let pending = std::mem::take(&mut self.pending_iter_close);
+                    if !pending.is_empty() {
+                        self.generator_inline_iters.insert(o.id, pending);
+                    }
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineAsyncGenerator {
                             state_machine,
@@ -10885,6 +10960,7 @@ impl Interpreter {
             }
         }
 
+        self.async_gen_yield_pending = false;
         let _ = self.async_generator_next_state_machine_with_promise(
             this,
             JsValue::Undefined,
@@ -10892,6 +10968,10 @@ impl Interpreter {
             resolve_fn.clone(),
             reject_fn.clone(),
         );
+        if self.async_gen_yield_pending {
+            self.async_gen_yield_pending = false;
+            return;
+        }
 
         // Pop the queue entry and process next
         if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
