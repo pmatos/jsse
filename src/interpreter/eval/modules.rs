@@ -733,7 +733,7 @@ impl Interpreter {
                             let _ = interp.call_function(
                                 &reject_root,
                                 &JsValue::Undefined,
-                                &[e.clone()],
+                                std::slice::from_ref(e),
                             );
                             return Completion::Normal(JsValue::Undefined);
                         }
