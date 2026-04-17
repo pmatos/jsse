@@ -695,26 +695,18 @@ impl Interpreter {
                 }
                 return self.create_rejected_promise(e.clone());
             }
-            // Drain microtasks to complete TLA module evaluation
-            self.drain_microtasks();
-            // Check if module evaluation failed (e.g. await rejected)
-            if let Some(err) = module.borrow().error.clone() {
-                return self.create_rejected_promise(err);
-            }
-            let ns = self.create_module_namespace(&module);
-            return self.create_resolved_promise(ns);
+            let (resolve, reject, promise) = self.create_promise_parts();
+            return self.settle_dynamic_import_promise(&module, promise, resolve, reject);
         }
 
         // Inside static module evaluation — defer to microtask so we don't
         // preempt the current module's DFS evaluation order
-        let promise = self.create_promise_object();
-        let pid = if let JsValue::Object(ref o) = promise {
-            o.id
-        } else {
-            0
-        };
+        let (resolve, reject, promise) = self.create_promise_parts();
         let resolved_path = resolved.clone();
         let promise_root = promise.clone();
+        let promise_for_settle = promise.clone();
+        let resolve_root = resolve.clone();
+        let reject_root = reject.clone();
 
         self.microtask_queue.push((
             vec![promise_root],
@@ -738,19 +730,22 @@ impl Interpreter {
                                     }
                                 }
                             }
-                            interp.reject_promise(pid, e.clone());
+                            let _ = interp.call_function(
+                                &reject_root,
+                                &JsValue::Undefined,
+                                &[e.clone()],
+                            );
                             return Completion::Normal(JsValue::Undefined);
                         }
-                        interp.drain_microtasks();
-                        if let Some(err) = m.borrow().error.clone() {
-                            interp.reject_promise(pid, err);
-                            return Completion::Normal(JsValue::Undefined);
-                        }
-                        let ns = interp.create_module_namespace(&m);
-                        interp.fulfill_promise(pid, ns);
+                        let _ = interp.settle_dynamic_import_promise(
+                            &m,
+                            promise_for_settle.clone(),
+                            resolve_root.clone(),
+                            reject_root.clone(),
+                        );
                     }
                     Err(e) => {
-                        interp.reject_promise(pid, e);
+                        let _ = interp.call_function(&reject_root, &JsValue::Undefined, &[e]);
                     }
                 }
                 Completion::Normal(JsValue::Undefined)
@@ -758,6 +753,84 @@ impl Interpreter {
         ));
 
         Completion::Normal(promise)
+    }
+
+    fn settle_dynamic_import_promise(
+        &mut self,
+        module: &Rc<RefCell<LoadedModule>>,
+        promise: JsValue,
+        resolve: JsValue,
+        reject: JsValue,
+    ) -> Completion {
+        if let Some(err) = module.borrow().error.clone() {
+            let _ = self.call_function(&reject, &JsValue::Undefined, &[err]);
+            return Completion::Normal(promise);
+        }
+
+        let evaluation_promise = match self.ensure_module_evaluation_promise(module) {
+            Ok(promise) => promise,
+            Err(err) => {
+                let _ = self.call_function(&reject, &JsValue::Undefined, &[err]);
+                return Completion::Normal(promise);
+            }
+        };
+
+        if let Some(eval_promise) = evaluation_promise {
+            let module_for_ns = module.clone();
+            let on_fulfilled = self.create_function(JsFunction::native(
+                "dynamicImportFulfilled".to_string(),
+                1,
+                move |interp, _this, _args| {
+                    Completion::Normal(interp.create_module_namespace(&module_for_ns))
+                },
+            ));
+            return self.perform_promise_then(
+                &eval_promise,
+                &on_fulfilled,
+                &JsValue::Undefined,
+                promise,
+                resolve,
+                reject,
+            );
+        }
+
+        let ns = self.create_module_namespace(module);
+        let _ = self.call_function(&resolve, &JsValue::Undefined, &[ns]);
+        Completion::Normal(promise)
+    }
+
+    fn ensure_module_evaluation_promise(
+        &mut self,
+        module: &Rc<RefCell<LoadedModule>>,
+    ) -> Result<Option<JsValue>, JsValue> {
+        let root_path = {
+            let m = module.borrow();
+            m.cycle_root
+                .clone()
+                .unwrap_or_else(|| m.path.canonicalize().unwrap_or_else(|_| m.path.clone()))
+        };
+        let root_module = self
+            .module_registry
+            .get(&root_path)
+            .cloned()
+            .unwrap_or_else(|| module.clone());
+
+        {
+            let root = root_module.borrow();
+            if let Some(err) = root.error.clone() {
+                return Err(err);
+            }
+            if root.evaluated || root.async_evaluation_order.is_none() {
+                return Ok(None);
+            }
+            if let Some((promise, _, _)) = root.top_level_capability.clone() {
+                return Ok(Some(promise));
+            }
+        }
+
+        let (resolve, reject, promise) = self.create_promise_parts();
+        root_module.borrow_mut().top_level_capability = Some((promise.clone(), resolve, reject));
+        Ok(Some(promise))
     }
 
     pub(crate) fn create_error_in_realm(
