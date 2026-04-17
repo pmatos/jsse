@@ -49,7 +49,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
     - `date.rs` — setup_date_builtin
 - `scripts/` — Test runners and utilities
 - `plan/` — Per-phase implementation plans
-- `test262-pass.txt` — Tracks currently passing test262 tests (updated by the test runner)
+- `test262-pass.txt` — Regression baseline of currently passing test262 tests. **Not rewritten by default.** The runner reads the baseline from `origin/main:test262-pass.txt` (override with `--baseline-ref`) so feature branches don't conflict on it. Pass `--update-baseline` to rewrite the working-tree file — typically only done on `main` (or a branch targeting it) to roll the baseline forward.
 - `test262-extra/` — Custom spec-compliance tests not covered by test262
 
 ## Building
@@ -59,8 +59,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 ## Testing
 - Primary validation: test262 suite
 - Custom tests: `tests/` directory
-- After any implementation work, run the full test262 suite and update README.md progress.
-- Update README progress with `python3 scripts/update-readme.py` after a full test262 run.
+- After any implementation work, run the full test262 suite.
 - Run test262: `uv run python scripts/run-test262.py`
 - Run linter: `./scripts/lint.sh`
 - Python scripts are run via `uv run python` (no virtualenv setup needed).

@@ -562,6 +562,22 @@ examples:
         ),
     )
     parser.add_argument(
+        "--update-baseline",
+        action="store_true",
+        help=(
+            "Write the current pass list to test262-pass.txt. Without this flag, "
+            "the file is read-only and baseline comparison uses origin/main's copy."
+        ),
+    )
+    parser.add_argument(
+        "--baseline-ref",
+        default="origin/main",
+        help=(
+            "Git ref to read the pass baseline from (default: origin/main). "
+            "Falls back to the working-tree file if the ref is unavailable."
+        ),
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -759,13 +775,28 @@ def main():
         baseline_file = Path(f"test262-pass-{engine_name}.txt")
         fail_file = Path(f"/tmp/test262-fail-{engine_name}.txt")
 
-    # Regression detection
+    # Regression detection. For jsse, prefer the baseline at a git ref so that
+    # feature branches don't conflict on test262-pass.txt.
     regressions: list[str] = []
     new_passes: list[str] = []
     ran_tests = set(pass_list + fail_list)
     is_full_run = not args.paths
-    if baseline_file.exists():
-        baseline = set(baseline_file.read_text().strip().split("\n"))
+    baseline_source = None
+    baseline_text: str | None = None
+    if engine_name == "jsse":
+        try:
+            baseline_text = subprocess.check_output(
+                ["git", "show", f"{args.baseline_ref}:{baseline_file}"],
+                stderr=subprocess.DEVNULL,
+            ).decode("utf-8")
+            baseline_source = f"{args.baseline_ref}:{baseline_file}"
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            baseline_text = None
+    if baseline_text is None and baseline_file.exists():
+        baseline_text = baseline_file.read_text()
+        baseline_source = str(baseline_file)
+    if baseline_text is not None:
+        baseline = {line for line in baseline_text.strip().split("\n") if line}
         current = set(pass_list)
         regressions = sorted((baseline & ran_tests) - current)
         new_passes = sorted(current - baseline)
@@ -777,6 +808,8 @@ def main():
         print(f"Sample:  {args.sample*100:.1f}% (seed={args.seed})")
     elif selected_paths:
         print(f"Paths:   {', '.join(selected_paths)}")
+    if baseline_source:
+        print(f"Baseline: {baseline_source}")
     print(f"Files:   {num_files}")
     print(f"Scenarios: {total}")
     print(f"Run:     {run_total}")
@@ -797,7 +830,12 @@ def main():
 
     if is_full_run and not is_sample_run:
         pass_list.sort()
-        baseline_file.write_text("\n".join(pass_list) + "\n")
+        if engine_name != "jsse" or args.update_baseline:
+            baseline_file.write_text("\n".join(pass_list) + "\n")
+        elif regressions or new_passes:
+            print(
+                f"\n(baseline unchanged; pass --update-baseline to rewrite {baseline_file})"
+            )
 
     fail_list.sort()
     fail_file.write_text("\n".join(fail_list) + "\n")
