@@ -124,6 +124,26 @@ fn dynamic_import_uses_run_path_during_microtask_drain() {
 }
 
 #[test]
+fn dynamic_import_keeps_resolvers_alive_across_gc_during_module_evaluation() {
+    let dir = temp_case_dir("dynamic-import-gc");
+    let main_path = write_case_file(
+        &dir,
+        "main.js",
+        r#"
+        globalThis.imported = "pending";
+        import("./dep.js").then(ns => { globalThis.imported = ns.value; });
+        $262.gc();
+        "#,
+    );
+    write_case_file(&dir, "dep.js", r#"export const value = "loaded";"#);
+
+    let interp = run_module_with_path(&fs::read_to_string(&main_path).unwrap(), &main_path);
+    assert_eq!(global_string(&interp, "imported"), "loaded");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn module_cycle_preserves_live_bindings_and_reuses_registry_entries() {
     let dir = temp_case_dir("module-cycle");
     let main_path = write_case_file(
