@@ -8,7 +8,7 @@ An agent-coded JS engine in Rust. I didn't touch a single line of code here. Not
 
 | Test Files | Scenarios | Passing | Failing | Pass Rate |
 |------------|-----------|---------|---------|-----------|
-| 51,525     | 99,020    | 99,020  | 0       | 100.00%   |
+| 51,525     | 99,020    | 98,942  | 78      | 99.92%    |
 
 Covers `language/`, `built-ins/`, `annexB/`, and `intl402/`.
 
