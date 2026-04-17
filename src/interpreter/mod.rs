@@ -1434,12 +1434,17 @@ impl Interpreter {
                         }
                         None if is_deferred => {
                             if let Err(e) = self.load_module_no_eval(&resolved) {
+                                Self::cache_module_error(&loaded_module, &e);
                                 self.current_module_path = prev_module_path;
                                 return Completion::Throw(e);
                             }
                         }
                         None => {
-                            let _ = self.load_module(&resolved);
+                            if let Err(e) = self.load_module(&resolved) {
+                                Self::cache_module_error(&loaded_module, &e);
+                                self.current_module_path = prev_module_path;
+                                return Completion::Throw(e);
+                            }
                         }
                     }
                 }
@@ -1453,6 +1458,7 @@ impl Interpreter {
                 && let Err(e) =
                     self.process_star_reexport(source, exported.as_ref(), &loaded_module)
             {
+                Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_module_path;
                 return Completion::Throw(e);
             }
@@ -1463,6 +1469,7 @@ impl Interpreter {
             if let ModuleItem::ImportDeclaration(import) = item
                 && let Err(e) = self.process_import(import, &module_env)
             {
+                Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_module_path;
                 return Completion::Throw(e);
             }
@@ -1478,6 +1485,7 @@ impl Interpreter {
                 }) = item
                     && let Err(e) = self.validate_named_reexports(canon_path, source, specifiers)
                 {
+                    Self::cache_module_error(&loaded_module, &e);
                     self.current_module_path = prev_module_path;
                     return Completion::Throw(e);
                 }
@@ -1487,6 +1495,7 @@ impl Interpreter {
         // Fourth pass: evaluate via inner_module_evaluation (Tarjan SCC + async protocol)
         let mut stack = vec![];
         if let Err(ref e) = self.inner_module_evaluation(&canon_path_entry, &mut stack, 0) {
+            Self::cache_module_error(&loaded_module, e);
             // Per spec §16.2.1.5.3 step 9: mark all modules on stack as evaluated with error
             for m_path in &stack {
                 if let Some(m) = self.module_registry.get(m_path) {
@@ -1648,11 +1657,14 @@ impl Interpreter {
                 Err(e) => return Err(e),
             }
         } else {
-            return Err(JsValue::String(JsString::from_str(&format!(
-                "Module '{}' has no export named '{}'",
-                loaded.borrow().path.display(),
-                imported
-            ))));
+            return Err(self.create_error(
+                "SyntaxError",
+                &format!(
+                    "Module '{}' has no export named '{}'",
+                    loaded.borrow().path.display(),
+                    imported
+                ),
+            ));
         }
         Ok(())
     }
@@ -1778,6 +1790,10 @@ impl Interpreter {
             "Cannot resolve bare module specifier '{}'",
             specifier
         ))))
+    }
+
+    fn cache_module_error(module: &Rc<RefCell<LoadedModule>>, err: &JsValue) {
+        module.borrow_mut().error = Some(err.clone());
     }
 
     fn load_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
@@ -2021,7 +2037,11 @@ impl Interpreter {
                             self.load_module_no_eval(&resolved)?;
                         }
                         None => {
-                            let _ = self.load_module(&resolved);
+                            if let Err(e) = self.load_module(&resolved) {
+                                Self::cache_module_error(&loaded_module, &e);
+                                self.current_module_path = prev_path;
+                                return Err(e);
+                            }
                         }
                     }
                 }
@@ -2032,15 +2052,23 @@ impl Interpreter {
         // so that self-importing namespaces include star re-exported keys
         for item in &program.module_items {
             if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
+                && let Err(e) =
+                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
             {
-                self.process_star_reexport(source, exported.as_ref(), &loaded_module)?;
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
+                return Err(e);
             }
         }
 
         // Third pass: process imports (after re-exports)
         for item in &program.module_items {
-            if let ModuleItem::ImportDeclaration(import) = item {
-                self.process_import(import, &module_env)?;
+            if let ModuleItem::ImportDeclaration(import) = item
+                && let Err(e) = self.process_import(import, &module_env)
+            {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
+                return Err(e);
             }
         }
 
@@ -2056,7 +2084,7 @@ impl Interpreter {
                     && let Err(e) = self.validate_named_reexports(&canon, source, specifiers)
                 {
                     self.current_module_path = prev_path;
-                    loaded_module.borrow_mut().error = Some(e.clone());
+                    Self::cache_module_error(&loaded_module, &e);
                     return Err(e);
                 }
             }
@@ -2074,6 +2102,9 @@ impl Interpreter {
         let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
         if let Some(existing) = self.module_registry.get(&canon_path) {
+            if let Some(ref err) = existing.borrow().error.clone() {
+                return Err(err.clone());
+            }
             return Ok(existing.clone());
         }
 
@@ -2216,6 +2247,8 @@ impl Interpreter {
                         None => self.load_module_no_eval(&resolved),
                     };
                     if let Err(e) = result {
+                        Self::cache_module_error(&loaded_module, &e);
+                        self.current_module_path = prev_path;
                         self.loading_deferred = prev_loading_deferred;
                         return Err(e);
                     }
@@ -2229,6 +2262,8 @@ impl Interpreter {
                 && let Err(e) =
                     self.process_star_reexport(source, exported.as_ref(), &loaded_module)
             {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
                 self.loading_deferred = prev_loading_deferred;
                 return Err(e);
             }
@@ -2239,6 +2274,8 @@ impl Interpreter {
             if let ModuleItem::ImportDeclaration(import) = item
                 && let Err(e) = self.process_import(import, &module_env)
             {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
                 self.loading_deferred = prev_loading_deferred;
                 return Err(e);
             }
@@ -2257,7 +2294,7 @@ impl Interpreter {
                 {
                     self.loading_deferred = prev_loading_deferred;
                     self.current_module_path = prev_path;
-                    loaded_module.borrow_mut().error = Some(e.clone());
+                    Self::cache_module_error(&loaded_module, &e);
                     return Err(e);
                 }
             }
@@ -3361,6 +3398,18 @@ impl Interpreter {
         if let Some((source_specifier, source_export)) = reexport_info {
             let resolved = self.resolve_module_specifier(&source_specifier, Some(&canon_path))?;
             return self.resolve_export(&resolved, &source_export, visited);
+        }
+
+        // A default export cannot be provided by `export *`.
+        if export_name == "default" {
+            return Err(self.create_error(
+                "SyntaxError",
+                &format!(
+                    "Module '{}' has no export named '{}'",
+                    canon_path.display(),
+                    export_name
+                ),
+            ));
         }
 
         // §16.2.1.6.3 step 8: check star re-exports
