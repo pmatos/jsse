@@ -4221,15 +4221,13 @@ impl Interpreter {
         self.drain_microtasks();
     }
 
-    /// True if any tracked pending host-async Promise has reactions registered
-    /// (i.e. JS code is awaiting/handling it) or any queued microtasks / suspended
-    /// async functions could still produce work, given that a host worker is in flight.
+    /// True if any tracked pending host-async Promise has reactions registered,
+    /// meaning JS code is awaiting / handling it. Unrelated suspended async
+    /// functions or queued microtasks do not count — only per-promise evidence
+    /// tied to an in-flight host worker.
     fn has_awaited_pending_async(&self) -> bool {
         if self.pending_async_jobs.load(Ordering::SeqCst) == 0 {
             return false;
-        }
-        if !self.async_function_states.is_empty() || !self.microtask_queue.is_empty() {
-            return true;
         }
         let ids = self.pending_async_promise_ids.lock().unwrap();
         for &id in ids.iter() {
