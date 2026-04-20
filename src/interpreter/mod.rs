@@ -110,6 +110,11 @@ pub struct Interpreter {
         std::sync::Condvar,
     )>,
     pub(crate) pending_async_jobs: Arc<AtomicUsize>,
+    /// Promise IDs whose resolution is blocked on a host-async worker thread
+    /// (e.g. Atomics.waitAsync, $262.agent.getReportAsync). Used by
+    /// drain_microtasks_until_idle to decide whether pending host work is
+    /// actually awaited by JS code (Promise has reactions) versus detached.
+    pub(crate) pending_async_promise_ids: Arc<std::sync::Mutex<std::collections::HashSet<u64>>>,
     pub(crate) iterator_next_cache: HashMap<u64, JsValue>,
     last_identifier_with_base: Option<u64>,
     pub(crate) async_gen_queues: HashMap<u64, std::collections::VecDeque<AsyncGenRequest>>,
@@ -255,6 +260,9 @@ impl Interpreter {
                 std::sync::Condvar::new(),
             )),
             pending_async_jobs: Arc::new(AtomicUsize::new(0)),
+            pending_async_promise_ids: Arc::new(std::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
             iterator_next_cache: HashMap::default(),
             last_identifier_with_base: None,
             async_gen_queues: HashMap::default(),
@@ -547,6 +555,15 @@ impl Interpreter {
                 let resolve = resolve_fn;
                 let pending = interp.agent_async_completions.clone();
                 let pending_jobs = interp.pending_async_jobs.clone();
+                let pending_promise_ids = interp.pending_async_promise_ids.clone();
+                let promise_id = if let JsValue::Object(ref o) = promise_val {
+                    o.id
+                } else {
+                    0
+                };
+                if promise_id != 0 {
+                    pending_promise_ids.lock().unwrap().insert(promise_id);
+                }
 
                 std::thread::spawn(move || {
                     let report = {
@@ -568,6 +585,9 @@ impl Interpreter {
                                 interp.call_function(&resolve, &JsValue::Undefined, &[report_val]);
                             interp.gc_unroot_value(&resolve);
                         }));
+                    if promise_id != 0 {
+                        pending_promise_ids.lock().unwrap().remove(&promise_id);
+                    }
                     pending_jobs.fetch_sub(1, Ordering::SeqCst);
                     completion_cvar.notify_one();
                 });
@@ -4159,18 +4179,23 @@ impl Interpreter {
         }
     }
 
-    /// Drain already-queued jobs, then wait briefly for host async jobs such as
-    /// Atomics.waitAsync/getReportAsync when the top-level program is still pending them.
+    /// Drain already-queued jobs, then wait for host async jobs such as
+    /// Atomics.waitAsync/getReportAsync when JS code is still awaiting them.
+    ///
+    /// A pending host-async Promise is considered "awaited" if it has any
+    /// fulfill/reject reactions registered (from `.then` / `await`). Detached
+    /// fire-and-forget host async work (e.g. `Atomics.waitAsync(ta, 0, 0, Infinity)`
+    /// with no `.then` / `await`) does not block process exit.
     pub(crate) fn drain_microtasks_until_idle(&mut self) {
         self.drain_microtasks();
-        if self.pending_async_jobs.load(Ordering::SeqCst) == 0 {
+        if !self.has_awaited_pending_async() {
             return;
         }
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         loop {
             self.drain_microtasks();
-            if self.pending_async_jobs.load(Ordering::SeqCst) == 0 {
+            if !self.has_awaited_pending_async() {
                 break;
             }
             if std::time::Instant::now() >= deadline {
@@ -4194,6 +4219,28 @@ impl Interpreter {
         }
 
         self.drain_microtasks();
+    }
+
+    /// True if any tracked pending host-async Promise has reactions registered
+    /// (i.e. JS code is awaiting/handling it) or any queued microtasks / suspended
+    /// async functions could still produce work, given that a host worker is in flight.
+    fn has_awaited_pending_async(&self) -> bool {
+        if self.pending_async_jobs.load(Ordering::SeqCst) == 0 {
+            return false;
+        }
+        if !self.async_function_states.is_empty() || !self.microtask_queue.is_empty() {
+            return true;
+        }
+        let ids = self.pending_async_promise_ids.lock().unwrap();
+        for &id in ids.iter() {
+            if let Some(obj) = self.get_object(id)
+                && let Some(ref pd) = obj.borrow().promise_data
+                && (!pd.fulfill_reactions.is_empty() || !pd.reject_reactions.is_empty())
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// Like drain_microtasks but blocks waiting for async completions via Condvar.
