@@ -93,7 +93,6 @@ When adding or debugging a built-in, start in `builtins/mod.rs` to find the setu
 - `src/main.rs`: CLI entrypoint for file execution, `-e`, and REPL
 - `scripts/run-test262.py`: primary conformance runner
 - `scripts/run-custom-tests.py`: custom repo tests
-- `scripts/update-readme.py`: updates or validates the managed README test262 progress table
 
 ## Validation Flow
 
@@ -101,6 +100,6 @@ The main validation target is test262. A typical workflow is:
 
 1. build with `cargo build --release`
 2. run targeted or full `test262` via `uv run python scripts/run-test262.py`
-3. update the managed README progress table with `python3 scripts/update-readme.py` after a full run
+3. review the full-run results and update any published documentation you intend to keep current
 
 Custom tests in `tests/` and the CI workflow complement test262, but test262 remains the primary correctness signal for language and built-in behavior.
