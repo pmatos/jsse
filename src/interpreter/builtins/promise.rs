@@ -754,7 +754,6 @@ impl Interpreter {
         data.promise_data = Some(PromiseData::new());
         let obj = Rc::new(RefCell::new(data));
         let id = self.allocate_object_slot(obj);
-        self.pending_promise_roots.insert(id);
         JsValue::Object(crate::types::JsObject { id })
     }
 
@@ -844,6 +843,25 @@ impl Interpreter {
             },
         ));
 
+        // The native closures above capture promise_id as a bare u64, which is
+        // invisible to the GC. Pin the Promise via gc_native_roots on both
+        // resolving functions so the Promise survives as long as either
+        // resolve or reject is reachable.
+        if promise_id != 0 {
+            let pin = JsValue::Object(crate::types::JsObject { id: promise_id });
+            for fn_val in [&resolve_fn, &reject_fn] {
+                if let JsValue::Object(o) = fn_val
+                    && let Some(fn_obj) = self.get_object(o.id)
+                {
+                    let mut borrowed = fn_obj.borrow_mut();
+                    borrowed
+                        .gc_native_roots
+                        .get_or_insert_with(Vec::new)
+                        .push(pin.clone());
+                }
+            }
+        }
+
         (resolve_fn, reject_fn)
     }
 
@@ -864,7 +882,6 @@ impl Interpreter {
         } else {
             return;
         };
-        self.pending_promise_roots.remove(&promise_id);
         self.trigger_promise_reactions(reactions, value);
     }
 
@@ -885,7 +902,6 @@ impl Interpreter {
         } else {
             return;
         };
-        self.pending_promise_roots.remove(&promise_id);
         self.trigger_promise_reactions(reactions, reason);
     }
 

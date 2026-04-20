@@ -82,7 +82,6 @@ impl Interpreter {
         }
         // Temporary roots (iterators, etc.)
         worklist.extend_from_slice(&self.gc_temp_roots);
-        worklist.extend(self.pending_promise_roots.iter().copied());
         // Root values captured in pending microtask closures
         for (roots, _) in &self.microtask_queue {
             for val in roots {
