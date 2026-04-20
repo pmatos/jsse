@@ -5929,7 +5929,9 @@ impl Interpreter {
                 let inline_prev = ctx_after.map(|c| c.prev_sent_values).unwrap_or_default();
                 // Save any iterators that need IteratorClose if generator.return() is called
                 let pending = std::mem::take(&mut self.pending_iter_close);
-                if !pending.is_empty() {
+                if pending.is_empty() {
+                    self.generator_inline_iters.remove(&o.id);
+                } else {
                     self.generator_inline_iters.insert(o.id, pending);
                 }
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
@@ -6349,7 +6351,9 @@ impl Interpreter {
 
                     // Save any iterators that need IteratorClose if generator.return() is called
                     let pending = std::mem::take(&mut self.pending_iter_close);
-                    if !pending.is_empty() {
+                    if pending.is_empty() {
+                        self.generator_inline_iters.remove(&o.id);
+                    } else {
                         self.generator_inline_iters.insert(o.id, pending);
                     }
                     obj_rc.borrow_mut().iterator_state =
@@ -9425,7 +9429,9 @@ impl Interpreter {
                     _ => yield_val,
                 };
                 let pending = std::mem::take(&mut self.pending_iter_close);
-                if !pending.is_empty() {
+                if pending.is_empty() {
+                    self.generator_inline_iters.remove(&o.id);
+                } else {
                     self.generator_inline_iters.insert(o.id, pending);
                 }
                 // Any Completion::Yield from exec_statements is an inline yield:
@@ -9787,7 +9793,9 @@ impl Interpreter {
 
                     if matches!(wrapped_state, Some(PromiseState::Pending)) {
                         let pending = std::mem::take(&mut self.pending_iter_close);
-                        if !pending.is_empty() {
+                        if pending.is_empty() {
+                            self.generator_inline_iters.remove(&o.id);
+                        } else {
                             self.generator_inline_iters.insert(o.id, pending);
                         }
                         // Suspend generator and register callbacks for when promise resolves
@@ -9915,7 +9923,9 @@ impl Interpreter {
                     };
 
                     let pending = std::mem::take(&mut self.pending_iter_close);
-                    if !pending.is_empty() {
+                    if pending.is_empty() {
+                        self.generator_inline_iters.remove(&o.id);
+                    } else {
                         self.generator_inline_iters.insert(o.id, pending);
                     }
                     obj_rc.borrow_mut().iterator_state =
