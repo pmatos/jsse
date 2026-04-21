@@ -3343,12 +3343,22 @@ fn is_v_flag_reserved_double_punctuator(a: char, b: char) -> bool {
         )
 }
 
+const MAX_V_FLAG_CLASS_NESTING_DEPTH: usize = 256;
+
 fn validate_v_flag_class_inner(
     chars: &[char],
     i: &mut usize,
     source: &str,
     negated: bool,
+    depth: usize,
 ) -> Result<(), String> {
+    if depth > MAX_V_FLAG_CLASS_NESTING_DEPTH {
+        return Err(format!(
+            "Invalid regular expression: /{}/ : Character class nesting too deep",
+            source
+        ));
+    }
+
     let len = chars.len();
     let err = |msg: &str| -> Result<(), String> {
         Err(format!(
@@ -3402,7 +3412,7 @@ fn validate_v_flag_class_inner(
             } else {
                 false
             };
-            validate_v_flag_class_inner(chars, i, source, nested_negated)?;
+            validate_v_flag_class_inner(chars, i, source, nested_negated, depth + 1)?;
             has_operand = true;
             continue;
         }
@@ -3802,7 +3812,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
             };
 
             if v_flag {
-                validate_v_flag_class_inner(&chars, &mut i, source, class_negated)?;
+                validate_v_flag_class_inner(&chars, &mut i, source, class_negated, 0)?;
             } else {
                 let mut prev_value: Option<u32> = None;
                 let mut prev_is_class_escape = false;
