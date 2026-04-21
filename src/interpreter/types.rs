@@ -8,8 +8,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{
-    AtomicI8, AtomicI16, AtomicI32, AtomicI64, AtomicU8, AtomicU16, AtomicU32, AtomicU64,
-    AtomicUsize, Ordering,
+    AtomicU64, AtomicUsize, Ordering,
 };
 
 static NEXT_SAB_ID: AtomicU64 = AtomicU64::new(1);
@@ -110,10 +109,11 @@ impl SharedBufferInner {
         if offset + size > self.len() {
             return None;
         }
-        let guard = self.words.read().unwrap();
-        let base = guard.as_ptr() as *mut u8;
+        let mut guard = self.words.write().unwrap();
+        let base = guard.as_mut_ptr() as *mut u8;
         Some(f(unsafe { base.add(offset) as *mut T }))
     }
+
 }
 
 impl std::fmt::Debug for SharedBufferInner {
@@ -2806,74 +2806,68 @@ fn typed_array_get_index_shared(
     offset: usize,
 ) -> JsValue {
     match kind {
-        TypedArrayKind::Int8 => {
-            let v = sab
-                .with_atomic_ptr::<i8, _>(offset, 1, |ptr| unsafe {
-                    AtomicI8::from_ptr(ptr).load(Ordering::SeqCst)
-                })
-                .unwrap_or(0);
+        TypedArrayKind::Int8 => sab.with_read(|buf| {
+            if offset + 1 > buf.len() {
+                return JsValue::Undefined;
+            }
+            JsValue::Number(buf[offset] as i8 as f64)
+        }),
+        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => sab.with_read(|buf| {
+            if offset + 1 > buf.len() {
+                return JsValue::Undefined;
+            }
+            JsValue::Number(buf[offset] as f64)
+        }),
+        TypedArrayKind::Int16 => sab.with_read(|buf| {
+            if offset + 2 > buf.len() {
+                return JsValue::Undefined;
+            }
+            let v = i16::from_ne_bytes([buf[offset], buf[offset + 1]]);
             JsValue::Number(v as f64)
-        }
-        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => {
-            let v = sab
-                .with_atomic_ptr::<u8, _>(offset, 1, |ptr| unsafe {
-                    AtomicU8::from_ptr(ptr).load(Ordering::SeqCst)
-                })
-                .unwrap_or(0);
+        }),
+        TypedArrayKind::Uint16 => sab.with_read(|buf| {
+            if offset + 2 > buf.len() {
+                return JsValue::Undefined;
+            }
+            let v = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
             JsValue::Number(v as f64)
-        }
-        TypedArrayKind::Int16 => {
-            let v = sab
-                .with_atomic_ptr::<i16, _>(offset, 2, |ptr| unsafe {
-                    AtomicI16::from_ptr(ptr).load(Ordering::SeqCst)
-                })
-                .unwrap_or(0);
+        }),
+        TypedArrayKind::Int32 => sab.with_read(|buf| {
+            if offset + 4 > buf.len() {
+                return JsValue::Undefined;
+            }
+            let v =
+                i32::from_ne_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]]);
             JsValue::Number(v as f64)
-        }
-        TypedArrayKind::Uint16 => {
-            let v = sab
-                .with_atomic_ptr::<u16, _>(offset, 2, |ptr| unsafe {
-                    AtomicU16::from_ptr(ptr).load(Ordering::SeqCst)
-                })
-                .unwrap_or(0);
+        }),
+        TypedArrayKind::Uint32 => sab.with_read(|buf| {
+            if offset + 4 > buf.len() {
+                return JsValue::Undefined;
+            }
+            let v =
+                u32::from_ne_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]]);
             JsValue::Number(v as f64)
-        }
-        TypedArrayKind::Int32 => {
-            let v = sab
-                .with_atomic_ptr::<i32, _>(offset, 4, |ptr| unsafe {
-                    AtomicI32::from_ptr(ptr).load(Ordering::SeqCst)
-                })
-                .unwrap_or(0);
-            JsValue::Number(v as f64)
-        }
-        TypedArrayKind::Uint32 => {
-            let v = sab
-                .with_atomic_ptr::<u32, _>(offset, 4, |ptr| unsafe {
-                    AtomicU32::from_ptr(ptr).load(Ordering::SeqCst)
-                })
-                .unwrap_or(0);
-            JsValue::Number(v as f64)
-        }
-        TypedArrayKind::BigInt64 => {
-            let v = sab
-                .with_atomic_ptr::<i64, _>(offset, 8, |ptr| unsafe {
-                    AtomicI64::from_ptr(ptr).load(Ordering::SeqCst)
-                })
-                .unwrap_or(0);
+        }),
+        TypedArrayKind::BigInt64 => sab.with_read(|buf| {
+            if offset + 8 > buf.len() {
+                return JsValue::Undefined;
+            }
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&buf[offset..offset + 8]);
             JsValue::BigInt(crate::types::JsBigInt {
-                value: num_bigint::BigInt::from(v),
+                value: num_bigint::BigInt::from(i64::from_ne_bytes(bytes)),
             })
-        }
-        TypedArrayKind::BigUint64 => {
-            let v = sab
-                .with_atomic_ptr::<i64, _>(offset, 8, |ptr| unsafe {
-                    AtomicI64::from_ptr(ptr).load(Ordering::SeqCst)
-                })
-                .unwrap_or(0) as u64;
+        }),
+        TypedArrayKind::BigUint64 => sab.with_read(|buf| {
+            if offset + 8 > buf.len() {
+                return JsValue::Undefined;
+            }
+            let mut bytes = [0u8; 8];
+            bytes.copy_from_slice(&buf[offset..offset + 8]);
             JsValue::BigInt(crate::types::JsBigInt {
-                value: num_bigint::BigInt::from(v),
+                value: num_bigint::BigInt::from(u64::from_ne_bytes(bytes)),
             })
-        }
+        }),
         TypedArrayKind::Float16 => sab.with_read(|buf| {
             if offset + 2 > buf.len() {
                 return JsValue::Undefined;
@@ -2995,69 +2989,78 @@ fn typed_array_set_index_shared(
     value: &JsValue,
 ) -> bool {
     match kind {
-        TypedArrayKind::Int8 => {
+        TypedArrayKind::Int8 => sab.with_write(|buf| {
+            if offset + 1 > buf.len() {
+                return false;
+            }
             let v = to_int8(value);
-            sab.with_atomic_ptr::<i8, _>(offset, 1, |ptr| unsafe {
-                AtomicI8::from_ptr(ptr).store(v, Ordering::SeqCst)
-            })
-            .is_some()
-        }
-        TypedArrayKind::Uint8 => {
+            buf[offset] = v as u8;
+            true
+        }),
+        TypedArrayKind::Uint8 => sab.with_write(|buf| {
+            if offset + 1 > buf.len() {
+                return false;
+            }
             let v = to_uint8(value);
-            sab.with_atomic_ptr::<u8, _>(offset, 1, |ptr| unsafe {
-                AtomicU8::from_ptr(ptr).store(v, Ordering::SeqCst)
-            })
-            .is_some()
-        }
-        TypedArrayKind::Uint8Clamped => {
+            buf[offset] = v;
+            true
+        }),
+        TypedArrayKind::Uint8Clamped => sab.with_write(|buf| {
+            if offset + 1 > buf.len() {
+                return false;
+            }
             let v = to_uint8_clamped(value);
-            sab.with_atomic_ptr::<u8, _>(offset, 1, |ptr| unsafe {
-                AtomicU8::from_ptr(ptr).store(v, Ordering::SeqCst)
-            })
-            .is_some()
-        }
-        TypedArrayKind::Int16 => {
+            buf[offset] = v;
+            true
+        }),
+        TypedArrayKind::Int16 => sab.with_write(|buf| {
+            if offset + 2 > buf.len() {
+                return false;
+            }
             let v = to_int16(value);
-            sab.with_atomic_ptr::<i16, _>(offset, 2, |ptr| unsafe {
-                AtomicI16::from_ptr(ptr).store(v, Ordering::SeqCst)
-            })
-            .is_some()
-        }
-        TypedArrayKind::Uint16 => {
+            buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
+            true
+        }),
+        TypedArrayKind::Uint16 => sab.with_write(|buf| {
+            if offset + 2 > buf.len() {
+                return false;
+            }
             let v = to_uint16(value);
-            sab.with_atomic_ptr::<u16, _>(offset, 2, |ptr| unsafe {
-                AtomicU16::from_ptr(ptr).store(v, Ordering::SeqCst)
-            })
-            .is_some()
-        }
-        TypedArrayKind::Int32 => {
+            buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
+            true
+        }),
+        TypedArrayKind::Int32 => sab.with_write(|buf| {
+            if offset + 4 > buf.len() {
+                return false;
+            }
             let v = to_int32(value);
-            sab.with_atomic_ptr::<i32, _>(offset, 4, |ptr| unsafe {
-                AtomicI32::from_ptr(ptr).store(v, Ordering::SeqCst)
-            })
-            .is_some()
-        }
-        TypedArrayKind::Uint32 => {
+            buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
+            true
+        }),
+        TypedArrayKind::Uint32 => sab.with_write(|buf| {
+            if offset + 4 > buf.len() {
+                return false;
+            }
             let v = to_uint32(value);
-            sab.with_atomic_ptr::<u32, _>(offset, 4, |ptr| unsafe {
-                AtomicU32::from_ptr(ptr).store(v, Ordering::SeqCst)
-            })
-            .is_some()
-        }
-        TypedArrayKind::BigInt64 => {
+            buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
+            true
+        }),
+        TypedArrayKind::BigInt64 => sab.with_write(|buf| {
+            if offset + 8 > buf.len() {
+                return false;
+            }
             let v = to_bigint64(value);
-            sab.with_atomic_ptr::<i64, _>(offset, 8, |ptr| unsafe {
-                AtomicI64::from_ptr(ptr).store(v, Ordering::SeqCst)
-            })
-            .is_some()
-        }
-        TypedArrayKind::BigUint64 => {
+            buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
+            true
+        }),
+        TypedArrayKind::BigUint64 => sab.with_write(|buf| {
+            if offset + 8 > buf.len() {
+                return false;
+            }
             let v = to_biguint64(value);
-            sab.with_atomic_ptr::<i64, _>(offset, 8, |ptr| unsafe {
-                AtomicI64::from_ptr(ptr).store(v as i64, Ordering::SeqCst)
-            })
-            .is_some()
-        }
+            buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
+            true
+        }),
         TypedArrayKind::Float16 => sab.with_write(|buf| {
             if offset + 2 > buf.len() {
                 return false;
