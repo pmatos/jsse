@@ -44,7 +44,7 @@ pub struct Interpreter {
         Box<dyn FnOnce(&mut Interpreter) -> Completion>,
     )>,
     cached_has_instance_key: Option<String>,
-    module_registry: HashMap<PathBuf, Rc<RefCell<LoadedModule>>>,
+    module_registry: HashMap<(usize, PathBuf), Rc<RefCell<LoadedModule>>>,
     current_module_path: Option<PathBuf>,
     loading_deferred: bool,
     last_call_had_explicit_return: bool,
@@ -1285,6 +1285,17 @@ impl Interpreter {
         self.current_module_path.as_deref()
     }
 
+    fn module_registry_get(&self, path: &Path) -> Option<Rc<RefCell<LoadedModule>>> {
+        self.module_registry
+            .get(&(self.current_realm_id, path.to_path_buf()))
+            .cloned()
+    }
+
+    fn module_registry_insert(&mut self, path: PathBuf, module: Rc<RefCell<LoadedModule>>) {
+        self.module_registry
+            .insert((self.current_realm_id, path), module);
+    }
+
     fn run_module(&mut self, program: &Program, module_path: Option<PathBuf>) -> Completion {
         let prev_module_path = self.current_module_path.take();
         self.current_module_path = module_path.clone();
@@ -1328,8 +1339,7 @@ impl Interpreter {
         }));
         if let Some(ref path) = module_path {
             let canon_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-            self.module_registry
-                .insert(canon_path, loaded_module.clone());
+            self.module_registry_insert(canon_path, loaded_module.clone());
         }
         // Note: is_evaluating is managed by inner_module_evaluation
 
@@ -1451,7 +1461,7 @@ impl Interpreter {
         if let Err(ref e) = self.inner_module_evaluation(&canon_path_entry, &mut stack, 0) {
             // Per spec §16.2.1.5.3 step 9: mark all modules on stack as evaluated with error
             for m_path in &stack {
-                if let Some(m) = self.module_registry.get(m_path) {
+                if let Some(m) = self.module_registry_get(m_path) {
                     let mut mb = m.borrow_mut();
                     mb.evaluated = true;
                     mb.is_evaluating = false;
@@ -1468,7 +1478,7 @@ impl Interpreter {
         self.drain_microtasks();
 
         // Check if the entry module has an error (e.g. from rejected TLA await)
-        if let Some(module) = self.module_registry.get(&canon_path_entry).cloned()
+        if let Some(module) = self.module_registry_get(&canon_path_entry)
             && let Some(err) = module.borrow().error.clone()
         {
             self.current_module_path = prev_module_path;
@@ -1510,7 +1520,7 @@ impl Interpreter {
                     env.borrow_mut().initialize_binding(local, ns);
                     if let Some(ref mp) = self.current_module_path {
                         let canon = mp.canonicalize().unwrap_or_else(|_| mp.clone());
-                        if let Some(current_mod) = self.module_registry.get(&canon) {
+                        if let Some(current_mod) = self.module_registry_get(&canon) {
                             current_mod
                                 .borrow_mut()
                                 .namespace_imports
@@ -1714,7 +1724,7 @@ impl Interpreter {
         let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
         // Check if module is already loaded
-        if let Some(existing) = self.module_registry.get(&canon_path).cloned() {
+        if let Some(existing) = self.module_registry_get(&canon_path) {
             // If the module previously errored, re-throw the same error
             if let Some(ref err) = existing.borrow().error.clone() {
                 return Err(err.clone());
@@ -1786,8 +1796,7 @@ impl Interpreter {
             module_env
                 .borrow_mut()
                 .initialize_binding("*default*", parsed);
-            self.module_registry
-                .insert(canon_path.clone(), loaded_module.clone());
+            self.module_registry_insert(canon_path.clone(), loaded_module.clone());
             return Ok(loaded_module);
         }
 
@@ -1851,8 +1860,7 @@ impl Interpreter {
             dfs_index: None,
             dfs_ancestor_index: None,
         }));
-        self.module_registry
-            .insert(canon_path.clone(), loaded_module.clone());
+        self.module_registry_insert(canon_path.clone(), loaded_module.clone());
 
         // Collect export names and bindings first (before processing imports) for namespace objects
         for item in &program.module_items {
@@ -1983,7 +1991,7 @@ impl Interpreter {
     fn load_module_no_eval(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
         let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
-        if let Some(existing) = self.module_registry.get(&canon_path) {
+        if let Some(existing) = self.module_registry_get(&canon_path) {
             return Ok(existing.clone());
         }
 
@@ -2051,8 +2059,7 @@ impl Interpreter {
             dfs_index: None,
             dfs_ancestor_index: None,
         }));
-        self.module_registry
-            .insert(canon_path.clone(), loaded_module.clone());
+        self.module_registry_insert(canon_path.clone(), loaded_module.clone());
 
         // Collect export names and bindings
         for item in &program.module_items {
@@ -2180,7 +2187,7 @@ impl Interpreter {
 
     /// Execute a module's body synchronously (no DFS into dependencies).
     fn execute_module_body_sync(&mut self, module_path: &Path) -> Result<(), JsValue> {
-        let module = match self.module_registry.get(module_path).cloned() {
+        let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return Ok(()),
         };
@@ -2226,7 +2233,7 @@ impl Interpreter {
     }
 
     fn collect_all_exports(&mut self, module_path: &Path) {
-        let module = match self.module_registry.get(module_path).cloned() {
+        let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return,
         };
@@ -2279,7 +2286,7 @@ impl Interpreter {
     }
 
     fn execute_async_module(&mut self, module_path: &Path) {
-        let module = match self.module_registry.get(module_path).cloned() {
+        let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return,
         };
@@ -2369,7 +2376,7 @@ impl Interpreter {
         let canon = module_path
             .canonicalize()
             .unwrap_or_else(|_| module_path.to_path_buf());
-        let module = match self.module_registry.get(&canon).cloned() {
+        let module = match self.module_registry_get(&canon) {
             Some(m) => m,
             None => return Ok(index),
         };
@@ -2417,7 +2424,7 @@ impl Interpreter {
         // Evaluate each dep and set up async parent relationships (spec §16.2.1.5.3.1 step 11)
         for dep_canon in evaluation_list.into_iter() {
             idx = self.inner_module_evaluation(&dep_canon, stack, idx)?;
-            let dep_mod = match self.module_registry.get(&dep_canon).cloned() {
+            let dep_mod = match self.module_registry_get(&dep_canon) {
                 Some(m) => m,
                 None => continue,
             };
@@ -2439,9 +2446,7 @@ impl Interpreter {
                 let cycle_root_path = dep.cycle_root.clone().unwrap_or_else(|| dep_canon.clone());
                 drop(dep);
                 let root_mod = self
-                    .module_registry
-                    .get(&cycle_root_path)
-                    .cloned()
+                    .module_registry_get(&cycle_root_path)
                     .unwrap_or_else(|| dep_mod.clone());
                 let root = root_mod.borrow();
                 if let Some(ref err) = root.error {
@@ -2481,7 +2486,7 @@ impl Interpreter {
         if my_dfs == my_ancestor {
             let has_async = module.borrow().async_evaluation_order.is_some();
             while let Some(popped) = stack.pop() {
-                if let Some(popped_mod) = self.module_registry.get(&popped).cloned() {
+                if let Some(popped_mod) = self.module_registry_get(&popped) {
                     popped_mod.borrow_mut().cycle_root = Some(canon.clone());
                     if !has_async {
                         let mut pm = popped_mod.borrow_mut();
@@ -2498,7 +2503,7 @@ impl Interpreter {
     }
 
     fn get_module_dep_paths(&self, canon_path: &Path) -> Vec<(PathBuf, bool)> {
-        let module = match self.module_registry.get(canon_path) {
+        let module = match self.module_registry_get(canon_path) {
             Some(m) => m.clone(),
             None => return Vec::new(),
         };
@@ -2535,13 +2540,13 @@ impl Interpreter {
     }
 
     fn gather_available_ancestors(&mut self, module_path: &Path) -> Vec<PathBuf> {
-        let parents = match self.module_registry.get(module_path) {
+        let parents = match self.module_registry_get(module_path) {
             Some(m) => m.borrow().async_parent_modules.clone(),
             None => return Vec::new(),
         };
         let mut result = Vec::new();
         for parent_path in parents {
-            let parent = match self.module_registry.get(&parent_path).cloned() {
+            let parent = match self.module_registry_get(&parent_path) {
                 Some(m) => m,
                 None => continue,
             };
@@ -2557,8 +2562,7 @@ impl Interpreter {
             }
         }
         result.sort_by_key(|p| {
-            self.module_registry
-                .get(p)
+            self.module_registry_get(p)
                 .and_then(|m| m.borrow().async_evaluation_order)
                 .unwrap_or(u64::MAX)
         });
@@ -2566,7 +2570,7 @@ impl Interpreter {
     }
 
     fn async_module_execution_rejected(&mut self, module_path: &Path, error: &JsValue) {
-        let module = match self.module_registry.get(module_path).cloned() {
+        let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return,
         };
@@ -2589,7 +2593,7 @@ impl Interpreter {
     }
 
     fn async_module_execution_fulfilled(&mut self, module_path: &Path) {
-        let module = match self.module_registry.get(module_path).cloned() {
+        let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return,
         };
@@ -2611,8 +2615,7 @@ impl Interpreter {
             let ancestor = exec_list[i].clone();
             i += 1;
             let ancestor_has_tla = self
-                .module_registry
-                .get(&ancestor)
+                .module_registry_get(&ancestor)
                 .map(|m| m.borrow().has_tla)
                 .unwrap_or(false);
             if ancestor_has_tla {
@@ -2620,12 +2623,12 @@ impl Interpreter {
             } else {
                 match self.execute_module_body_sync(&ancestor) {
                     Ok(()) => {
-                        if let Some(m) = self.module_registry.get(&ancestor) {
+                        if let Some(m) = self.module_registry_get(&ancestor) {
                             let mut mb = m.borrow_mut();
                             mb.evaluated = true;
                             mb.is_evaluating = false;
                         }
-                        if let Some(m) = self.module_registry.get(&ancestor).cloned()
+                        if let Some(m) = self.module_registry_get(&ancestor)
                             && let Some((_p, resolve, _r)) = m.borrow().top_level_capability.clone()
                         {
                             let _ = self.call_function(
@@ -2819,7 +2822,7 @@ impl Interpreter {
         self.gather_async_transitive_deps(deferred_path, &mut to_eval, &mut seen);
 
         for path in to_eval {
-            if let Some(module) = self.module_registry.get(&path).cloned()
+            if let Some(module) = self.module_registry_get(&path)
                 && !module.borrow().evaluated
             {
                 let mut stack = vec![];
@@ -2841,7 +2844,7 @@ impl Interpreter {
             return;
         }
 
-        let module = match self.module_registry.get(&canon) {
+        let module = match self.module_registry_get(&canon) {
             Some(m) => m.clone(),
             None => return,
         };
@@ -2921,7 +2924,7 @@ impl Interpreter {
             return true; // cycle — spec says return true
         }
 
-        let module = match self.module_registry.get(&canon) {
+        let module = match self.module_registry_get(&canon) {
             Some(m) => m.clone(),
             None => return true,
         };
@@ -3518,7 +3521,9 @@ impl Interpreter {
     fn create_namespace_for_env(&mut self, target_env: &EnvRef) -> JsValue {
         let found = self
             .module_registry
-            .values()
+            .iter()
+            .filter(|((realm_id, _), _)| *realm_id == self.current_realm_id)
+            .map(|(_, module)| module)
             .find(|m| Rc::ptr_eq(&m.borrow().env, target_env))
             .cloned();
         if let Some(module) = found {
