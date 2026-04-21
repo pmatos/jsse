@@ -48,7 +48,6 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
     - `collections.rs` — setup_map/set/weakmap/weakset_prototype
     - `date.rs` — setup_date_builtin
 - `scripts/` — Test runners and utilities
-- `plan/` — Per-phase implementation plans
 - `test262-pass.txt` — Regression baseline of currently passing test262 tests. **Not rewritten by default.** The runner reads the baseline from `origin/main:test262-pass.txt` (override with `--baseline-ref`) so feature branches don't conflict on it. Pass `--update-baseline` to rewrite the working-tree file — typically only done on `main` (or a branch targeting it) to roll the baseline forward.
 - `test262-extra/` — Custom spec-compliance tests not covered by test262
 
@@ -71,7 +70,6 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   - it should include spec part that is tested and follow the exact same patterns of test262 tests.
 - Run test262 on a specific directory: `uv run python scripts/run-test262.py test262/test/built-ins/Symbol/`
 - Run custom tests: `uv run python scripts/run-custom-tests.py`
-- After implementation, also update `PLAN.md` with new pass counts for affected built-ins.
 
 ## Acorn Tests
 - Run acorn tests: `./scripts/run-acorn-tests.sh`
