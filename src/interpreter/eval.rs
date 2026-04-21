@@ -946,7 +946,7 @@ impl Interpreter {
                     Environment::find_module_path(env).or_else(|| self.current_module_path.clone());
                 if let Some(ref path) = module_path {
                     let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
-                    if let Some(module) = self.module_registry.get(&canon)
+                    if let Some(module) = self.module_registry_get(&canon)
                         && let Some(ref cached) = module.borrow().cached_import_meta
                     {
                         return Completion::Normal(cached.clone());
@@ -970,7 +970,7 @@ impl Interpreter {
                 let meta_val = JsValue::Object(crate::types::JsObject { id });
                 if let Some(ref path) = module_path {
                     let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
-                    if let Some(module) = self.module_registry.get(&canon) {
+                    if let Some(module) = self.module_registry_get(&canon) {
                         module.borrow_mut().cached_import_meta = Some(meta_val.clone());
                     }
                 }
