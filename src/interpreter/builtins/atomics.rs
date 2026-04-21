@@ -672,6 +672,17 @@ impl Interpreter {
                         let resolve_clone = resolve_fn.clone();
                         let timeout_ms = timeout;
                         let pending = interp.agent_async_completions.clone();
+                        let pending_jobs = interp.pending_async_jobs.clone();
+                        let pending_promise_ids = interp.pending_async_promise_ids.clone();
+                        let promise_id = if let JsValue::Object(ref o) = promise_val {
+                            o.id
+                        } else {
+                            0
+                        };
+                        if promise_id != 0 {
+                            pending_promise_ids.lock().unwrap().insert(promise_id);
+                        }
+                        pending_jobs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         std::thread::spawn(move || {
                             let (lock, cvar) = &*pair_clone;
                             let mut notified = lock.lock().unwrap();
@@ -717,6 +728,10 @@ impl Interpreter {
                                     );
                                     interp.gc_unroot_value(&resolve);
                                 }));
+                            if promise_id != 0 {
+                                pending_promise_ids.lock().unwrap().remove(&promise_id);
+                            }
+                            pending_jobs.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                             completion_cvar.notify_one();
                         });
                     }
