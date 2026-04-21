@@ -2,8 +2,8 @@
 
 A from-scratch JavaScript engine in Rust, fully spec-compliant with ECMA-262.
 
-**Total test262 scenarios:** 91,986 (48,002 files, dual strict/non-strict per spec)
-**Current pass rate:** 91,572 / 91,986 (99.55%)
+**Total test262 scenarios:** 99,020 (51,525 files, dual strict/non-strict per spec)
+**Current pass rate:** 98,953 / 99,020 (99.93%)
 **intl402/Temporal pass rate:** 3,838 / 3,838 (100.00%)
 
 ---
@@ -53,7 +53,7 @@ Scenario counts (dual strict/non-strict per spec INTERPRETING.md).
 | Promise | 100% | 1,272/1,272 |
 | Array | 100% | 6,115/6,115 |
 | Iterator | 100% | 1,020/1,020 |
-| Atomics | 91% | 698/764 |
+| Atomics | 92% | 702/764 |
 | TypedArray | 100% | 2,860/2,860 |
 | Date | 100% | 1,188/1,188 |
 | Function | 99% | 883/893 |
@@ -260,6 +260,8 @@ These features block significant numbers of tests:
 112. ~~**US-024: Implement `import defer` (Deferred Module Evaluation)**~~ — ✅ Done (+85 new passes, 99.14% → 99.22%). Full implementation of the `import defer` proposal per spec: (1) Split `load_module()` into load-only + evaluate phases: new `load_module_no_eval()` parses, links, and resolves exports without executing the module body. New `evaluate_module()` executes a loaded module's body with re-entry guards (`is_evaluating`/`evaluated` flags). (2) Deferred namespace objects: `create_deferred_module_namespace()` creates namespace with `deferred: true` and `"Deferred Module"` `Symbol.toStringTag`. (3) MOP operation triggers: `ensure_deferred_namespace_evaluation()` called from `[[Get]]`, `[[HasProperty]]`, `[[GetOwnProperty]]`, `[[Delete]]`, `[[DefineOwnProperty]]`, `[[OwnPropertyKeys]]` when key is not symbol-like (`IsSymbolLikeNamespaceKey`). Symbol keys and `"then"` on deferred namespaces skip evaluation. (4) `import.defer()` dynamic import returns deferred namespace wrapped in resolved promise. (5) `ReadyForSyncExecution` check: recursive transitive dependency scan for `has_tla`/`is_evaluating`, throws TypeError if not ready. (6) `loading_deferred` flag prevents premature evaluation of sub-dependencies. (7) `deferred_only` flag on `LoadedModule` distinguishes deferred-loaded from circular-import modules. (8) Parser fix: `skip_import_attributes()` for `import defer` path. import-defer: 17→99/102 (97%). 3 remaining failures are TLA/async-related tests needing `$DONE`/`asyncTest` harness. Files: `mod.rs`, `eval.rs`, `types.rs`, `builtins/mod.rs`, `builtins/array.rs`, `parser/modules.rs`.
 
 113. ~~**US-025: Implement `AbstractModuleSource` (§28.1/§28.3)**~~ — ✅ Done (+9 new passes, 99.22% → 99.23%). Added `$262.AbstractModuleSource` constructor and prototype to test262 harness. Constructor always throws TypeError per §28.1.1.1. Prototype has `constructor` property and `@@toStringTag` getter that returns `undefined` (no objects have `[[ModuleSourceClassName]]` internal slot). `prototype` property on constructor is `{writable: false, enumerable: false, configurable: false}`. AbstractModuleSource: 8/8 (100%). Files: `mod.rs`.
+
+114. ~~**Issue #78: async-generator queue draining + suspended `IteratorClose`**~~ — ✅ Done (58 issue files / 116 scenarios now 100%). Fixed four state-machine bugs in `src/interpreter/eval.rs`: (1) `async_gen_await_resume()` no longer double-pops queued requests when the resumed execution already scheduled its own async drain; (2) the immediate rejected-`yield` path now rejects through a microtask that also advances the request queue; (3) `yield*` resumption reuses the queued caller promise instead of allocating an internal promise, fixing concurrent `.next()` and exhausted-delegate hangs; (4) async suspended yields now preserve pending `IteratorClose` work across suspension and honor it on `.return()`, fixing the `for-await-of` destructuring return-null case. Validation: the full issue #78 batch (58 files / 116 scenarios) now passes. Full suite after this fix: 98,953 / 99,020 (99.93%); remaining unrelated failures are concentrated in `Atomics.waitAsync`.
 
 92. ~~**Proto-from-ctor-realm: Realm-Aware Constructors (§10.2.4)**~~ — ✅ Done (+105 new passes, 97.95% → 98.06%). Fixed `GetPrototypeFromConstructor` to use `GetFunctionRealm(newTarget)` intrinsic when `newTarget.prototype` is not an Object. (1) Indirect eval realm switching: `perform_eval` now runs with `current_realm_id = eval_realm_id` during execution, not just for `global_env` lookup. (2) Constructor realm-aware prototype: Error, native errors (SyntaxError/TypeError/ReferenceError/RangeError/URIError/EvalError), AggregateError, SuppressedError, Boolean, Number, Function, Map, Set, WeakMap, WeakSet, Date, Promise, ArrayBuffer, SharedArrayBuffer, DataView, Iterator, DisposableStack, AsyncDisposableStack, plus all 9 Intl constructors now use `get_prototype_from_new_target_realm()` instead of hardcoded prototypes. Native error prototypes now stored on Realm struct. (3) ArraySpeciesCreate cross-realm: §9.4.2.3 step 5-6 check — when constructor C is from a different realm and equals that realm's intrinsic %Array%, set C to undefined. Files: `builtins/mod.rs`, `builtins/collections.rs`, `builtins/date.rs`, `builtins/promise.rs`, `builtins/typedarray.rs`, `builtins/iterators.rs`, `builtins/disposable.rs`, `builtins/array.rs`, `builtins/intl/*.rs`.
 
