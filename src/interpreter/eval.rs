@@ -5929,7 +5929,9 @@ impl Interpreter {
                 let inline_prev = ctx_after.map(|c| c.prev_sent_values).unwrap_or_default();
                 // Save any iterators that need IteratorClose if generator.return() is called
                 let pending = std::mem::take(&mut self.pending_iter_close);
-                if !pending.is_empty() {
+                if pending.is_empty() {
+                    self.generator_inline_iters.remove(&o.id);
+                } else {
                     self.generator_inline_iters.insert(o.id, pending);
                 }
                 obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineGenerator {
@@ -6349,7 +6351,9 @@ impl Interpreter {
 
                     // Save any iterators that need IteratorClose if generator.return() is called
                     let pending = std::mem::take(&mut self.pending_iter_close);
-                    if !pending.is_empty() {
+                    if pending.is_empty() {
+                        self.generator_inline_iters.remove(&o.id);
+                    } else {
                         self.generator_inline_iters.insert(o.id, pending);
                     }
                     obj_rc.borrow_mut().iterator_state =
@@ -7709,6 +7713,7 @@ impl Interpreter {
         gen_this: &JsValue,
         gen_id: u64,
         awaited_result: JsValue,
+        promise: &JsValue,
         resolve_fn: &JsValue,
         reject_fn: &JsValue,
         is_rejection: bool,
@@ -7738,6 +7743,7 @@ impl Interpreter {
         };
 
         if is_rejection {
+            self.generator_inline_iters.remove(&gen_id);
             obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineAsyncGenerator {
                 state_machine,
                 func_env,
@@ -7761,6 +7767,7 @@ impl Interpreter {
         // §15.5.5 step 8.a.iii: If innerResult is not an Object, throw TypeError
         if !matches!(awaited_result, JsValue::Object(_)) {
             let err = self.create_type_error("Iterator result is not an object");
+            self.generator_inline_iters.remove(&gen_id);
             obj_rc.borrow_mut().iterator_state = Some(IteratorState::StateMachineAsyncGenerator {
                 state_machine,
                 func_env,
@@ -7785,6 +7792,7 @@ impl Interpreter {
         let done = match self.iterator_complete(&awaited_result) {
             Ok(d) => d,
             Err(e) => {
+                self.generator_inline_iters.remove(&gen_id);
                 obj_rc.borrow_mut().iterator_state =
                     Some(IteratorState::StateMachineAsyncGenerator {
                         state_machine,
@@ -7831,9 +7839,25 @@ impl Interpreter {
                             pending_exception: Some(e),
                             pending_return: None,
                         });
-                    let _ = self.async_generator_next_state_machine(gen_this, JsValue::Undefined);
+                    self.async_gen_yield_pending = false;
+                    let _ = self.async_generator_next_state_machine_with_promise(
+                        gen_this,
+                        JsValue::Undefined,
+                        promise.clone(),
+                        resolve_fn.clone(),
+                        reject_fn.clone(),
+                    );
+                    if self.async_gen_yield_pending {
+                        self.async_gen_yield_pending = false;
+                        return;
+                    }
+                    if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+                        queue.pop_front();
+                    }
+                    self.async_gen_process_queue(gen_this);
                     return;
                 }
+                self.generator_inline_iters.remove(&gen_id);
                 obj_rc.borrow_mut().iterator_state =
                     Some(IteratorState::StateMachineAsyncGenerator {
                         state_machine,
@@ -7886,7 +7910,22 @@ impl Interpreter {
                 pending_exception: None,
                 pending_return: None,
             });
-            let _ = self.async_generator_next_state_machine(gen_this, value);
+            self.async_gen_yield_pending = false;
+            let _ = self.async_generator_next_state_machine_with_promise(
+                gen_this,
+                value,
+                promise.clone(),
+                resolve_fn.clone(),
+                reject_fn.clone(),
+            );
+            if self.async_gen_yield_pending {
+                self.async_gen_yield_pending = false;
+                return;
+            }
+            if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+                queue.pop_front();
+            }
+            self.async_gen_process_queue(gen_this);
             return;
         }
 
@@ -7982,6 +8021,7 @@ impl Interpreter {
                                     ..
                                 }) = b.iterator_state
                                 {
+                                    interp.generator_inline_iters.remove(&gen_id_r2);
                                     *execution_state = StateMachineExecutionState::Completed;
                                     *delegated_iterator = None;
                                     try_stack.clear();
@@ -8149,6 +8189,7 @@ impl Interpreter {
                 let iawait_result = match self.await_value(&inner_return_result) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => {
+                        self.generator_inline_iters.remove(&gen_id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -8174,6 +8215,7 @@ impl Interpreter {
                 let done = match self.iterator_complete(&iawait_result) {
                     Ok(d) => d,
                     Err(e) => {
+                        self.generator_inline_iters.remove(&gen_id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -8198,6 +8240,7 @@ impl Interpreter {
                 let value = match self.iterator_value(&iawait_result) {
                     Ok(v) => v,
                     Err(e) => {
+                        self.generator_inline_iters.remove(&gen_id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -8220,6 +8263,7 @@ impl Interpreter {
                     }
                 };
                 if done {
+                    self.generator_inline_iters.remove(&gen_id);
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineAsyncGenerator {
                             state_machine,
@@ -8270,6 +8314,7 @@ impl Interpreter {
             }
             Ok(None) => {
                 // No .return() method — §15.5.5 step 8.c.iii: Await(received.[[Value]])
+                self.generator_inline_iters.remove(&gen_id);
                 obj_rc.borrow_mut().iterator_state =
                     Some(IteratorState::StateMachineAsyncGenerator {
                         state_machine,
@@ -8295,6 +8340,7 @@ impl Interpreter {
                 self.async_gen_process_queue(gen_this);
             }
             Err(e) => {
+                self.generator_inline_iters.remove(&gen_id);
                 obj_rc.borrow_mut().iterator_state =
                     Some(IteratorState::StateMachineAsyncGenerator {
                         state_machine,
@@ -8315,23 +8361,6 @@ impl Interpreter {
                 self.async_gen_process_queue(gen_this);
             }
         }
-    }
-
-    fn async_generator_next_state_machine(
-        &mut self,
-        this: &JsValue,
-        sent_value: JsValue,
-    ) -> Completion {
-        let promise = self.create_promise_object();
-        let promise_id = if let JsValue::Object(ref po) = promise {
-            po.id
-        } else {
-            0
-        };
-        let (resolve_fn, reject_fn) = self.create_resolving_functions(promise_id);
-        self.async_generator_next_state_machine_with_promise(
-            this, sent_value, promise, resolve_fn, reject_fn,
-        )
     }
 
     fn async_generator_next_state_machine_with_promise(
@@ -8405,6 +8434,7 @@ impl Interpreter {
                         let awaited_result = match self.await_value(&iter_result) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -8427,6 +8457,7 @@ impl Interpreter {
                         let done = match self.iterator_complete(&awaited_result) {
                             Ok(d) => d,
                             Err(e) => {
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -8481,6 +8512,7 @@ impl Interpreter {
                                         reject_fn,
                                     );
                                 }
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -8500,6 +8532,7 @@ impl Interpreter {
                             }
                         };
                         if done {
+                            self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
                                     state_machine,
@@ -8555,6 +8588,7 @@ impl Interpreter {
                     Ok(None) => {
                         // No .return() method — complete the generator
                         // §15.5.5 step 7.c.iii.1: Await(received.[[Value]])
+                        self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -8576,6 +8610,7 @@ impl Interpreter {
                         return self.async_generator_await_return(ret_val, promise_id);
                     }
                     Err(e) => {
+                        self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -8603,6 +8638,7 @@ impl Interpreter {
                         let awaited_result = match self.await_value(&iter_result) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -8625,6 +8661,7 @@ impl Interpreter {
                         let done = match self.iterator_complete(&awaited_result) {
                             Ok(d) => d,
                             Err(e) => {
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -8678,6 +8715,7 @@ impl Interpreter {
                                         reject_fn,
                                     );
                                 }
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -8730,8 +8768,13 @@ impl Interpreter {
                                     pending_exception: None,
                                     pending_return: None,
                                 });
-                            return self
-                                .async_generator_next_state_machine(this, JsValue::Undefined);
+                            return self.async_generator_next_state_machine_with_promise(
+                                this,
+                                JsValue::Undefined,
+                                promise,
+                                resolve_fn,
+                                reject_fn,
+                            );
                         } else {
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
@@ -8770,6 +8813,7 @@ impl Interpreter {
                         let _ = self.iterator_close(&iterator, exc.clone());
                         let type_err =
                             self.create_type_error("The iterator does not provide a throw method");
+                        self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -8788,6 +8832,7 @@ impl Interpreter {
                         return Completion::Normal(promise);
                     }
                     Err(e) => {
+                        self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -8826,6 +8871,7 @@ impl Interpreter {
                     let awaited_result = match self.await_value(&iter_result) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
+                            self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
                                     state_machine,
@@ -8848,6 +8894,7 @@ impl Interpreter {
                     let done = match self.iterator_complete(&awaited_result) {
                         Ok(d) => d,
                         Err(e) => {
+                            self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
                                     state_machine,
@@ -8893,12 +8940,16 @@ impl Interpreter {
                                             pending_exception: Some(e),
                                             pending_return: None,
                                         });
-                                    return self.async_generator_next_state_machine(
+                                    return self.async_generator_next_state_machine_with_promise(
                                         this,
                                         JsValue::Undefined,
+                                        promise,
+                                        resolve_fn,
+                                        reject_fn,
                                     );
                                 }
                             }
+                            self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
                                     state_machine,
@@ -9001,6 +9052,7 @@ impl Interpreter {
                     }
                 }
                 Err(e) => {
+                    self.generator_inline_iters.remove(&o.id);
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineAsyncGenerator {
                             state_machine,
@@ -9131,6 +9183,7 @@ impl Interpreter {
                         Completion::Throw(e) => e,
                         _ => unreachable!(),
                     };
+                    self.generator_inline_iters.remove(&o.id);
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineAsyncGenerator {
                             state_machine,
@@ -9151,6 +9204,31 @@ impl Interpreter {
                 // Check pending_return before executing state (handles .return() with no try/catch)
                 if let Some(ret_val) = pending_return.take() {
                     if current_try_stack.is_empty() {
+                        if let Some(iters) = self.generator_inline_iters.remove(&o.id) {
+                            for iter in iters {
+                                if let Err(e) = self.iterator_close_result(&iter) {
+                                    self.generator_inline_iters.remove(&o.id);
+                                    obj_rc.borrow_mut().iterator_state =
+                                        Some(IteratorState::StateMachineAsyncGenerator {
+                                            state_machine,
+                                            func_env,
+                                            is_strict,
+                                            execution_state: StateMachineExecutionState::Completed,
+                                            _sent_value: JsValue::Undefined,
+                                            try_stack: vec![],
+                                            pending_binding: None,
+                                            delegated_iterator: None,
+                                            pending_exception: None,
+                                            pending_return: None,
+                                        });
+                                    let _ =
+                                        self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                                    self.drain_microtasks();
+                                    return Completion::Normal(promise);
+                                }
+                            }
+                        }
+                        self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -9238,6 +9316,7 @@ impl Interpreter {
                     Completion::Throw(e) => e,
                     _ => unreachable!(),
                 };
+                self.generator_inline_iters.remove(&o.id);
                 obj_rc.borrow_mut().iterator_state =
                     Some(IteratorState::StateMachineAsyncGenerator {
                         state_machine,
@@ -9261,6 +9340,7 @@ impl Interpreter {
                 let v = match disp {
                     Completion::Return(v) => v,
                     Completion::Throw(e) => {
+                        self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -9283,6 +9363,7 @@ impl Interpreter {
                 let awaited = match self.await_value(&v) {
                     Completion::Normal(av) => av,
                     Completion::Throw(e) => {
+                        self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -9302,6 +9383,7 @@ impl Interpreter {
                     }
                     _ => JsValue::Undefined,
                 };
+                self.generator_inline_iters.remove(&o.id);
                 obj_rc.borrow_mut().iterator_state =
                     Some(IteratorState::StateMachineAsyncGenerator {
                         state_machine,
@@ -9326,6 +9408,7 @@ impl Interpreter {
                 let awaited_val = match self.await_value(&yield_val) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => {
+                        self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -9345,6 +9428,12 @@ impl Interpreter {
                     }
                     _ => yield_val,
                 };
+                let pending = std::mem::take(&mut self.pending_iter_close);
+                if pending.is_empty() {
+                    self.generator_inline_iters.remove(&o.id);
+                } else {
+                    self.generator_inline_iters.insert(o.id, pending);
+                }
                 // Any Completion::Yield from exec_statements is an inline yield:
                 // it came from a loop body or complex control flow that isn't
                 // decomposed by the state machine transformer. Use InlineYield
@@ -9403,6 +9492,7 @@ impl Interpreter {
                                         continue;
                                     }
                                 }
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -9438,6 +9528,7 @@ impl Interpreter {
                             Err(e) => match self.get_iterator(&yield_val) {
                                 Ok(it) => it,
                                 Err(_) => {
+                                    self.generator_inline_iters.remove(&o.id);
                                     obj_rc.borrow_mut().iterator_state =
                                         Some(IteratorState::StateMachineAsyncGenerator {
                                             state_machine,
@@ -9466,6 +9557,7 @@ impl Interpreter {
                                 match self.get_object_property(io.id, "next", &iterator) {
                                     Completion::Normal(v) => v,
                                     Completion::Throw(e) => {
+                                        self.generator_inline_iters.remove(&o.id);
                                         obj_rc.borrow_mut().iterator_state =
                                             Some(IteratorState::StateMachineAsyncGenerator {
                                                 state_machine,
@@ -9510,6 +9602,7 @@ impl Interpreter {
                         let iter_result = match iter_result {
                             Ok(r) => r,
                             Err(e) => {
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -9564,6 +9657,7 @@ impl Interpreter {
                                 pending_return: None,
                             });
 
+                        let promise_c = promise.clone();
                         let resolve_fn_c = resolve_fn.clone();
                         let reject_fn_c = reject_fn.clone();
                         let gen_this = this.clone();
@@ -9581,6 +9675,7 @@ impl Interpreter {
                                     &gen_this,
                                     gen_id,
                                     awaited_result,
+                                    &promise_c,
                                     &resolve_fn_c,
                                     &reject_fn_c,
                                     false,
@@ -9589,6 +9684,7 @@ impl Interpreter {
                             },
                         ));
 
+                        let promise_c2 = promise.clone();
                         let reject_fn_c2 = reject_fn.clone();
                         let gen_this2 = this.clone();
                         let gen_id2 = o.id;
@@ -9601,6 +9697,7 @@ impl Interpreter {
                                     &gen_this2,
                                     gen_id2,
                                     reason,
+                                    &promise_c2,
                                     &JsValue::Undefined,
                                     &reject_fn_c2,
                                     true,
@@ -9695,6 +9792,12 @@ impl Interpreter {
                     let wrapped_state = self.get_promise_state(wrapped_id);
 
                     if matches!(wrapped_state, Some(PromiseState::Pending)) {
+                        let pending = std::mem::take(&mut self.pending_iter_close);
+                        if pending.is_empty() {
+                            self.generator_inline_iters.remove(&o.id);
+                        } else {
+                            self.generator_inline_iters.insert(o.id, pending);
+                        }
                         // Suspend generator and register callbacks for when promise resolves
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
@@ -9784,6 +9887,7 @@ impl Interpreter {
                     let awaited_val = if let Some(PromiseState::Fulfilled(v)) = wrapped_state {
                         v
                     } else if let Some(PromiseState::Rejected(e)) = wrapped_state {
+                        self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -9797,13 +9901,33 @@ impl Interpreter {
                                 pending_exception: None,
                                 pending_return: None,
                             });
-                        let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
+                        let reject_fn_c2 = reject_fn.clone();
+                        let gen_this3 = this.clone();
+                        let gen_id3 = o.id;
+                        self.microtask_queue.push((
+                            vec![e.clone(), reject_fn_c2.clone(), gen_this3.clone()],
+                            Box::new(move |interp| {
+                                let _ =
+                                    interp.call_function(&reject_fn_c2, &JsValue::Undefined, &[e]);
+                                if let Some(queue) = interp.async_gen_queues.get_mut(&gen_id3) {
+                                    queue.pop_front();
+                                }
+                                interp.async_gen_process_queue(&gen_this3);
+                                Completion::Normal(JsValue::Undefined)
+                            }),
+                        ));
                         self.async_gen_yield_pending = true;
                         return Completion::Normal(promise);
                     } else {
                         yield_val
                     };
 
+                    let pending = std::mem::take(&mut self.pending_iter_close);
+                    if pending.is_empty() {
+                        self.generator_inline_iters.remove(&o.id);
+                    } else {
+                        self.generator_inline_iters.insert(o.id, pending);
+                    }
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineAsyncGenerator {
                             state_machine,
@@ -9865,6 +9989,7 @@ impl Interpreter {
                                     Completion::Throw(e) => e,
                                     _ => unreachable!(),
                                 };
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -9896,6 +10021,7 @@ impl Interpreter {
                         match disp {
                             Completion::Return(_) => {}
                             Completion::Throw(e) => {
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -9918,6 +10044,7 @@ impl Interpreter {
                         // Microtask-based Await: wrap in PromiseResolve, schedule via PerformPromiseThen
                         let wrapper = self.promise_resolve_value(&ret_val);
 
+                        self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -9999,6 +10126,7 @@ impl Interpreter {
                         match disp {
                             Completion::Return(_) => {}
                             Completion::Throw(e) => {
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -10018,6 +10146,7 @@ impl Interpreter {
                             _ => {}
                         }
 
+                        self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -10065,6 +10194,7 @@ impl Interpreter {
                         continue;
                     }
 
+                    self.generator_inline_iters.remove(&o.id);
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineAsyncGenerator {
                             state_machine,
@@ -10094,6 +10224,7 @@ impl Interpreter {
                     let cond_val = match self.eval_expr(condition, &func_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
+                            self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
                                     state_machine,
@@ -10157,6 +10288,7 @@ impl Interpreter {
                                 continue;
                             }
                         }
+                        self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -10176,6 +10308,7 @@ impl Interpreter {
                     }
                     if let Some(ret_val) = pending_return.take() {
                         if current_try_stack.is_empty() {
+                            self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
                                     state_machine,
@@ -10231,6 +10364,7 @@ impl Interpreter {
                     let disc_val = match self.eval_expr(discriminant, &func_env) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
+                            self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
                                     state_machine,
@@ -10262,6 +10396,7 @@ impl Interpreter {
                         let case_val = match self.eval_expr(&case.test, &func_env) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -10320,6 +10455,7 @@ impl Interpreter {
                                     continue;
                                 }
                             }
+                            self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
                                     state_machine,
@@ -10359,6 +10495,7 @@ impl Interpreter {
                                         continue;
                                     }
                                 }
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -10391,6 +10528,7 @@ impl Interpreter {
                                         continue;
                                     }
                                 }
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -10451,6 +10589,7 @@ impl Interpreter {
                                     continue;
                                 }
                             }
+                            self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
                                     state_machine,
@@ -10484,6 +10623,7 @@ impl Interpreter {
                                         continue;
                                     }
                                 }
+                                self.generator_inline_iters.remove(&o.id);
                                 obj_rc.borrow_mut().iterator_state =
                                     Some(IteratorState::StateMachineAsyncGenerator {
                                         state_machine,
@@ -10532,6 +10672,7 @@ impl Interpreter {
                                             continue;
                                         }
                                     }
+                                    self.generator_inline_iters.remove(&o.id);
                                     obj_rc.borrow_mut().iterator_state =
                                         Some(IteratorState::StateMachineAsyncGenerator {
                                             state_machine,
@@ -10578,6 +10719,7 @@ impl Interpreter {
                                                 continue;
                                             }
                                         }
+                                        self.generator_inline_iters.remove(&o.id);
                                         obj_rc.borrow_mut().iterator_state =
                                             Some(IteratorState::StateMachineAsyncGenerator {
                                                 state_machine,
@@ -10619,6 +10761,7 @@ impl Interpreter {
                                                     continue;
                                                 }
                                             }
+                                            self.generator_inline_iters.remove(&o.id);
                                             obj_rc.borrow_mut().iterator_state =
                                                 Some(IteratorState::StateMachineAsyncGenerator {
                                                     state_machine,
@@ -10661,6 +10804,7 @@ impl Interpreter {
                                     continue;
                                 }
                             }
+                            self.generator_inline_iters.remove(&o.id);
                             obj_rc.borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
                                     state_machine,
@@ -10686,6 +10830,7 @@ impl Interpreter {
                     let disp =
                         self.dispose_resources(&func_env, Completion::Normal(JsValue::Undefined));
                     if let Completion::Throw(e) = disp {
+                        self.generator_inline_iters.remove(&o.id);
                         obj_rc.borrow_mut().iterator_state =
                             Some(IteratorState::StateMachineAsyncGenerator {
                                 state_machine,
@@ -10702,6 +10847,7 @@ impl Interpreter {
                         let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                         return Completion::Normal(promise);
                     }
+                    self.generator_inline_iters.remove(&o.id);
                     obj_rc.borrow_mut().iterator_state =
                         Some(IteratorState::StateMachineAsyncGenerator {
                             state_machine,
@@ -10885,6 +11031,7 @@ impl Interpreter {
             }
         }
 
+        self.async_gen_yield_pending = false;
         let _ = self.async_generator_next_state_machine_with_promise(
             this,
             JsValue::Undefined,
@@ -10892,6 +11039,10 @@ impl Interpreter {
             resolve_fn.clone(),
             reject_fn.clone(),
         );
+        if self.async_gen_yield_pending {
+            self.async_gen_yield_pending = false;
+            return;
+        }
 
         // Pop the queue entry and process next
         if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
@@ -11218,6 +11369,7 @@ impl Interpreter {
                 return Completion::Normal(promise);
             }
             StateMachineExecutionState::SuspendedStart | StateMachineExecutionState::Completed => {
+                self.generator_inline_iters.remove(&o.id);
                 obj_rc.borrow_mut().iterator_state =
                     Some(IteratorState::StateMachineAsyncGenerator {
                         state_machine,
@@ -11328,6 +11480,7 @@ impl Interpreter {
                 return Completion::Normal(promise);
             }
             StateMachineExecutionState::SuspendedStart | StateMachineExecutionState::Completed => {
+                self.generator_inline_iters.remove(&o.id);
                 obj_rc.borrow_mut().iterator_state =
                     Some(IteratorState::StateMachineAsyncGenerator {
                         state_machine,
