@@ -2084,6 +2084,28 @@ impl Interpreter {
             }
         }
 
+        // Host-resolve pre-pass (spec LoadRequestedModules): surface unresolvable
+        // specifier errors before any transitive Link-phase SyntaxError fires.
+        for item in &program.module_items {
+            let specifier = match item {
+                ModuleItem::ImportDeclaration(import) => Some(import.source.as_str()),
+                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
+                    Some(source.as_str())
+                }
+                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                    source: Some(s), ..
+                }) => Some(s.as_str()),
+                _ => None,
+            };
+            if let Some(spec) = specifier
+                && let Err(e) = self.resolve_module_specifier(spec, Some(&canon_path))
+            {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
+                return Err(e);
+            }
+        }
+
         // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6)
         // For deferred imports, load without evaluation.
         // For non-deferred, load normally (which includes evaluation).
@@ -2188,8 +2210,16 @@ impl Interpreter {
         let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
         if let Some(existing) = self.module_registry.get(&canon_path) {
-            if let Some(ref err) = existing.borrow().error.clone() {
-                return Err(err.clone());
+            // Propagate parse/link errors (module never finished loading) eagerly.
+            // Let evaluation errors surface via ensure_deferred_namespace_evaluation
+            // when the deferred namespace is accessed, so identity is preserved
+            // per spec §16.2.1.5.3 (EnsureDeferredNamespaceEvaluation).
+            let (has_error, evaluated, err_clone) = {
+                let b = existing.borrow();
+                (b.error.is_some(), b.evaluated, b.error.clone())
+            };
+            if has_error && !evaluated {
+                return Err(err_clone.unwrap());
             }
             return Ok(existing.clone());
         }
