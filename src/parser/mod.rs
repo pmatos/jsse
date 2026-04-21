@@ -180,8 +180,18 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn source_since(&self, start: usize) -> String {
-        self.source[start..self.prev_token_end].to_string()
+    const MAX_SOURCE_TEXT_LEN: usize = 64 * 1024;
+
+    fn source_since(&self, start: usize) -> Option<String> {
+        let end = self.prev_token_end;
+        if end <= start {
+            return Some(String::new());
+        }
+        let len = end - start;
+        if len > Self::MAX_SOURCE_TEXT_LEN {
+            return None;
+        }
+        Some(self.source[start..end].to_string())
     }
 
     pub fn set_strict(&mut self, strict: bool) {

@@ -896,7 +896,7 @@ impl<'a> Parser<'a> {
                             false,
                         )
                     };
-                    let source_text = Some(self.source_since(ident_start));
+                    let source_text = self.source_since(ident_start);
                     return Ok(Expression::ArrowFunction(ArrowFunction {
                         params: vec![Pattern::Identifier("yield".to_string())],
                         body,
@@ -923,7 +923,7 @@ impl<'a> Parser<'a> {
                             false,
                         )
                     };
-                    let source_text = Some(self.source_since(ident_start));
+                    let source_text = self.source_since(ident_start);
                     return Ok(Expression::ArrowFunction(ArrowFunction {
                         params: vec![Pattern::Identifier("await".to_string())],
                         body,
@@ -948,7 +948,7 @@ impl<'a> Parser<'a> {
                             false,
                         )
                     };
-                    let source_text = Some(self.source_since(ident_start));
+                    let source_text = self.source_since(ident_start);
                     return Ok(Expression::ArrowFunction(ArrowFunction {
                         params: vec![Pattern::Identifier("let".to_string())],
                         body,
@@ -973,7 +973,7 @@ impl<'a> Parser<'a> {
                             false,
                         )
                     };
-                    let source_text = Some(self.source_since(ident_start));
+                    let source_text = self.source_since(ident_start);
                     return Ok(Expression::ArrowFunction(ArrowFunction {
                         params: vec![Pattern::Identifier("static".to_string())],
                         body,
@@ -1090,7 +1090,7 @@ impl<'a> Parser<'a> {
                                 )
                             };
                             self.in_async = prev_async;
-                            let source_text = Some(self.source_since(source_start));
+                            let source_text = self.source_since(source_start);
                             return Ok(Expression::ArrowFunction(ArrowFunction {
                                 params: vec![Pattern::Identifier(name)],
                                 body,
@@ -1132,7 +1132,7 @@ impl<'a> Parser<'a> {
                             false,
                         )
                     };
-                    let source_text = Some(self.source_since(ident_start));
+                    let source_text = self.source_since(ident_start);
                     return Ok(Expression::ArrowFunction(ArrowFunction {
                         params: vec![Pattern::Identifier(name)],
                         body,
@@ -1172,7 +1172,7 @@ impl<'a> Parser<'a> {
                             false,
                         )
                     };
-                    let source_text = Some(self.source_since(ident_start));
+                    let source_text = self.source_since(ident_start);
                     return Ok(Expression::ArrowFunction(ArrowFunction {
                         params: vec![Pattern::Identifier(name)],
                         body,
@@ -1275,7 +1275,7 @@ impl<'a> Parser<'a> {
                                 false,
                             )
                         };
-                        let source_text = Some(self.source_since(paren_start));
+                        let source_text = self.source_since(paren_start);
                         return Ok(Expression::ArrowFunction(ArrowFunction {
                             params: Vec::new(),
                             body,
@@ -1303,7 +1303,7 @@ impl<'a> Parser<'a> {
                             false,
                         )
                     };
-                    let source_text = Some(self.source_since(paren_start));
+                    let source_text = self.source_since(paren_start);
                     return Ok(Expression::ArrowFunction(ArrowFunction {
                         params,
                         body,
@@ -1365,7 +1365,7 @@ impl<'a> Parser<'a> {
                                 false,
                             )
                         };
-                        let source_text = Some(self.source_since(paren_start));
+                        let source_text = self.source_since(paren_start);
                         return Ok(Expression::ArrowFunction(ArrowFunction {
                             params,
                             body,
@@ -1596,7 +1596,7 @@ impl<'a> Parser<'a> {
                         ));
                     }
                     self.check_duplicate_params_strict(&params)?;
-                    let source_text = Some(self.source_since(method_source_start));
+                    let source_text = self.source_since(method_source_start);
                     return Ok(Property {
                         key,
                         value: Expression::Function(FunctionExpr {
@@ -1676,7 +1676,7 @@ impl<'a> Parser<'a> {
                 ));
             }
             self.check_duplicate_params_strict(&params)?;
-            let source_text = Some(self.source_since(method_source_start));
+            let source_text = self.source_since(method_source_start);
             return Ok(Property {
                 key,
                 value: Expression::Function(FunctionExpr {
@@ -1772,7 +1772,7 @@ impl<'a> Parser<'a> {
                         body,
                         is_async: false,
                         is_generator: false,
-                        source_text: Some(self.source_since(method_source_start)),
+                        source_text: self.source_since(method_source_start),
                         body_is_strict: body_strict,
                     }),
                     kind: saved_kind,
@@ -1953,7 +1953,7 @@ impl<'a> Parser<'a> {
                     body,
                     is_async: false,
                     is_generator: false,
-                    source_text: Some(self.source_since(method_source_start)),
+                    source_text: self.source_since(method_source_start),
                     body_is_strict: body_strict,
                 }),
                 kind: PropertyKind::Init,
@@ -2028,7 +2028,7 @@ impl<'a> Parser<'a> {
         if body_strict || self.strict || is_generator || !Self::is_simple_parameter_list(&params) {
             self.check_duplicate_params_strict(&params)?;
         }
-        let source_text = Some(self.source_since(source_start));
+        let source_text = self.source_since(source_start);
         Ok(Expression::Function(FunctionExpr {
             name,
             params,
@@ -2083,7 +2083,7 @@ impl<'a> Parser<'a> {
             self.check_strict_params(&params)?;
         }
         self.check_duplicate_params_strict(&params)?;
-        let source_text = Some(self.source_since(source_start));
+        let source_text = self.source_since(source_start);
         Ok(Expression::Function(FunctionExpr {
             name,
             params,
@@ -2114,7 +2114,7 @@ impl<'a> Parser<'a> {
                     )
                 };
                 self.in_async = prev_async;
-                let source_text = Some(self.source_since(source_start));
+                let source_text = self.source_since(source_start);
                 return Ok(Expression::ArrowFunction(ArrowFunction {
                     params: Vec::new(),
                     body,
@@ -2151,7 +2151,7 @@ impl<'a> Parser<'a> {
                 )
             };
             self.in_async = prev_async;
-            let source_text = Some(self.source_since(source_start));
+            let source_text = self.source_since(source_start);
             return Ok(Expression::ArrowFunction(ArrowFunction {
                 params,
                 body,
@@ -2208,7 +2208,7 @@ impl<'a> Parser<'a> {
                     )
                 };
                 self.in_async = prev_async;
-                let source_text = Some(self.source_since(source_start));
+                let source_text = self.source_since(source_start);
                 return Ok(Expression::ArrowFunction(ArrowFunction {
                     params,
                     body,
@@ -2264,7 +2264,7 @@ impl<'a> Parser<'a> {
         if super_class.is_none() {
             Self::check_no_direct_super_in_constructor(&body)?;
         }
-        let source_text = Some(self.source_since(source_start));
+        let source_text = self.source_since(source_start);
         Ok(Expression::Class(ClassExpr {
             name,
             super_class,

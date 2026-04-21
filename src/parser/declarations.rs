@@ -295,7 +295,7 @@ impl<'a> Parser<'a> {
         {
             self.check_duplicate_params_strict(&params)?;
         }
-        let source_text = Some(self.source_since(source_start));
+        let source_text = self.source_since(source_start);
         Ok(Statement::FunctionDeclaration(FunctionDecl {
             name,
             params,
@@ -414,7 +414,7 @@ impl<'a> Parser<'a> {
         if super_class.is_none() {
             Self::check_no_direct_super_in_constructor(&body)?;
         }
-        let source_text = Some(self.source_since(source_start));
+        let source_text = self.source_since(source_start);
         Ok(Statement::ClassDeclaration(ClassDecl {
             name,
             super_class,
@@ -1202,7 +1202,7 @@ impl<'a> Parser<'a> {
         {
             self.check_duplicate_params_strict(&params)?;
         }
-        let source_text = Some(self.source_since(method_source_start));
+        let source_text = self.source_since(method_source_start);
         Ok(FunctionExpr {
             name: None,
             params,
