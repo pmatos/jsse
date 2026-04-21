@@ -1438,8 +1438,7 @@ impl Interpreter {
                 if obj_data.prototype.is_none() {
                     obj_data.prototype = self.realm().object_prototype.clone();
                 }
-                let obj = Rc::new(RefCell::new(obj_data));
-                let id = self.allocate_object_slot(obj);
+                let id = self.alloc_object(obj_data);
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             }
             JsValue::Object(_) => Completion::Normal(val.clone()),

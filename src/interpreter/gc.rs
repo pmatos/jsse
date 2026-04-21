@@ -1,6 +1,14 @@
 use super::*;
 
 impl Interpreter {
+    /// Allocate a fresh object slot for `data` and return its id.
+    /// Centralises the `Rc::new(RefCell::new(..))` + `allocate_object_slot`
+    /// pattern used at every object creation site.
+    pub(crate) fn alloc_object(&mut self, data: JsObjectData) -> u64 {
+        let rc = Rc::new(RefCell::new(data));
+        self.allocate_object_slot(rc)
+    }
+
     pub(crate) fn allocate_object_slot(&mut self, obj: Rc<RefCell<JsObjectData>>) -> u64 {
         self.gc_alloc_count += 1;
         let is_reuse = !self.free_list.is_empty();

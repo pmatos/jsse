@@ -123,8 +123,7 @@ impl Interpreter {
                 kind,
                 done: false,
             });
-            let obj = Rc::new(RefCell::new(obj_data));
-            let id = interp.allocate_object_slot(obj);
+            let id = interp.alloc_object(obj_data);
             JsValue::Object(crate::types::JsObject { id })
         }
 
@@ -970,8 +969,7 @@ impl Interpreter {
                 kind,
                 done: false,
             });
-            let obj = Rc::new(RefCell::new(obj_data));
-            let id = interp.allocate_object_slot(obj);
+            let id = interp.alloc_object(obj_data);
             JsValue::Object(crate::types::JsObject { id })
         }
 

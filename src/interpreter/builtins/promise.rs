@@ -752,8 +752,7 @@ impl Interpreter {
         data.prototype = self.realm().promise_prototype.clone();
         data.class_name = "Promise".to_string();
         data.promise_data = Some(PromiseData::new());
-        let obj = Rc::new(RefCell::new(data));
-        let id = self.allocate_object_slot(obj);
+        let id = self.alloc_object(data);
         JsValue::Object(crate::types::JsObject { id })
     }
 
