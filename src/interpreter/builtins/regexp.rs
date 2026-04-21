@@ -814,6 +814,8 @@ fn parse_v_class_escape(chars: &[char], i: &mut usize) -> Option<u32> {
     }
 }
 
+const V_FLAG_CLASS_MAX_DEPTH: usize = 256;
+
 /// Parse a v-flag character class starting right after the opening `[`.
 /// Returns (VClassSet, new_index_after_closing_bracket).
 fn parse_v_flag_class(
@@ -821,6 +823,19 @@ fn parse_v_flag_class(
     start: usize,
     flags: &str,
 ) -> Result<(VClassSet, usize), String> {
+    parse_v_flag_class_with_depth(chars, start, flags, 0)
+}
+
+fn parse_v_flag_class_with_depth(
+    chars: &[char],
+    start: usize,
+    flags: &str,
+    depth: usize,
+) -> Result<(VClassSet, usize), String> {
+    if depth >= V_FLAG_CLASS_MAX_DEPTH {
+        return Err("v-flag character class nesting exceeds implementation limit".to_string());
+    }
+
     let len = chars.len();
     let mut i = start;
     let negated = i < len && chars[i] == '^';
@@ -829,24 +844,24 @@ fn parse_v_flag_class(
     }
 
     // Parse the first operand
-    let mut result = parse_v_class_operand(chars, &mut i, flags)?;
+    let mut result = parse_v_class_operand(chars, &mut i, flags, depth)?;
 
     // Check for set operations
     while i < len && chars[i] != ']' {
         if i + 1 < len && chars[i] == '-' && chars[i + 1] == '-' {
             // Difference: --
             i += 2;
-            let rhs = parse_v_class_operand(chars, &mut i, flags)?;
+            let rhs = parse_v_class_operand(chars, &mut i, flags, depth)?;
             result = result.difference(&rhs);
         } else if i + 1 < len && chars[i] == '&' && chars[i + 1] == '&' {
             // Intersection: &&
             i += 2;
-            let rhs = parse_v_class_operand(chars, &mut i, flags)?;
+            let rhs = parse_v_class_operand(chars, &mut i, flags, depth)?;
             result = result.intersect(&rhs);
         } else if i < len && chars[i] == '[' {
             // Nested class in union position
             i += 1;
-            let (set, new_i) = parse_v_flag_class(chars, i, flags)?;
+            let (set, new_i) = parse_v_flag_class_with_depth(chars, i, flags, depth + 1)?;
             i = new_i;
             result = result.union(&set);
         } else {
@@ -868,12 +883,17 @@ fn parse_v_flag_class(
 }
 
 /// Parse a class operand: either a nested [...] or a sequence of atoms (union).
-fn parse_v_class_operand(chars: &[char], i: &mut usize, flags: &str) -> Result<VClassSet, String> {
+fn parse_v_class_operand(
+    chars: &[char],
+    i: &mut usize,
+    flags: &str,
+    depth: usize,
+) -> Result<VClassSet, String> {
     let len = chars.len();
     if *i < len && chars[*i] == '[' {
         // Nested character class
         *i += 1;
-        let (set, new_i) = parse_v_flag_class(chars, *i, flags)?;
+        let (set, new_i) = parse_v_flag_class_with_depth(chars, *i, flags, depth + 1)?;
         *i = new_i;
         return Ok(set);
     }
@@ -894,7 +914,7 @@ fn parse_v_class_operand(chars: &[char], i: &mut usize, flags: &str) -> Result<V
         if c == '[' {
             // Nested class in union position
             *i += 1;
-            let (set, new_i) = parse_v_flag_class(chars, *i, flags)?;
+            let (set, new_i) = parse_v_flag_class_with_depth(chars, *i, flags, depth + 1)?;
             *i = new_i;
             result = result.union(&set);
             continue;
