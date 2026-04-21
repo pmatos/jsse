@@ -882,9 +882,10 @@ impl Interpreter {
 
         let func_obj = self.create_object();
         let func_id = func_obj.borrow().id.unwrap();
+        let fp_id = self.realms[caller_realm_id].function_prototype;
         {
             let mut o = func_obj.borrow_mut();
-            o.prototype = self.realms[caller_realm_id].function_prototype.clone();
+            o.prototype = self.proto_rc(fp_id);
             o.class_name = "Function".to_string();
             o.callable = Some(JsFunction::native("".to_string(), 0, |_, _, _| {
                 Completion::Normal(JsValue::Undefined)

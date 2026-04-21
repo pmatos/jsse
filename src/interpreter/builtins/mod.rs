@@ -371,12 +371,12 @@ impl Interpreter {
         // setup get the correct [[Prototype]]. It will be adopted by Function.prototype later.
         if self.realm().function_prototype.is_none() {
             let fp = self.create_object();
-            fp.borrow_mut().prototype = self.realm().object_prototype.clone();
+            fp.borrow_mut().prototype = self.proto_rc(self.realm().object_prototype);
             fp.borrow_mut().callable = Some(JsFunction::native(String::new(), 0, |_, _, _| {
                 Completion::Normal(JsValue::Undefined)
             }));
             fp.borrow_mut().class_name = "Function".to_string();
-            self.realm_mut().function_prototype = Some(fp);
+            self.realm_mut().function_prototype = Some(fp.borrow().id.unwrap());
         }
 
         // Create %ThrowTypeError% intrinsic (§10.2.4) — must exist before anything uses it
@@ -460,7 +460,7 @@ impl Interpreter {
 
                     // OrdinaryCreateFromConstructor — realm-aware prototype
                     let proto = match interp
-                        .get_prototype_from_new_target_realm(|realm| realm.error_prototype.clone())
+                        .get_prototype_from_new_target_realm(|realm| realm.error_prototype)
                     {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
@@ -538,7 +538,7 @@ impl Interpreter {
         }
 
         // Get Error.prototype for inheritance
-        let error_prototype = {
+        let error_prototype_id: Option<u64> = {
             let env = self.realm().global_env.borrow();
             if let Some(error_val) = env.get("Error")
                 && let JsValue::Object(o) = &error_val
@@ -546,7 +546,7 @@ impl Interpreter {
                 if let Some(ctor) = self.get_object(o.id) {
                     let proto_val = ctor.borrow().get_property("prototype");
                     if let JsValue::Object(p) = &proto_val {
-                        self.get_object(p.id)
+                        Some(p.id)
                     } else {
                         None
                     }
@@ -557,7 +557,8 @@ impl Interpreter {
                 None
             }
         };
-        self.realm_mut().error_prototype = error_prototype.clone();
+        let error_prototype = error_prototype_id.and_then(|id| self.get_object(id));
+        self.realm_mut().error_prototype = error_prototype_id;
 
         // Add toString to Error.prototype
         if let Some(ref ep) = error_prototype {
@@ -724,17 +725,16 @@ impl Interpreter {
             );
 
             // Store native error prototype on realm
+            let native_proto_id = native_proto.borrow().id.unwrap();
             match name {
-                "SyntaxError" => {
-                    self.realm_mut().syntax_error_prototype = Some(native_proto.clone())
-                }
-                "TypeError" => self.realm_mut().type_error_prototype = Some(native_proto.clone()),
+                "SyntaxError" => self.realm_mut().syntax_error_prototype = Some(native_proto_id),
+                "TypeError" => self.realm_mut().type_error_prototype = Some(native_proto_id),
                 "ReferenceError" => {
-                    self.realm_mut().reference_error_prototype = Some(native_proto.clone())
+                    self.realm_mut().reference_error_prototype = Some(native_proto_id)
                 }
-                "RangeError" => self.realm_mut().range_error_prototype = Some(native_proto.clone()),
-                "URIError" => self.realm_mut().uri_error_prototype = Some(native_proto.clone()),
-                "EvalError" => self.realm_mut().eval_error_prototype = Some(native_proto.clone()),
+                "RangeError" => self.realm_mut().range_error_prototype = Some(native_proto_id),
+                "URIError" => self.realm_mut().uri_error_prototype = Some(native_proto_id),
+                "EvalError" => self.realm_mut().eval_error_prototype = Some(native_proto_id),
                 _ => {}
             }
 
@@ -750,12 +750,12 @@ impl Interpreter {
                     // OrdinaryCreateFromConstructor — realm-aware prototype
                     let proto = match interp.get_prototype_from_new_target_realm(|realm| {
                         match error_name_clone.as_str() {
-                            "SyntaxError" => realm.syntax_error_prototype.clone(),
-                            "TypeError" => realm.type_error_prototype.clone(),
-                            "ReferenceError" => realm.reference_error_prototype.clone(),
-                            "RangeError" => realm.range_error_prototype.clone(),
-                            "URIError" => realm.uri_error_prototype.clone(),
-                            "EvalError" => realm.eval_error_prototype.clone(),
+                            "SyntaxError" => realm.syntax_error_prototype,
+                            "TypeError" => realm.type_error_prototype,
+                            "ReferenceError" => realm.reference_error_prototype,
+                            "RangeError" => realm.range_error_prototype,
+                            "URIError" => realm.uri_error_prototype,
+                            "EvalError" => realm.eval_error_prototype,
                             _ => None,
                         }
                     }) {
@@ -870,7 +870,8 @@ impl Interpreter {
                 JsValue::String(JsString::from_str("")),
             );
 
-            self.realm_mut().suppressed_error_prototype = Some(suppressed_proto.clone());
+            self.realm_mut().suppressed_error_prototype =
+                Some(suppressed_proto.borrow().id.unwrap());
 
             let suppressed_ctor = self.create_function(JsFunction::constructor(
                 "SuppressedError".to_string(),
@@ -882,7 +883,7 @@ impl Interpreter {
 
                     // OrdinaryCreateFromConstructor — realm-aware prototype
                     let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                        realm.suppressed_error_prototype.clone()
+                        realm.suppressed_error_prototype
                     }) {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
@@ -957,7 +958,7 @@ impl Interpreter {
                 JsValue::String(JsString::from_str("")),
             );
             let agg_proto_clone = agg_proto.clone();
-            self.realm_mut().aggregate_error_prototype = Some(agg_proto.clone());
+            self.realm_mut().aggregate_error_prototype = Some(agg_proto.borrow().id.unwrap());
             self.register_global_fn(
                 "AggregateError",
                 BindingKind::Var,
@@ -971,7 +972,7 @@ impl Interpreter {
 
                         // OrdinaryCreateFromConstructor — realm-aware prototype
                         let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                            realm.aggregate_error_prototype.clone()
+                            realm.aggregate_error_prototype
                         }) {
                             Ok(p) => p.unwrap_or_else(|| agg_proto_clone.clone()),
                             Err(e) => return Completion::Throw(e),
@@ -1085,11 +1086,10 @@ impl Interpreter {
                     let nt_is_object = matches!((&object_fn, nt), (JsValue::Object(a), JsValue::Object(b)) if a.id == b.id);
                     if !nt_is_object {
                         // OrdinaryCreateFromConstructor(NewTarget, "%Object.prototype%")
-                        let default_proto = interp.realm().object_prototype.as_ref()
-                            .map(|p| p.borrow().id.unwrap());
+                        let default_proto = interp.realm().object_prototype;
                         let new_obj_rc = interp.create_object();
                         let no_id = new_obj_rc.borrow().id.unwrap();
-                        interp.apply_new_target_prototype(no_id, default_proto, |realm| realm.object_prototype.clone());
+                        interp.apply_new_target_prototype(no_id, default_proto, |realm| realm.object_prototype);
                         let new_obj_val = JsValue::Object(crate::types::JsObject { id: no_id });
                         return Completion::Normal(new_obj_val);
                     }
@@ -1131,13 +1131,9 @@ impl Interpreter {
                     interp.create_array(args.to_vec())
                 };
                 if let JsValue::Object(ref o) = arr {
-                    let default_proto_id = interp
-                        .realm()
-                        .array_prototype
-                        .as_ref()
-                        .and_then(|p| p.borrow().id);
+                    let default_proto_id = interp.realm().array_prototype;
                     interp.apply_new_target_prototype(o.id, default_proto_id, |realm| {
-                        realm.array_prototype.clone()
+                        realm.array_prototype
                     });
                 }
                 Completion::Normal(arr)
@@ -1316,7 +1312,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let proto = match interp
-                        .get_prototype_from_new_target_realm(|realm| realm.string_prototype.clone())
+                        .get_prototype_from_new_target_realm(|realm| realm.string_prototype)
                     {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
@@ -1438,7 +1434,7 @@ impl Interpreter {
                 {
                     // OrdinaryCreateFromConstructor — realm-aware prototype
                     let proto = match interp
-                        .get_prototype_from_new_target_realm(|realm| realm.number_prototype.clone())
+                        .get_prototype_from_new_target_realm(|realm| realm.number_prototype)
                     {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
@@ -1570,9 +1566,9 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     // OrdinaryCreateFromConstructor — realm-aware prototype
-                    let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                        realm.boolean_prototype.clone()
-                    }) {
+                    let proto = match interp
+                        .get_prototype_from_new_target_realm(|realm| realm.boolean_prototype)
+                    {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -2540,9 +2536,9 @@ impl Interpreter {
                         let result = interp.create_function(js_func);
                         interp.current_realm_id = old_realm;
                         // OrdinaryCreateFromConstructor — realm-aware prototype
-                        let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                            realm.function_prototype.clone()
-                        }) {
+                        let proto = match interp
+                            .get_prototype_from_new_target_realm(|realm| realm.function_prototype)
+                        {
                             Ok(p) => p,
                             Err(e) => return Completion::Throw(e),
                         };
@@ -2577,7 +2573,7 @@ impl Interpreter {
         // If we already have an early-created function_prototype, update it;
         // otherwise update the auto-created one from the Function constructor.
         {
-            let fp = self.realm().function_prototype.clone();
+            let fp = self.proto_rc(self.realm().function_prototype);
             if let Some(ref fp_obj) = fp {
                 // Already has callable from early init, but ensure length/name
                 let mut b = fp_obj.borrow_mut();
@@ -2638,10 +2634,11 @@ impl Interpreter {
             {
                 // Use the early-created function_prototype if available, otherwise
                 // fall back to the auto-created one from create_function
-                let fp = if let Some(ref existing_fp) = self.realm().function_prototype {
+                let fp = if let Some(existing_fp_id) = self.realm().function_prototype
+                    && let Some(existing_fp) = self.get_object(existing_fp_id)
+                {
                     // Replace the Function constructor's .prototype with our early object
-                    let fp_id = existing_fp.borrow().id.unwrap();
-                    let fp_val = JsValue::Object(crate::types::JsObject { id: fp_id });
+                    let fp_val = JsValue::Object(crate::types::JsObject { id: existing_fp_id });
                     func_data.borrow_mut().insert_property(
                         "prototype".to_string(),
                         PropertyDescriptor::data(fp_val, true, false, false),
@@ -2664,10 +2661,10 @@ impl Interpreter {
                 {
                     // Set Function.prototype's [[Prototype]] to Object.prototype
                     if fp.borrow().prototype.is_none() {
-                        fp.borrow_mut().prototype = self.realm().object_prototype.clone();
+                        fp.borrow_mut().prototype = self.proto_rc(self.realm().object_prototype);
                     }
                     // Ensure function_prototype is set
-                    self.realm_mut().function_prototype = Some(fp.clone());
+                    self.realm_mut().function_prototype = Some(fp.borrow().id.unwrap());
 
                     // Install call/apply/bind/toString on Function.prototype
                     self.setup_function_prototype(&fp);
@@ -2870,40 +2867,47 @@ impl Interpreter {
                     // Fix generator/async/async-generator function prototypes:
                     // Their [[Prototype]] should be Function.prototype per spec
                     // (§27.3.3, §27.7.3, §27.4.3) regardless of callability
-                    for special_proto in [
-                        self.realm().generator_function_prototype.clone(),
-                        self.realm().async_function_prototype.clone(),
-                        self.realm().async_generator_function_prototype.clone(),
-                    ]
-                    .into_iter()
-                    .flatten()
-                    {
-                        special_proto.borrow_mut().prototype = Some(fp.clone());
-                    }
-
-                    // Fix internal prototype fields (iterator protos, collection protos, etc.)
-                    // that aren't reachable through the global bindings walk above.
-                    let internal_protos: Vec<Rc<RefCell<JsObjectData>>> = [
-                        self.realm().iterator_prototype.clone(),
-                        self.realm().array_iterator_prototype.clone(),
-                        self.realm().string_iterator_prototype.clone(),
-                        self.realm().map_iterator_prototype.clone(),
-                        self.realm().set_iterator_prototype.clone(),
-                        self.realm().generator_prototype.clone(),
-                        self.realm().async_iterator_prototype.clone(),
-                        self.realm().async_generator_prototype.clone(),
-                        self.realm().regexp_prototype.clone(),
-                        self.realm().promise_prototype.clone(),
-                        self.realm().arraybuffer_prototype.clone(),
-                        self.realm().typed_array_prototype.clone(),
-                        self.realm().dataview_prototype.clone(),
-                        self.realm().weakref_prototype.clone(),
-                        self.realm().finalization_registry_prototype.clone(),
-                        self.realm().aggregate_error_prototype.clone(),
+                    let special_proto_ids: Vec<u64> = [
+                        self.realm().generator_function_prototype,
+                        self.realm().async_function_prototype,
+                        self.realm().async_generator_function_prototype,
                     ]
                     .into_iter()
                     .flatten()
                     .collect();
+                    for sp_id in special_proto_ids {
+                        if let Some(special_proto) = self.get_object(sp_id) {
+                            special_proto.borrow_mut().prototype = Some(fp.clone());
+                        }
+                    }
+
+                    // Fix internal prototype fields (iterator protos, collection protos, etc.)
+                    // that aren't reachable through the global bindings walk above.
+                    let internal_proto_ids: Vec<u64> = [
+                        self.realm().iterator_prototype,
+                        self.realm().array_iterator_prototype,
+                        self.realm().string_iterator_prototype,
+                        self.realm().map_iterator_prototype,
+                        self.realm().set_iterator_prototype,
+                        self.realm().generator_prototype,
+                        self.realm().async_iterator_prototype,
+                        self.realm().async_generator_prototype,
+                        self.realm().regexp_prototype,
+                        self.realm().promise_prototype,
+                        self.realm().arraybuffer_prototype,
+                        self.realm().typed_array_prototype,
+                        self.realm().dataview_prototype,
+                        self.realm().weakref_prototype,
+                        self.realm().finalization_registry_prototype,
+                        self.realm().aggregate_error_prototype,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect();
+                    let internal_protos: Vec<Rc<RefCell<JsObjectData>>> = internal_proto_ids
+                        .into_iter()
+                        .filter_map(|id| self.get_object(id))
+                        .collect();
                     for proto in &internal_protos {
                         let prop_vals: Vec<JsValue> = proto
                             .borrow()
@@ -2995,12 +2999,14 @@ impl Interpreter {
                 ),
             );
 
-            self.realm_mut().async_function_prototype = Some(af_proto);
+            self.realm_mut().async_function_prototype = Some(af_proto.borrow().id.unwrap());
         }
 
         // AsyncFunction constructor (not a global per spec)
         // Create the constructor and wire it up with AsyncFunction.prototype
-        if let Some(af_proto) = self.realm().async_function_prototype.clone() {
+        if let Some(af_proto_id) = self.realm().async_function_prototype
+            && let Some(af_proto) = self.get_object(af_proto_id)
+        {
             let af_ctor = self.create_function(JsFunction::constructor(
                 "AsyncFunction".to_string(),
                 1,
@@ -3100,7 +3106,7 @@ impl Interpreter {
                         // Apply GetPrototypeFromConstructor(newTarget, "%AsyncFunction.prototype%")
                         if let JsValue::Object(ref fo) = fn_val {
                             let proto = interp.get_prototype_from_new_target_realm(|realm| {
-                                realm.async_function_prototype.clone()
+                                realm.async_function_prototype
                             });
                             match proto {
                                 Ok(Some(proto_rc)) => {
@@ -3159,7 +3165,9 @@ impl Interpreter {
 
         // GeneratorFunction constructor (not a global per spec)
         // Create the constructor and wire it up with GeneratorFunction.prototype
-        if let Some(gf_proto) = self.realm().generator_function_prototype.clone() {
+        if let Some(gf_proto_id) = self.realm().generator_function_prototype
+            && let Some(gf_proto) = self.get_object(gf_proto_id)
+        {
             let gf_ctor = self.create_function(JsFunction::constructor(
                 "GeneratorFunction".to_string(),
                 1,
@@ -3257,7 +3265,7 @@ impl Interpreter {
                         // Apply GetPrototypeFromConstructor(newTarget, "%GeneratorFunction.prototype%")
                         if let JsValue::Object(ref fo) = fn_val {
                             let proto = interp.get_prototype_from_new_target_realm(|realm| {
-                                realm.generator_function_prototype.clone()
+                                realm.generator_function_prototype
                             });
                             match proto {
                                 Ok(Some(proto_rc)) => {
@@ -3316,7 +3324,9 @@ impl Interpreter {
 
         // AsyncGeneratorFunction constructor (not a global per spec)
         // Create the constructor and wire it up with AsyncGeneratorFunction.prototype
-        if let Some(agf_proto) = self.realm().async_generator_function_prototype.clone() {
+        if let Some(agf_proto_id) = self.realm().async_generator_function_prototype
+            && let Some(agf_proto) = self.get_object(agf_proto_id)
+        {
             let agf_ctor = self.create_function(JsFunction::constructor(
                 "AsyncGeneratorFunction".to_string(),
                 1,
@@ -3416,7 +3426,7 @@ impl Interpreter {
                         // Apply GetPrototypeFromConstructor(newTarget, "%AsyncGeneratorFunction.prototype%")
                         if let JsValue::Object(ref fo) = fn_val {
                             let proto = interp.get_prototype_from_new_target_realm(|realm| {
-                                realm.async_generator_function_prototype.clone()
+                                realm.async_generator_function_prototype
                             });
                             match proto {
                                 Ok(Some(proto_rc)) => {
@@ -3963,7 +3973,7 @@ impl Interpreter {
         // Record whose binding object is the global object. Variable lookups in global
         // scope should check global object properties.
         self.realm().global_env.borrow_mut().global_object = Some(global_obj.clone());
-        self.realm_mut().global_object = Some(global_obj);
+        self.realm_mut().global_object = Some(global_obj.borrow().id.unwrap());
 
         // Per §9.1.1.4, built-in global names live on the global object (Object
         // Environment Record), not as declarative bindings. Remove the bootstrapping
@@ -4008,7 +4018,7 @@ impl Interpreter {
             if let Some(JsValue::Object(ref proto_ref)) = proto_val
                 && let Some(proto_obj) = self.get_object(proto_ref.id)
             {
-                self.realm_mut().object_prototype = Some(proto_obj.clone());
+                self.realm_mut().object_prototype = Some(proto_obj.borrow().id.unwrap());
                 // Object.prototype is an immutable prototype exotic object (§10.4.7)
                 proto_obj.borrow_mut().is_immutable_prototype = true;
 
@@ -6705,9 +6715,8 @@ impl Interpreter {
             }
             JsValue::String(_) => {
                 if let Some(key) = &sym_key {
-                    let str_proto = self.realm().string_prototype.clone();
-                    if let Some(proto) = str_proto {
-                        let proto_id = proto.borrow().id.unwrap();
+                    let str_proto_id = self.realm().string_prototype;
+                    if let Some(proto_id) = str_proto_id {
                         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
                         let val = match self.get_object_property(proto_id, key, &proto_val) {
                             Completion::Normal(v) => v,
@@ -8892,10 +8901,11 @@ impl Interpreter {
     pub(crate) fn setup_shadow_realm(&mut self) {
         let my_realm_id = self.current_realm_id;
         let proto = self.create_object();
+        let op = self.proto_rc(self.realm().object_prototype);
         {
             let mut p = proto.borrow_mut();
             p.class_name = "ShadowRealm".to_string();
-            p.prototype = self.realm().object_prototype.clone();
+            p.prototype = op;
         }
 
         // ShadowRealm.prototype[Symbol.toStringTag] = "ShadowRealm"
@@ -9129,9 +9139,7 @@ impl Interpreter {
         }
 
         // Store prototype in realm
-        if let Some(proto_rc) = self.get_object(proto_id) {
-            self.realm_mut().shadow_realm_prototype = Some(proto_rc);
-        }
+        self.realm_mut().shadow_realm_prototype = Some(proto_id);
 
         // Register ShadowRealm as global
         let global_env = self.realm().global_env.clone();

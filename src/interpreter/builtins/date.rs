@@ -1175,8 +1175,8 @@ impl Interpreter {
                     let ns = ms * num_bigint::BigInt::from(1_000_000i64);
                     let obj = interp.create_object();
                     obj.borrow_mut().class_name = "Temporal.Instant".to_string();
-                    if let Some(ref proto) = interp.realm().temporal_instant_prototype {
-                        obj.borrow_mut().prototype = Some(proto.clone());
+                    if let Some(proto_id) = interp.realm().temporal_instant_prototype {
+                        obj.borrow_mut().prototype = Some(interp.get_object_expect(proto_id));
                     }
                     obj.borrow_mut().temporal_data =
                         Some(crate::interpreter::types::TemporalData::Instant {
@@ -1374,7 +1374,7 @@ impl Interpreter {
                 {
                     // OrdinaryCreateFromConstructor — realm-aware prototype
                     let proto = match interp
-                        .get_prototype_from_new_target_realm(|realm| realm.date_prototype.clone())
+                        .get_prototype_from_new_target_realm(|realm| realm.date_prototype)
                     {
                         Ok(p) => p.unwrap_or_else(|| date_proto_clone.clone()),
                         Err(e) => return Completion::Throw(e),
@@ -1574,7 +1574,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("toGMTString".to_string(), to_gmt);
 
-        self.realm_mut().date_prototype = Some(proto);
+        self.realm_mut().date_prototype = Some(proto.borrow().id.unwrap());
     }
 
     pub(crate) fn create_range_error(&mut self, msg: &str) -> JsValue {

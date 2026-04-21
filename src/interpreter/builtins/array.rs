@@ -3893,16 +3893,16 @@ impl Interpreter {
             );
         }
 
-        self.realm_mut().array_prototype = Some(proto);
+        self.realm_mut().array_prototype = Some(proto.borrow().id.unwrap());
     }
 
     pub(crate) fn create_array(&mut self, values: Vec<JsValue>) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
-            .realm()
-            .array_prototype
-            .clone()
-            .or(self.realm().object_prototype.clone());
+        obj_data.prototype = self.proto_rc(
+            self.realm()
+                .array_prototype
+                .or(self.realm().object_prototype),
+        );
         obj_data.class_name = "Array".to_string();
         for (i, v) in values.iter().enumerate() {
             obj_data.insert_value(i.to_string(), v.clone());
@@ -3919,11 +3919,11 @@ impl Interpreter {
     pub(crate) fn create_array_with_holes(&mut self, items: Vec<Option<JsValue>>) -> JsValue {
         let len = items.len();
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
-            .realm()
-            .array_prototype
-            .clone()
-            .or(self.realm().object_prototype.clone());
+        obj_data.prototype = self.proto_rc(
+            self.realm()
+                .array_prototype
+                .or(self.realm().object_prototype),
+        );
         obj_data.class_name = "Array".to_string();
         let mut array_elements = Vec::with_capacity(len);
         for (i, item) in items.into_iter().enumerate() {
@@ -3949,11 +3949,11 @@ impl Interpreter {
 
     pub(crate) fn create_array_with_length(&mut self, len: usize) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
-            .realm()
-            .array_prototype
-            .clone()
-            .or(self.realm().object_prototype.clone());
+        obj_data.prototype = self.proto_rc(
+            self.realm()
+                .array_prototype
+                .or(self.realm().object_prototype),
+        );
         obj_data.class_name = "Array".to_string();
         obj_data.insert_property(
             "length".to_string(),

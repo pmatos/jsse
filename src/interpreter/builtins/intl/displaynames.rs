@@ -1069,8 +1069,8 @@ fn get_display_name_for_code(
 impl Interpreter {
     pub(crate) fn setup_intl_display_names(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
-        if let Some(ref op) = self.realm().object_prototype {
-            proto.borrow_mut().prototype = Some(op.clone());
+        if let Some(op_id) = self.realm().object_prototype {
+            proto.borrow_mut().prototype = Some(self.get_object_expect(op_id));
         }
         proto.borrow_mut().class_name = "Intl.DisplayNames".to_string();
 
@@ -1135,8 +1135,8 @@ impl Interpreter {
                 };
 
                 let result = interp.create_object();
-                if let Some(ref op) = interp.realm().object_prototype {
-                    result.borrow_mut().prototype = Some(op.clone());
+                if let Some(op_id) = interp.realm().object_prototype {
+                    result.borrow_mut().prototype = Some(interp.get_object_expect(op_id));
                 }
 
                 // Properties in spec order: locale, style, type, fallback, languageDisplay
@@ -1197,7 +1197,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_display_names_prototype = Some(proto.clone());
+        self.realm_mut().intl_display_names_prototype = Some(proto.borrow().id.unwrap());
 
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
@@ -1308,9 +1308,9 @@ impl Interpreter {
 
                 let locale = interp.intl_resolve_locale(&requested);
 
-                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                    realm.intl_display_names_prototype.clone()
-                }) {
+                let proto = match interp
+                    .get_prototype_from_new_target_realm(|realm| realm.intl_display_names_prototype)
+                {
                     Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
                     Err(e) => return Completion::Throw(e),
                 };

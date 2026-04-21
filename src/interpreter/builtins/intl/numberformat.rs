@@ -2905,8 +2905,8 @@ pub(crate) fn format_to_parts_internal(
 impl Interpreter {
     pub(crate) fn setup_intl_number_format(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
-        if let Some(ref op) = self.realm().object_prototype {
-            proto.borrow_mut().prototype = Some(op.clone());
+        if let Some(op_id) = self.realm().object_prototype {
+            proto.borrow_mut().prototype = Some(self.get_object_expect(op_id));
         }
         proto.borrow_mut().class_name = "Intl.NumberFormat".to_string();
 
@@ -3121,8 +3121,9 @@ impl Interpreter {
                             .into_iter()
                             .map(|(typ, val)| {
                                 let part_obj = interp.create_object();
-                                if let Some(ref op) = interp.realm().object_prototype {
-                                    part_obj.borrow_mut().prototype = Some(op.clone());
+                                if let Some(op_id) = interp.realm().object_prototype {
+                                    part_obj.borrow_mut().prototype =
+                                        Some(interp.get_object_expect(op_id));
                                 }
                                 part_obj.borrow_mut().insert_property(
                                     "type".to_string(),
@@ -3390,8 +3391,8 @@ impl Interpreter {
 
                             let make_part = |interp: &mut Interpreter, typ: &str, val: &str, source: &str| -> JsValue {
                                 let part = interp.create_object();
-                                if let Some(ref op) = interp.realm().object_prototype {
-                                    part.borrow_mut().prototype = Some(op.clone());
+                                if let Some(op_id) = interp.realm().object_prototype {
+                                    part.borrow_mut().prototype = Some(interp.get_object_expect(op_id));
                                 }
                                 part.borrow_mut().insert_property(
                                     "type".to_string(),
@@ -3505,8 +3506,8 @@ impl Interpreter {
                     }) = data
                     {
                         let result = interp.create_object();
-                        if let Some(ref op) = interp.realm().object_prototype {
-                            result.borrow_mut().prototype = Some(op.clone());
+                        if let Some(op_id) = interp.realm().object_prototype {
+                            result.borrow_mut().prototype = Some(interp.get_object_expect(op_id));
                         }
 
                         let mut props: Vec<(&str, JsValue)> = vec![
@@ -3631,7 +3632,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_number_format_prototype = Some(proto.clone());
+        self.realm_mut().intl_number_format_prototype = Some(proto.borrow().id.unwrap());
 
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
@@ -4329,7 +4330,7 @@ impl Interpreter {
                 };
 
                 let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                    realm.intl_number_format_prototype.clone()
+                    realm.intl_number_format_prototype
                 }) {
                     Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
                     Err(e) => return Completion::Throw(e),

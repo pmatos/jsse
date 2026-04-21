@@ -329,7 +329,7 @@ impl Interpreter {
             );
         }
 
-        self.realm_mut().bigint_prototype = Some(proto);
+        self.realm_mut().bigint_prototype = Some(proto.borrow().id.unwrap());
     }
 }
 

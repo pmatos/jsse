@@ -209,8 +209,8 @@ fn is_thai_locale(locale_str: &str) -> bool {
 impl Interpreter {
     pub(crate) fn setup_intl_collator(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
-        if let Some(ref op) = self.realm().object_prototype {
-            proto.borrow_mut().prototype = Some(op.clone());
+        if let Some(op_id) = self.realm().object_prototype {
+            proto.borrow_mut().prototype = Some(self.get_object_expect(op_id));
         }
         proto.borrow_mut().class_name = "Intl.Collator".to_string();
 
@@ -366,8 +366,8 @@ impl Interpreter {
                     }) = data
                     {
                         let result = interp.create_object();
-                        if let Some(ref op) = interp.realm().object_prototype {
-                            result.borrow_mut().prototype = Some(op.clone());
+                        if let Some(op_id) = interp.realm().object_prototype {
+                            result.borrow_mut().prototype = Some(interp.get_object_expect(op_id));
                         }
 
                         let props = vec![
@@ -407,7 +407,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_collator_prototype = Some(proto.clone());
+        self.realm_mut().intl_collator_prototype = Some(proto.borrow().id.unwrap());
 
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
@@ -636,9 +636,9 @@ impl Interpreter {
                 };
 
                 // OrdinaryCreateFromConstructor — realm-aware prototype
-                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                    realm.intl_collator_prototype.clone()
-                }) {
+                let proto = match interp
+                    .get_prototype_from_new_target_realm(|realm| realm.intl_collator_prototype)
+                {
                     Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
                     Err(e) => return Completion::Throw(e),
                 };

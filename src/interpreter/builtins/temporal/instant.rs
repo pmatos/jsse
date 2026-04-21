@@ -560,7 +560,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("toZonedDateTimeISO".to_string(), to_zdt_fn);
 
-        self.realm_mut().temporal_instant_prototype = Some(proto.clone());
+        self.realm_mut().temporal_instant_prototype = Some(proto.borrow().id.unwrap());
 
         // Constructor
         let constructor = self.create_function(JsFunction::constructor(
@@ -582,14 +582,8 @@ impl Interpreter {
                 }
                 let result = create_instant_result(interp, epoch_ns);
                 if let Completion::Normal(JsValue::Object(ref o)) = result {
-                    let dp = interp
-                        .realm()
-                        .temporal_instant_prototype
-                        .as_ref()
-                        .and_then(|p| p.borrow().id);
-                    interp.apply_new_target_prototype(o.id, dp, |r| {
-                        r.temporal_instant_prototype.clone()
-                    });
+                    let dp = interp.realm().temporal_instant_prototype;
+                    interp.apply_new_target_prototype(o.id, dp, |r| r.temporal_instant_prototype);
                 }
                 result
             },
@@ -830,8 +824,8 @@ fn get_instant_ns(interp: &mut Interpreter, this: &JsValue) -> Result<BigInt, Co
 fn create_instant_result(interp: &mut Interpreter, epoch_ns: BigInt) -> Completion {
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.Instant".to_string();
-    if let Some(ref proto) = interp.realm().temporal_instant_prototype {
-        obj.borrow_mut().prototype = Some(proto.clone());
+    if let Some(proto_id) = interp.realm().temporal_instant_prototype {
+        obj.borrow_mut().prototype = Some(interp.get_object_expect(proto_id));
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::Instant {
         epoch_nanoseconds: epoch_ns,

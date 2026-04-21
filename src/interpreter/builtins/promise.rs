@@ -188,7 +188,7 @@ impl Interpreter {
 
     pub(crate) fn setup_promise(&mut self) {
         let proto = self.create_object();
-        self.realm_mut().promise_prototype = Some(proto.clone());
+        self.realm_mut().promise_prototype = Some(proto.borrow().id.unwrap());
 
         // Promise.prototype.then
         let then_fn = self.create_function(JsFunction::native(
@@ -395,7 +395,7 @@ impl Interpreter {
         );
 
         // Promise constructor
-        let _promise_proto = self.realm().promise_prototype.clone();
+        let _promise_proto = self.realm().promise_prototype;
         let ctor = self.create_function(JsFunction::constructor(
             "Promise".to_string(),
             1,
@@ -414,7 +414,7 @@ impl Interpreter {
                 }
                 // OrdinaryCreateFromConstructor — realm-aware prototype
                 let proto = match interp
-                    .get_prototype_from_new_target_realm(|realm| realm.promise_prototype.clone())
+                    .get_prototype_from_new_target_realm(|realm| realm.promise_prototype)
                 {
                     Ok(p) => p,
                     Err(e) => return Completion::Throw(e),
@@ -749,7 +749,7 @@ impl Interpreter {
 
     pub(crate) fn create_promise_object(&mut self) -> JsValue {
         let mut data = JsObjectData::new();
-        data.prototype = self.realm().promise_prototype.clone();
+        data.prototype = self.proto_rc(self.realm().promise_prototype);
         data.class_name = "Promise".to_string();
         data.promise_data = Some(PromiseData::new());
         let id = self.alloc_object(data);
@@ -1773,8 +1773,8 @@ impl Interpreter {
         {
             let mut o = obj.borrow_mut();
             o.class_name = "AggregateError".to_string();
-            if let Some(ref proto) = self.realm().aggregate_error_prototype {
-                o.prototype = Some(proto.clone());
+            if let Some(proto_id) = self.realm().aggregate_error_prototype {
+                o.prototype = Some(self.get_object_expect(proto_id));
             }
             o.insert_builtin(
                 "message".to_string(),
