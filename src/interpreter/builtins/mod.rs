@@ -2668,6 +2668,11 @@ impl Interpreter {
                                     JsValue::Object(o) => o.id,
                                     _ => return Completion::Normal(JsValue::Null),
                                 };
+                                let this_realm_id = interp
+                                    .function_realm_map
+                                    .get(&this_id)
+                                    .copied()
+                                    .unwrap_or(interp.current_realm_id);
                                 // Walk call_stack_frames from top to find this function's activation
                                 let mut found_idx = None;
                                 for i in (0..interp.call_stack_frames.len()).rev() {
@@ -2691,6 +2696,15 @@ impl Interpreter {
                                     }
                                     if frame.func_obj_id == 0 {
                                         continue;
+                                    }
+                                    let caller_realm_id = interp
+                                        .function_realm_map
+                                        .get(&frame.func_obj_id)
+                                        .copied()
+                                        .unwrap_or(interp.current_realm_id);
+                                    // Do not leak cross-realm caller function objects.
+                                    if caller_realm_id != this_realm_id {
+                                        return Completion::Normal(JsValue::Null);
                                     }
                                     // Check if the caller is strict — return null for strict callers
                                     if let Some(obj) = interp.get_object(frame.func_obj_id) {
