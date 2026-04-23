@@ -3912,8 +3912,7 @@ impl Interpreter {
             PropertyDescriptor::data(JsValue::Number(values.len() as f64), true, false, false),
         );
         obj_data.array_elements = Some(values);
-        let obj = Rc::new(RefCell::new(obj_data));
-        let id = self.allocate_object_slot(obj);
+        let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
 
@@ -3944,8 +3943,7 @@ impl Interpreter {
             PropertyDescriptor::data(JsValue::Number(len as f64), true, false, false),
         );
         obj_data.array_elements = Some(array_elements);
-        let obj = Rc::new(RefCell::new(obj_data));
-        let id = self.allocate_object_slot(obj);
+        let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
 
@@ -3963,8 +3961,7 @@ impl Interpreter {
         );
         // Use a small Vec for sparse arrays — don't pre-allocate huge arrays
         obj_data.array_elements = Some(Vec::new());
-        let obj = Rc::new(RefCell::new(obj_data));
-        let id = self.allocate_object_slot(obj);
+        let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
 }

@@ -65,8 +65,7 @@ impl Interpreter {
         );
         obj_data.array_elements = Some(values);
         obj_data.extensible = false;
-        let obj = Rc::new(RefCell::new(obj_data));
-        let id = self.allocate_object_slot(obj);
+        let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
 
@@ -113,8 +112,7 @@ impl Interpreter {
                     "lastIndex".to_string(),
                     PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
                 );
-                let rc = Rc::new(RefCell::new(obj));
-                let id = self.allocate_object_slot(rc);
+                let id = self.alloc_object(obj);
                 JsValue::Object(crate::types::JsObject { id })
             }
         }
@@ -157,8 +155,7 @@ impl Interpreter {
             "lastIndex".to_string(),
             PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
         );
-        let rc = Rc::new(RefCell::new(obj));
-        let id = self.allocate_object_slot(rc);
+        let id = self.alloc_object(obj);
         JsValue::Object(crate::types::JsObject { id })
     }
 
@@ -1342,8 +1339,7 @@ impl Interpreter {
                 }
             }
         }
-        let obj = Rc::new(RefCell::new(obj_data));
-        let id = self.allocate_object_slot(obj);
+        let id = self.alloc_object(obj_data);
         // Set __home_object__ for concise methods, getters, and setters
         let obj_val = JsValue::Object(crate::types::JsObject { id });
         {

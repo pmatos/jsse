@@ -8668,8 +8668,7 @@ impl Interpreter {
                     "lastIndex".to_string(),
                     PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
                 );
-                let rc = Rc::new(RefCell::new(obj));
-                let id = interp.allocate_object_slot(rc);
+                let id = interp.alloc_object(obj);
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             },
         ));

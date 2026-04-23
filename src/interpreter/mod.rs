@@ -955,9 +955,8 @@ impl Interpreter {
     fn create_object(&mut self) -> Rc<RefCell<JsObjectData>> {
         let mut data = JsObjectData::new();
         data.prototype = self.realm().object_prototype.clone();
-        let obj = Rc::new(RefCell::new(data));
-        self.allocate_object_slot(obj.clone());
-        obj
+        let id = self.alloc_object(data);
+        self.get_object_expect(id)
     }
 
     fn create_thrower_function(&mut self) -> JsValue {
@@ -1122,15 +1121,17 @@ impl Interpreter {
                 PropertyDescriptor::data(proto_val.clone(), true, false, false),
             );
         }
-        let obj = Rc::new(RefCell::new(obj_data));
-        let func_id = self.allocate_object_slot(obj.clone());
+        let func_id = self.alloc_object(obj_data);
         self.function_realm_map
             .insert(func_id, self.current_realm_id);
         let func_val = JsValue::Object(crate::types::JsObject { id: func_id });
         // Set prototype.constructor = func (not for generators)
         if is_constructable
             && !is_gen
-            && let Some(JsValue::Object(proto_ref)) = obj.borrow().get_property_value("prototype")
+            && let Some(JsValue::Object(proto_ref)) = self
+                .get_object_expect(func_id)
+                .borrow()
+                .get_property_value("prototype")
             && let Some(proto_obj) = self.get_object(proto_ref.id)
         {
             proto_obj
@@ -1140,8 +1141,18 @@ impl Interpreter {
         func_val
     }
 
-    fn get_object(&self, id: u64) -> Option<Rc<RefCell<JsObjectData>>> {
+    pub(crate) fn get_object(&self, id: u64) -> Option<Rc<RefCell<JsObjectData>>> {
         self.objects.get(id as usize).and_then(|slot| slot.clone())
+    }
+
+    /// Like `get_object` but panics if the id is dead. Matches the pattern
+    /// `self.objects[id as usize].as_ref().unwrap().clone()` used at most
+    /// call sites where the id is known live (held by a live JsValue).
+    pub(crate) fn get_object_expect(&self, id: u64) -> Rc<RefCell<JsObjectData>> {
+        self.objects[id as usize]
+            .as_ref()
+            .expect("dead object id")
+            .clone()
     }
 
     pub(crate) fn set_function_name(&self, val: &JsValue, name: &str) {
