@@ -564,6 +564,9 @@ impl Realm {
             self.syntax_error_prototype,
             self.uri_error_prototype,
             self.eval_error_prototype,
+            self.disposable_stack_prototype,
+            self.async_disposable_stack_prototype,
+            self.suppressed_error_prototype,
             self.shadow_realm_prototype,
             self.iterator_helper_prototype,
         ]
