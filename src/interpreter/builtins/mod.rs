@@ -2527,7 +2527,7 @@ impl Interpreter {
                             is_generator: false,
                             is_async: false,
                             is_method: false,
-                            source_text: Some(fn_source_text),
+                            source_text: Some(fn_source_text.into()),
                             captured_new_target: None,
                         };
                         // Create function in the Function constructor's realm
@@ -3099,7 +3099,7 @@ impl Interpreter {
                             is_generator: false,
                             is_async: true,
                             is_method: false,
-                            source_text: Some(fn_source_text),
+                            source_text: Some(fn_source_text.into()),
                             captured_new_target: None,
                         };
                         let fn_val = interp.create_function(js_func);
@@ -3258,7 +3258,7 @@ impl Interpreter {
                             is_generator: true,
                             is_async: false,
                             is_method: false,
-                            source_text: Some(fn_source_text),
+                            source_text: Some(fn_source_text.into()),
                             captured_new_target: None,
                         };
                         let fn_val = interp.create_function(js_func);
@@ -3419,7 +3419,7 @@ impl Interpreter {
                             is_generator: true,
                             is_async: true,
                             is_method: false,
-                            source_text: Some(fn_source_text),
+                            source_text: Some(fn_source_text.into()),
                             captured_new_target: None,
                         };
                         let fn_val = interp.create_function(js_func);
@@ -8856,7 +8856,7 @@ impl Interpreter {
                             JsFunction::User {
                                 source_text: Some(text),
                                 ..
-                            } => text.clone(),
+                            } => text.to_string(),
                             JsFunction::User {
                                 name,
                                 is_arrow,

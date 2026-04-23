@@ -1104,7 +1104,7 @@ pub enum JsFunction {
         is_generator: bool,
         is_async: bool,
         is_method: bool,
-        source_text: Option<String>,
+        source_text: Option<SourceText>,
         captured_new_target: Option<JsValue>,
     },
     Native(

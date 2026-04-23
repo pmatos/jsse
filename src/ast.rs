@@ -1,11 +1,47 @@
 /// AST node types for ECMAScript.
 /// Each node represents a syntactic element from the spec.
+use std::fmt;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_TEMPLATE_ID: AtomicU64 = AtomicU64::new(1);
 
 pub fn next_template_id() -> u64 {
     NEXT_TEMPLATE_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+#[derive(Clone, Debug)]
+pub struct SourceText {
+    source: Rc<str>,
+    start: usize,
+    end: usize,
+}
+
+impl SourceText {
+    pub fn new(source: Rc<str>, start: usize, end: usize) -> Self {
+        Self { source, start, end }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.source[self.start..self.end]
+    }
+}
+
+impl From<String> for SourceText {
+    fn from(source: String) -> Self {
+        let end = source.len();
+        Self {
+            source: Rc::from(source),
+            start: 0,
+            end,
+        }
+    }
+}
+
+impl fmt::Display for SourceText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -374,7 +410,7 @@ pub struct FunctionDecl {
     pub body: Vec<Statement>,
     pub is_async: bool,
     pub is_generator: bool,
-    pub source_text: Option<String>,
+    pub source_text: Option<SourceText>,
     pub body_is_strict: bool,
 }
 
@@ -385,7 +421,7 @@ pub struct FunctionExpr {
     pub body: Vec<Statement>,
     pub is_async: bool,
     pub is_generator: bool,
-    pub source_text: Option<String>,
+    pub source_text: Option<SourceText>,
     pub body_is_strict: bool,
 }
 
@@ -394,7 +430,7 @@ pub struct ArrowFunction {
     pub params: Vec<Pattern>,
     pub body: ArrowBody,
     pub is_async: bool,
-    pub source_text: Option<String>,
+    pub source_text: Option<SourceText>,
     pub body_is_strict: bool,
 }
 
@@ -409,7 +445,7 @@ pub struct ClassDecl {
     pub name: String,
     pub super_class: Option<Box<Expression>>,
     pub body: Vec<ClassElement>,
-    pub source_text: Option<String>,
+    pub source_text: Option<SourceText>,
 }
 
 #[derive(Clone, Debug)]
@@ -417,7 +453,7 @@ pub struct ClassExpr {
     pub name: Option<String>,
     pub super_class: Option<Box<Expression>>,
     pub body: Vec<ClassElement>,
-    pub source_text: Option<String>,
+    pub source_text: Option<SourceText>,
 }
 
 #[derive(Clone, Debug)]

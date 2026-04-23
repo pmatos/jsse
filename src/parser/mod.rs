@@ -2,6 +2,7 @@ use crate::ast::*;
 use crate::lexer::{Keyword, LexError, Lexer, Token};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::fmt;
+use std::rc::Rc;
 
 mod declarations;
 mod expressions;
@@ -34,6 +35,7 @@ impl From<LexError> for ParseError {
 
 pub struct Parser<'a> {
     source: &'a str,
+    source_text_source: Rc<str>,
     lexer: Lexer<'a>,
     current: Token,
     current_token_start: usize,
@@ -81,8 +83,10 @@ impl<'a> Parser<'a> {
         };
         let token_start = lexer.token_start();
         let token_end = lexer.offset();
+        let source_text_source = Rc::from(source);
         Ok(Self {
             source,
+            source_text_source,
             lexer,
             current,
             current_token_start: token_start,
@@ -180,18 +184,16 @@ impl<'a> Parser<'a> {
         }
     }
 
-    const MAX_SOURCE_TEXT_LEN: usize = 64 * 1024;
-
-    fn source_since(&self, start: usize) -> Option<String> {
+    fn source_since(&self, start: usize) -> Option<SourceText> {
         let end = self.prev_token_end;
         if end <= start {
-            return Some(String::new());
+            return Some(SourceText::new(
+                self.source_text_source.clone(),
+                start,
+                start,
+            ));
         }
-        let len = end - start;
-        if len > Self::MAX_SOURCE_TEXT_LEN {
-            return None;
-        }
-        Some(self.source[start..end].to_string())
+        Some(SourceText::new(self.source_text_source.clone(), start, end))
     }
 
     pub fn set_strict(&mut self, strict: bool) {
