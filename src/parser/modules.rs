@@ -404,7 +404,7 @@ impl<'a> Parser<'a> {
         let params = self.parse_formal_parameters()?;
         let (body, body_is_strict) = self.parse_function_body_with_context(is_generator, false)?;
 
-        let source_text = Some(self.source_since(start));
+        let source_text = self.source_since(start);
 
         Ok(FunctionDecl {
             name,
@@ -432,7 +432,7 @@ impl<'a> Parser<'a> {
         let params = self.parse_formal_parameters()?;
         let (body, body_is_strict) = self.parse_function_body_with_context(is_generator, true)?;
 
-        let source_text = Some(self.source_since(start));
+        let source_text = self.source_since(start);
 
         Ok(FunctionDecl {
             name,
@@ -469,7 +469,7 @@ impl<'a> Parser<'a> {
             Self::check_no_direct_super_in_constructor(&body)?;
         }
 
-        let source_text = Some(self.source_since(start));
+        let source_text = self.source_since(start);
 
         Ok(ClassDecl {
             name,

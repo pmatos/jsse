@@ -201,7 +201,7 @@ impl Interpreter {
         super_class: &Option<Box<Expression>>,
         body: &[ClassElement],
         env: &EnvRef,
-        class_source_text: Option<String>,
+        class_source_text: Option<SourceText>,
     ) -> Completion {
         let brand_id = self.next_class_brand_id;
         self.next_class_brand_id += 1;
@@ -252,7 +252,7 @@ impl Interpreter {
         super_class: &Option<Box<Expression>>,
         body: &[ClassElement],
         env: &EnvRef,
-        class_source_text: Option<String>,
+        class_source_text: Option<SourceText>,
     ) -> Completion {
         // Find constructor method
         let ctor_method = body.iter().find_map(|elem| {
