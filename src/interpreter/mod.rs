@@ -779,13 +779,13 @@ impl Interpreter {
         get_realm_proto: F,
     ) -> Result<Option<Rc<RefCell<JsObjectData>>>, JsValue>
     where
-        F: Fn(&Realm) -> Option<Rc<RefCell<JsObjectData>>>,
+        F: Fn(&Realm) -> Option<u64>,
     {
         let nt = match self.new_target.clone() {
             Some(v) => v,
             None => {
-                let proto = get_realm_proto(&self.realms[self.current_realm_id]);
-                return Ok(proto);
+                let proto_id = get_realm_proto(&self.realms[self.current_realm_id]);
+                return Ok(self.proto_rc(proto_id));
             }
         };
         if let JsValue::Object(nt_o) = &nt {
@@ -801,11 +801,11 @@ impl Interpreter {
             }
             // proto is not an object: use realm of newTarget
             let nt_realm_id = self.get_function_realm(&JsValue::Object(nt_o.clone()))?;
-            let proto = get_realm_proto(&self.realms[nt_realm_id]);
-            return Ok(proto);
+            let proto_id = get_realm_proto(&self.realms[nt_realm_id]);
+            return Ok(self.proto_rc(proto_id));
         }
-        let proto = get_realm_proto(&self.realms[self.current_realm_id]);
-        Ok(proto)
+        let proto_id = get_realm_proto(&self.realms[self.current_realm_id]);
+        Ok(self.proto_rc(proto_id))
     }
 
     fn register_global_fn(&mut self, name: &str, kind: BindingKind, func: JsFunction) {
@@ -954,7 +954,7 @@ impl Interpreter {
 
     fn create_object(&mut self) -> Rc<RefCell<JsObjectData>> {
         let mut data = JsObjectData::new();
-        data.prototype = self.realm().object_prototype.clone();
+        data.prototype = self.proto_rc(self.realm().object_prototype);
         let id = self.alloc_object(data);
         self.get_object_expect(id)
     }
@@ -1012,27 +1012,24 @@ impl Interpreter {
             JsFunction::Native(name, arity, _, _) => (name.clone(), *arity),
         };
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = if is_async_gen {
+        let proto_id = if is_async_gen {
             self.realm()
                 .async_generator_function_prototype
-                .clone()
-                .or(self.realm().object_prototype.clone())
+                .or(self.realm().object_prototype)
         } else if is_gen {
             self.realm()
                 .generator_function_prototype
-                .clone()
-                .or(self.realm().object_prototype.clone())
+                .or(self.realm().object_prototype)
         } else if is_async_non_gen {
             self.realm()
                 .async_function_prototype
-                .clone()
-                .or(self.realm().object_prototype.clone())
+                .or(self.realm().object_prototype)
         } else {
             self.realm()
                 .function_prototype
-                .clone()
-                .or(self.realm().object_prototype.clone())
+                .or(self.realm().object_prototype)
         };
+        obj_data.prototype = self.proto_rc(proto_id);
         obj_data.callable = Some(func);
         obj_data.class_name = if is_async_gen {
             "AsyncGeneratorFunction".to_string()
@@ -1110,9 +1107,10 @@ impl Interpreter {
         if needs_prototype {
             let proto = self.create_object();
             if is_async_gen {
-                proto.borrow_mut().prototype = self.realm().async_generator_prototype.clone();
+                proto.borrow_mut().prototype =
+                    self.proto_rc(self.realm().async_generator_prototype);
             } else if is_gen {
-                proto.borrow_mut().prototype = self.realm().generator_prototype.clone();
+                proto.borrow_mut().prototype = self.proto_rc(self.realm().generator_prototype);
             }
             let proto_id = proto.borrow().id.unwrap();
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
@@ -1293,7 +1291,7 @@ impl Interpreter {
             let array_iter_fn = self
                 .realm()
                 .array_prototype
-                .as_ref()
+                .and_then(|id| self.get_object(id))
                 .map(|proto| proto.borrow().get_property(&key));
             if let Some(iter_fn) = array_iter_fn
                 && !matches!(iter_fn, JsValue::Undefined)
@@ -2529,7 +2527,7 @@ impl Interpreter {
         {
             let mut ab = ab_obj.borrow_mut();
             ab.class_name = "ArrayBuffer".to_string();
-            ab.prototype = self.realm().arraybuffer_prototype.clone();
+            ab.prototype = self.proto_rc(self.realm().arraybuffer_prototype);
             ab.arraybuffer_data = Some(buf_rc.clone());
             ab.arraybuffer_detached = Some(detached.clone());
             ab.arraybuffer_is_immutable = true;
@@ -2548,7 +2546,7 @@ impl Interpreter {
             is_length_tracking: false,
         };
 
-        let proto = self.realm().uint8array_prototype.clone().unwrap();
+        let proto = self.get_object_expect(self.realm().uint8array_prototype.unwrap());
         let ta_obj = self.create_typed_array_object_with_proto(ta_info, buf_val, &proto);
         let ta_id = ta_obj.borrow().id.unwrap();
         JsValue::Object(crate::types::JsObject { id: ta_id })
@@ -4703,10 +4701,11 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                     let buf = BufferData::Shared(sab_inner.clone());
                     let buf_rc = Rc::new(RefCell::new(buf));
                     let sab_obj = interp.create_object();
+                    let sab_proto = interp.proto_rc(interp.realm().shared_arraybuffer_prototype);
                     {
                         let mut o = sab_obj.borrow_mut();
                         o.class_name = "SharedArrayBuffer".to_string();
-                        o.prototype = interp.realm().shared_arraybuffer_prototype.clone();
+                        o.prototype = sab_proto;
                         o.arraybuffer_data = Some(buf_rc);
                         o.arraybuffer_detached = None;
                         o.arraybuffer_is_shared = true;

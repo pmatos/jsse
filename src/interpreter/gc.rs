@@ -9,6 +9,13 @@ impl Interpreter {
         self.allocate_object_slot(rc)
     }
 
+    /// Convert an `Option<u64>` (as stored in `Realm` prototype fields) back
+    /// to an `Option<Rc<RefCell<JsObjectData>>>` for assignment into
+    /// `JsObjectData.prototype` and similar Rc-typed fields.
+    pub(crate) fn proto_rc(&self, id_opt: Option<u64>) -> Option<Rc<RefCell<JsObjectData>>> {
+        id_opt.and_then(|id| self.get_object(id))
+    }
+
     pub(crate) fn allocate_object_slot(&mut self, obj: Rc<RefCell<JsObjectData>>) -> u64 {
         self.gc_alloc_count += 1;
         let is_reuse = !self.free_list.is_empty();

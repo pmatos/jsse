@@ -47,11 +47,11 @@ impl Interpreter {
     pub(super) fn create_frozen_template_array(&mut self, values: Vec<JsValue>) -> JsValue {
         let len = values.len();
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
-            .realm()
-            .array_prototype
-            .clone()
-            .or(self.realm().object_prototype.clone());
+        obj_data.prototype = self.proto_rc(
+            self.realm()
+                .array_prototype
+                .or(self.realm().object_prototype),
+        );
         obj_data.class_name = "Array".to_string();
         for (i, v) in values.iter().enumerate() {
             obj_data.insert_property(
@@ -95,11 +95,11 @@ impl Interpreter {
             }
             Literal::RegExp(pattern, flags) => {
                 let mut obj = JsObjectData::new();
-                obj.prototype = self
-                    .realm()
-                    .regexp_prototype
-                    .clone()
-                    .or(self.realm().object_prototype.clone());
+                obj.prototype = self.proto_rc(
+                    self.realm()
+                        .regexp_prototype
+                        .or(self.realm().object_prototype),
+                );
                 obj.class_name = "RegExp".to_string();
                 let source_js = if pattern.is_empty() {
                     JsString::from_str("(?:)")
@@ -142,11 +142,11 @@ impl Interpreter {
 
     pub(crate) fn create_regexp(&mut self, pattern: &str, flags: &str) -> JsValue {
         let mut obj = JsObjectData::new();
-        obj.prototype = self
-            .realm()
-            .regexp_prototype
-            .clone()
-            .or(self.realm().object_prototype.clone());
+        obj.prototype = self.proto_rc(
+            self.realm()
+                .regexp_prototype
+                .or(self.realm().object_prototype),
+        );
         obj.class_name = "RegExp".to_string();
         let source_str = if pattern.is_empty() { "(?:)" } else { pattern };
         obj.regexp_original_source = Some(JsString::from_str(source_str));
@@ -1202,7 +1202,7 @@ impl Interpreter {
 
     pub(super) fn eval_object_literal(&mut self, props: &[Property], env: &EnvRef) -> Completion {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self.realm().object_prototype.clone();
+        obj_data.prototype = self.proto_rc(self.realm().object_prototype);
         let mut method_values: Vec<JsValue> = Vec::new();
         for prop in props {
             let (key, fn_name_for_key) = match &prop.key {

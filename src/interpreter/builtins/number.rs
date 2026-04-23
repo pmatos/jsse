@@ -426,7 +426,7 @@ impl Interpreter {
                 .insert_builtin("constructor".to_string(), ctor_val);
         }
 
-        self.realm_mut().symbol_prototype = Some(proto);
+        self.realm_mut().symbol_prototype = Some(proto.borrow().id.unwrap());
     }
 
     pub(crate) fn setup_number_prototype(&mut self) {
@@ -687,7 +687,7 @@ impl Interpreter {
                 .insert_builtin("constructor".to_string(), num_val);
         }
 
-        self.realm_mut().number_prototype = Some(proto);
+        self.realm_mut().number_prototype = Some(proto.borrow().id.unwrap());
     }
 
     pub(crate) fn setup_boolean_prototype(&mut self) {
@@ -770,6 +770,6 @@ impl Interpreter {
                 .insert_builtin("constructor".to_string(), bool_val);
         }
 
-        self.realm_mut().boolean_prototype = Some(proto);
+        self.realm_mut().boolean_prototype = Some(proto.borrow().id.unwrap());
     }
 }

@@ -7968,8 +7968,8 @@ impl Interpreter {
                 // Create iterator with %RegExpStringIteratorPrototype%
                 let iter_obj = interp.create_object();
                 iter_obj.borrow_mut().class_name = "RegExp String Iterator".to_string();
-                if let Some(ref rsi_proto) = interp.realm().regexp_string_iterator_prototype {
-                    iter_obj.borrow_mut().prototype = Some(rsi_proto.clone());
+                if let Some(rsi_proto_id) = interp.realm().regexp_string_iterator_prototype {
+                    iter_obj.borrow_mut().prototype = Some(interp.get_object_expect(rsi_proto_id));
                 }
 
                 // Store matcher ID for spec-compliant RegExpExec
@@ -8005,8 +8005,8 @@ impl Interpreter {
         // Setup %RegExpStringIteratorPrototype% (§22.2.9.2)
         let rsi_proto = self.create_object();
         rsi_proto.borrow_mut().class_name = "RegExp String Iterator".to_string();
-        if let Some(ref ip) = self.realm().iterator_prototype {
-            rsi_proto.borrow_mut().prototype = Some(ip.clone());
+        if let Some(ip_id) = self.realm().iterator_prototype {
+            rsi_proto.borrow_mut().prototype = Some(self.get_object_expect(ip_id));
         }
 
         // %RegExpStringIteratorPrototype%.next
@@ -8284,7 +8284,7 @@ impl Interpreter {
             );
         }
 
-        self.realm_mut().regexp_string_iterator_prototype = Some(rsi_proto);
+        self.realm_mut().regexp_string_iterator_prototype = Some(rsi_proto.borrow().id.unwrap());
 
         // RegExp.prototype.flags getter (§22.2.5.3)
         let flags_getter = self.create_function(JsFunction::native(
@@ -8603,7 +8603,7 @@ impl Interpreter {
 
                 // §22.2.3.1 step 5: RegExpAlloc — get prototype from new target
                 let proto = match interp
-                    .get_prototype_from_new_target_realm(|realm| realm.regexp_prototype.clone())
+                    .get_prototype_from_new_target_realm(|realm| realm.regexp_prototype)
                 {
                     Ok(p) => p,
                     Err(e) => return Completion::Throw(e),
@@ -8995,7 +8995,7 @@ impl Interpreter {
             .borrow_mut()
             .set("RegExp", regexp_ctor);
 
-        self.realm_mut().regexp_prototype = Some(regexp_proto);
+        self.realm_mut().regexp_prototype = Some(regexp_proto.borrow().id.unwrap());
     }
 
     pub(crate) fn get_symbol_key(&self, name: &str) -> Option<String> {

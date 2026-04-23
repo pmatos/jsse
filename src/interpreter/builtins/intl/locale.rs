@@ -153,8 +153,8 @@ fn build_intl_data_from_locale(locale: &IcuLocale) -> IntlData {
 
 fn create_locale_object_from_icu(interp: &mut Interpreter, locale: &IcuLocale) -> JsValue {
     let obj = interp.create_object();
-    if let Some(ref proto) = interp.realm().intl_locale_prototype {
-        obj.borrow_mut().prototype = Some(proto.clone());
+    if let Some(proto_id) = interp.realm().intl_locale_prototype {
+        obj.borrow_mut().prototype = Some(interp.get_object_expect(proto_id));
     }
     obj.borrow_mut().class_name = "Intl.Locale".to_string();
     obj.borrow_mut().intl_data = Some(build_intl_data_from_locale(locale));
@@ -188,8 +188,8 @@ where
 impl Interpreter {
     pub(crate) fn setup_intl_locale(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
-        if let Some(ref op) = self.realm().object_prototype {
-            proto.borrow_mut().prototype = Some(op.clone());
+        if let Some(op_id) = self.realm().object_prototype {
+            proto.borrow_mut().prototype = Some(self.get_object_expect(op_id));
         }
         proto.borrow_mut().class_name = "Intl.Locale".to_string();
 
@@ -809,8 +809,8 @@ impl Interpreter {
                     };
 
                     let info_obj = interp.create_object();
-                    if let Some(ref op) = interp.realm().object_prototype {
-                        info_obj.borrow_mut().prototype = Some(op.clone());
+                    if let Some(op_id) = interp.realm().object_prototype {
+                        info_obj.borrow_mut().prototype = Some(interp.get_object_expect(op_id));
                     }
                     info_obj.borrow_mut().insert_property(
                         "direction".to_string(),
@@ -943,8 +943,8 @@ impl Interpreter {
                     weekend_days.sort();
 
                     let info_obj = interp.create_object();
-                    if let Some(ref op) = interp.realm().object_prototype {
-                        info_obj.borrow_mut().prototype = Some(op.clone());
+                    if let Some(op_id) = interp.realm().object_prototype {
+                        info_obj.borrow_mut().prototype = Some(interp.get_object_expect(op_id));
                     }
                     info_obj.borrow_mut().insert_property(
                         "firstDay".to_string(),
@@ -979,7 +979,7 @@ impl Interpreter {
             .insert_builtin("getWeekInfo".to_string(), get_week_info_fn);
 
         // Store the prototype
-        self.realm_mut().intl_locale_prototype = Some(proto.clone());
+        self.realm_mut().intl_locale_prototype = Some(proto.borrow().id.unwrap());
 
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
@@ -1332,9 +1332,9 @@ impl Interpreter {
                     }
                 }
 
-                let locale_proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                    realm.intl_locale_prototype.clone()
-                }) {
+                let locale_proto = match interp
+                    .get_prototype_from_new_target_realm(|realm| realm.intl_locale_prototype)
+                {
                     Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
                     Err(e) => return Completion::Throw(e),
                 };

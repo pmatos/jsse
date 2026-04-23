@@ -3,8 +3,8 @@ use super::*;
 impl Interpreter {
     pub(crate) fn setup_disposable_stack(&mut self) {
         let ds_proto = self.create_object();
-        if let Some(ref op) = self.realm().object_prototype {
-            ds_proto.borrow_mut().prototype = Some(op.clone());
+        if let Some(op_id) = self.realm().object_prototype {
+            ds_proto.borrow_mut().prototype = Some(self.get_object_expect(op_id));
         }
 
         // Symbol.toStringTag
@@ -336,7 +336,7 @@ impl Interpreter {
             .insert_builtin("move".to_string(), move_fn);
 
         // Store prototype in realm for OrdinaryCreateFromConstructor
-        self.realm_mut().disposable_stack_prototype = Some(ds_proto.clone());
+        self.realm_mut().disposable_stack_prototype = Some(ds_proto.borrow().id.unwrap());
 
         // Constructor
         self.register_global_fn(
@@ -353,7 +353,7 @@ impl Interpreter {
                     }
                     // OrdinaryCreateFromConstructor — realm-aware prototype
                     let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                        realm.disposable_stack_prototype.clone()
+                        realm.disposable_stack_prototype
                     }) {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
@@ -459,8 +459,8 @@ impl Interpreter {
 
     pub(crate) fn setup_async_disposable_stack(&mut self) {
         let ads_proto = self.create_object();
-        if let Some(ref op) = self.realm().object_prototype {
-            ads_proto.borrow_mut().prototype = Some(op.clone());
+        if let Some(op_id) = self.realm().object_prototype {
+            ads_proto.borrow_mut().prototype = Some(self.get_object_expect(op_id));
         }
 
         // Symbol.toStringTag
@@ -775,9 +775,9 @@ impl Interpreter {
                     };
                     let new_obj = interp.create_object();
                     {
-                        let default_proto = interp.realm().async_disposable_stack_prototype.clone();
-                        if let Some(p) = default_proto {
-                            new_obj.borrow_mut().prototype = Some(p);
+                        let default_proto_id = interp.realm().async_disposable_stack_prototype;
+                        if let Some(pid) = default_proto_id {
+                            new_obj.borrow_mut().prototype = Some(interp.get_object_expect(pid));
                         }
                     }
                     {
@@ -799,7 +799,7 @@ impl Interpreter {
             .insert_builtin("move".to_string(), move_fn);
 
         // Store prototype in realm for OrdinaryCreateFromConstructor
-        self.realm_mut().async_disposable_stack_prototype = Some(ads_proto.clone());
+        self.realm_mut().async_disposable_stack_prototype = Some(ads_proto.borrow().id.unwrap());
 
         // Constructor
         self.register_global_fn(
@@ -818,7 +818,7 @@ impl Interpreter {
                     }
                     // OrdinaryCreateFromConstructor — realm-aware prototype
                     let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                        realm.async_disposable_stack_prototype.clone()
+                        realm.async_disposable_stack_prototype
                     }) {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),

@@ -2477,7 +2477,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("valueOf".to_string(), value_of_fn);
 
-        self.realm_mut().temporal_duration_prototype = Some(proto.clone());
+        self.realm_mut().temporal_duration_prototype = Some(proto.borrow().id.unwrap());
 
         // Constructor
         let constructor = self.create_function(JsFunction::constructor(
@@ -2575,14 +2575,8 @@ impl Interpreter {
                     nanoseconds,
                 );
                 if let Completion::Normal(JsValue::Object(ref o)) = result {
-                    let dp = interp
-                        .realm()
-                        .temporal_duration_prototype
-                        .as_ref()
-                        .and_then(|p| p.borrow().id);
-                    interp.apply_new_target_prototype(o.id, dp, |r| {
-                        r.temporal_duration_prototype.clone()
-                    });
+                    let dp = interp.realm().temporal_duration_prototype;
+                    interp.apply_new_target_prototype(o.id, dp, |r| r.temporal_duration_prototype);
                 }
                 result
             },
@@ -2878,8 +2872,8 @@ pub(crate) fn create_duration_result(
     }
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.Duration".to_string();
-    if let Some(ref proto) = interp.realm().temporal_duration_prototype {
-        obj.borrow_mut().prototype = Some(proto.clone());
+    if let Some(proto_id) = interp.realm().temporal_duration_prototype {
+        obj.borrow_mut().prototype = Some(interp.get_object_expect(proto_id));
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::Duration {
         years,

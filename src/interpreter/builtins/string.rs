@@ -1711,7 +1711,7 @@ impl Interpreter {
                 .insert_builtin("constructor".to_string(), str_val.clone());
         }
 
-        self.realm_mut().string_prototype = Some(proto);
+        self.realm_mut().string_prototype = Some(proto.borrow().id.unwrap());
     }
 }
 

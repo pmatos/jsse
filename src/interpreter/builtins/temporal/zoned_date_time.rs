@@ -689,8 +689,8 @@ fn create_zdt(interp: &mut Interpreter, ns: BigInt, tz: String, cal: String) -> 
     }
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.ZonedDateTime".to_string();
-    if let Some(ref proto) = interp.realm().temporal_zoned_date_time_prototype {
-        obj.borrow_mut().prototype = Some(proto.clone());
+    if let Some(proto_id) = interp.realm().temporal_zoned_date_time_prototype {
+        obj.borrow_mut().prototype = Some(interp.get_object_expect(proto_id));
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::ZonedDateTime {
         epoch_nanoseconds: ns,
@@ -2105,7 +2105,7 @@ impl Interpreter {
             Completion::Normal(JsValue::Undefined)
         });
 
-        self.realm_mut().temporal_zoned_date_time_prototype = Some(proto.clone());
+        self.realm_mut().temporal_zoned_date_time_prototype = Some(proto.borrow().id.unwrap());
 
         // --- Methods ---
 
@@ -2203,8 +2203,8 @@ impl Interpreter {
                     // Inject timeZone from ZDT into options
                     let effective_opts = {
                         let opts_obj = interp.create_object();
-                        if let Some(ref op) = interp.realm().object_prototype {
-                            opts_obj.borrow_mut().prototype = Some(op.clone());
+                        if let Some(op_id) = interp.realm().object_prototype {
+                            opts_obj.borrow_mut().prototype = Some(interp.get_object_expect(op_id));
                         }
                         // Copy properties from user options if present
                         if let JsValue::Object(ref o) = options_arg {
@@ -2384,8 +2384,8 @@ impl Interpreter {
                     };
                     let obj = interp.create_object();
                     obj.borrow_mut().class_name = "Temporal.Instant".to_string();
-                    if let Some(ref proto) = interp.realm().temporal_instant_prototype {
-                        obj.borrow_mut().prototype = Some(proto.clone());
+                    if let Some(proto_id) = interp.realm().temporal_instant_prototype {
+                        obj.borrow_mut().prototype = Some(interp.get_object_expect(proto_id));
                     }
                     obj.borrow_mut().temporal_data = Some(TemporalData::Instant {
                         epoch_nanoseconds: ns,
@@ -3498,13 +3498,9 @@ impl Interpreter {
 
                 let result = create_zdt(interp, ns_bigint, tz, cal);
                 if let Completion::Normal(JsValue::Object(ref o)) = result {
-                    let dp = interp
-                        .realm()
-                        .temporal_zoned_date_time_prototype
-                        .as_ref()
-                        .and_then(|p| p.borrow().id);
+                    let dp = interp.realm().temporal_zoned_date_time_prototype;
                     interp.apply_new_target_prototype(o.id, dp, |r| {
-                        r.temporal_zoned_date_time_prototype.clone()
+                        r.temporal_zoned_date_time_prototype
                     });
                 }
                 result
