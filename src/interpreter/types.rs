@@ -7,9 +7,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::RwLock;
-use std::sync::atomic::{
-    AtomicU64, AtomicUsize, Ordering,
-};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 static NEXT_SAB_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -113,7 +111,6 @@ impl SharedBufferInner {
         let base = guard.as_mut_ptr() as *mut u8;
         Some(f(unsafe { base.add(offset) as *mut T }))
     }
-
 }
 
 impl std::fmt::Debug for SharedBufferInner {
@@ -2836,16 +2833,24 @@ fn typed_array_get_index_shared(
             if offset + 4 > buf.len() {
                 return JsValue::Undefined;
             }
-            let v =
-                i32::from_ne_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]]);
+            let v = i32::from_ne_bytes([
+                buf[offset],
+                buf[offset + 1],
+                buf[offset + 2],
+                buf[offset + 3],
+            ]);
             JsValue::Number(v as f64)
         }),
         TypedArrayKind::Uint32 => sab.with_read(|buf| {
             if offset + 4 > buf.len() {
                 return JsValue::Undefined;
             }
-            let v =
-                u32::from_ne_bytes([buf[offset], buf[offset + 1], buf[offset + 2], buf[offset + 3]]);
+            let v = u32::from_ne_bytes([
+                buf[offset],
+                buf[offset + 1],
+                buf[offset + 2],
+                buf[offset + 3],
+            ]);
             JsValue::Number(v as f64)
         }),
         TypedArrayKind::BigInt64 => sab.with_read(|buf| {
