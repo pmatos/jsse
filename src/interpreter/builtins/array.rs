@@ -101,8 +101,8 @@ fn obj_set_throw(
             }
         }
         // Check for setter in prototype chain
-        if let Some(obj) = interp.get_object(obj_ref.id) {
-            let desc = obj.borrow().get_property_descriptor(key);
+        {
+            let desc = interp.get_property_descriptor_on_id(obj_ref.id, key);
             if let Some(ref d) = desc {
                 if let Some(ref setter) = d.set
                     && !matches!(setter, JsValue::Undefined)
@@ -215,13 +215,14 @@ pub(crate) fn create_data_property_or_throw(
         }
         if let Some(obj) = interp.get_object(obj_ref.id) {
             // Check extensibility — if object is not extensible and property doesn't exist, fail
+            let not_extensible = !obj.borrow().extensible;
+            if not_extensible && !interp.has_property_on_id(obj_ref.id, key) {
+                return Err(interp.create_type_error(&format!(
+                    "Cannot add property {key}, object is not extensible"
+                )));
+            }
             {
                 let borrow = obj.borrow();
-                if !borrow.extensible && !borrow.has_property(key) {
-                    return Err(interp.create_type_error(&format!(
-                        "Cannot add property {key}, object is not extensible"
-                    )));
-                }
                 // Check for non-configurable existing property
                 if let Some(desc) = borrow.get_own_property(key)
                     && desc.configurable == Some(false)
@@ -3861,7 +3862,7 @@ impl Interpreter {
         // Array.prototype[@@unscopables] (§23.1.3.38)
         {
             let unscopables_obj = self.create_object();
-            unscopables_obj.borrow_mut().prototype = None;
+            unscopables_obj.borrow_mut().prototype_id = None;
             let names = [
                 "at",
                 "copyWithin",
@@ -3898,11 +3899,10 @@ impl Interpreter {
 
     pub(crate) fn create_array(&mut self, values: Vec<JsValue>) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self.proto_rc(
-            self.realm()
-                .array_prototype
-                .or(self.realm().object_prototype),
-        );
+        obj_data.prototype_id = self
+            .realm()
+            .array_prototype
+            .or(self.realm().object_prototype);
         obj_data.class_name = "Array".to_string();
         for (i, v) in values.iter().enumerate() {
             obj_data.insert_value(i.to_string(), v.clone());
@@ -3919,11 +3919,10 @@ impl Interpreter {
     pub(crate) fn create_array_with_holes(&mut self, items: Vec<Option<JsValue>>) -> JsValue {
         let len = items.len();
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self.proto_rc(
-            self.realm()
-                .array_prototype
-                .or(self.realm().object_prototype),
-        );
+        obj_data.prototype_id = self
+            .realm()
+            .array_prototype
+            .or(self.realm().object_prototype);
         obj_data.class_name = "Array".to_string();
         let mut array_elements = Vec::with_capacity(len);
         for (i, item) in items.into_iter().enumerate() {
@@ -3949,11 +3948,10 @@ impl Interpreter {
 
     pub(crate) fn create_array_with_length(&mut self, len: usize) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self.proto_rc(
-            self.realm()
-                .array_prototype
-                .or(self.realm().object_prototype),
-        );
+        obj_data.prototype_id = self
+            .realm()
+            .array_prototype
+            .or(self.realm().object_prototype);
         obj_data.class_name = "Array".to_string();
         obj_data.insert_property(
             "length".to_string(),

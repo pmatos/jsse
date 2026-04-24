@@ -583,7 +583,7 @@ impl Interpreter {
     ) -> Result<JsValue, JsValue> {
         if matches!(options, JsValue::Undefined) {
             let obj = self.create_object();
-            obj.borrow_mut().prototype = None; // ObjectCreate(null)
+            obj.borrow_mut().prototype_id = None; // ObjectCreate(null)
             let id = obj.borrow().id.unwrap();
             return Ok(JsValue::Object(crate::types::JsObject { id }));
         }
@@ -605,7 +605,7 @@ impl Interpreter {
     ) -> Result<JsValue, JsValue> {
         if matches!(options, JsValue::Undefined) {
             let obj = self.create_object();
-            obj.borrow_mut().prototype = None;
+            obj.borrow_mut().prototype_id = None;
             let id = obj.borrow().id.unwrap();
             return Ok(JsValue::Object(crate::types::JsObject { id }));
         }

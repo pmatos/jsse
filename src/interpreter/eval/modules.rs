@@ -303,10 +303,10 @@ impl Interpreter {
                 }
 
                 // Own property not found — walk prototype chain
-                let proto = b.prototype.clone();
+                let proto = b.prototype_id;
                 drop(b);
                 if let Some(proto_rc) = proto {
-                    let proto_id = proto_rc.borrow().id.unwrap();
+                    let proto_id = proto_rc;
                     return self.get_object_property(proto_id, key, this_val);
                 }
                 return Completion::Normal(JsValue::Undefined);
@@ -427,12 +427,12 @@ impl Interpreter {
             Some(ref d) => Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined)),
             None => {
                 let proto = if let Some(obj) = self.get_object(obj_id) {
-                    obj.borrow().prototype.clone()
+                    obj.borrow().prototype_id
                 } else {
                     None
                 };
                 if let Some(proto_rc) = proto {
-                    let proto_id = proto_rc.borrow().id.unwrap();
+                    let proto_id = proto_rc;
                     self.get_object_property(proto_id, key, this_val)
                 } else {
                     Completion::Normal(JsValue::Undefined)
@@ -506,9 +506,9 @@ impl Interpreter {
                 return Ok(true);
             }
             // Walk prototype chain, checking for proxies
-            let proto = obj.borrow().prototype.clone();
+            let proto = obj.borrow().prototype_id;
             if let Some(proto_rc) = proto {
-                let proto_id = proto_rc.borrow().id.unwrap();
+                let proto_id = proto_rc;
                 return self.proxy_has_property(proto_id, key);
             }
             Ok(false)
@@ -885,7 +885,7 @@ impl Interpreter {
         let fp_id = self.realms[caller_realm_id].function_prototype;
         {
             let mut o = func_obj.borrow_mut();
-            o.prototype = self.proto_rc(fp_id);
+            o.prototype_id = fp_id;
             o.class_name = "Function".to_string();
             o.callable = Some(JsFunction::native("".to_string(), 0, |_, _, _| {
                 Completion::Normal(JsValue::Undefined)

@@ -2616,7 +2616,7 @@ impl Interpreter {
             },
         ));
 
-        // Constructor.prototype
+        // Constructor.prototype_id
         if let JsValue::Object(ref o) = constructor
             && let Some(obj) = self.get_object(o.id)
         {
@@ -2911,7 +2911,8 @@ pub(crate) fn create_duration_result(
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.Duration".to_string();
     if let Some(proto_id) = interp.realm().temporal_duration_prototype {
-        obj.borrow_mut().prototype = Some(interp.get_object_expect(proto_id));
+        obj.borrow_mut().prototype_id =
+            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::Duration {
         years,

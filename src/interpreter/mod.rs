@@ -662,7 +662,7 @@ impl Interpreter {
             unreachable!()
         };
 
-        // AbstractModuleSource.prototype
+        // AbstractModuleSource.prototype_id
         let ams_proto = self.create_object();
         // constructor property
         ams_proto
@@ -777,15 +777,14 @@ impl Interpreter {
     pub(crate) fn get_prototype_from_new_target_realm<F>(
         &mut self,
         get_realm_proto: F,
-    ) -> Result<Option<Rc<RefCell<JsObjectData>>>, JsValue>
+    ) -> Result<Option<u64>, JsValue>
     where
         F: Fn(&Realm) -> Option<u64>,
     {
         let nt = match self.new_target.clone() {
             Some(v) => v,
             None => {
-                let proto_id = get_realm_proto(&self.realms[self.current_realm_id]);
-                return Ok(self.proto_rc(proto_id));
+                return Ok(get_realm_proto(&self.realms[self.current_realm_id]));
             }
         };
         if let JsValue::Object(nt_o) = &nt {
@@ -794,18 +793,14 @@ impl Interpreter {
                 Completion::Throw(e) => return Err(e),
                 _ => JsValue::Undefined,
             };
-            if let JsValue::Object(po) = proto_val
-                && let Some(proto_rc) = self.get_object(po.id)
-            {
-                return Ok(Some(proto_rc));
+            if let JsValue::Object(po) = proto_val {
+                return Ok(Some(po.id));
             }
             // proto is not an object: use realm of newTarget
             let nt_realm_id = self.get_function_realm(&JsValue::Object(nt_o.clone()))?;
-            let proto_id = get_realm_proto(&self.realms[nt_realm_id]);
-            return Ok(self.proto_rc(proto_id));
+            return Ok(get_realm_proto(&self.realms[nt_realm_id]));
         }
-        let proto_id = get_realm_proto(&self.realms[self.current_realm_id]);
-        Ok(self.proto_rc(proto_id))
+        Ok(get_realm_proto(&self.realms[self.current_realm_id]))
     }
 
     fn register_global_fn(&mut self, name: &str, kind: BindingKind, func: JsFunction) {
@@ -954,7 +949,7 @@ impl Interpreter {
 
     fn create_object(&mut self) -> Rc<RefCell<JsObjectData>> {
         let mut data = JsObjectData::new();
-        data.prototype = self.proto_rc(self.realm().object_prototype);
+        data.prototype_id = self.realm().object_prototype;
         let id = self.alloc_object(data);
         self.get_object_expect(id)
     }
@@ -1029,7 +1024,7 @@ impl Interpreter {
                 .function_prototype
                 .or(self.realm().object_prototype)
         };
-        obj_data.prototype = self.proto_rc(proto_id);
+        obj_data.prototype_id = proto_id;
         obj_data.callable = Some(func);
         obj_data.class_name = if is_async_gen {
             "AsyncGeneratorFunction".to_string()
@@ -1107,10 +1102,9 @@ impl Interpreter {
         if needs_prototype {
             let proto = self.create_object();
             if is_async_gen {
-                proto.borrow_mut().prototype =
-                    self.proto_rc(self.realm().async_generator_prototype);
+                proto.borrow_mut().prototype_id = self.realm().async_generator_prototype;
             } else if is_gen {
-                proto.borrow_mut().prototype = self.proto_rc(self.realm().generator_prototype);
+                proto.borrow_mut().prototype_id = self.realm().generator_prototype;
             }
             let proto_id = proto.borrow().id.unwrap();
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
@@ -1151,6 +1145,89 @@ impl Interpreter {
             .as_ref()
             .expect("dead object id")
             .clone()
+    }
+
+    /// Iterative prototype-chain walk of `get_property`. Returns
+    /// `JsValue::Undefined` when the key is not found anywhere in the chain.
+    /// Each frame is pinned by the Rc returned from `get_object_expect` so
+    /// intermediate safepoints cannot sweep the next prototype before we reach it.
+    pub(crate) fn get_property_on_id(&self, start_id: u64, key: &str) -> JsValue {
+        let mut current = Some(start_id);
+        while let Some(id) = current {
+            let obj_rc = self.get_object_expect(id);
+            let b = obj_rc.borrow();
+            if let Some(v) = b.own_property_lookup(key) {
+                return v;
+            }
+            let next = b.prototype_id;
+            drop(b);
+            current = next;
+        }
+        JsValue::Undefined
+    }
+
+    /// Iterative prototype-chain walk of `get_property_descriptor`.
+    pub(crate) fn get_property_descriptor_on_id(
+        &self,
+        start_id: u64,
+        key: &str,
+    ) -> Option<PropertyDescriptor> {
+        let mut current = Some(start_id);
+        while let Some(id) = current {
+            let obj_rc = self.get_object_expect(id);
+            let b = obj_rc.borrow();
+            if let Some(d) = b.own_property_descriptor_lookup(key) {
+                return Some(d);
+            }
+            let next = b.prototype_id;
+            drop(b);
+            current = next;
+        }
+        None
+    }
+
+    /// Iterative prototype-chain walk of `has_property`. TypedArray canonical
+    /// numeric indices short-circuit the walk (per §10.4.5.2).
+    pub(crate) fn has_property_on_id(&self, start_id: u64, key: &str) -> bool {
+        let mut current = Some(start_id);
+        while let Some(id) = current {
+            let obj_rc = self.get_object_expect(id);
+            let b = obj_rc.borrow();
+            if let Some(result) = b.own_has_property(key) {
+                return result;
+            }
+            let next = b.prototype_id;
+            drop(b);
+            current = next;
+        }
+        false
+    }
+
+    /// Iterative prototype-chain walk of `enumerable_keys_with_proto`. Merges
+    /// each frame's emit with a global shadow set so non-enumerable own keys on
+    /// one frame correctly suppress enumerable inherited keys with matching
+    /// names on subsequent frames.
+    pub(crate) fn enumerable_keys_with_proto_on_id(&self, start_id: u64) -> Vec<String> {
+        let mut global_seen: HashSet<String> = HashSet::default();
+        let mut result: Vec<String> = Vec::new();
+        let mut current = Some(start_id);
+        while let Some(id) = current {
+            let obj_rc = self.get_object_expect(id);
+            let b = obj_rc.borrow();
+            let (keys, shadow) = b.own_enumerable_keys_with_shadow();
+            for k in keys {
+                if global_seen.insert(k.clone()) {
+                    result.push(k);
+                }
+            }
+            for k in shadow {
+                global_seen.insert(k);
+            }
+            let next = b.prototype_id;
+            drop(b);
+            current = next;
+        }
+        result
     }
 
     pub(crate) fn set_function_name(&self, val: &JsValue, name: &str) {
@@ -1291,8 +1368,7 @@ impl Interpreter {
             let array_iter_fn = self
                 .realm()
                 .array_prototype
-                .and_then(|id| self.get_object(id))
-                .map(|proto| proto.borrow().get_property(&key));
+                .map(|id| self.get_property_on_id(id, &key));
             if let Some(iter_fn) = array_iter_fn
                 && !matches!(iter_fn, JsValue::Undefined)
                 && let JsValue::Object(ref o) = result
@@ -1317,9 +1393,8 @@ impl Interpreter {
             let name = &inner[7..]; // "toStringTag"
             if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
                 && let JsValue::Object(so) = sym_val
-                && let Some(sobj) = self.get_object(so.id)
             {
-                let val = sobj.borrow().get_property(name);
+                let val = self.get_property_on_id(so.id, name);
                 if let JsValue::Symbol(s) = val {
                     return JsValue::Symbol(s);
                 }
@@ -2527,7 +2602,7 @@ impl Interpreter {
         {
             let mut ab = ab_obj.borrow_mut();
             ab.class_name = "ArrayBuffer".to_string();
-            ab.prototype = self.proto_rc(self.realm().arraybuffer_prototype);
+            ab.prototype_id = self.realm().arraybuffer_prototype;
             ab.arraybuffer_data = Some(buf_rc.clone());
             ab.arraybuffer_detached = Some(detached.clone());
             ab.arraybuffer_is_immutable = true;
@@ -2546,8 +2621,8 @@ impl Interpreter {
             is_length_tracking: false,
         };
 
-        let proto = self.get_object_expect(self.realm().uint8array_prototype.unwrap());
-        let ta_obj = self.create_typed_array_object_with_proto(ta_info, buf_val, &proto);
+        let proto_id = self.realm().uint8array_prototype.unwrap();
+        let ta_obj = self.create_typed_array_object_with_proto(ta_info, buf_val, proto_id);
         let ta_id = ta_obj.borrow().id.unwrap();
         JsValue::Object(crate::types::JsObject { id: ta_id })
     }
@@ -3805,7 +3880,7 @@ impl Interpreter {
         });
         obj.borrow_mut().class_name = "Module".to_string();
         obj.borrow_mut().extensible = false; // Module namespaces are non-extensible
-        obj.borrow_mut().prototype = None; // Module namespaces have null prototype
+        obj.borrow_mut().prototype_id = None; // Module namespaces have null prototype
 
         // Add property descriptors for each export (values will be looked up dynamically)
         for name in &export_names {
@@ -3879,7 +3954,7 @@ impl Interpreter {
         });
         obj.borrow_mut().class_name = "Module".to_string();
         obj.borrow_mut().extensible = false;
-        obj.borrow_mut().prototype = None;
+        obj.borrow_mut().prototype_id = None;
 
         for name in &export_names {
             obj.borrow_mut().insert_property(
@@ -4641,10 +4716,9 @@ impl Interpreter {
     pub fn format_value(&self, val: &JsValue) -> String {
         match val {
             JsValue::Object(o) => {
-                if let Some(obj) = self.get_object(o.id) {
-                    let obj = obj.borrow();
-                    let name = obj.get_property("name");
-                    let message = obj.get_property("message");
+                if self.get_object(o.id).is_some() {
+                    let name = self.get_property_on_id(o.id, "name");
+                    let message = self.get_property_on_id(o.id, "message");
                     if let JsValue::String(ref msg) = message {
                         let msg_str = msg.to_rust_string();
                         if let JsValue::String(ref n) = name {
@@ -4701,11 +4775,11 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                     let buf = BufferData::Shared(sab_inner.clone());
                     let buf_rc = Rc::new(RefCell::new(buf));
                     let sab_obj = interp.create_object();
-                    let sab_proto = interp.proto_rc(interp.realm().shared_arraybuffer_prototype);
+                    let sab_proto = interp.realm().shared_arraybuffer_prototype;
                     {
                         let mut o = sab_obj.borrow_mut();
                         o.class_name = "SharedArrayBuffer".to_string();
-                        o.prototype = sab_proto;
+                        o.prototype_id = sab_proto;
                         o.arraybuffer_data = Some(buf_rc);
                         o.arraybuffer_detached = None;
                         o.arraybuffer_is_shared = true;

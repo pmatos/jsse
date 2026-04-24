@@ -154,7 +154,8 @@ fn build_intl_data_from_locale(locale: &IcuLocale) -> IntlData {
 fn create_locale_object_from_icu(interp: &mut Interpreter, locale: &IcuLocale) -> JsValue {
     let obj = interp.create_object();
     if let Some(proto_id) = interp.realm().intl_locale_prototype {
-        obj.borrow_mut().prototype = Some(interp.get_object_expect(proto_id));
+        obj.borrow_mut().prototype_id =
+            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
     }
     obj.borrow_mut().class_name = "Intl.Locale".to_string();
     obj.borrow_mut().intl_data = Some(build_intl_data_from_locale(locale));
@@ -189,7 +190,8 @@ impl Interpreter {
     pub(crate) fn setup_intl_locale(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype = Some(self.get_object_expect(op_id));
+            proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(op_id).borrow().id.unwrap());
         }
         proto.borrow_mut().class_name = "Intl.Locale".to_string();
 
@@ -810,7 +812,8 @@ impl Interpreter {
 
                     let info_obj = interp.create_object();
                     if let Some(op_id) = interp.realm().object_prototype {
-                        info_obj.borrow_mut().prototype = Some(interp.get_object_expect(op_id));
+                        info_obj.borrow_mut().prototype_id =
+                            Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                     }
                     info_obj.borrow_mut().insert_property(
                         "direction".to_string(),
@@ -944,7 +947,8 @@ impl Interpreter {
 
                     let info_obj = interp.create_object();
                     if let Some(op_id) = interp.realm().object_prototype {
-                        info_obj.borrow_mut().prototype = Some(interp.get_object_expect(op_id));
+                        info_obj.borrow_mut().prototype_id =
+                            Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                     }
                     info_obj.borrow_mut().insert_property(
                         "firstDay".to_string(),
@@ -984,7 +988,7 @@ impl Interpreter {
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone = proto.clone();
+        let proto_clone_id = proto.borrow().id.unwrap();
 
         let locale_ctor = self.create_function(JsFunction::constructor(
             "Locale".to_string(),
@@ -1335,13 +1339,13 @@ impl Interpreter {
                 let locale_proto = match interp
                     .get_prototype_from_new_target_realm(|realm| realm.intl_locale_prototype)
                 {
-                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                    Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
 
                 if is_fallback_tag {
                     let obj = interp.create_object();
-                    obj.borrow_mut().prototype = Some(locale_proto.clone());
+                    obj.borrow_mut().prototype_id = Some(locale_proto);
                     obj.borrow_mut().class_name = "Intl.Locale".to_string();
                     let lower_tag = tag_string.to_ascii_lowercase();
                     obj.borrow_mut().intl_data = Some(IntlData::Locale {
@@ -1367,7 +1371,7 @@ impl Interpreter {
                     canonicalize_unicode_keyword_values(&mut locale);
 
                     let obj = interp.create_object();
-                    obj.borrow_mut().prototype = Some(locale_proto);
+                    obj.borrow_mut().prototype_id = Some(locale_proto);
                     obj.borrow_mut().class_name = "Intl.Locale".to_string();
                     obj.borrow_mut().intl_data = Some(build_intl_data_from_locale(&locale));
                     let obj_id = obj.borrow().id.unwrap();

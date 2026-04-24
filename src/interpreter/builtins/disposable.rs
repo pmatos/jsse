@@ -4,7 +4,8 @@ impl Interpreter {
     pub(crate) fn setup_disposable_stack(&mut self) {
         let ds_proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
-            ds_proto.borrow_mut().prototype = Some(self.get_object_expect(op_id));
+            ds_proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(op_id).borrow().id.unwrap());
         }
 
         // Symbol.toStringTag
@@ -307,13 +308,10 @@ impl Interpreter {
                         let env = interp.realm().global_env.borrow();
                         if let Some(ctor_val) = env.get("DisposableStack")
                             && let JsValue::Object(ctor) = &ctor_val
-                            && let Some(ctor_obj) = interp.get_object(ctor.id)
                         {
-                            let proto_val = ctor_obj.borrow().get_property("prototype");
-                            if let JsValue::Object(p) = &proto_val
-                                && let Some(proto_rc) = interp.get_object(p.id)
-                            {
-                                new_obj.borrow_mut().prototype = Some(proto_rc);
+                            let proto_val = interp.get_property_on_id(ctor.id, "prototype");
+                            if let JsValue::Object(p) = &proto_val {
+                                new_obj.borrow_mut().prototype_id = Some(p.id);
                             }
                         }
                     }
@@ -363,7 +361,7 @@ impl Interpreter {
                         let mut b = obj.borrow_mut();
                         b.class_name = "DisposableStack".to_string();
                         if let Some(p) = proto {
-                            b.prototype = Some(p);
+                            b.prototype_id = Some(p);
                         }
                         b.disposable_stack = Some(DisposableStackData {
                             stack: Vec::new(),
@@ -460,7 +458,8 @@ impl Interpreter {
     pub(crate) fn setup_async_disposable_stack(&mut self) {
         let ads_proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
-            ads_proto.borrow_mut().prototype = Some(self.get_object_expect(op_id));
+            ads_proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(op_id).borrow().id.unwrap());
         }
 
         // Symbol.toStringTag
@@ -777,7 +776,8 @@ impl Interpreter {
                     {
                         let default_proto_id = interp.realm().async_disposable_stack_prototype;
                         if let Some(pid) = default_proto_id {
-                            new_obj.borrow_mut().prototype = Some(interp.get_object_expect(pid));
+                            new_obj.borrow_mut().prototype_id =
+                                Some(interp.get_object_expect(pid).borrow().id.unwrap());
                         }
                     }
                     {
@@ -828,7 +828,7 @@ impl Interpreter {
                         let mut b = obj.borrow_mut();
                         b.class_name = "AsyncDisposableStack".to_string();
                         if let Some(p) = proto {
-                            b.prototype = Some(p);
+                            b.prototype_id = Some(p);
                         }
                         b.disposable_stack = Some(DisposableStackData {
                             stack: Vec::new(),

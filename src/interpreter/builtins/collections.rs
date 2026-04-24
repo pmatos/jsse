@@ -7,7 +7,7 @@ impl Interpreter {
 
         // Map iterator prototype
         let map_iter_proto = self.create_object();
-        map_iter_proto.borrow_mut().prototype = self.proto_rc(self.realm().iterator_prototype);
+        map_iter_proto.borrow_mut().prototype_id = self.realm().iterator_prototype;
         map_iter_proto.borrow_mut().class_name = "Map Iterator".to_string();
 
         map_iter_proto.borrow_mut().insert_property(
@@ -110,13 +110,11 @@ impl Interpreter {
             kind: IteratorKind,
         ) -> JsValue {
             let mut obj_data = JsObjectData::new();
-            obj_data.prototype = interp.proto_rc(
-                interp
-                    .realm()
-                    .map_iterator_prototype
-                    .or(interp.realm().iterator_prototype)
-                    .or(interp.realm().object_prototype),
-            );
+            obj_data.prototype_id = interp
+                .realm()
+                .map_iterator_prototype
+                .or(interp.realm().iterator_prototype)
+                .or(interp.realm().object_prototype);
             obj_data.class_name = "Map Iterator".to_string();
             obj_data.iterator_state = Some(IteratorState::MapIterator {
                 map_id,
@@ -582,7 +580,7 @@ impl Interpreter {
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
         // Map constructor
-        let map_proto_clone = proto.clone();
+        let map_proto_clone_id = proto.borrow().id.unwrap();
         let map_ctor = self.create_function(JsFunction::constructor(
             "Map".to_string(),
             0,
@@ -596,11 +594,11 @@ impl Interpreter {
                 let proto = match interp.get_prototype_from_new_target_realm(|realm| {
                     realm.map_prototype
                 }) {
-                    Ok(p) => p.unwrap_or_else(|| map_proto_clone.clone()),
+                    Ok(p) => p.unwrap_or(map_proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto);
+                obj.borrow_mut().prototype_id = Some(proto);
                 obj.borrow_mut().class_name = "Map".to_string();
                 obj.borrow_mut().map_data = Some(Vec::new());
                 let obj_id = obj.borrow().id.unwrap();
@@ -748,7 +746,8 @@ impl Interpreter {
 
                     // 3. Create result Map
                     let result_map = interp.create_object();
-                    result_map.borrow_mut().prototype = Some(map_proto_for_groupby.clone());
+                    result_map.borrow_mut().prototype_id =
+                        Some(map_proto_for_groupby.borrow().id.unwrap());
                     result_map.borrow_mut().class_name = "Map".to_string();
                     result_map.borrow_mut().map_data = Some(Vec::new());
                     let result_id = result_map.borrow().id.unwrap();
@@ -811,7 +810,7 @@ impl Interpreter {
                                     let arr_id = arr_obj.id;
                                     drop(borrowed);
                                     if let Some(arr) = interp.get_object(arr_id) {
-                                        let len_val = arr.borrow().get_property("length");
+                                        let len_val = interp.get_property_on_id(arr_id, "length");
                                         let len = interp.to_number_coerce(&len_val) as usize;
                                         arr.borrow_mut().insert_builtin(len.to_string(), value);
                                         arr.borrow_mut().insert_builtin(
@@ -857,7 +856,7 @@ impl Interpreter {
 
         // Set iterator prototype
         let set_iter_proto = self.create_object();
-        set_iter_proto.borrow_mut().prototype = self.proto_rc(self.realm().iterator_prototype);
+        set_iter_proto.borrow_mut().prototype_id = self.realm().iterator_prototype;
         set_iter_proto.borrow_mut().class_name = "Set Iterator".to_string();
 
         set_iter_proto.borrow_mut().insert_property(
@@ -957,13 +956,11 @@ impl Interpreter {
             kind: IteratorKind,
         ) -> JsValue {
             let mut obj_data = JsObjectData::new();
-            obj_data.prototype = interp.proto_rc(
-                interp
-                    .realm()
-                    .set_iterator_prototype
-                    .or(interp.realm().iterator_prototype)
-                    .or(interp.realm().object_prototype),
-            );
+            obj_data.prototype_id = interp
+                .realm()
+                .set_iterator_prototype
+                .or(interp.realm().iterator_prototype)
+                .or(interp.realm().object_prototype);
             obj_data.class_name = "Set Iterator".to_string();
             obj_data.iterator_state = Some(IteratorState::SetIterator {
                 set_id,
@@ -1372,7 +1369,7 @@ impl Interpreter {
 
         fn make_result_set(interp: &mut Interpreter, entries: Vec<Option<JsValue>>) -> Completion {
             let new_obj = interp.create_object();
-            new_obj.borrow_mut().prototype = interp.proto_rc(interp.realm().set_prototype);
+            new_obj.borrow_mut().prototype_id = interp.realm().set_prototype;
             new_obj.borrow_mut().class_name = "Set".to_string();
             new_obj.borrow_mut().set_data = Some(entries);
             let id = new_obj.borrow().id.unwrap();
@@ -1832,7 +1829,7 @@ impl Interpreter {
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
         // Set constructor
-        let set_proto_clone = proto.clone();
+        let set_proto_clone_id = proto.borrow().id.unwrap();
         let set_ctor = self.create_function(JsFunction::constructor(
             "Set".to_string(),
             0,
@@ -1846,11 +1843,11 @@ impl Interpreter {
                 let proto = match interp.get_prototype_from_new_target_realm(|realm| {
                     realm.set_prototype
                 }) {
-                    Ok(p) => p.unwrap_or_else(|| set_proto_clone.clone()),
+                    Ok(p) => p.unwrap_or(set_proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto);
+                obj.borrow_mut().prototype_id = Some(proto);
                 obj.borrow_mut().class_name = "Set".to_string();
                 obj.borrow_mut().set_data = Some(Vec::new());
                 let obj_id = obj.borrow().id.unwrap();
@@ -1871,10 +1868,8 @@ impl Interpreter {
                     let iter_key = interp.get_symbol_iterator_key();
                     let iterator_fn = if let Some(ref key) = iter_key {
                         if let JsValue::Object(io) = &iterable {
-                            if let Some(iter_obj) = interp.get_object(io.id) {
-                                let v = iter_obj.borrow().get_property(key);
-                                if v.is_undefined() { JsValue::Undefined } else { v }
-                            } else { JsValue::Undefined }
+                            let v = interp.get_property_on_id(io.id, key);
+                            if v.is_undefined() { JsValue::Undefined } else { v }
                         } else { JsValue::Undefined }
                     } else { JsValue::Undefined };
 
@@ -1890,9 +1885,7 @@ impl Interpreter {
 
                     loop {
                         let next_fn = if let JsValue::Object(io) = &iterator {
-                            if let Some(iter_obj) = interp.get_object(io.id) {
-                                iter_obj.borrow().get_property("next")
-                            } else { JsValue::Undefined }
+                            interp.get_property_on_id(io.id, "next")
                         } else { JsValue::Undefined };
 
                         let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
@@ -2237,7 +2230,7 @@ impl Interpreter {
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
         // WeakMap constructor
-        let weakmap_proto_clone = proto.clone();
+        let weakmap_proto_clone_id = proto.borrow().id.unwrap();
         let weakmap_ctor = self.create_function(JsFunction::constructor(
             "WeakMap".to_string(),
             0,
@@ -2251,11 +2244,11 @@ impl Interpreter {
                 let proto = match interp.get_prototype_from_new_target_realm(|realm| {
                     realm.weakmap_prototype
                 }) {
-                    Ok(p) => p.unwrap_or_else(|| weakmap_proto_clone.clone()),
+                    Ok(p) => p.unwrap_or(weakmap_proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto);
+                obj.borrow_mut().prototype_id = Some(proto);
                 obj.borrow_mut().class_name = "WeakMap".to_string();
                 obj.borrow_mut().map_data = Some(Vec::new());
                 let obj_id = obj.borrow().id.unwrap();
@@ -2276,10 +2269,8 @@ impl Interpreter {
                     let iter_key = interp.get_symbol_iterator_key();
                     let iterator_fn = if let Some(ref key) = iter_key {
                         if let JsValue::Object(io) = &iterable {
-                            if let Some(iter_obj) = interp.get_object(io.id) {
-                                let v = iter_obj.borrow().get_property(key);
-                                if v.is_undefined() { JsValue::Undefined } else { v }
-                            } else { JsValue::Undefined }
+                            let v = interp.get_property_on_id(io.id, key);
+                            if v.is_undefined() { JsValue::Undefined } else { v }
                         } else { JsValue::Undefined }
                     } else { JsValue::Undefined };
 
@@ -2295,9 +2286,7 @@ impl Interpreter {
 
                     loop {
                         let next_fn = if let JsValue::Object(io) = &iterator {
-                            if let Some(iter_obj) = interp.get_object(io.id) {
-                                iter_obj.borrow().get_property("next")
-                            } else { JsValue::Undefined }
+                            interp.get_property_on_id(io.id, "next")
                         } else { JsValue::Undefined };
 
                         let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
@@ -2517,7 +2506,7 @@ impl Interpreter {
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
         // WeakSet constructor
-        let weakset_proto_clone = proto.clone();
+        let weakset_proto_clone_id = proto.borrow().id.unwrap();
         let weakset_ctor = self.create_function(JsFunction::constructor(
             "WeakSet".to_string(),
             0,
@@ -2531,11 +2520,11 @@ impl Interpreter {
                 let proto = match interp.get_prototype_from_new_target_realm(|realm| {
                     realm.weakset_prototype
                 }) {
-                    Ok(p) => p.unwrap_or_else(|| weakset_proto_clone.clone()),
+                    Ok(p) => p.unwrap_or(weakset_proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto);
+                obj.borrow_mut().prototype_id = Some(proto);
                 obj.borrow_mut().class_name = "WeakSet".to_string();
                 obj.borrow_mut().set_data = Some(Vec::new());
                 let obj_id = obj.borrow().id.unwrap();
@@ -2556,10 +2545,8 @@ impl Interpreter {
                     let iter_key = interp.get_symbol_iterator_key();
                     let iterator_fn = if let Some(ref key) = iter_key {
                         if let JsValue::Object(io) = &iterable {
-                            if let Some(iter_obj) = interp.get_object(io.id) {
-                                let v = iter_obj.borrow().get_property(key);
-                                if v.is_undefined() { JsValue::Undefined } else { v }
-                            } else { JsValue::Undefined }
+                            let v = interp.get_property_on_id(io.id, key);
+                            if v.is_undefined() { JsValue::Undefined } else { v }
                         } else { JsValue::Undefined }
                     } else { JsValue::Undefined };
 
@@ -2575,9 +2562,7 @@ impl Interpreter {
 
                     loop {
                         let next_fn = if let JsValue::Object(io) = &iterator {
-                            if let Some(iter_obj) = interp.get_object(io.id) {
-                                iter_obj.borrow().get_property("next")
-                            } else { JsValue::Undefined }
+                            interp.get_property_on_id(io.id, "next")
                         } else { JsValue::Undefined };
 
                         let next_result = match interp.call_function(&next_fn, &iterator, &[]) {
@@ -2723,7 +2708,7 @@ impl Interpreter {
                 let obj = interp.create_object();
                 obj.borrow_mut().class_name = "WeakRef".to_string();
                 if let Some(p) = proto {
-                    obj.borrow_mut().prototype = Some(p);
+                    obj.borrow_mut().prototype_id = Some(p);
                 }
                 obj.borrow_mut().primitive_value = Some(target);
                 let id = obj.borrow().id.unwrap();
@@ -2961,7 +2946,7 @@ impl Interpreter {
                 let obj = interp.create_object();
                 obj.borrow_mut().class_name = "FinalizationRegistry".to_string();
                 if let Some(p) = proto {
-                    obj.borrow_mut().prototype = Some(p);
+                    obj.borrow_mut().prototype_id = Some(p);
                 }
                 obj.borrow_mut().primitive_value = Some(callback);
                 // Initialize [[Cells]] as empty - map_data for (target, heldValue), set_data for tokens

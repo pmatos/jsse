@@ -104,7 +104,8 @@ impl Interpreter {
     pub(crate) fn setup_intl_list_format(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype = Some(self.get_object_expect(op_id));
+            proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(op_id).borrow().id.unwrap());
         }
         proto.borrow_mut().class_name = "Intl.ListFormat".to_string();
 
@@ -178,7 +179,8 @@ impl Interpreter {
                     .map(|(ptype, value)| {
                         let part_obj = interp.create_object();
                         if let Some(op_id) = interp.realm().object_prototype {
-                            part_obj.borrow_mut().prototype = Some(interp.get_object_expect(op_id));
+                            part_obj.borrow_mut().prototype_id =
+                                Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                         }
                         part_obj.borrow_mut().insert_property(
                             "type".to_string(),
@@ -222,7 +224,8 @@ impl Interpreter {
 
                 let result = interp.create_object();
                 if let Some(op_id) = interp.realm().object_prototype {
-                    result.borrow_mut().prototype = Some(interp.get_object_expect(op_id));
+                    result.borrow_mut().prototype_id =
+                        Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                 }
 
                 let props = vec![
@@ -250,7 +253,7 @@ impl Interpreter {
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone = proto.clone();
+        let proto_clone_id = proto.borrow().id.unwrap();
 
         let list_format_ctor = self.create_function(JsFunction::constructor(
             "ListFormat".to_string(),
@@ -312,11 +315,11 @@ impl Interpreter {
                 let proto = match interp
                     .get_prototype_from_new_target_realm(|realm| realm.intl_list_format_prototype)
                 {
-                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                    Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto);
+                obj.borrow_mut().prototype_id = Some(proto);
                 obj.borrow_mut().class_name = "Intl.ListFormat".to_string();
                 obj.borrow_mut().intl_data = Some(IntlData::ListFormat {
                     locale,

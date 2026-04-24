@@ -424,7 +424,7 @@ impl Interpreter {
                     && let JsValue::Object(po) = &promise
                     && let Some(pobj) = interp.get_object(po.id)
                 {
-                    pobj.borrow_mut().prototype = Some(p);
+                    pobj.borrow_mut().prototype_id = Some(p);
                 }
                 let promise_id = if let JsValue::Object(ref o) = promise {
                     o.id
@@ -749,7 +749,7 @@ impl Interpreter {
 
     pub(crate) fn create_promise_object(&mut self) -> JsValue {
         let mut data = JsObjectData::new();
-        data.prototype = self.proto_rc(self.realm().promise_prototype);
+        data.prototype_id = self.realm().promise_prototype;
         data.class_name = "Promise".to_string();
         data.promise_data = Some(PromiseData::new());
         let id = self.alloc_object(data);
@@ -1774,7 +1774,7 @@ impl Interpreter {
             let mut o = obj.borrow_mut();
             o.class_name = "AggregateError".to_string();
             if let Some(proto_id) = self.realm().aggregate_error_prototype {
-                o.prototype = Some(self.get_object_expect(proto_id));
+                o.prototype_id = Some(self.get_object_expect(proto_id).borrow().id.unwrap());
             }
             o.insert_builtin(
                 "message".to_string(),

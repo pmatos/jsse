@@ -97,7 +97,7 @@ fn create_segment_object(
 ) -> JsValue {
     let obj = interp.create_object();
     if let Some(op_id) = interp.realm().object_prototype {
-        obj.borrow_mut().prototype = Some(interp.get_object_expect(op_id));
+        obj.borrow_mut().prototype_id = Some(interp.get_object_expect(op_id).borrow().id.unwrap());
     }
     obj.borrow_mut().insert_property(
         "segment".to_string(),
@@ -158,7 +158,8 @@ impl Interpreter {
     pub(crate) fn setup_intl_segmenter(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype = Some(self.get_object_expect(op_id));
+            proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(op_id).borrow().id.unwrap());
         }
         proto.borrow_mut().class_name = "Intl.Segmenter".to_string();
 
@@ -196,7 +197,8 @@ impl Interpreter {
 
                 let segments_obj = interp.create_object();
                 if let Some(op_id) = interp.realm().object_prototype {
-                    segments_obj.borrow_mut().prototype = Some(interp.get_object_expect(op_id));
+                    segments_obj.borrow_mut().prototype_id =
+                        Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                 }
                 segments_obj.borrow_mut().class_name = "Segmenter Segments".to_string();
 
@@ -381,7 +383,8 @@ impl Interpreter {
 
                         let iter_obj = interp.create_object();
                         if let Some(ip_id) = interp.realm().iterator_prototype {
-                            iter_obj.borrow_mut().prototype = Some(interp.get_object_expect(ip_id));
+                            iter_obj.borrow_mut().prototype_id =
+                                Some(interp.get_object_expect(ip_id).borrow().id.unwrap());
                         }
                         iter_obj.borrow_mut().class_name = "Segmenter String Iterator".to_string();
 
@@ -505,7 +508,8 @@ impl Interpreter {
 
                 let result = interp.create_object();
                 if let Some(op_id) = interp.realm().object_prototype {
-                    result.borrow_mut().prototype = Some(interp.get_object_expect(op_id));
+                    result.borrow_mut().prototype_id =
+                        Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                 }
 
                 let props = vec![
@@ -535,7 +539,7 @@ impl Interpreter {
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone = proto.clone();
+        let proto_clone_id = proto.borrow().id.unwrap();
 
         let segmenter_ctor = self.create_function(JsFunction::constructor(
             "Segmenter".to_string(),
@@ -586,11 +590,11 @@ impl Interpreter {
                 let proto = match interp
                     .get_prototype_from_new_target_realm(|realm| realm.intl_segmenter_prototype)
                 {
-                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                    Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto);
+                obj.borrow_mut().prototype_id = Some(proto);
                 obj.borrow_mut().class_name = "Intl.Segmenter".to_string();
                 obj.borrow_mut().intl_data = Some(IntlData::Segmenter {
                     locale,

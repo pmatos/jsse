@@ -308,15 +308,13 @@ pub(crate) fn enumerable_own_keys(
                 Ok(Some(v)) => {
                     interp.validate_ownkeys_invariant(&v, &target_val)?;
                     let mut keys = Vec::new();
-                    if let JsValue::Object(arr) = &v
-                        && let Some(arr_obj) = interp.get_object(arr.id)
-                    {
-                        let len = match arr_obj.borrow().get_property("length") {
+                    if let JsValue::Object(arr) = &v {
+                        let len = match interp.get_property_on_id(arr.id, "length") {
                             JsValue::Number(n) => n as usize,
                             _ => 0,
                         };
                         for i in 0..len {
-                            let k = arr_obj.borrow().get_property(&i.to_string());
+                            let k = interp.get_property_on_id(arr.id, &i.to_string());
                             if let JsValue::String(s) = k {
                                 let key_str = s.to_rust_string();
                                 let key_val = JsValue::String(s);
@@ -326,11 +324,9 @@ pub(crate) fn enumerable_own_keys(
                                     vec![target_val.clone(), key_val],
                                 ) {
                                     Ok(Some(desc_val)) => {
-                                        if let JsValue::Object(dobj) = &desc_val
-                                            && let Some(desc_obj) = interp.get_object(dobj.id)
-                                        {
+                                        if let JsValue::Object(dobj) = &desc_val {
                                             let enum_val =
-                                                desc_obj.borrow().get_property("enumerable");
+                                                interp.get_property_on_id(dobj.id, "enumerable");
                                             if interp.to_boolean_val(&enum_val) {
                                                 keys.push(key_str);
                                             }

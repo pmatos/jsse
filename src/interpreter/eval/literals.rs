@@ -47,11 +47,10 @@ impl Interpreter {
     pub(super) fn create_frozen_template_array(&mut self, values: Vec<JsValue>) -> JsValue {
         let len = values.len();
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self.proto_rc(
-            self.realm()
-                .array_prototype
-                .or(self.realm().object_prototype),
-        );
+        obj_data.prototype_id = self
+            .realm()
+            .array_prototype
+            .or(self.realm().object_prototype);
         obj_data.class_name = "Array".to_string();
         for (i, v) in values.iter().enumerate() {
             obj_data.insert_property(
@@ -95,11 +94,10 @@ impl Interpreter {
             }
             Literal::RegExp(pattern, flags) => {
                 let mut obj = JsObjectData::new();
-                obj.prototype = self.proto_rc(
-                    self.realm()
-                        .regexp_prototype
-                        .or(self.realm().object_prototype),
-                );
+                obj.prototype_id = self
+                    .realm()
+                    .regexp_prototype
+                    .or(self.realm().object_prototype);
                 obj.class_name = "RegExp".to_string();
                 let source_js = if pattern.is_empty() {
                     JsString::from_str("(?:)")
@@ -142,11 +140,10 @@ impl Interpreter {
 
     pub(crate) fn create_regexp(&mut self, pattern: &str, flags: &str) -> JsValue {
         let mut obj = JsObjectData::new();
-        obj.prototype = self.proto_rc(
-            self.realm()
-                .regexp_prototype
-                .or(self.realm().object_prototype),
-        );
+        obj.prototype_id = self
+            .realm()
+            .regexp_prototype
+            .or(self.realm().object_prototype);
         obj.class_name = "RegExp".to_string();
         let source_str = if pattern.is_empty() { "(?:)" } else { pattern };
         obj.regexp_original_source = Some(JsString::from_str(source_str));
@@ -371,7 +368,8 @@ impl Interpreter {
                 }
             }
             // Per spec §14.6.13: class .prototype is {writable: false, enumerable: false, configurable: false}
-            let proto_val_for_desc = func_obj.borrow().get_property("prototype");
+            let func_obj_id = func_obj.borrow().id.unwrap();
+            let proto_val_for_desc = self.get_property_on_id(func_obj_id, "prototype");
             func_obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val_for_desc, false, false, false),
@@ -390,13 +388,9 @@ impl Interpreter {
 
         // Get the prototype object that was auto-created by create_function
         let proto_obj = if let JsValue::Object(ref o) = ctor_val {
-            if let Some(func_obj) = self.get_object(o.id) {
-                let proto_val = func_obj.borrow().get_property("prototype");
-                if let JsValue::Object(ref p) = proto_val {
-                    self.get_object(p.id)
-                } else {
-                    None
-                }
+            let proto_val = self.get_property_on_id(o.id, "prototype");
+            if let JsValue::Object(ref p) = proto_val {
+                self.get_object(p.id)
             } else {
                 None
             }
@@ -410,7 +404,7 @@ impl Interpreter {
         {
             let super_o_id = super_o.id;
             let sv_clone = sv.clone();
-            // Step 5.e: proto.[[Prototype]] = superclass.prototype
+            // Step 5.e: proto.[[Prototype]] = superclass.prototype_id
             // Must use Get() to invoke accessor properties (e.g. getter-defined prototype)
             let super_proto_val = match self.get_object_property(super_o_id, "prototype", &sv_clone)
             {
@@ -430,14 +424,14 @@ impl Interpreter {
                 && let Some(super_proto) = self.get_object(sp.id)
                 && let Some(ref proto) = proto_obj
             {
-                proto.borrow_mut().prototype = Some(super_proto);
+                proto.borrow_mut().prototype_id = Some(super_proto.borrow().id.unwrap());
             }
             // Step 7.a: F.[[Prototype]] = superclass (for static method inheritance)
             if let JsValue::Object(ref o) = ctor_val
                 && let Some(ctor_obj) = self.get_object(o.id)
                 && let Some(super_obj) = self.get_object(super_o_id)
             {
-                ctor_obj.borrow_mut().prototype = Some(super_obj);
+                ctor_obj.borrow_mut().prototype_id = Some(super_obj.borrow().id.unwrap());
             }
         }
 
@@ -445,7 +439,7 @@ impl Interpreter {
         if let Some(JsValue::Null) = super_val
             && let Some(ref proto) = proto_obj
         {
-            proto.borrow_mut().prototype = None;
+            proto.borrow_mut().prototype_id = None;
         }
 
         // Set __home_object__ in class_env for the constructor (which uses class_env as
@@ -1202,7 +1196,7 @@ impl Interpreter {
 
     pub(super) fn eval_object_literal(&mut self, props: &[Property], env: &EnvRef) -> Completion {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self.proto_rc(self.realm().object_prototype);
+        obj_data.prototype_id = self.realm().object_prototype;
         let mut method_values: Vec<JsValue> = Vec::new();
         for prop in props {
             let (key, fn_name_for_key) = match &prop.key {
@@ -1318,10 +1312,10 @@ impl Interpreter {
                     if key == "__proto__" && !prop.computed && !prop.shorthand && !prop.method {
                         match &value {
                             JsValue::Object(o) => {
-                                obj_data.prototype = self.get_object(o.id);
+                                obj_data.prototype_id = Some(o.id);
                             }
                             JsValue::Null => {
-                                obj_data.prototype = None;
+                                obj_data.prototype_id = None;
                             }
                             _ => {
                                 // Non-object, non-null values are ignored per spec
