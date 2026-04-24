@@ -2776,9 +2776,9 @@ impl Interpreter {
                     ) {
                         Ok(v) => v,
                         Err(()) => {
-                            return Completion::Throw(interp.create_range_error(
-                                "duration out of range when compared",
-                            ));
+                            return Completion::Throw(
+                                interp.create_range_error("duration out of range when compared"),
+                            );
                         }
                     };
                     let n2 = match duration_week_day_time_to_ns_checked(
@@ -2786,9 +2786,9 @@ impl Interpreter {
                     ) {
                         Ok(v) => v,
                         Err(()) => {
-                            return Completion::Throw(interp.create_range_error(
-                                "duration out of range when compared",
-                            ));
+                            return Completion::Throw(
+                                interp.create_range_error("duration out of range when compared"),
+                            );
                         }
                     };
                     (n1, n2)
