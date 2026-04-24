@@ -575,3 +575,31 @@ fn typed_array_clamps_assigned_values() {
     );
     assert_eq!(global_string(&interp, "result"), "255");
 }
+
+/// Regression test for PR 1b.2 (#105): prototype chain survives GC.
+/// Builds chain a -> b -> c -> d, stashes a reference to d, allocates
+/// many throwaway objects to force safepoints, then asserts the chain
+/// still resolves and returns d's own property via walk.
+#[test]
+fn prototype_chain_survives_gc() {
+    let interp = run_script(
+        r#"
+        var d = { marker: "deep" };
+        var c = Object.create(d);
+        var b = Object.create(c);
+        var a = Object.create(b);
+        // force many allocations to trigger gc_safepoint
+        var sink = [];
+        for (var i = 0; i < 20000; i++) {
+            sink.push({ k: i });
+        }
+        sink = null;
+        // prototype walk must still resolve
+        var resolved = a.marker;
+        // own-property access on d must still work
+        var direct = d.marker;
+        var result = resolved + "|" + direct;
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "deep|deep");
+}

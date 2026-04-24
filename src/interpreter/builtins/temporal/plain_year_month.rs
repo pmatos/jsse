@@ -21,7 +21,8 @@ pub(super) fn create_plain_year_month_result(
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.PlainYearMonth".to_string();
     if let Some(proto_id) = interp.realm().temporal_plain_year_month_prototype {
-        obj.borrow_mut().prototype = Some(interp.get_object_expect(proto_id));
+        obj.borrow_mut().prototype_id =
+            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::PlainYearMonth {
         iso_year: y,

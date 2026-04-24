@@ -6171,7 +6171,7 @@ fn spec_set(
             }
         }
         // Check for setter accessor
-        let desc = obj.borrow().get_property_descriptor(key);
+        let desc = interp.get_property_descriptor_on_id(obj_id, key);
         if let Some(ref d) = desc
             && let Some(ref setter) = d.set
             && !matches!(setter, JsValue::Undefined)
@@ -6671,7 +6671,7 @@ fn regexp_exec_raw(
     };
     let groups_val = if let Some(ref resolved) = resolved_named {
         let groups_obj = interp.create_object();
-        groups_obj.borrow_mut().prototype = None;
+        groups_obj.borrow_mut().prototype_id = None;
         for (name, m) in resolved {
             let val = match m {
                 Some(m) => JsValue::String(regex_output_to_js_string(&m.text)),
@@ -6726,7 +6726,7 @@ fn regexp_exec_raw(
             let indices_arr = interp.create_array(index_pairs);
             if let Some(ref resolved) = resolved_named {
                 let idx_groups = interp.create_object();
-                idx_groups.borrow_mut().prototype = None;
+                idx_groups.borrow_mut().prototype_id = None;
                 for (name, m) in resolved {
                     let val = match m {
                         Some(m) => {
@@ -6771,10 +6771,7 @@ fn get_symbol_key(interp: &Interpreter, name: &str) -> Option<String> {
         .get("Symbol")
         .and_then(|sv| {
             if let JsValue::Object(so) = sv {
-                interp.get_object(so.id).map(|sobj| {
-                    let val = sobj.borrow().get_property(name);
-                    to_js_string(&val)
-                })
+                Some(to_js_string(&interp.get_property_on_id(so.id, name)))
             } else {
                 None
             }
@@ -6915,12 +6912,7 @@ impl Interpreter {
                         ));
                     }
                     // B.2.5.1 step 3: throw TypeError for subclass instances
-                    let proto_matches = obj
-                        .borrow()
-                        .prototype
-                        .as_ref()
-                        .map(|p| p.borrow().id == Some(compile_proto_id))
-                        .unwrap_or(false);
+                    let proto_matches = obj.borrow().prototype_id == Some(compile_proto_id);
                     if !proto_matches {
                         return Completion::Throw(interp.create_type_error(
                             "RegExp.prototype.compile cannot be used on RegExp subclass instances",
@@ -7969,7 +7961,8 @@ impl Interpreter {
                 let iter_obj = interp.create_object();
                 iter_obj.borrow_mut().class_name = "RegExp String Iterator".to_string();
                 if let Some(rsi_proto_id) = interp.realm().regexp_string_iterator_prototype {
-                    iter_obj.borrow_mut().prototype = Some(interp.get_object_expect(rsi_proto_id));
+                    iter_obj.borrow_mut().prototype_id =
+                        Some(interp.get_object_expect(rsi_proto_id).borrow().id.unwrap());
                 }
 
                 // Store matcher ID for spec-compliant RegExpExec
@@ -8006,7 +7999,8 @@ impl Interpreter {
         let rsi_proto = self.create_object();
         rsi_proto.borrow_mut().class_name = "RegExp String Iterator".to_string();
         if let Some(ip_id) = self.realm().iterator_prototype {
-            rsi_proto.borrow_mut().prototype = Some(self.get_object_expect(ip_id));
+            rsi_proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(ip_id).borrow().id.unwrap());
         }
 
         // %RegExpStringIteratorPrototype%.next
@@ -8031,8 +8025,8 @@ impl Interpreter {
                     }
                 };
                 let state = obj.borrow().iterator_state.clone();
-                let matcher_id_val = obj.borrow().get_property("__matcher__");
-                let full_unicode_val = obj.borrow().get_property("__full_unicode__");
+                let matcher_id_val = interp.get_property_on_id(o.id, "__matcher__");
+                let full_unicode_val = interp.get_property_on_id(o.id, "__full_unicode__");
                 let full_unicode = matches!(full_unicode_val, JsValue::Boolean(true));
 
                 let (source, flags, string, global, last_index, done) =
@@ -8461,7 +8455,7 @@ impl Interpreter {
             },
         );
 
-        let regexp_proto_rc = regexp_proto.clone();
+        let regexp_proto_rc_id = regexp_proto.borrow().id.unwrap();
 
         // RegExp constructor
         let regexp_ctor = self.create_function(JsFunction::constructor(
@@ -8659,7 +8653,7 @@ impl Interpreter {
                 };
 
                 let mut obj = JsObjectData::new();
-                obj.prototype = proto.or(Some(regexp_proto_rc.clone()));
+                obj.prototype_id = proto.or(Some(regexp_proto_rc_id));
                 obj.class_name = "RegExp".to_string();
                 // Store internal slots as non-enumerable hidden properties
                 obj.regexp_original_source = Some(source_js);

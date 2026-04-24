@@ -156,10 +156,8 @@ impl Interpreter {
         init_env.borrow_mut().is_field_initializer = true;
         // Set __home_object__ for super property access in field initializers.
         // Instance field HomeObject = class prototype.
-        if let JsValue::Object(ref o) = new_target_val
-            && let Some(ctor_obj) = self.get_object(o.id)
-        {
-            let proto_val = ctor_obj.borrow().get_property("prototype");
+        if let JsValue::Object(ref o) = new_target_val {
+            let proto_val = self.get_property_on_id(o.id, "prototype");
             if let JsValue::Object(_) = &proto_val {
                 init_env.borrow_mut().bindings.insert(
                     "__home_object__".to_string(),
@@ -955,7 +953,7 @@ impl Interpreter {
                     }
                 }
                 let meta = self.create_object();
-                meta.borrow_mut().prototype = None;
+                meta.borrow_mut().prototype_id = None;
                 if let Some(ref path) = module_path {
                     let url = format!("file://{}", path.display());
                     meta.borrow_mut().insert_property(
@@ -1082,10 +1080,8 @@ impl Interpreter {
                                     );
                                     return self.create_rejected_promise(err);
                                 }
-                                if let JsValue::Object(o) = &opts_val
-                                    && let Some(obj) = self.get_object(o.id)
-                                {
-                                    let wv = obj.borrow().get_property("with");
+                                if let JsValue::Object(o) = &opts_val {
+                                    let wv = self.get_property_on_id(o.id, "with");
                                     if !wv.is_undefined() && !matches!(wv, JsValue::Object(_)) {
                                         let err = self.create_type_error(
                                             "The 'with' option must be an object",
@@ -1136,10 +1132,8 @@ impl Interpreter {
                                     );
                                     return self.create_rejected_promise(err);
                                 }
-                                if let JsValue::Object(o) = &opts_val
-                                    && let Some(obj) = self.get_object(o.id)
-                                {
-                                    let wv = obj.borrow().get_property("with");
+                                if let JsValue::Object(o) = &opts_val {
+                                    let wv = self.get_property_on_id(o.id, "with");
                                     if !wv.is_undefined() && !matches!(wv, JsValue::Object(_)) {
                                         let err = self.create_type_error(
                                             "The 'with' option must be an object",
@@ -1276,46 +1270,36 @@ impl Interpreter {
                     } else {
                         Completion::Normal(JsValue::Undefined)
                     }
-                } else if let Some(sp_id) = self.realm().string_prototype
-                    && let Some(sp) = self.get_object(sp_id)
-                {
-                    Completion::Normal(sp.borrow().get_property(name))
+                } else if let Some(sp_id) = self.realm().string_prototype {
+                    Completion::Normal(self.get_property_on_id(sp_id, name))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Number(_) => {
-                if let Some(np_id) = self.realm().number_prototype
-                    && let Some(np) = self.get_object(np_id)
-                {
-                    Completion::Normal(np.borrow().get_property(name))
+                if let Some(np_id) = self.realm().number_prototype {
+                    Completion::Normal(self.get_property_on_id(np_id, name))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Boolean(_) => {
-                if let Some(bp_id) = self.realm().boolean_prototype
-                    && let Some(bp) = self.get_object(bp_id)
-                {
-                    Completion::Normal(bp.borrow().get_property(name))
+                if let Some(bp_id) = self.realm().boolean_prototype {
+                    Completion::Normal(self.get_property_on_id(bp_id, name))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Symbol(_) => {
-                if let Some(sp_id) = self.realm().symbol_prototype
-                    && let Some(sp) = self.get_object(sp_id)
-                {
-                    Completion::Normal(sp.borrow().get_property(name))
+                if let Some(sp_id) = self.realm().symbol_prototype {
+                    Completion::Normal(self.get_property_on_id(sp_id, name))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::BigInt(_) => {
-                if let Some(bp_id) = self.realm().bigint_prototype
-                    && let Some(bp) = self.get_object(bp_id)
-                {
-                    Completion::Normal(bp.borrow().get_property(name))
+                if let Some(bp_id) = self.realm().bigint_prototype {
+                    Completion::Normal(self.get_property_on_id(bp_id, name))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
@@ -1415,28 +1399,28 @@ impl Interpreter {
                 match val {
                     JsValue::String(_) => {
                         obj_data.class_name = "String".to_string();
-                        obj_data.prototype = self.proto_rc(self.realm().string_prototype);
+                        obj_data.prototype_id = self.realm().string_prototype;
                     }
                     JsValue::Number(_) => {
                         obj_data.class_name = "Number".to_string();
-                        obj_data.prototype = self.proto_rc(self.realm().number_prototype);
+                        obj_data.prototype_id = self.realm().number_prototype;
                     }
                     JsValue::Boolean(_) => {
                         obj_data.class_name = "Boolean".to_string();
-                        obj_data.prototype = self.proto_rc(self.realm().boolean_prototype);
+                        obj_data.prototype_id = self.realm().boolean_prototype;
                     }
                     JsValue::Symbol(_) => {
                         obj_data.class_name = "Symbol".to_string();
-                        obj_data.prototype = self.proto_rc(self.realm().symbol_prototype);
+                        obj_data.prototype_id = self.realm().symbol_prototype;
                     }
                     JsValue::BigInt(_) => {
                         obj_data.class_name = "BigInt".to_string();
-                        obj_data.prototype = self.proto_rc(self.realm().bigint_prototype);
+                        obj_data.prototype_id = self.realm().bigint_prototype;
                     }
                     _ => unreachable!(),
                 }
-                if obj_data.prototype.is_none() {
-                    obj_data.prototype = self.proto_rc(self.realm().object_prototype);
+                if obj_data.prototype_id.is_none() {
+                    obj_data.prototype_id = self.realm().object_prototype;
                 }
                 let id = self.alloc_object(obj_data);
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
@@ -2696,9 +2680,9 @@ impl Interpreter {
                     }
                     // OrdinarySet: walk prototype chain for setters
                     if !obj.borrow().has_own_property(&key) {
-                        let mut proto_opt = obj.borrow().prototype.clone();
-                        while let Some(proto_rc) = proto_opt {
-                            let inherited = proto_rc.borrow().get_property_descriptor(&key);
+                        let mut proto_opt = obj.borrow().prototype_id;
+                        while let Some(proto_id) = proto_opt {
+                            let inherited = self.get_property_descriptor_on_id(proto_id, &key);
                             if let Some(ref inherited_desc) = inherited {
                                 if inherited_desc.is_accessor_descriptor() {
                                     if let Some(ref setter) = inherited_desc.set
@@ -2719,7 +2703,7 @@ impl Interpreter {
                                 }
                                 break;
                             }
-                            proto_opt = proto_rc.borrow().prototype.clone();
+                            proto_opt = self.get_object_expect(proto_id).borrow().prototype_id;
                         }
                     }
                     obj.borrow_mut().set_property_value(&key, value);
@@ -3232,12 +3216,13 @@ impl Interpreter {
                     }
                     // OrdinarySet (§10.1.9.2): if no own property, walk prototype chain
                     if !obj.borrow().has_own_property(&key) {
-                        let mut proto_opt = obj.borrow().prototype.clone();
+                        let mut proto_opt = obj.borrow().prototype_id;
                         while let Some(proto_rc) = proto_opt {
-                            let proto_id = proto_rc.borrow().id.unwrap();
+                            let proto_id = proto_rc;
                             // TypedArray [[Set]] §10.4.5.5: canonical numeric index in TA prototype
                             {
-                                let proto_borrow = proto_rc.borrow();
+                                let proto_borrow = self.get_object_expect(proto_rc);
+                                let proto_borrow = proto_borrow.borrow();
                                 if let Some(ref ta) = proto_borrow.typed_array_info
                                     && let Some(index) = canonical_numeric_index_string(&key)
                                     && !is_valid_integer_index(ta, index)
@@ -3262,7 +3247,8 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 }
                             }
-                            let inherited = proto_rc.borrow().get_property_descriptor(&key);
+                            let proto_id = proto_rc;
+                            let inherited = self.get_property_descriptor_on_id(proto_id, &key);
                             if let Some(ref inherited_desc) = inherited {
                                 if inherited_desc.is_data_descriptor() {
                                     if inherited_desc.writable == Some(false) {
@@ -3303,7 +3289,7 @@ impl Interpreter {
                                 }
                                 break;
                             }
-                            proto_opt = proto_rc.borrow().prototype.clone();
+                            proto_opt = self.get_object_expect(proto_rc).borrow().prototype_id;
                         }
                     }
                     // ArraySetLength §10.4.2.4 via [[Set]]
@@ -3368,11 +3354,7 @@ impl Interpreter {
                 };
                 if let JsValue::Object(ref o) = wrapper {
                     // Walk prototype chain looking for setter or proxy set trap
-                    let desc = if let Some(obj) = self.get_object(o.id) {
-                        obj.borrow().get_property_descriptor(&key)
-                    } else {
-                        None
-                    };
+                    let desc = self.get_property_descriptor_on_id(o.id, &key);
                     if let Some(ref d) = desc
                         && let Some(ref setter) = d.set
                         && !matches!(setter, JsValue::Undefined)
@@ -3389,9 +3371,9 @@ impl Interpreter {
                     }
                     // Check for proxy in prototype chain
                     if let Some(obj) = self.get_object(o.id) {
-                        let mut proto_opt = obj.borrow().prototype.clone();
+                        let mut proto_opt = obj.borrow().prototype_id;
                         while let Some(proto_rc) = proto_opt {
-                            let proto_id = proto_rc.borrow().id.unwrap();
+                            let proto_id = proto_rc;
                             if self.get_proxy_info(proto_id).is_some() {
                                 match self.proxy_set(proto_id, &key, final_val.clone(), &obj_val) {
                                     Ok(success) => {
@@ -3407,7 +3389,7 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 }
                             }
-                            proto_opt = proto_rc.borrow().prototype.clone();
+                            proto_opt = self.get_object_expect(proto_rc).borrow().prototype_id;
                         }
                     }
                 }
@@ -3771,7 +3753,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     }
-                    let desc = obj.borrow().get_property_descriptor(&key);
+                    let desc = self.get_property_descriptor_on_id(o.id, &key);
                     if let Some(ref d) = desc
                         && let Some(ref setter) = d.set
                         && !matches!(setter, JsValue::Undefined)
@@ -3797,9 +3779,9 @@ impl Interpreter {
                         return Completion::Normal(rval);
                     }
                     if !obj.borrow().has_own_property(&key) {
-                        let proto = obj.borrow().prototype.clone();
+                        let proto = obj.borrow().prototype_id;
                         if let Some(proto_rc) = proto {
-                            let proto_id = proto_rc.borrow().id.unwrap();
+                            let proto_id = proto_rc;
                             if self.has_proxy_in_prototype_chain(proto_id) {
                                 let receiver = boxed_obj.clone();
                                 match self.proxy_set(proto_id, &key, rval.clone(), &receiver) {
@@ -4007,7 +3989,7 @@ impl Interpreter {
                 return Ok(());
             }
             // Check for setter
-            let desc = obj.borrow().get_property_descriptor(key);
+            let desc = self.get_property_descriptor_on_id(o.id, key);
             if let Some(ref d) = desc
                 && let Some(ref setter) = d.set
                 && !matches!(setter, JsValue::Undefined)
@@ -4057,12 +4039,13 @@ impl Interpreter {
             }
             // OrdinarySet (§10.1.9.2): if no own property, walk prototype chain
             if !obj.borrow().has_own_property(key) {
-                let mut proto_opt = obj.borrow().prototype.clone();
+                let mut proto_opt = obj.borrow().prototype_id;
                 while let Some(proto_rc) = proto_opt {
-                    let proto_id = proto_rc.borrow().id.unwrap();
+                    let proto_id = proto_rc;
                     // TypedArray [[Set]] §10.4.5.5: canonical numeric index in TA prototype
                     {
-                        let proto_borrow = proto_rc.borrow();
+                        let proto_borrow = self.get_object_expect(proto_rc);
+                        let proto_borrow = proto_borrow.borrow();
                         if let Some(ref ta) = proto_borrow.typed_array_info
                             && let Some(index) = canonical_numeric_index_string(key)
                             && !is_valid_integer_index(ta, index)
@@ -4086,7 +4069,8 @@ impl Interpreter {
                             Err(e) => return Err(e),
                         }
                     }
-                    let inherited = proto_rc.borrow().get_property_descriptor(key);
+                    let proto_id = proto_rc;
+                    let inherited = self.get_property_descriptor_on_id(proto_id, key);
                     if let Some(ref inherited_desc) = inherited {
                         if inherited_desc.is_data_descriptor() {
                             if inherited_desc.writable == Some(false) {
@@ -4120,7 +4104,7 @@ impl Interpreter {
                         }
                         break;
                     }
-                    proto_opt = proto_rc.borrow().prototype.clone();
+                    proto_opt = self.get_object_expect(proto_rc).borrow().prototype_id;
                 }
             }
             let success = obj.borrow_mut().set_property_value(key, val);
@@ -4910,8 +4894,8 @@ impl Interpreter {
             let super_ctor = if let Some(ctor_func) = env.borrow().get("__constructor_func__") {
                 if let JsValue::Object(o) = &ctor_func {
                     if let Some(obj_rc) = self.get_object(o.id) {
-                        if let Some(proto) = &obj_rc.borrow().prototype {
-                            if let Some(id) = proto.borrow().id {
+                        if let Some(proto) = &obj_rc.borrow().prototype_id {
+                            if let Some(id) = Some(*proto) {
                                 JsValue::Object(crate::types::JsObject { id })
                             } else {
                                 JsValue::Undefined
@@ -5058,11 +5042,12 @@ impl Interpreter {
                     }
                     let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
                     let home = env.borrow().get("__home_object__");
-                    if let Some(JsValue::Object(ref ho)) = home
-                        && let Some(home_obj) = self.get_object(ho.id)
-                    {
-                        if let Some(ref proto_rc) = home_obj.borrow().prototype.clone() {
-                            let method = proto_rc.borrow().get_property(&key);
+                    if let Some(JsValue::Object(ref ho)) = home {
+                        let proto_id = self
+                            .get_object(ho.id)
+                            .and_then(|ho_obj| ho_obj.borrow().prototype_id.as_ref().copied());
+                        if let Some(pid) = proto_id {
+                            let method = self.get_property_on_id(pid, &key);
                             (method, this_val)
                         } else {
                             return Completion::Throw(self.create_type_error(&format!(
@@ -5071,18 +5056,10 @@ impl Interpreter {
                         }
                     } else if let JsValue::Object(ref o) = obj_val {
                         // Fallback: __super__.prototype for class super
-                        if let Some(obj) = self.get_object(o.id) {
-                            let proto_val = obj.borrow().get_property("prototype");
-                            if let JsValue::Object(ref p) = proto_val {
-                                if let Some(proto) = self.get_object(p.id) {
-                                    let method = proto.borrow().get_property(&key);
-                                    (method, this_val)
-                                } else {
-                                    (JsValue::Undefined, JsValue::Undefined)
-                                }
-                            } else {
-                                (JsValue::Undefined, JsValue::Undefined)
-                            }
+                        let proto_val = self.get_property_on_id(o.id, "prototype");
+                        if let JsValue::Object(ref p) = proto_val {
+                            let method = self.get_property_on_id(p.id, &key);
+                            (method, this_val)
                         } else {
                             (JsValue::Undefined, JsValue::Undefined)
                         }
@@ -5097,39 +5074,37 @@ impl Interpreter {
                         other => return other,
                     }
                 } else if let JsValue::String(_) = &obj_val {
-                    if let Some(sp) = self.proto_rc(self.realm().string_prototype) {
-                        let method = sp.borrow().get_property(&key);
+                    if let Some(sp_id) = self.realm().string_prototype {
+                        let method = self.get_property_on_id(sp_id, &key);
                         (method, obj_val)
                     } else {
                         (JsValue::Undefined, obj_val)
                     }
                 } else if matches!(&obj_val, JsValue::Number(_)) {
-                    let proto = self.proto_rc(
-                        self.realm()
-                            .number_prototype
-                            .or(self.realm().object_prototype),
-                    );
-                    if let Some(ref p) = proto {
-                        let method = p.borrow().get_property(&key);
+                    let pid_opt = self
+                        .realm()
+                        .number_prototype
+                        .or(self.realm().object_prototype);
+                    if let Some(pid) = pid_opt {
+                        let method = self.get_property_on_id(pid, &key);
                         (method, obj_val)
                     } else {
                         (JsValue::Undefined, obj_val)
                     }
                 } else if matches!(&obj_val, JsValue::Boolean(_)) {
-                    let proto = self.proto_rc(
-                        self.realm()
-                            .boolean_prototype
-                            .or(self.realm().object_prototype),
-                    );
-                    if let Some(ref p) = proto {
-                        let method = p.borrow().get_property(&key);
+                    let pid_opt = self
+                        .realm()
+                        .boolean_prototype
+                        .or(self.realm().object_prototype);
+                    if let Some(pid) = pid_opt {
+                        let method = self.get_property_on_id(pid, &key);
                         (method, obj_val)
                     } else {
                         (JsValue::Undefined, obj_val)
                     }
                 } else if matches!(&obj_val, JsValue::Symbol(_)) {
-                    if let Some(p) = self.proto_rc(self.realm().symbol_prototype) {
-                        let desc = p.borrow().get_property_descriptor(&key);
+                    if let Some(pid) = self.realm().symbol_prototype {
+                        let desc = self.get_property_descriptor_on_id(pid, &key);
                         let method = match desc {
                             Some(ref d) if d.get.is_some() => {
                                 let getter = d.get.clone().unwrap();
@@ -5146,13 +5121,12 @@ impl Interpreter {
                         (JsValue::Undefined, obj_val)
                     }
                 } else if matches!(&obj_val, JsValue::BigInt(_)) {
-                    let proto = self.proto_rc(
-                        self.realm()
-                            .bigint_prototype
-                            .or(self.realm().object_prototype),
-                    );
-                    if let Some(ref p) = proto {
-                        let method = p.borrow().get_property(&key);
+                    let pid_opt = self
+                        .realm()
+                        .bigint_prototype
+                        .or(self.realm().object_prototype);
+                    if let Some(pid) = pid_opt {
+                        let method = self.get_property_on_id(pid, &key);
                         (method, obj_val)
                     } else {
                         (JsValue::Undefined, obj_val)
@@ -11852,10 +11826,8 @@ impl Interpreter {
                             if let Some(func_obj_rc) = self.get_object(o.id) {
                                 let proto_val =
                                     func_obj_rc.borrow().get_property_value("prototype");
-                                if let Some(JsValue::Object(ref p)) = proto_val
-                                    && let Some(proto_rc) = self.get_object(p.id)
-                                {
-                                    gen_obj.borrow_mut().prototype = Some(proto_rc);
+                                if let Some(JsValue::Object(ref p)) = proto_val {
+                                    gen_obj.borrow_mut().prototype_id = Some(p.id);
                                     proto_set = true;
                                 }
                             }
@@ -11865,7 +11837,7 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 };
                                 let agp_id = self.realms[fn_realm_id].async_generator_prototype;
-                                gen_obj.borrow_mut().prototype = self.proto_rc(agp_id);
+                                gen_obj.borrow_mut().prototype_id = agp_id;
                             }
                             gen_obj.borrow_mut().class_name = "AsyncGenerator".to_string();
                             let is_simple =
@@ -12041,10 +12013,8 @@ impl Interpreter {
                             if let Some(func_obj_rc) = self.get_object(o.id) {
                                 let proto_val =
                                     func_obj_rc.borrow().get_property_value("prototype");
-                                if let Some(JsValue::Object(ref p)) = proto_val
-                                    && let Some(proto_rc) = self.get_object(p.id)
-                                {
-                                    gen_obj.borrow_mut().prototype = Some(proto_rc);
+                                if let Some(JsValue::Object(ref p)) = proto_val {
+                                    gen_obj.borrow_mut().prototype_id = Some(p.id);
                                     proto_set = true;
                                 }
                             }
@@ -12054,7 +12024,7 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 };
                                 let gp_id = self.realms[fn_realm_id].generator_prototype;
-                                gen_obj.borrow_mut().prototype = self.proto_rc(gp_id);
+                                gen_obj.borrow_mut().prototype_id = gp_id;
                             }
                             gen_obj.borrow_mut().class_name = "Generator".to_string();
                             let is_simple =
@@ -13350,8 +13320,7 @@ impl Interpreter {
                 let super_ctor = if let JsValue::Object(o) = &callee_val
                     && let Some(func_obj) = self.get_object(o.id)
                 {
-                    if let Some(ref proto) = func_obj.borrow().prototype {
-                        let id = proto.borrow().id.unwrap();
+                    if let Some(id) = func_obj.borrow().prototype_id {
                         JsValue::Object(crate::types::JsObject { id })
                     } else {
                         JsValue::Undefined
@@ -13426,10 +13395,8 @@ impl Interpreter {
                 && let Some(func_obj) = self.get_object(o.id)
             {
                 let proto = func_obj.borrow().get_property_value("prototype");
-                if let Some(JsValue::Object(proto_obj)) = proto
-                    && let Some(proto_rc) = self.get_object(proto_obj.id)
-                {
-                    new_obj.borrow_mut().prototype = Some(proto_rc);
+                if let Some(JsValue::Object(proto_obj)) = proto {
+                    new_obj.borrow_mut().prototype_id = Some(proto_obj.id);
                 }
             }
             let instance_field_defs = if let JsValue::Object(o) = &callee_val
@@ -13467,7 +13434,8 @@ impl Interpreter {
                     }
                 }
                 // Set __home_object__ for super property access in field initializers.
-                let proto_val = func_obj.borrow().get_property("prototype");
+                let func_obj_id = func_obj.borrow().id.unwrap();
+                let proto_val = self.get_property_on_id(func_obj_id, "prototype");
                 if matches!(&proto_val, JsValue::Object(_)) {
                     init_env.borrow_mut().bindings.insert(
                         "__home_object__".to_string(),
@@ -13763,10 +13731,8 @@ impl Interpreter {
                         Completion::Throw(e) => return Completion::Throw(e),
                         _ => JsValue::Undefined,
                     };
-                    if let JsValue::Object(proto_obj) = proto
-                        && let Some(proto_rc) = self.get_object(proto_obj.id)
-                    {
-                        new_obj.borrow_mut().prototype = Some(proto_rc);
+                    if let JsValue::Object(proto_obj) = proto {
+                        new_obj.borrow_mut().prototype_id = Some(proto_obj.id);
                     } else {
                         // proto is not an Object: GetFunctionRealm(newTarget) → realm's %ObjectPrototype%
                         let nt_realm_id =
@@ -13775,8 +13741,8 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             };
                         let op_id = self.realms[nt_realm_id].object_prototype;
-                        if let Some(proto_rc) = self.proto_rc(op_id) {
-                            new_obj.borrow_mut().prototype = Some(proto_rc);
+                        if let Some(proto_rc) = op_id {
+                            new_obj.borrow_mut().prototype_id = Some(proto_rc);
                         }
                     }
                 }
@@ -13804,7 +13770,8 @@ impl Interpreter {
                     } else {
                         (None, None)
                     };
-                    let pv = func_obj.borrow().get_property("prototype");
+                    let func_obj_id = func_obj.borrow().id.unwrap();
+                    let pv = self.get_property_on_id(func_obj_id, "prototype");
                     (pn, pv, oe)
                 } else {
                     (None, JsValue::Undefined, None)
@@ -13967,10 +13934,9 @@ impl Interpreter {
                     _ => return,
                 };
                 if let JsValue::Object(po) = proto_val
-                    && let Some(proto_rc) = self.get_object(po.id)
                     && let Some(obj_rc) = self.get_object(obj_id)
                 {
-                    obj_rc.borrow_mut().prototype = Some(proto_rc);
+                    obj_rc.borrow_mut().prototype_id = Some(po.id);
                 } else {
                     // proto is not an Object: GetFunctionRealm(newTarget) → realm's intrinsic
                     let nt_realm_id = match self.get_function_realm(&JsValue::Object(nt_o.clone()))
@@ -13979,10 +13945,10 @@ impl Interpreter {
                         Err(_) => return,
                     };
                     let fallback_id = realm_fallback(&self.realms[nt_realm_id]);
-                    if let Some(proto_rc) = self.proto_rc(fallback_id)
+                    if let Some(proto_rc) = fallback_id
                         && let Some(obj_rc) = self.get_object(obj_id)
                     {
-                        obj_rc.borrow_mut().prototype = Some(proto_rc);
+                        obj_rc.borrow_mut().prototype_id = Some(proto_rc);
                     }
                 }
             }
@@ -14060,16 +14026,15 @@ impl Interpreter {
         trap_result: &JsValue,
         target_val: &JsValue,
     ) -> Result<(), JsValue> {
-        let trap_keys: Vec<String> = if let JsValue::Object(arr) = trap_result
-            && let Some(arr_obj) = self.get_object(arr.id)
-        {
-            let len = match arr_obj.borrow().get_property("length") {
+        let trap_keys: Vec<String> = if let JsValue::Object(arr) = trap_result {
+            let len = match self.get_property_on_id(arr.id, "length") {
                 JsValue::Number(n) => n as usize,
                 _ => 0,
             };
+            let arr_id = arr.id;
             (0..len)
                 .map(|i| {
-                    let v = arr_obj.borrow().get_property(&i.to_string());
+                    let v = self.get_property_on_id(arr_id, &i.to_string());
                     to_js_string(&v)
                 })
                 .collect()
@@ -14756,9 +14721,9 @@ impl Interpreter {
                 return Ok(obj.borrow_mut().set_property_value(key, value));
             }
             // No own property, walk prototype chain
-            let proto = obj.borrow().prototype.clone();
+            let proto = obj.borrow().prototype_id;
             if let Some(proto_rc) = proto {
-                let proto_id = proto_rc.borrow().id.unwrap();
+                let proto_id = proto_rc;
                 return self.proxy_set(proto_id, key, value, receiver);
             }
             // No prototype: OrdinarySetWithOwnDescriptor with synthetic {writable:true,...} ownDesc.
@@ -14817,14 +14782,16 @@ impl Interpreter {
     }
 
     fn has_proxy_in_prototype_chain(&self, obj_id: u64) -> bool {
-        if self.get_proxy_info(obj_id).is_some() {
-            return true;
-        }
-        if let Some(obj) = self.get_object(obj_id)
-            && let Some(ref proto) = obj.borrow().prototype
-            && let Some(pid) = proto.borrow().id
-        {
-            return self.has_proxy_in_prototype_chain(pid);
+        let mut current = Some(obj_id);
+        while let Some(id) = current {
+            if self.get_proxy_info(id).is_some() {
+                return true;
+            }
+            let Some(obj) = self.get_object(id) else {
+                return false;
+            };
+            let b = obj.borrow();
+            current = b.prototype_id;
         }
         false
     }
@@ -15598,9 +15565,7 @@ impl Interpreter {
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object(obj_id) {
-            if let Some(proto) = &obj.borrow().prototype
-                && let Some(id) = proto.borrow().id
-            {
+            if let Some(id) = obj.borrow().prototype_id {
                 Ok(JsValue::Object(crate::types::JsObject { id }))
             } else {
                 Ok(JsValue::Null)
@@ -15662,7 +15627,7 @@ impl Interpreter {
             }
         } else if let Some(obj) = self.get_object(obj_id) {
             // OrdinarySetPrototypeOf
-            let current_proto_id = obj.borrow().prototype.as_ref().and_then(|p| p.borrow().id);
+            let current_proto_id = obj.borrow().prototype_id;
             let new_proto_id = if let JsValue::Object(p) = proto {
                 Some(p.id)
             } else {
@@ -15685,16 +15650,16 @@ impl Interpreter {
                     }
                     check_id = self
                         .get_object(cid)
-                        .and_then(|o| o.borrow().prototype.as_ref().and_then(|pr| pr.borrow().id));
+                        .and_then(|o| o.borrow().prototype_id.as_ref().copied());
                 }
             }
             match proto {
                 JsValue::Null => {
-                    obj.borrow_mut().prototype = None;
+                    obj.borrow_mut().prototype_id = None;
                 }
                 JsValue::Object(p) => {
                     if let Some(po) = self.get_object(p.id) {
-                        obj.borrow_mut().prototype = Some(po);
+                        obj.borrow_mut().prototype_id = Some(po.borrow().id.unwrap());
                     }
                 }
                 _ => {}
@@ -15781,17 +15746,12 @@ impl Interpreter {
         if let Some(JsValue::Object(ref ho)) = home
             && let Some(home_obj) = self.get_object(ho.id)
         {
-            if let Some(ref proto_rc) = home_obj.borrow().prototype.clone() {
-                return Some(proto_rc.borrow().id.unwrap());
-            }
-            return None;
+            return home_obj.borrow().prototype_id;
         }
-        // Fallback: __super__.prototype
+        // Fallback: __super__.prototype_id
         let obj_val = env.borrow().get("__super__").unwrap_or(JsValue::Undefined);
-        if let JsValue::Object(ref o) = obj_val
-            && let Some(sup_obj) = self.get_object(o.id)
-        {
-            let proto_val = sup_obj.borrow().get_property("prototype");
+        if let JsValue::Object(ref o) = obj_val {
+            let proto_val = self.get_property_on_id(o.id, "prototype");
             if let JsValue::Object(ref p) = proto_val {
                 return Some(p.id);
             }
@@ -15832,11 +15792,7 @@ impl Interpreter {
                 if desc.is_some() {
                     break;
                 }
-                current_id = obj
-                    .borrow()
-                    .prototype
-                    .as_ref()
-                    .map(|p| p.borrow().id.unwrap());
+                current_id = obj.borrow().prototype_id.as_ref().copied();
             } else {
                 break;
             }
@@ -17071,7 +17027,7 @@ impl Interpreter {
                         }
                         return Ok(JsValue::Undefined);
                     }
-                    current_id = b.prototype.as_ref().map(|p| p.borrow().id.unwrap());
+                    current_id = b.prototype_id;
                 } else {
                     break;
                 }

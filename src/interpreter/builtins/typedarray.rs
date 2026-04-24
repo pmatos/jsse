@@ -757,7 +757,7 @@ impl Interpreter {
             .insert_property(sym_key, PropertyDescriptor::data(tag, false, false, true));
 
         // ArrayBuffer constructor
-        let ab_proto_clone = ab_proto.clone();
+        let ab_proto_clone_id = ab_proto.borrow().id.unwrap();
         let ctor = self.create_function(JsFunction::constructor(
             "ArrayBuffer".to_string(),
             1,
@@ -809,7 +809,7 @@ impl Interpreter {
                 let proto = match interp
                     .get_prototype_from_new_target_realm(|realm| realm.arraybuffer_prototype)
                 {
-                    Ok(p) => Some(p.unwrap_or_else(|| ab_proto_clone.clone())),
+                    Ok(p) => p.or(Some(ab_proto_clone_id)),
                     Err(e) => return Completion::Throw(e),
                 };
                 // Allocation limit: 256 MiB.
@@ -834,7 +834,7 @@ impl Interpreter {
                 {
                     let mut o = obj.borrow_mut();
                     o.class_name = "ArrayBuffer".to_string();
-                    o.prototype = proto;
+                    o.prototype_id = proto;
                     o.arraybuffer_data = Some(buf_rc);
                     o.arraybuffer_detached = Some(detached);
                     o.arraybuffer_max_byte_length = max_byte_length;
@@ -931,11 +931,11 @@ impl Interpreter {
         let buf_rc = Rc::new(RefCell::new(BufferData::Owned(data)));
         let detached = Rc::new(Cell::new(false));
         let obj = self.create_object();
-        let ab_proto = self.proto_rc(self.realm().arraybuffer_prototype);
+        let ab_proto = self.realm().arraybuffer_prototype;
         {
             let mut o = obj.borrow_mut();
             o.class_name = "ArrayBuffer".to_string();
-            o.prototype = ab_proto;
+            o.prototype_id = ab_proto;
             o.arraybuffer_data = Some(buf_rc);
             o.arraybuffer_detached = Some(detached);
             o.arraybuffer_max_byte_length = max_byte_length;
@@ -1284,7 +1284,7 @@ impl Interpreter {
         }
 
         // SharedArrayBuffer constructor
-        let sab_proto_clone = sab_proto.clone();
+        let sab_proto_clone_id = sab_proto.borrow().id.unwrap();
         let ctor = self.create_function(JsFunction::constructor(
             "SharedArrayBuffer".to_string(),
             1,
@@ -1337,7 +1337,7 @@ impl Interpreter {
                 let proto = match interp
                     .get_prototype_from_new_target_realm(|realm| realm.shared_arraybuffer_prototype)
                 {
-                    Ok(p) => Some(p.unwrap_or_else(|| sab_proto_clone.clone())),
+                    Ok(p) => p.or(Some(sab_proto_clone_id)),
                     Err(e) => return Completion::Throw(e),
                 };
                 // Allocation limit: 256 MiB.
@@ -1357,7 +1357,7 @@ impl Interpreter {
                     let buf_rc = Rc::new(RefCell::new(BufferData::Shared(inner.clone())));
                     let mut o = obj.borrow_mut();
                     o.class_name = "SharedArrayBuffer".to_string();
-                    o.prototype = proto;
+                    o.prototype_id = proto;
                     o.arraybuffer_data = Some(buf_rc);
                     o.arraybuffer_detached = None;
                     o.arraybuffer_max_byte_length = max_byte_length;
@@ -1369,7 +1369,7 @@ impl Interpreter {
             },
         ));
 
-        // Wire SharedArrayBuffer.prototype
+        // Wire SharedArrayBuffer.prototype_id
         let sab_proto_val = {
             let id = sab_proto.borrow().id.unwrap();
             JsValue::Object(crate::types::JsObject { id })
@@ -2558,8 +2558,8 @@ impl Interpreter {
 
         // toString must be the same function object as Array.prototype.toString (spec §23.2.3.30)
         {
-            let array_proto = self.get_object_expect(self.realm().array_prototype.unwrap());
-            let tostring_val = array_proto.borrow().get_property("toString");
+            let array_proto_id = self.realm().array_prototype.unwrap();
+            let tostring_val = self.get_property_on_id(array_proto_id, "toString");
             proto
                 .borrow_mut()
                 .insert_builtin("toString".to_string(), tostring_val);
@@ -2690,11 +2690,11 @@ impl Interpreter {
                         typed_array_set_index(&new_ta, i, &val);
                     }
                     let ab_obj = interp.create_object();
-                    let ab_proto = interp.proto_rc(interp.realm().arraybuffer_prototype);
+                    let ab_proto = interp.realm().arraybuffer_prototype;
                     {
                         let mut ab = ab_obj.borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype = ab_proto;
+                        ab.prototype_id = ab_proto;
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
@@ -2833,11 +2833,11 @@ impl Interpreter {
                         typed_array_set_index(&new_ta, i, val);
                     }
                     let ab_obj = interp.create_object();
-                    let ab_proto = interp.proto_rc(interp.realm().arraybuffer_prototype);
+                    let ab_proto = interp.realm().arraybuffer_prototype;
                     {
                         let mut ab = ab_obj.borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype = ab_proto;
+                        ab.prototype_id = ab_proto;
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
@@ -2867,46 +2867,34 @@ impl Interpreter {
                 ) -> Result<f64, JsValue> {
                     match val {
                         JsValue::Object(o) => {
-                            if let Some(obj) = interp.get_object(o.id) {
-                                let method = {
-                                    let borrow = obj.borrow();
-                                    borrow
-                                        .get_property_descriptor("valueOf")
-                                        .and_then(|d| d.value)
-                                };
-                                if let Some(func) = method
-                                    && interp.is_callable(&func)
-                                {
-                                    match interp.call_function(&func, val, &[]) {
-                                        Completion::Normal(v)
-                                            if !matches!(v, JsValue::Object(_)) =>
-                                        {
-                                            return to_number_throwing(interp, &v);
-                                        }
-                                        Completion::Normal(_) => {}
-                                        Completion::Throw(e) => return Err(e),
-                                        _ => {}
+                            let method = interp
+                                .get_property_descriptor_on_id(o.id, "valueOf")
+                                .and_then(|d| d.value);
+                            if let Some(func) = method
+                                && interp.is_callable(&func)
+                            {
+                                match interp.call_function(&func, val, &[]) {
+                                    Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
+                                        return to_number_throwing(interp, &v);
                                     }
+                                    Completion::Normal(_) => {}
+                                    Completion::Throw(e) => return Err(e),
+                                    _ => {}
                                 }
-                                let tostring_method = {
-                                    let borrow = obj.borrow();
-                                    borrow
-                                        .get_property_descriptor("toString")
-                                        .and_then(|d| d.value)
-                                };
-                                if let Some(func) = tostring_method
-                                    && interp.is_callable(&func)
-                                {
-                                    match interp.call_function(&func, val, &[]) {
-                                        Completion::Normal(v)
-                                            if !matches!(v, JsValue::Object(_)) =>
-                                        {
-                                            return to_number_throwing(interp, &v);
-                                        }
-                                        Completion::Normal(_) => {}
-                                        Completion::Throw(e) => return Err(e),
-                                        _ => {}
+                            }
+                            let tostring_method = interp
+                                .get_property_descriptor_on_id(o.id, "toString")
+                                .and_then(|d| d.value);
+                            if let Some(func) = tostring_method
+                                && interp.is_callable(&func)
+                            {
+                                match interp.call_function(&func, val, &[]) {
+                                    Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
+                                        return to_number_throwing(interp, &v);
                                     }
+                                    Completion::Normal(_) => {}
+                                    Completion::Throw(e) => return Err(e),
+                                    _ => {}
                                 }
                             }
                             Ok(f64::NAN)
@@ -2931,26 +2919,19 @@ impl Interpreter {
                     match val {
                         JsValue::BigInt(_) => Ok(val.clone()),
                         JsValue::Object(o) => {
-                            if let Some(obj) = interp.get_object(o.id) {
-                                let method = {
-                                    let borrow = obj.borrow();
-                                    borrow
-                                        .get_property_descriptor("valueOf")
-                                        .and_then(|d| d.value)
-                                };
-                                if let Some(func) = method
-                                    && interp.is_callable(&func)
-                                {
-                                    match interp.call_function(&func, val, &[]) {
-                                        Completion::Normal(v)
-                                            if !matches!(v, JsValue::Object(_)) =>
-                                        {
-                                            return to_bigint_throwing(interp, &v);
-                                        }
-                                        Completion::Normal(_) => {}
-                                        Completion::Throw(e) => return Err(e),
-                                        _ => {}
+                            let method = interp
+                                .get_property_descriptor_on_id(o.id, "valueOf")
+                                .and_then(|d| d.value);
+                            if let Some(func) = method
+                                && interp.is_callable(&func)
+                            {
+                                match interp.call_function(&func, val, &[]) {
+                                    Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
+                                        return to_bigint_throwing(interp, &v);
                                     }
+                                    Completion::Normal(_) => {}
+                                    Completion::Throw(e) => return Err(e),
+                                    _ => {}
                                 }
                             }
                             Err(interp.create_type_error("Cannot convert value to a BigInt"))
@@ -3073,11 +3054,11 @@ impl Interpreter {
                         typed_array_set_index(&new_ta, k, &elem);
                     }
                     let ab_obj = interp.create_object();
-                    let ab_proto = interp.proto_rc(interp.realm().arraybuffer_prototype);
+                    let ab_proto = interp.realm().arraybuffer_prototype;
                     {
                         let mut ab = ab_obj.borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype = ab_proto;
+                        ab.prototype_id = ab_proto;
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
@@ -3996,14 +3977,14 @@ impl Interpreter {
         for kind in kinds {
             let name = kind.name().to_string();
             let bpe = kind.bytes_per_element();
-            let ta_proto_clone = ta_proto.clone();
+            let ta_proto_clone_id = ta_proto.borrow().id.unwrap();
             let ta_ctor_clone = ta_ctor.clone();
 
             // Create per-type prototype
             let type_proto = self.create_object();
             {
                 let mut p = type_proto.borrow_mut();
-                p.prototype = Some(ta_proto_clone.clone());
+                p.prototype_id = Some(ta_proto_clone_id);
                 p.class_name = name.clone();
                 p.insert_property(
                     "BYTES_PER_ELEMENT".to_string(),
@@ -4011,7 +3992,7 @@ impl Interpreter {
                 );
             }
 
-            let type_proto_clone = type_proto.clone();
+            let type_proto_clone_id = type_proto.borrow().id.unwrap();
             let ctor = self.create_function(JsFunction::constructor(
                 name.clone(), 3,
                 move |interp, _this, args| {
@@ -4022,7 +4003,7 @@ impl Interpreter {
                         );
                     }
                     // Helper closure to get prototype from NewTarget's realm (deferred)
-                    let get_proto = |interp: &mut Interpreter| -> Result<Rc<RefCell<JsObjectData>>, JsValue> {
+                    let get_proto = |interp: &mut Interpreter| -> Result<u64, JsValue> {
                         match interp.get_prototype_from_new_target_realm(|realm| match kind {
                             TypedArrayKind::Int8 => realm.int8array_prototype,
                             TypedArrayKind::Uint8 => realm.uint8array_prototype,
@@ -4037,7 +4018,7 @@ impl Interpreter {
                             TypedArrayKind::BigInt64 => realm.bigint64array_prototype,
                             TypedArrayKind::BigUint64 => realm.biguint64array_prototype,
                         }) {
-                            Ok(p) => Ok(p.unwrap_or_else(|| type_proto_clone.clone())),
+                            Ok(p) => Ok(p.unwrap_or(type_proto_clone_id)),
                             Err(e) => Err(e),
                         }
                     };
@@ -4047,7 +4028,7 @@ impl Interpreter {
                             Ok(p) => p,
                             Err(e) => return Completion::Throw(e),
                         };
-                        return interp.create_typed_array_from_length(kind, 0, &proto);
+                        return interp.create_typed_array_from_length(kind, 0, proto);
                     }
                     let first = &args[0];
                     match first {
@@ -4132,7 +4113,7 @@ impl Interpreter {
                                         is_length_tracking,
                                     };
                                     let buf_val = first.clone();
-                                    let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, &proto);
+                                    let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, proto);
                                     let id = result.borrow().id.unwrap();
                                     return Completion::Normal(JsValue::Object(JsObject { id }));
                                 }
@@ -4175,11 +4156,11 @@ impl Interpreter {
                                         typed_array_set_index(&new_ta, i, &val);
                                     }
                                     let ab_obj = interp.create_object();
-                                    let ab_proto = interp.proto_rc(interp.realm().arraybuffer_prototype);
+                                    let ab_proto = interp.realm().arraybuffer_prototype;
                                     {
                                         let mut ab = ab_obj.borrow_mut();
                                         ab.class_name = "ArrayBuffer".to_string();
-                                        ab.prototype = ab_proto;
+                                        ab.prototype_id = ab_proto;
                                         ab.arraybuffer_data = Some(new_buf_rc);
                                         ab.arraybuffer_detached = Some(new_detached);
                                     }
@@ -4190,7 +4171,7 @@ impl Interpreter {
                                     };
                                     let ab_id = ab_obj.borrow().id.unwrap();
                                     let buf_val = JsValue::Object(JsObject { id: ab_id });
-                                    let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, &proto);
+                                    let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, proto);
                                     let id = result.borrow().id.unwrap();
                                     return Completion::Normal(JsValue::Object(JsObject { id }));
                                 }
@@ -4223,11 +4204,11 @@ impl Interpreter {
                                     typed_array_set_index(&new_ta, i, &coerced);
                                 }
                                 let ab_obj = interp.create_object();
-                                let ab_proto = interp.proto_rc(interp.realm().arraybuffer_prototype);
+                                let ab_proto = interp.realm().arraybuffer_prototype;
                                 {
                                     let mut ab = ab_obj.borrow_mut();
                                     ab.class_name = "ArrayBuffer".to_string();
-                                    ab.prototype = ab_proto;
+                                    ab.prototype_id = ab_proto;
                                     ab.arraybuffer_data = Some(new_buf_rc);
                                     ab.arraybuffer_detached = Some(new_detached);
                                 }
@@ -4238,7 +4219,7 @@ impl Interpreter {
                                 };
                                 let ab_id = ab_obj.borrow().id.unwrap();
                                 let buf_val = JsValue::Object(JsObject { id: ab_id });
-                                let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, &proto);
+                                let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, proto);
                                 let id = result.borrow().id.unwrap();
                                 return Completion::Normal(JsValue::Object(JsObject { id }));
                             }
@@ -4256,7 +4237,7 @@ impl Interpreter {
                                 Ok(p) => p,
                                 Err(e) => return Completion::Throw(e),
                             };
-                            interp.create_typed_array_from_length(kind, len, &proto)
+                            interp.create_typed_array_from_length(kind, len, proto)
                         }
                     }
                 },
@@ -4293,7 +4274,7 @@ impl Interpreter {
                 if let JsValue::Object(ta_o) = &ta_ctor_clone
                     && let Some(ta_obj) = self.get_object(ta_o.id)
                 {
-                    obj.borrow_mut().prototype = Some(ta_obj.clone());
+                    obj.borrow_mut().prototype_id = Some(ta_obj.borrow().id.unwrap());
                 }
             }
 
@@ -4663,7 +4644,7 @@ impl Interpreter {
         &mut self,
         kind: TypedArrayKind,
         len: usize,
-        type_proto: &Rc<RefCell<JsObjectData>>,
+        type_proto_id: u64,
     ) -> Completion {
         let bpe = kind.bytes_per_element();
         let buf_byte_len = len * bpe;
@@ -4680,18 +4661,18 @@ impl Interpreter {
             is_length_tracking: false,
         };
         let ab_obj = self.create_object();
-        let ab_proto = self.proto_rc(self.realm().arraybuffer_prototype);
+        let ab_proto = self.realm().arraybuffer_prototype;
         {
             let mut ab = ab_obj.borrow_mut();
             ab.class_name = "ArrayBuffer".to_string();
-            ab.prototype = ab_proto;
+            ab.prototype_id = ab_proto;
             ab.arraybuffer_data = Some(buf_rc);
             ab.arraybuffer_detached = Some(detached);
         }
         self.gc_track_external_bytes(buf_byte_len);
         let ab_id = ab_obj.borrow().id.unwrap();
         let buf_val = JsValue::Object(JsObject { id: ab_id });
-        let result = self.create_typed_array_object_with_proto(ta_info, buf_val, type_proto);
+        let result = self.create_typed_array_object_with_proto(ta_info, buf_val, type_proto_id);
         let id = result.borrow().id.unwrap();
         Completion::Normal(JsValue::Object(JsObject { id }))
     }
@@ -4706,7 +4687,7 @@ impl Interpreter {
         {
             let mut o = obj.borrow_mut();
             o.class_name = info.kind.name().to_string();
-            o.prototype = proto;
+            o.prototype_id = proto;
             if let JsValue::Object(ref bobj) = buf_val {
                 o.view_buffer_object_id = Some(bobj.id);
             }
@@ -4719,13 +4700,13 @@ impl Interpreter {
         &mut self,
         info: TypedArrayInfo,
         buf_val: JsValue,
-        proto: &Rc<RefCell<JsObjectData>>,
+        proto_id: u64,
     ) -> Rc<RefCell<JsObjectData>> {
         let obj = self.create_object();
         {
             let mut o = obj.borrow_mut();
             o.class_name = info.kind.name().to_string();
-            o.prototype = Some(proto.clone());
+            o.prototype_id = Some(proto_id);
             if let JsValue::Object(ref bobj) = buf_val {
                 o.view_buffer_object_id = Some(bobj.id);
             }
@@ -4734,8 +4715,8 @@ impl Interpreter {
         obj
     }
 
-    fn get_typed_array_prototype(&self, kind: TypedArrayKind) -> Option<Rc<RefCell<JsObjectData>>> {
-        let id = match kind {
+    fn get_typed_array_prototype(&self, kind: TypedArrayKind) -> Option<u64> {
+        match kind {
             TypedArrayKind::Int8 => self.realm().int8array_prototype,
             TypedArrayKind::Uint8 => self.realm().uint8array_prototype,
             TypedArrayKind::Uint8Clamped => self.realm().uint8clampedarray_prototype,
@@ -4748,8 +4729,7 @@ impl Interpreter {
             TypedArrayKind::Float64 => self.realm().float64array_prototype,
             TypedArrayKind::BigInt64 => self.realm().bigint64array_prototype,
             TypedArrayKind::BigUint64 => self.realm().biguint64array_prototype,
-        };
-        self.proto_rc(id)
+        }
     }
 
     /// TypedArrayCreate(C, argumentList) — §23.2.4.2
@@ -4789,14 +4769,12 @@ impl Interpreter {
                 if let Some(kind) = kind {
                     // Get prototype from the constructor's .prototype property
                     // (handles cross-realm constructors correctly)
-                    let proto = match self.get_object_property(o.id, "prototype", ctor) {
-                        #[allow(clippy::map_clone)]
-                        Completion::Normal(JsValue::Object(po)) => {
-                            self.get_object(po.id).map(|p| p.clone())
+                    let proto: Option<u64> =
+                        match self.get_object_property(o.id, "prototype", ctor) {
+                            Completion::Normal(JsValue::Object(po)) => Some(po.id),
+                            _ => None,
                         }
-                        _ => None,
-                    }
-                    .or_else(|| self.get_typed_array_prototype(kind));
+                        .or_else(|| self.get_typed_array_prototype(kind));
                     let bpe = kind.bytes_per_element();
                     let buf_byte_len = len * bpe;
                     let new_buf = vec![0u8; buf_byte_len];
@@ -4812,11 +4790,11 @@ impl Interpreter {
                         is_length_tracking: false,
                     };
                     let ab_obj = self.create_object();
-                    let ab_proto = self.proto_rc(self.realm().arraybuffer_prototype);
+                    let ab_proto = self.realm().arraybuffer_prototype;
                     {
                         let mut ab = ab_obj.borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype = ab_proto;
+                        ab.prototype_id = ab_proto;
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
@@ -4826,7 +4804,7 @@ impl Interpreter {
                     {
                         let mut r = result.borrow_mut();
                         r.class_name = kind.name().to_string();
-                        r.prototype = proto;
+                        r.prototype_id = proto;
                         r.view_buffer_object_id = Some(ab_id);
                         r.typed_array_info = Some(ta);
                     }
@@ -5638,7 +5616,7 @@ impl Interpreter {
         );
 
         // DataView constructor
-        let dv_proto_clone = dv_proto.clone();
+        let dv_proto_clone_id = dv_proto.borrow().id.unwrap();
         let ctor = self.create_function(JsFunction::constructor(
             "DataView".to_string(),
             1,
@@ -5726,7 +5704,7 @@ impl Interpreter {
                     let dv_proto = match interp
                         .get_prototype_from_new_target_realm(|realm| realm.dataview_prototype)
                     {
-                        Ok(p) => p.unwrap_or_else(|| dv_proto_clone.clone()),
+                        Ok(p) => p.unwrap_or(dv_proto_clone_id),
                         Err(e) => return Completion::Throw(e),
                     };
                     // Re-validate after OrdinaryCreateFromConstructor (prototype getter
@@ -5761,7 +5739,7 @@ impl Interpreter {
                     {
                         let mut r = result.borrow_mut();
                         r.class_name = "DataView".to_string();
-                        r.prototype = Some(dv_proto);
+                        r.prototype_id = Some(dv_proto);
                         if let JsValue::Object(ref bobj) = buf_arg {
                             r.view_buffer_object_id = Some(bobj.id);
                         }
@@ -6607,11 +6585,11 @@ fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Compl
         is_length_tracking: false,
     };
     let ab_obj = interp.create_object();
-    let ab_proto = interp.proto_rc(interp.realm().arraybuffer_prototype);
+    let ab_proto = interp.realm().arraybuffer_prototype;
     {
         let mut ab = ab_obj.borrow_mut();
         ab.class_name = "ArrayBuffer".to_string();
-        ab.prototype = ab_proto;
+        ab.prototype_id = ab_proto;
         ab.arraybuffer_data = Some(buf_rc);
         ab.arraybuffer_detached = Some(detached);
     }
@@ -6619,8 +6597,8 @@ fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Compl
     let ab_id = ab_obj.borrow().id.unwrap();
     let buf_val = JsValue::Object(JsObject { id: ab_id });
 
-    let proto = interp.get_object_expect(interp.realm().uint8array_prototype.unwrap());
-    let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, &proto);
+    let proto_id = interp.realm().uint8array_prototype.unwrap();
+    let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, proto_id);
     let id = result.borrow().id.unwrap();
     Completion::Normal(JsValue::Object(JsObject { id }))
 }

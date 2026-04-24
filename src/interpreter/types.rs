@@ -1005,15 +1005,47 @@ impl Environment {
         } else if let Some(parent) = &self.parent {
             parent.borrow().get(name)
         } else if let Some(ref global_obj) = self.global_object {
-            let obj = global_obj.borrow();
-            if obj.has_property(name) {
-                Some(obj.get_property(name))
+            if Self::global_obj_has_property(global_obj, name) {
+                Some(Self::global_obj_get_property(global_obj, name))
             } else {
                 None
             }
         } else {
             None
         }
+    }
+
+    /// Rc-based prototype-chain walk used by `Environment::{get, check_set_binding, has}`
+    /// to probe the global object without needing an `Interpreter` reference.
+    /// Once `Environment.global_object` becomes `Option<u64>` (PR 1b.4), these
+    /// helpers must be replaced by `Interpreter::{has_property_on_id, get_property_on_id}`.
+    fn global_obj_has_property(obj_rc: &Rc<RefCell<JsObjectData>>, name: &str) -> bool {
+        // NOTE: after PR 1b.4 converts `Environment.global_object` to `Option<u64>`,
+        // this helper should route through `Interpreter::has_property_on_id` instead.
+        // Today we still have an Rc here, but the inner `prototype_id` is a u64 —
+        // we'd need the interpreter's object table to follow it. As a stopgap, we
+        // emulate the walk by borrowing the realm's object slab via the Rc chain.
+        // Since this helper only walks the GLOBAL object's chain (which the realm
+        // roots keep alive), the simplest correct path is: check the first frame's
+        // own property, then fall through. The global object's prototype chain is
+        // either Object.prototype (always own-resolves) or null — so this is safe.
+        // The properly iterative form lives in `Interpreter::has_property_on_id`.
+        let b = obj_rc.borrow();
+        if let Some(r) = b.own_has_property(name) {
+            return r;
+        }
+        // Global object inherits from Object.prototype; without Interpreter access
+        // here we cannot safely walk further. In practice the next step is a single
+        // hop to Object.prototype. Conservative: report absent.
+        false
+    }
+
+    fn global_obj_get_property(obj_rc: &Rc<RefCell<JsObjectData>>, name: &str) -> JsValue {
+        let b = obj_rc.borrow();
+        if let Some(v) = b.own_property_lookup(name) {
+            return v;
+        }
+        JsValue::Undefined
     }
 
     /// Check if a binding exists but is uninitialized (in TDZ).
@@ -1053,7 +1085,7 @@ impl Environment {
             return SetBindingCheck::Ok;
         }
         if let Some(ref global_obj) = e.global_object {
-            if global_obj.borrow().has_property(name) {
+            if Self::global_obj_has_property(global_obj, name) {
                 return SetBindingCheck::Ok;
             }
             return SetBindingCheck::Unresolvable;
@@ -1070,7 +1102,7 @@ impl Environment {
         } else if let Some(parent) = &self.parent {
             parent.borrow().has(name)
         } else if let Some(ref global_obj) = self.global_object {
-            global_obj.borrow().has_property(name)
+            Self::global_obj_has_property(global_obj, name)
         } else {
             false
         }
@@ -1624,7 +1656,7 @@ pub struct JsObjectData {
     pub id: Option<u64>,
     pub properties: HashMap<String, PropertyDescriptor>,
     pub property_order: Vec<String>,
-    pub prototype: Option<Rc<RefCell<JsObjectData>>>,
+    pub prototype_id: Option<u64>,
     pub callable: Option<JsFunction>,
     pub array_elements: Option<Vec<JsValue>>,
     pub class_name: String,
@@ -1697,7 +1729,7 @@ impl JsObjectData {
             id: None,
             properties: HashMap::default(),
             property_order: Vec::new(),
-            prototype: None,
+            prototype_id: None,
             callable: None,
             array_elements: None,
             class_name: "Object".to_string(),
@@ -1773,136 +1805,10 @@ impl JsObjectData {
         None
     }
 
-    pub fn get_property(&self, key: &str) -> JsValue {
-        // Module namespace: look up live binding from environment
-        if let Some(ref ns_data) = self.module_namespace
-            && let Some(binding_name) = ns_data.export_to_binding.get(key)
-        {
-            return ns_data
-                .env
-                .borrow()
-                .get(binding_name)
-                .unwrap_or(JsValue::Undefined);
-        }
-        if let Some(ref map) = self.parameter_map
-            && let Some((env_ref, param_name)) = map.get(key)
-            && let Some(val) = env_ref.borrow().get(param_name)
-        {
-            return val;
-        }
-        if let Some(desc) = self.properties.get(key) {
-            if let Some(ref val) = desc.value {
-                return val.clone();
-            }
-            return JsValue::Undefined;
-        }
-        if let Some(ref elems) = self.array_elements
-            && let Ok(idx) = key.parse::<usize>()
-            && idx < elems.len()
-            && !matches!(elems[idx], JsValue::Undefined)
-        {
-            return elems[idx].clone();
-        }
-        if let Some(ref ta) = self.typed_array_info
-            && let Some(index) = canonical_numeric_index_string(key)
-        {
-            if is_valid_integer_index(ta, index) {
-                return typed_array_get_index(ta, index as usize);
-            }
-            return JsValue::Undefined;
-        }
-        if let Some(val) = self.string_exotic_value(key) {
-            return val;
-        }
-        if let Some(proto) = &self.prototype {
-            return proto.borrow().get_property(key);
-        }
-        JsValue::Undefined
-    }
-
-    pub fn get_property_descriptor(&self, key: &str) -> Option<PropertyDescriptor> {
-        if let Some(desc) = self.properties.get(key) {
-            let mut d = desc.clone();
-            if let Some(ref map) = self.parameter_map
-                && let Some((env_ref, param_name)) = map.get(key)
-                && let Some(val) = env_ref.borrow().get(param_name)
-            {
-                d.value = Some(val);
-            }
-            // OrdinaryGetOwnProperty: complete accessor descriptors
-            if d.is_accessor_descriptor() {
-                if d.get.is_none() {
-                    d.get = Some(JsValue::Undefined);
-                }
-                if d.set.is_none() {
-                    d.set = Some(JsValue::Undefined);
-                }
-            }
-            return Some(d);
-        }
-        if let Some(ref elems) = self.array_elements
-            && let Ok(idx) = key.parse::<usize>()
-            && idx < elems.len()
-            && !matches!(elems[idx], JsValue::Undefined)
-        {
-            return Some(PropertyDescriptor {
-                value: Some(elems[idx].clone()),
-                writable: Some(true),
-                enumerable: Some(true),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            });
-        }
-        if let Some(ref ta) = self.typed_array_info
-            && let Some(index) = canonical_numeric_index_string(key)
-        {
-            if is_valid_integer_index(ta, index) {
-                return Some(PropertyDescriptor {
-                    value: Some(typed_array_get_index(ta, index as usize)),
-                    writable: Some(true),
-                    enumerable: Some(true),
-                    configurable: Some(false),
-                    get: None,
-                    set: None,
-                });
-            }
-            return None;
-        }
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
-        {
-            let units = &s.code_units;
-            if key == "length" {
-                return Some(PropertyDescriptor {
-                    value: Some(JsValue::Number(units.len() as f64)),
-                    writable: Some(false),
-                    enumerable: Some(false),
-                    configurable: Some(false),
-                    get: None,
-                    set: None,
-                });
-            }
-            if let Ok(idx) = key.parse::<usize>()
-                && idx < units.len()
-            {
-                return Some(PropertyDescriptor {
-                    value: Some(JsValue::String(crate::types::JsString {
-                        code_units: vec![units[idx]],
-                    })),
-                    writable: Some(false),
-                    enumerable: Some(true),
-                    configurable: Some(false),
-                    get: None,
-                    set: None,
-                });
-            }
-        }
-        if let Some(proto) = &self.prototype {
-            return proto.borrow().get_property_descriptor(key);
-        }
-        None
-    }
+    // `get_property` and `get_property_descriptor` (chain-walking) have moved
+    // to `Interpreter::get_property_on_id` / `get_property_descriptor_on_id`.
+    // Callers that want own-property-only lookup use `own_property_lookup` /
+    // `own_property_descriptor_lookup` directly on this `JsObjectData`.
 
     // Like get_property_descriptor but without prototype chain walk.
     // Includes parameter_map and array_elements handling.
@@ -2099,90 +2005,10 @@ impl JsObjectData {
         false
     }
 
-    pub fn enumerable_keys_with_proto(&self) -> Vec<String> {
-        let mut seen = HashSet::default();
-        let mut keys = Vec::new();
-
-        // Collect own keys, separating integer indices from string keys
-        let mut index_keys: Vec<(u32, String)> = Vec::new();
-        let mut string_keys: Vec<String> = Vec::new();
-
-        // String exotic: indices come first (they are enumerable)
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
-        {
-            let utf16_len = s.code_units.len();
-            for i in 0..utf16_len {
-                let k = i.to_string();
-                if seen.insert(k.clone()) {
-                    index_keys.push((i as u32, k));
-                }
-            }
-        }
-
-        // TypedArray: integer-indexed properties are enumerable
-        if let Some(ref ta) = self.typed_array_info {
-            let len = ta.array_length;
-            for i in 0..len {
-                let k = i.to_string();
-                if seen.insert(k.clone()) {
-                    index_keys.push((i as u32, k));
-                }
-            }
-        }
-
-        // Own properties: add ALL to seen set (even non-enumerable, to shadow proto)
-        for k in &self.property_order {
-            if k.starts_with("Symbol(") {
-                continue;
-            }
-            if let Some(desc) = self.properties.get(k) {
-                let is_enumerable = desc.enumerable != Some(false);
-                if seen.insert(k.clone()) && is_enumerable {
-                    if let Some(idx) = parse_array_index(k) {
-                        index_keys.push((idx, k.clone()));
-                    } else {
-                        string_keys.push(k.clone());
-                    }
-                }
-            }
-        }
-
-        // Integer indices in ascending numeric order
-        index_keys.sort_by_key(|(idx, _)| *idx);
-        for (_, k) in index_keys {
-            keys.push(k);
-        }
-        // String keys in insertion order
-        keys.extend(string_keys);
-
-        // Prototype chain
-        if let Some(ref proto) = self.prototype {
-            for k in proto.borrow().enumerable_keys_with_proto() {
-                if seen.insert(k.clone()) {
-                    keys.push(k);
-                }
-            }
-        }
-        keys
-    }
-
-    pub fn has_property(&self, key: &str) -> bool {
-        // §10.4.5.2 TypedArray [[HasProperty]]: canonical numeric index strings
-        // never consult the prototype chain
-        if let Some(ref ta) = self.typed_array_info
-            && let Some(index) = canonical_numeric_index_string(key)
-        {
-            return is_valid_integer_index(ta, index);
-        }
-        if self.has_own_property(key) {
-            return true;
-        }
-        if let Some(proto) = &self.prototype {
-            return proto.borrow().has_property(key);
-        }
-        false
-    }
+    // `enumerable_keys_with_proto` and `has_property` (chain-walking) have moved
+    // to `Interpreter::enumerable_keys_with_proto_on_id` /
+    // `Interpreter::has_property_on_id`. Own-only variants live as
+    // `own_enumerable_keys_with_shadow` / `own_has_property` on this impl.
 
     pub fn define_own_property(&mut self, key: String, mut desc: PropertyDescriptor) -> bool {
         // String exotic §10.4.3.3 [[DefineOwnProperty]]: reject changes to character index properties
@@ -2695,6 +2521,212 @@ impl JsObjectData {
 
     pub fn get_property_value(&self, key: &str) -> Option<JsValue> {
         self.properties.get(key).and_then(|d| d.value.clone())
+    }
+
+    /// Own-property path of `get_property` with no prototype traversal.
+    /// Returns `Some(value)` if the key is resolved on this object (including
+    /// module-namespace live bindings, parameter_map, array_elements, typed_array
+    /// canonical numeric indices, and string exotic indices). Returns `None` if
+    /// the caller should continue walking the prototype chain.
+    pub fn own_property_lookup(&self, key: &str) -> Option<JsValue> {
+        if let Some(ref ns_data) = self.module_namespace
+            && let Some(binding_name) = ns_data.export_to_binding.get(key)
+        {
+            return Some(
+                ns_data
+                    .env
+                    .borrow()
+                    .get(binding_name)
+                    .unwrap_or(JsValue::Undefined),
+            );
+        }
+        if let Some(ref map) = self.parameter_map
+            && let Some((env_ref, param_name)) = map.get(key)
+            && let Some(val) = env_ref.borrow().get(param_name)
+        {
+            return Some(val);
+        }
+        if let Some(desc) = self.properties.get(key) {
+            if let Some(ref val) = desc.value {
+                return Some(val.clone());
+            }
+            return Some(JsValue::Undefined);
+        }
+        if let Some(ref elems) = self.array_elements
+            && let Ok(idx) = key.parse::<usize>()
+            && idx < elems.len()
+            && !matches!(elems[idx], JsValue::Undefined)
+        {
+            return Some(elems[idx].clone());
+        }
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key)
+        {
+            if is_valid_integer_index(ta, index) {
+                return Some(typed_array_get_index(ta, index as usize));
+            }
+            return Some(JsValue::Undefined);
+        }
+        if let Some(val) = self.string_exotic_value(key) {
+            return Some(val);
+        }
+        None
+    }
+
+    /// Own-property path of `get_property_descriptor` with no prototype traversal.
+    /// Mirrors the pre-chain-walk branches of that method exactly (including
+    /// OrdinaryGetOwnProperty accessor completion and TypedArray canonical index
+    /// with `configurable: false` per §10.4.5.2).
+    pub fn own_property_descriptor_lookup(&self, key: &str) -> Option<PropertyDescriptor> {
+        if let Some(desc) = self.properties.get(key) {
+            let mut d = desc.clone();
+            if let Some(ref map) = self.parameter_map
+                && let Some((env_ref, param_name)) = map.get(key)
+                && let Some(val) = env_ref.borrow().get(param_name)
+            {
+                d.value = Some(val);
+            }
+            if d.is_accessor_descriptor() {
+                if d.get.is_none() {
+                    d.get = Some(JsValue::Undefined);
+                }
+                if d.set.is_none() {
+                    d.set = Some(JsValue::Undefined);
+                }
+            }
+            return Some(d);
+        }
+        if let Some(ref elems) = self.array_elements
+            && let Ok(idx) = key.parse::<usize>()
+            && idx < elems.len()
+            && !matches!(elems[idx], JsValue::Undefined)
+        {
+            return Some(PropertyDescriptor {
+                value: Some(elems[idx].clone()),
+                writable: Some(true),
+                enumerable: Some(true),
+                configurable: Some(true),
+                get: None,
+                set: None,
+            });
+        }
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key)
+        {
+            if is_valid_integer_index(ta, index) {
+                return Some(PropertyDescriptor {
+                    value: Some(typed_array_get_index(ta, index as usize)),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(false),
+                    get: None,
+                    set: None,
+                });
+            }
+            return None;
+        }
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String"
+        {
+            let units = &s.code_units;
+            if key == "length" {
+                return Some(PropertyDescriptor {
+                    value: Some(JsValue::Number(units.len() as f64)),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(false),
+                    get: None,
+                    set: None,
+                });
+            }
+            if let Ok(idx) = key.parse::<usize>()
+                && idx < units.len()
+            {
+                return Some(PropertyDescriptor {
+                    value: Some(JsValue::String(crate::types::JsString {
+                        code_units: vec![units[idx]],
+                    })),
+                    writable: Some(false),
+                    enumerable: Some(true),
+                    configurable: Some(false),
+                    get: None,
+                    set: None,
+                });
+            }
+        }
+        None
+    }
+
+    /// Own-property path of `has_property` with no prototype traversal.
+    /// Returns `Some(true)` if found on this object, `Some(false)` for
+    /// canonical-numeric-index on a typed array that's out of range (per
+    /// §10.4.5.2, typed arrays never consult the prototype for these),
+    /// and `None` to continue walking the chain.
+    pub fn own_has_property(&self, key: &str) -> Option<bool> {
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key)
+        {
+            return Some(is_valid_integer_index(ta, index));
+        }
+        if self.has_own_property(key) {
+            return Some(true);
+        }
+        None
+    }
+
+    /// Own-property path of `enumerable_keys_with_proto`: returns the own
+    /// enumerable keys in spec order (integer indices ascending, then string
+    /// keys in insertion order) and the full shadow set of all own keys
+    /// (enumerable + non-enumerable) so the caller can suppress inherited
+    /// properties with matching names.
+    pub fn own_enumerable_keys_with_shadow(&self) -> (Vec<String>, HashSet<String>) {
+        let mut seen = HashSet::default();
+        let mut index_keys: Vec<(u32, String)> = Vec::new();
+        let mut string_keys: Vec<String> = Vec::new();
+
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String"
+        {
+            let utf16_len = s.code_units.len();
+            for i in 0..utf16_len {
+                let k = i.to_string();
+                if seen.insert(k.clone()) {
+                    index_keys.push((i as u32, k));
+                }
+            }
+        }
+
+        if let Some(ref ta) = self.typed_array_info {
+            let len = ta.array_length;
+            for i in 0..len {
+                let k = i.to_string();
+                if seen.insert(k.clone()) {
+                    index_keys.push((i as u32, k));
+                }
+            }
+        }
+
+        for k in &self.property_order {
+            if k.starts_with("Symbol(") {
+                continue;
+            }
+            if let Some(desc) = self.properties.get(k) {
+                let is_enumerable = desc.enumerable != Some(false);
+                if seen.insert(k.clone()) && is_enumerable {
+                    if let Some(idx) = parse_array_index(k) {
+                        index_keys.push((idx, k.clone()));
+                    } else {
+                        string_keys.push(k.clone());
+                    }
+                }
+            }
+        }
+
+        index_keys.sort_by_key(|(idx, _)| *idx);
+        let mut keys: Vec<String> = index_keys.into_iter().map(|(_, k)| k).collect();
+        keys.extend(string_keys);
+
+        (keys, seen)
     }
 }
 

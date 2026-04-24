@@ -1839,8 +1839,8 @@ impl Interpreter {
                         Ok(k) => k,
                         Err(e) => return Completion::Throw(e),
                     }
-                } else if let Some(obj) = self.get_object(obj_id) {
-                    obj.borrow().enumerable_keys_with_proto()
+                } else if self.get_object(obj_id).is_some() {
+                    self.enumerable_keys_with_proto_on_id(obj_id)
                 } else {
                     return Completion::Normal(JsValue::Undefined);
                 }
@@ -2531,10 +2531,8 @@ impl Interpreter {
                 && let Some(func_obj) = self.get_object(o.id)
             {
                 let proto = func_obj.borrow().get_property_value("prototype");
-                if let Some(JsValue::Object(proto_obj)) = proto
-                    && let Some(proto_rc) = self.get_object(proto_obj.id)
-                {
-                    new_obj.borrow_mut().prototype = Some(proto_rc);
+                if let Some(JsValue::Object(proto_obj)) = proto {
+                    new_obj.borrow_mut().prototype_id = Some(proto_obj.id);
                 }
             }
             let new_obj_id = new_obj.borrow().id.unwrap();
