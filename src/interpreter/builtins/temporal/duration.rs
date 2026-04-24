@@ -546,19 +546,53 @@ fn duration_total_ns_relative(
     let base_epoch = iso_date_to_epoch_days(base_year, base_month, base_day);
     let result_epoch = iso_date_to_epoch_days(ry, rm, rd);
     let total_days = (result_epoch - base_epoch) as i128;
-    let time_ns = h as i128 * 3_600_000_000_000
-        + mi as i128 * 60_000_000_000
-        + s as i128 * 1_000_000_000
-        + ms as i128 * 1_000_000
-        + us as i128 * 1_000
-        + ns as i128;
-    let total = total_days * 86_400_000_000_000 + time_ns;
+    let time_ns = duration_time_to_ns_checked(h, mi, s, ms, us, ns)?;
+    let total = total_days
+        .checked_mul(86_400_000_000_000)
+        .and_then(|v| v.checked_add(time_ns))
+        .ok_or(())?;
     // Add24HourDaysToNormalizedTimeDuration range check
     let limit = (1i128 << 53) * 1_000_000_000;
     if total.abs() > limit {
         return Err(());
     }
     Ok(total)
+}
+
+fn duration_time_to_ns_checked(
+    h: f64,
+    mi: f64,
+    s: f64,
+    ms: f64,
+    us: f64,
+    ns: f64,
+) -> Result<i128, ()> {
+    (h as i128)
+        .checked_mul(3_600_000_000_000)
+        .and_then(|v| v.checked_add((mi as i128).checked_mul(60_000_000_000)?))
+        .and_then(|v| v.checked_add((s as i128).checked_mul(1_000_000_000)?))
+        .and_then(|v| v.checked_add((ms as i128).checked_mul(1_000_000)?))
+        .and_then(|v| v.checked_add((us as i128).checked_mul(1_000)?))
+        .and_then(|v| v.checked_add(ns as i128))
+        .ok_or(())
+}
+
+fn duration_week_day_time_to_ns_checked(
+    w: f64,
+    d: f64,
+    h: f64,
+    mi: f64,
+    s: f64,
+    ms: f64,
+    us: f64,
+    ns: f64,
+) -> Result<i128, ()> {
+    let time_ns = duration_time_to_ns_checked(h, mi, s, ms, us, ns)?;
+    (w as i128)
+        .checked_mul(604_800_000_000_000)
+        .and_then(|v| v.checked_add((d as i128).checked_mul(86_400_000_000_000)?))
+        .and_then(|v| v.checked_add(time_ns))
+        .ok_or(())
 }
 
 /// TotalRelativeDuration per spec (simplified for ISO 8601 calendar).
@@ -2737,22 +2771,26 @@ impl Interpreter {
                     };
                     (n1, n2)
                 } else {
-                    let n1 = one.2 as i128 * 604_800_000_000_000
-                        + one.3 as i128 * 86_400_000_000_000
-                        + one.4 as i128 * 3_600_000_000_000
-                        + one.5 as i128 * 60_000_000_000
-                        + one.6 as i128 * 1_000_000_000
-                        + one.7 as i128 * 1_000_000
-                        + one.8 as i128 * 1_000
-                        + one.9 as i128;
-                    let n2 = two.2 as i128 * 604_800_000_000_000
-                        + two.3 as i128 * 86_400_000_000_000
-                        + two.4 as i128 * 3_600_000_000_000
-                        + two.5 as i128 * 60_000_000_000
-                        + two.6 as i128 * 1_000_000_000
-                        + two.7 as i128 * 1_000_000
-                        + two.8 as i128 * 1_000
-                        + two.9 as i128;
+                    let n1 = match duration_week_day_time_to_ns_checked(
+                        one.2, one.3, one.4, one.5, one.6, one.7, one.8, one.9,
+                    ) {
+                        Ok(v) => v,
+                        Err(()) => {
+                            return Completion::Throw(
+                                interp.create_range_error("duration out of range when compared"),
+                            );
+                        }
+                    };
+                    let n2 = match duration_week_day_time_to_ns_checked(
+                        two.2, two.3, two.4, two.5, two.6, two.7, two.8, two.9,
+                    ) {
+                        Ok(v) => v,
+                        Err(()) => {
+                            return Completion::Throw(
+                                interp.create_range_error("duration out of range when compared"),
+                            );
+                        }
+                    };
                     (n1, n2)
                 };
                 let result = if ns1 < ns2 {
