@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 /// Custom RTL lookbehind matcher for patterns that fancy-regex cannot handle.
 ///
 /// ECMAScript specifies that lookbehinds evaluate their content right-to-left (direction=-1).
@@ -1706,6 +1708,8 @@ pub fn match_with_lookbehind_no_backtrack(
     total_groups: usize,
     external_lb_backrefs: &[(u32, u32)],
 ) -> Option<Vec<Option<(usize, usize)>>> {
+    const MAX_NO_BACKTRACK_COMPILES: usize = 256;
+
     let text_chars: Vec<char> = text.chars().collect();
     let char_to_byte: Vec<usize> = text_chars
         .iter()
@@ -1736,6 +1740,12 @@ pub fn match_with_lookbehind_no_backtrack(
     };
 
     let start_char = byte_to_char(start_pos);
+    let parsed_lookbehinds: Vec<Vec<LbAtom>> = lookbehinds
+        .iter()
+        .map(|lb| parse_lb_atoms(&lb.content, &lb_flags, lb.capture_offset))
+        .collect();
+    let mut regex_cache: HashMap<String, fancy_regex::Regex> = HashMap::new();
+    let mut compile_count = 0usize;
 
     for pos_char in start_char..=text_chars.len() {
         let pos_byte = char_to_byte_fn(pos_char);
@@ -1744,13 +1754,12 @@ pub fn match_with_lookbehind_no_backtrack(
         let mut all_ok = true;
         let mut lb_caps_all: Vec<Vec<Option<(usize, usize)>>> = Vec::new();
 
-        for lb in lookbehinds {
-            let atoms = parse_lb_atoms(&lb.content, &lb_flags, lb.capture_offset);
+        for (lb, atoms) in lookbehinds.iter().zip(parsed_lookbehinds.iter()) {
             let cap_size = total_groups + 1;
             let mut lb_caps = vec![None; cap_size];
 
             let found = match_rtl(
-                &atoms,
+                atoms,
                 &text_chars[..pos_char],
                 pos_char,
                 &mut lb_caps,
@@ -1786,15 +1795,30 @@ pub fn match_with_lookbehind_no_backtrack(
             subst = subst.replace(&backref_pattern, &regex_escape_for_js(&cap_text));
         }
 
-        // Translate and compile substituted pattern anchored at this position
-        let tr = match super::regexp::translate_js_pattern_ex(&subst, flags_str) {
-            Ok(t) => t,
-            Err(_) => continue,
-        };
-        let anchored = format!("^(?:{})", tr.pattern);
-        let re = match fancy_regex::Regex::new(&anchored) {
-            Ok(r) => r,
-            Err(_) => continue,
+        if !regex_cache.contains_key(&subst) {
+            // Cap unique compilations to bound DoS exposure, but keep scanning:
+            // skipping this position preserves matches at later positions whose
+            // substitutions either hit the existing cache or never compile.
+            if compile_count >= MAX_NO_BACKTRACK_COMPILES {
+                continue;
+            }
+
+            // Translate and compile substituted pattern anchored at this position
+            let tr = match super::regexp::translate_js_pattern_ex(&subst, flags_str) {
+                Ok(t) => t,
+                Err(_) => continue,
+            };
+            let anchored = format!("^(?:{})", tr.pattern);
+            let re = match fancy_regex::Regex::new(&anchored) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            compile_count += 1;
+            regex_cache.insert(subst.clone(), re);
+        }
+        let re = match regex_cache.get(&subst) {
+            Some(r) => r,
+            None => continue,
         };
 
         // Match against text from this position
