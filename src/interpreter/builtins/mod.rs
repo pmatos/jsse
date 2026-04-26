@@ -8468,12 +8468,10 @@ impl Interpreter {
                     if callable.is_some() {
                         proxy_obj.borrow_mut().callable = callable;
                     }
-                    proxy_obj.borrow_mut().proxy_target = Some(target_rc);
+                    proxy_obj.borrow_mut().proxy_target_id = Some(t.id);
                 }
-                if let JsValue::Object(ref h) = handler
-                    && let Some(handler_rc) = interp.get_object(h.id)
-                {
-                    proxy_obj.borrow_mut().proxy_handler = Some(handler_rc);
+                if let JsValue::Object(ref h) = handler {
+                    proxy_obj.borrow_mut().proxy_handler_id = Some(h.id);
                 }
                 let proxy_id = proxy_obj.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: proxy_id }))
@@ -8521,12 +8519,10 @@ impl Interpreter {
                         if callable.is_some() {
                             proxy_obj.borrow_mut().callable = callable;
                         }
-                        proxy_obj.borrow_mut().proxy_target = Some(target_rc);
+                        proxy_obj.borrow_mut().proxy_target_id = Some(t.id);
                     }
-                    if let JsValue::Object(ref h) = handler
-                        && let Some(handler_rc) = interp.get_object(h.id)
-                    {
-                        proxy_obj.borrow_mut().proxy_handler = Some(handler_rc);
+                    if let JsValue::Object(ref h) = handler {
+                        proxy_obj.borrow_mut().proxy_handler_id = Some(h.id);
                     }
                     let proxy_id = proxy_obj.borrow().id.unwrap();
                     let proxy_val = JsValue::Object(crate::types::JsObject { id: proxy_id });
@@ -8539,8 +8535,8 @@ impl Interpreter {
                             if let Some(p) = interp2.get_object(proxy_id) {
                                 let mut pm = p.borrow_mut();
                                 pm.proxy_revoked = true;
-                                pm.proxy_target = None;
-                                pm.proxy_handler = None;
+                                pm.proxy_target_id = None;
+                                pm.proxy_handler_id = None;
                             }
                             Completion::Normal(JsValue::Undefined)
                         },

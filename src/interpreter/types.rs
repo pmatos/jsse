@@ -1665,8 +1665,8 @@ pub struct JsObjectData {
     pub parameter_map: Option<HashMap<String, (EnvRef, String)>>,
     pub map_data: Option<Vec<Option<(JsValue, JsValue)>>>,
     pub set_data: Option<Vec<Option<JsValue>>>,
-    pub proxy_target: Option<Rc<RefCell<JsObjectData>>>,
-    pub proxy_handler: Option<Rc<RefCell<JsObjectData>>>,
+    pub proxy_target_id: Option<u64>,
+    pub proxy_handler_id: Option<u64>,
     pub proxy_revoked: bool,
     pub arraybuffer_data: Option<Rc<RefCell<BufferData>>>,
     pub arraybuffer_detached: Option<Rc<Cell<bool>>>,
@@ -1738,8 +1738,8 @@ impl JsObjectData {
             parameter_map: None,
             map_data: None,
             set_data: None,
-            proxy_target: None,
-            proxy_handler: None,
+            proxy_target_id: None,
+            proxy_handler_id: None,
             proxy_revoked: false,
             arraybuffer_data: None,
             arraybuffer_detached: None,
@@ -1780,7 +1780,7 @@ impl JsObjectData {
     }
 
     pub fn is_proxy(&self) -> bool {
-        self.proxy_target.is_some()
+        self.proxy_target_id.is_some()
     }
 
     fn string_exotic_value(&self, key: &str) -> Option<JsValue> {
