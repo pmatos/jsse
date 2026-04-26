@@ -14074,9 +14074,19 @@ impl Interpreter {
         trap_result: &JsValue,
         target_val: &JsValue,
     ) -> Result<(), JsValue> {
+        const MAX_PROXY_OWNKEYS_RESULT_LEN: usize = 1_000_000;
+
         let trap_keys: Vec<String> = if let JsValue::Object(arr) = trap_result {
             let len = match self.get_property_on_id(arr.id, "length") {
-                JsValue::Number(n) => n as usize,
+                JsValue::Number(n) if n.is_finite() && n > 0.0 => {
+                    let len = n.floor() as usize;
+                    if len > MAX_PROXY_OWNKEYS_RESULT_LEN {
+                        return Err(self.create_type_error(
+                            "'ownKeys' on proxy: trap result length exceeds supported limit",
+                        ));
+                    }
+                    len
+                }
                 _ => 0,
             };
             let arr_id = arr.id;
@@ -15368,6 +15378,8 @@ impl Interpreter {
     /// Proxy-aware [[OwnPropertyKeys]] - checks proxy `ownKeys` trap, recurses on target if no trap.
     /// Returns all own property keys (for getOwnPropertyNames).
     pub(crate) fn proxy_own_keys(&mut self, obj_id: u64) -> Result<Vec<JsValue>, JsValue> {
+        const MAX_PROXY_OWNKEYS_RESULT_LEN: usize = 1_000_000;
+
         if self.get_proxy_info(obj_id).is_some() {
             let target_val = self.get_proxy_target_val(obj_id);
             match self.invoke_proxy_trap(obj_id, "ownKeys", vec![target_val.clone()]) {
@@ -15386,7 +15398,16 @@ impl Interpreter {
                             _ => JsValue::Undefined,
                         };
                         let len = match len_val {
-                            JsValue::Number(n) => n as usize,
+                            JsValue::Number(n) if n.is_finite() && n > 0.0 => {
+                                let len = n.floor() as usize;
+                                if len > MAX_PROXY_OWNKEYS_RESULT_LEN {
+                                    return Err(self.create_type_error(
+                                        "'ownKeys' on proxy: trap result length exceeds supported limit",
+                                    ));
+                                }
+                                len
+                            }
+                            JsValue::Number(_) => 0,
                             _ => {
                                 return Err(self.create_type_error(
                                     "ownKeys trap result length is not a number",
