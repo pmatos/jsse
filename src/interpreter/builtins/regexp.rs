@@ -854,7 +854,7 @@ impl VClassSet {
     }
 
     fn dedup_strings(&mut self) {
-        let mut seen = HashSet::default();
+        let mut seen = HashSet::new();
         self.strings.retain(|s| seen.insert(s.clone()));
     }
 
@@ -1905,7 +1905,7 @@ pub(super) fn translate_js_pattern_ex(
     let mut groups_seen: u32 = 0;
     let mut open_groups: Vec<u32> = Vec::new();
     let mut open_group_names: Vec<Option<String>> = Vec::new();
-    let mut group_num_to_name: HashMap<u32, String> = HashMap::default();
+    let mut group_num_to_name: HashMap<u32, String> = HashMap::new();
     let mut group_is_capturing: Vec<bool> = Vec::new();
     let mut lookbehind_depth: u32 = 0;
     let mut is_lookbehind_group: Vec<bool> = Vec::new();
@@ -1999,7 +1999,7 @@ pub(super) fn translate_js_pattern_ex(
             j += 1;
         }
     }
-    let mut name_count: HashMap<String, usize> = HashMap::default();
+    let mut name_count: HashMap<String, usize> = HashMap::new();
     for name in &all_group_names {
         *name_count.entry(name.clone()).or_insert(0) += 1;
     }
@@ -2055,7 +2055,7 @@ pub(super) fn translate_js_pattern_ex(
             }
             // Re-compute duplicated_names from expanded source (renamed groups
             // like __jsse_qi0__x are also duplicates)
-            let mut new_name_count: HashMap<String, usize> = HashMap::default();
+            let mut new_name_count: HashMap<String, usize> = HashMap::new();
             for name in &new_names {
                 *new_name_count.entry(name.clone()).or_insert(0) += 1;
             }
@@ -2077,10 +2077,10 @@ pub(super) fn translate_js_pattern_ex(
     // prefix so we can use named backreferences throughout.
     let has_named_groups = !all_group_names.is_empty();
     // Track how many times we've seen each duplicated name during translation
-    let mut dup_seen_count: HashMap<String, u32> = HashMap::default();
-    let mut dup_group_map: HashMap<String, Vec<(String, u32)>> = HashMap::default();
+    let mut dup_seen_count: HashMap<String, u32> = HashMap::new();
+    let mut dup_group_map: HashMap<String, Vec<(String, u32)>> = HashMap::new();
     let mut group_name_order: Vec<String> = Vec::new();
-    let mut group_name_seen: HashSet<String> = HashSet::default();
+    let mut group_name_seen: HashSet<String> = HashSet::new();
 
     while i < len {
         let c = chars[i];
@@ -5580,7 +5580,7 @@ fn fix_assertion_only_quantified_groups(pattern: &str) -> String {
     }
 
     // For each non-capturing group followed by a quantifier, check if it's assertion-only
-    let mut insert_positions: HashSet<usize> = HashSet::default();
+    let mut insert_positions: HashSet<usize> = HashSet::new();
     for g in &groups {
         if !g.is_non_capturing {
             continue;
@@ -7054,7 +7054,7 @@ impl Interpreter {
 
                 // Validate flags: no invalid chars and no duplicates
                 {
-                    let mut seen = HashSet::default();
+                    let mut seen = HashSet::new();
                     for c in flags_str.chars() {
                         if !matches!(c, 'g' | 'i' | 'm' | 's' | 'u' | 'v' | 'y' | 'd') {
                             return Completion::Throw(interp.create_error(
@@ -8680,7 +8680,7 @@ impl Interpreter {
                         ));
                     }
                 }
-                let mut seen = HashSet::default();
+                let mut seen = HashSet::new();
                 for c in flags_str.chars() {
                     if !seen.insert(c) {
                         return Completion::Throw(interp.create_error(

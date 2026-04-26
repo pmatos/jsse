@@ -1,6 +1,6 @@
 use crate::ast::*;
 use crate::lexer::{Keyword, LexError, Lexer, Token};
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 
@@ -225,8 +225,7 @@ impl<'a> Parser<'a> {
     }
 
     fn push_private_scope(&mut self) {
-        self.private_name_scopes
-            .push((HashSet::default(), Vec::new()));
+        self.private_name_scopes.push((HashSet::new(), Vec::new()));
     }
 
     fn declare_private_name(&mut self, name: &str) {
@@ -422,7 +421,7 @@ impl<'a> Parser<'a> {
     }
 
     fn check_duplicate_params_strict(&self, params: &[Pattern]) -> Result<(), ParseError> {
-        let mut seen = HashSet::default();
+        let mut seen = HashSet::new();
         let mut names = Vec::new();
         for p in params {
             Self::collect_bound_names(p, &mut names);
@@ -1113,7 +1112,7 @@ impl<'a> Parser<'a> {
         self.set_strict(true);
 
         let mut module_items = Vec::new();
-        let mut exported_names = HashSet::default();
+        let mut exported_names = HashSet::new();
 
         while self.current != Token::Eof {
             let item = self.parse_module_item()?;
@@ -1229,9 +1228,9 @@ impl<'a> Parser<'a> {
     fn validate_module_early_errors(&self, items: &[ModuleItem]) -> Result<(), ParseError> {
         use HashSet;
 
-        let mut lex_names: HashSet<String> = HashSet::default();
-        let mut var_names: HashSet<String> = HashSet::default();
-        let mut exported_bindings: HashSet<String> = HashSet::default();
+        let mut lex_names: HashSet<String> = HashSet::new();
+        let mut var_names: HashSet<String> = HashSet::new();
+        let mut exported_bindings: HashSet<String> = HashSet::new();
 
         // Collect all lexically-declared and var-declared names
         for item in items {

@@ -395,7 +395,7 @@ impl Interpreter {
             Expression::Function(f) => {
                 let closure_env = if let Some(ref name) = f.name {
                     let func_env = Rc::new(RefCell::new(Environment {
-                        bindings: HashMap::default(),
+                        bindings: HashMap::new(),
                         parent: Some(env.clone()),
                         strict: env.borrow().strict || f.body_is_strict,
                         is_function_scope: false,
@@ -11895,9 +11895,9 @@ impl Interpreter {
                                     Environment::new_function_scope(Some(func_env.clone()));
                                 body_env.borrow_mut().strict = func_env.borrow().strict;
                                 body_env.borrow_mut().has_simple_params = false;
-                                let mut var_names = HashSet::default();
+                                let mut var_names = HashSet::new();
                                 Self::collect_var_names_from_stmts(&body, &mut var_names);
-                                let mut param_names_set = HashSet::default();
+                                let mut param_names_set = HashSet::new();
                                 for p in params.iter() {
                                     Self::collect_var_names_from_pattern(p, &mut param_names_set);
                                 }
@@ -12082,9 +12082,9 @@ impl Interpreter {
                                     Environment::new_function_scope(Some(func_env.clone()));
                                 body_env.borrow_mut().strict = func_env.borrow().strict;
                                 body_env.borrow_mut().has_simple_params = false;
-                                let mut var_names = HashSet::default();
+                                let mut var_names = HashSet::new();
                                 Self::collect_var_names_from_stmts(&body, &mut var_names);
-                                let mut param_names_set = HashSet::default();
+                                let mut param_names_set = HashSet::new();
                                 for p in params.iter() {
                                     Self::collect_var_names_from_pattern(p, &mut param_names_set);
                                 }
@@ -12270,9 +12270,9 @@ impl Interpreter {
                             let body_env = Environment::new_function_scope(Some(func_env.clone()));
                             body_env.borrow_mut().strict = func_env.borrow().strict;
                             body_env.borrow_mut().has_simple_params = false;
-                            let mut var_names = HashSet::default();
+                            let mut var_names = HashSet::new();
                             Self::collect_var_names_from_stmts(&body, &mut var_names);
-                            let mut param_names = HashSet::default();
+                            let mut param_names = HashSet::new();
                             for p in params.iter() {
                                 Self::collect_var_names_from_pattern(p, &mut param_names);
                             }
@@ -12885,7 +12885,7 @@ impl Interpreter {
         }
         // Per spec: reverse order, keep last occurrence of each name
         funcs.reverse();
-        let mut seen = HashSet::default();
+        let mut seen = HashSet::new();
         funcs.retain(|f| seen.insert(f.name.clone()));
         funcs
     }
@@ -12911,7 +12911,7 @@ impl Interpreter {
         let mut all_var_names = Vec::new();
         Self::collect_eval_var_names(body, &mut all_var_names);
         let declared_var_names: Vec<String> = {
-            let mut seen = HashSet::default();
+            let mut seen = HashSet::new();
             all_var_names
                 .into_iter()
                 .filter(|n| !declared_func_names.contains(n) && seen.insert(n.clone()))
@@ -15431,7 +15431,7 @@ impl Interpreter {
                                 ));
                             }
                         }
-                        let mut seen = HashSet::default();
+                        let mut seen = HashSet::new();
                         for key in &keys {
                             let key_str = to_property_key_string(key);
                             if !seen.insert(key_str) {
@@ -15550,7 +15550,7 @@ impl Interpreter {
         &mut self,
         obj_id: u64,
     ) -> Result<Vec<String>, JsValue> {
-        let mut seen = HashSet::default();
+        let mut seen = HashSet::new();
         let mut keys = Vec::new();
         let mut current_id = Some(obj_id);
 

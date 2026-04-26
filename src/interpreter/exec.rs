@@ -239,7 +239,7 @@ impl Interpreter {
         }
 
         // §16.1.7 step 6: For each var name, check HasLexicalDeclaration
-        let mut var_names = HashSet::default();
+        let mut var_names = HashSet::new();
         Self::collect_var_names_from_stmts(stmts, &mut var_names);
         for name in &var_names {
             if let Some(binding) = env.borrow().bindings.get(name)
@@ -941,7 +941,7 @@ impl Interpreter {
                 if let JsValue::Object(obj_ref) = &obj_val {
                     if let Some(obj_data) = self.get_object(obj_ref.id) {
                         let with_env = Rc::new(RefCell::new(Environment {
-                            bindings: HashMap::default(),
+                            bindings: HashMap::new(),
                             parent: Some(env.clone()),
                             strict: env.borrow().strict,
                             is_function_scope: false,

@@ -9,7 +9,7 @@ fn validate_regexp_literal(pattern: &str, flags: &str) -> Result<(), ParseError>
             });
         }
     }
-    let mut seen = HashSet::default();
+    let mut seen = HashSet::new();
     for c in flags.chars() {
         if !seen.insert(c) {
             return Err(ParseError {

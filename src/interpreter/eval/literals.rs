@@ -202,7 +202,7 @@ impl Interpreter {
     ) -> Completion {
         let brand_id = self.next_class_brand_id;
         self.next_class_brand_id += 1;
-        let mut pn_set = HashMap::default();
+        let mut pn_set = HashMap::new();
         for elem in body {
             match elem {
                 ClassElement::Method(m) => {
