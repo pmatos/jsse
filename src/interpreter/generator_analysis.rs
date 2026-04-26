@@ -1,5 +1,5 @@
 use crate::ast::*;
-use rustc_hash::FxHashSet as HashSet;
+use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
 pub struct GeneratorAnalysis {
@@ -78,7 +78,7 @@ impl AnalysisContext {
             current_try: None,
             current_loop: None,
             current_label: None,
-            seen_vars: HashSet::default(),
+            seen_vars: HashSet::new(),
         }
     }
 }

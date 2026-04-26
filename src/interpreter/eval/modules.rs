@@ -15,7 +15,7 @@ impl Interpreter {
             env,
             module_path,
             original_key,
-            &mut HashSet::default(),
+            &mut HashSet::new(),
         )
     }
 
@@ -212,7 +212,7 @@ impl Interpreter {
         }
 
         // Check ReadyForSyncExecution
-        let mut seen = HashSet::default();
+        let mut seen = HashSet::new();
         if !self.ready_for_sync_execution(&module_path, &mut seen) {
             return Err(self.create_type_error(
                 "Cannot synchronously evaluate a module with top-level await or that is currently being evaluated",

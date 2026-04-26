@@ -190,7 +190,7 @@ pub(crate) fn typeof_val<'a>(
     }
 }
 
-use rustc_hash::FxHashMap as HashMap;
+use std::collections::HashMap;
 
 fn json_quote(s: &str) -> String {
     json_quote_units(&s.encode_utf16().collect::<Vec<u16>>())

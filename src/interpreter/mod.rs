@@ -1,8 +1,9 @@
 use crate::ast::*;
 use crate::parser;
 use crate::types::{JsBigInt, JsString, JsValue, bigint_ops, number_ops};
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -64,7 +65,7 @@ pub struct Interpreter {
     generator_context: Option<GeneratorContext>,
     pub(crate) destructuring_yield: bool,
     pub(crate) pending_iter_close: Vec<JsValue>,
-    pub(crate) generator_inline_iters: HashMap<u64, Vec<JsValue>>,
+    pub(crate) generator_inline_iters: FxHashMap<u64, Vec<JsValue>>,
     microtask_queue: Vec<(
         Vec<JsValue>,
         Box<dyn FnOnce(&mut Interpreter) -> Completion>,
@@ -92,7 +93,7 @@ pub struct Interpreter {
     pub(crate) regexp_legacy_right_context: String,
     pub(crate) regexp_legacy_parens: [String; 9],
     pub(crate) regexp_constructor_id: Option<u64>,
-    pub(crate) function_realm_map: HashMap<u64, usize>,
+    pub(crate) function_realm_map: FxHashMap<u64, usize>,
     pub(crate) in_tail_position: bool,
     pub(crate) in_state_machine: bool,
     pub(crate) next_function_is_method: bool,
@@ -115,16 +116,16 @@ pub struct Interpreter {
     /// drain_microtasks_until_idle to decide whether pending host work is
     /// actually awaited by JS code (Promise has reactions) versus detached.
     pub(crate) pending_async_promise_ids: Arc<std::sync::Mutex<std::collections::HashSet<u64>>>,
-    pub(crate) iterator_next_cache: HashMap<u64, JsValue>,
+    pub(crate) iterator_next_cache: FxHashMap<u64, JsValue>,
     last_identifier_with_base: Option<u64>,
-    pub(crate) async_gen_queues: HashMap<u64, std::collections::VecDeque<AsyncGenRequest>>,
+    pub(crate) async_gen_queues: FxHashMap<u64, std::collections::VecDeque<AsyncGenRequest>>,
     pub(crate) async_gen_yield_pending: bool,
-    pub(crate) async_function_states: HashMap<u64, AsyncFunctionState>,
+    pub(crate) async_function_states: FxHashMap<u64, AsyncFunctionState>,
     next_async_function_id: u64,
     pub(crate) pending_async_dispose_await: bool,
     pub(crate) static_module_load_depth: u32,
     module_async_evaluation_count: u64,
-    module_async_info: HashMap<u64, PathBuf>,
+    module_async_info: FxHashMap<u64, PathBuf>,
     pub(crate) with_scope_depth: u32,
     pub(crate) has_ever_entered_with: bool,
 }
@@ -205,8 +206,8 @@ impl Interpreter {
             realms: vec![realm],
             current_realm_id: 0,
             objects: Vec::new(),
-            global_symbol_registry: HashMap::default(),
-            well_known_symbols: HashMap::default(),
+            global_symbol_registry: HashMap::new(),
+            well_known_symbols: HashMap::new(),
             next_symbol_id: 1,
             new_target: None,
             free_list: Vec::new(),
@@ -218,11 +219,11 @@ impl Interpreter {
             generator_context: None,
             destructuring_yield: false,
             pending_iter_close: Vec::new(),
-            generator_inline_iters: HashMap::default(),
+            generator_inline_iters: FxHashMap::default(),
             microtask_queue: Vec::new(),
             cached_has_instance_key: None,
-            module_registry: HashMap::default(),
-            synthetic_module_registry: HashMap::default(),
+            module_registry: HashMap::new(),
+            synthetic_module_registry: HashMap::new(),
             current_module_path: None,
             loading_deferred: false,
             last_call_had_explicit_return: false,
@@ -242,7 +243,7 @@ impl Interpreter {
             regexp_legacy_right_context: String::new(),
             regexp_legacy_parens: Default::default(),
             regexp_constructor_id: None,
-            function_realm_map: HashMap::default(),
+            function_realm_map: FxHashMap::default(),
             in_tail_position: false,
             in_state_machine: false,
             next_function_is_method: false,
@@ -263,16 +264,16 @@ impl Interpreter {
             pending_async_promise_ids: Arc::new(std::sync::Mutex::new(
                 std::collections::HashSet::new(),
             )),
-            iterator_next_cache: HashMap::default(),
+            iterator_next_cache: FxHashMap::default(),
             last_identifier_with_base: None,
-            async_gen_queues: HashMap::default(),
+            async_gen_queues: FxHashMap::default(),
             async_gen_yield_pending: false,
-            async_function_states: HashMap::default(),
+            async_function_states: FxHashMap::default(),
             next_async_function_id: 0,
             pending_async_dispose_await: false,
             static_module_load_depth: 0,
             module_async_evaluation_count: 0,
-            module_async_info: HashMap::default(),
+            module_async_info: FxHashMap::default(),
             with_scope_depth: 0,
             has_ever_entered_with: false,
         };
@@ -1317,8 +1318,8 @@ impl Interpreter {
                     },
                 );
 
-                let mut map = HashMap::default();
-                let mut mapped_names: HashSet<&str> = HashSet::default();
+                let mut map = HashMap::new();
+                let mut mapped_names: HashSet<&str> = HashSet::new();
                 for i in (0..param_names.len()).rev() {
                     let name = &param_names[i];
                     if mapped_names.contains(name.as_str()) {
@@ -1505,13 +1506,13 @@ impl Interpreter {
         let loaded_module = Rc::new(RefCell::new(LoadedModule {
             path: canon_path_entry.clone(),
             env: module_env.clone(),
-            exports: HashMap::default(),
-            export_bindings: HashMap::default(),
+            exports: HashMap::new(),
+            export_bindings: HashMap::new(),
             cached_namespace: None,
             cached_deferred_namespace: None,
             cached_import_meta: None,
             error: None,
-            namespace_imports: HashMap::default(),
+            namespace_imports: HashMap::new(),
             star_export_sources: Vec::new(),
             evaluated: false,
             is_evaluating: false,
@@ -1821,7 +1822,7 @@ impl Interpreter {
         }
         let has_export = binding_info.is_some();
         if has_export {
-            let mut visited = HashSet::default();
+            let mut visited = HashSet::new();
             match self.resolve_export_binding(resolved, imported, &mut visited) {
                 Ok((source_env, binding_name)) => {
                     if binding_name == "*namespace*" {
@@ -1892,13 +1893,13 @@ impl Interpreter {
                         // — check if they resolve to the same (module, binding)
                         if existing != &new_reexport {
                             let is_ambiguous = if let Some(ref mp) = module_path {
-                                let mut v1 = HashSet::default();
+                                let mut v1 = HashSet::new();
                                 let r1 = self.resolve_export_binding(mp, &export_name, &mut v1);
                                 module
                                     .borrow_mut()
                                     .export_bindings
                                     .insert(export_name.clone(), new_reexport.clone());
-                                let mut v2 = HashSet::default();
+                                let mut v2 = HashSet::new();
                                 let r2 = self.resolve_export_binding(mp, &export_name, &mut v2);
                                 module
                                     .borrow_mut()
@@ -2025,12 +2026,12 @@ impl Interpreter {
                 path: canon_path.clone(),
                 env: module_env.clone(),
                 exports: {
-                    let mut m = HashMap::default();
+                    let mut m = HashMap::new();
                     m.insert("default".to_string(), parsed.clone());
                     m
                 },
                 export_bindings: {
-                    let mut m = HashMap::default();
+                    let mut m = HashMap::new();
                     m.insert("default".to_string(), "*default*".to_string());
                     m
                 },
@@ -2038,7 +2039,7 @@ impl Interpreter {
                 cached_deferred_namespace: None,
                 cached_import_meta: None,
                 error: None,
-                namespace_imports: HashMap::default(),
+                namespace_imports: HashMap::new(),
                 star_export_sources: Vec::new(),
                 evaluated: true,
                 is_evaluating: false,
@@ -2102,13 +2103,13 @@ impl Interpreter {
         let loaded_module = Rc::new(RefCell::new(LoadedModule {
             path: canon_path.clone(),
             env: module_env.clone(),
-            exports: HashMap::default(),
-            export_bindings: HashMap::default(),
+            exports: HashMap::new(),
+            export_bindings: HashMap::new(),
             cached_namespace: None,
             cached_deferred_namespace: None,
             cached_import_meta: None,
             error: None,
-            namespace_imports: HashMap::default(),
+            namespace_imports: HashMap::new(),
             star_export_sources: Vec::new(),
             evaluated: false,
             is_evaluating: false,
@@ -2359,13 +2360,13 @@ impl Interpreter {
         let loaded_module = Rc::new(RefCell::new(LoadedModule {
             path: canon_path.clone(),
             env: module_env.clone(),
-            exports: HashMap::default(),
-            export_bindings: HashMap::default(),
+            exports: HashMap::new(),
+            export_bindings: HashMap::new(),
             cached_namespace: None,
             cached_deferred_namespace: None,
             cached_import_meta: None,
             error: None,
-            namespace_imports: HashMap::default(),
+            namespace_imports: HashMap::new(),
             star_export_sources: Vec::new(),
             evaluated: false,
             is_evaluating: false,
@@ -2531,12 +2532,12 @@ impl Interpreter {
             path: canon_path,
             env: module_env,
             exports: {
-                let mut m = HashMap::default();
+                let mut m = HashMap::new();
                 m.insert("default".to_string(), value);
                 m
             },
             export_bindings: {
-                let mut m = HashMap::default();
+                let mut m = HashMap::new();
                 m.insert("default".to_string(), "*default*".to_string());
                 m
             },
@@ -2544,7 +2545,7 @@ impl Interpreter {
             cached_deferred_namespace: None,
             cached_import_meta: None,
             error: None,
-            namespace_imports: HashMap::default(),
+            namespace_imports: HashMap::new(),
             star_export_sources: Vec::new(),
             evaluated: true,
             is_evaluating: false,
@@ -2858,7 +2859,7 @@ impl Interpreter {
         for (dep_canon, is_deferred) in &dep_paths {
             if *is_deferred {
                 let mut to_eval = Vec::new();
-                let mut seen = HashSet::default();
+                let mut seen = HashSet::new();
                 self.gather_async_transitive_deps(dep_canon, &mut to_eval, &mut seen);
                 for async_dep in to_eval {
                     if !evaluation_list.contains(&async_dep) {
@@ -3267,7 +3268,7 @@ impl Interpreter {
     /// Eagerly evaluate async transitive dependencies of a deferred module
     fn evaluate_async_transitive_deps(&mut self, deferred_path: &Path) {
         let mut to_eval = Vec::new();
-        let mut seen = HashSet::default();
+        let mut seen = HashSet::new();
         self.gather_async_transitive_deps(deferred_path, &mut to_eval, &mut seen);
 
         for path in to_eval {
@@ -3431,7 +3432,7 @@ impl Interpreter {
         let resolved = self.resolve_module_specifier(source, Some(current_module))?;
 
         for spec in specifiers {
-            let mut visited = HashSet::default();
+            let mut visited = HashSet::new();
             self.resolve_export(&resolved, &spec.local, &mut visited)?;
         }
         Ok(())
@@ -3625,13 +3626,13 @@ impl Interpreter {
                 if found_in_star {
                     // §16.2.1.6.3 step 10.d.ii: ambiguous — same name from multiple stars
                     // Check if they resolve to the same (module, binding)
-                    let mut va = HashSet::default();
+                    let mut va = HashSet::new();
                     let ra = self.resolve_export_binding(
                         first_star_source.as_ref().unwrap(),
                         export_name,
                         &mut va,
                     );
-                    let mut vb = HashSet::default();
+                    let mut vb = HashSet::new();
                     let rb = self.resolve_export_binding(&resolved, export_name, &mut vb);
                     match (ra, rb) {
                         (Ok((env1, name1)), Ok((env2, name2))) => {

@@ -5,7 +5,6 @@ edition = "2024"
 
 [dependencies]
 clap = { version = "4", features = ["derive"] }
-rustc-hash = "2"
 num-bigint = "0.4"
 unicode-ident = "1.0"
 regex = "1"
@@ -19,3 +18,4 @@ icu_calendar = { version = "2.0", features = ["unstable"] }
 fixed_decimal = { version = "0.7", features = ["ryu"] }
 tinystr = "0.8"
 icu_normalizer = "2.1.1"
+rustc-hash = "2"

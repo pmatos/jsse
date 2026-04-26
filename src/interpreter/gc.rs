@@ -478,7 +478,7 @@ impl Interpreter {
 
     pub(crate) fn collect_env_roots(env: &EnvRef, worklist: &mut Vec<u64>) {
         let mut current = Some(env.clone());
-        let mut seen = HashSet::default();
+        let mut seen = HashSet::new();
         while let Some(e) = current {
             let ptr = Rc::as_ptr(&e) as usize;
             if !seen.insert(ptr) {

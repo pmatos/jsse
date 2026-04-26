@@ -2,8 +2,9 @@ use crate::ast::*;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
 use crate::interpreter::helpers::same_value;
 use crate::types::{JsString, JsValue};
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::RwLock;
@@ -297,7 +298,7 @@ pub struct Realm {
     pub(crate) global_env: EnvRef,
     pub(crate) global_object: Option<u64>,
     pub(crate) throw_type_error: Option<JsValue>,
-    pub(crate) template_cache: HashMap<u64, u64>,
+    pub(crate) template_cache: FxHashMap<u64, u64>,
     pub(crate) builtin_eval_id: Option<u64>,
     pub(crate) object_prototype: Option<u64>,
     pub(crate) array_prototype: Option<u64>,
@@ -392,7 +393,7 @@ impl Realm {
             global_env,
             global_object: None,
             throw_type_error: None,
-            template_cache: HashMap::default(),
+            template_cache: FxHashMap::default(),
             builtin_eval_id: None,
             object_prototype: None,
             array_prototype: None,
@@ -695,7 +696,7 @@ impl Environment {
     pub fn new(parent: Option<EnvRef>) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::default(),
+            bindings: HashMap::new(),
             parent,
             strict,
             is_function_scope: false,
@@ -719,7 +720,7 @@ impl Environment {
     pub fn new_function_scope(parent: Option<EnvRef>) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::default(),
+            bindings: HashMap::new(),
             parent,
             strict,
             is_function_scope: true,
@@ -1724,7 +1725,7 @@ impl JsObjectData {
     pub(crate) fn new() -> Self {
         Self {
             id: None,
-            properties: HashMap::default(),
+            properties: HashMap::new(),
             property_order: Vec::new(),
             prototype_id: None,
             callable: None,
@@ -1732,7 +1733,7 @@ impl JsObjectData {
             class_name: "Object".to_string(),
             extensible: true,
             primitive_value: None,
-            private_fields: HashMap::default(),
+            private_fields: HashMap::new(),
             class_instance_field_defs: Vec::new(),
             iterator_state: None,
             parameter_map: None,

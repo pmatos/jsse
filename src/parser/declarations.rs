@@ -434,8 +434,7 @@ impl<'a> Parser<'a> {
         let mut has_constructor = false;
         // Track private names: value is (getter_static, setter_static, has_other)
         // Option<bool> = None means no getter/setter, Some(is_static) means present with staticness
-        let mut private_names: HashMap<String, (Option<bool>, Option<bool>, bool)> =
-            HashMap::default();
+        let mut private_names: HashMap<String, (Option<bool>, Option<bool>, bool)> = HashMap::new();
         while self.current != Token::RightBrace {
             if self.current == Token::Semicolon {
                 self.advance()?;
@@ -1256,7 +1255,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn set_function_param_names(&mut self, params: &[Pattern]) {
-        let mut names = HashSet::default();
+        let mut names = HashSet::new();
         for p in params {
             let mut bound = Vec::new();
             Self::collect_bound_names(p, &mut bound);
