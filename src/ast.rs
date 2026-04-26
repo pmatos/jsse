@@ -1,11 +1,47 @@
 /// AST node types for ECMAScript.
 /// Each node represents a syntactic element from the spec.
+use std::fmt;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT_TEMPLATE_ID: AtomicU64 = AtomicU64::new(1);
 
 pub fn next_template_id() -> u64 {
     NEXT_TEMPLATE_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+#[derive(Clone, Debug)]
+pub struct SourceText {
+    source: Rc<str>,
+    start: usize,
+    end: usize,
+}
+
+impl SourceText {
+    pub fn new(source: Rc<str>, start: usize, end: usize) -> Self {
+        Self { source, start, end }
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.source[self.start..self.end]
+    }
+}
+
+impl From<String> for SourceText {
+    fn from(source: String) -> Self {
+        let end = source.len();
+        Self {
+            source: Rc::from(source),
+            start: 0,
+            end,
+        }
+    }
+}
+
+impl fmt::Display for SourceText {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +70,7 @@ pub enum ModuleItem {
 pub struct ImportDeclaration {
     pub specifiers: Vec<ImportSpecifier>,
     pub source: String,
+    pub attributes: Vec<(String, String)>,
 }
 
 #[derive(Clone, Debug)]
@@ -373,7 +410,7 @@ pub struct FunctionDecl {
     pub body: Vec<Statement>,
     pub is_async: bool,
     pub is_generator: bool,
-    pub source_text: Option<String>,
+    pub source_text: Option<SourceText>,
     pub body_is_strict: bool,
 }
 
@@ -384,7 +421,7 @@ pub struct FunctionExpr {
     pub body: Vec<Statement>,
     pub is_async: bool,
     pub is_generator: bool,
-    pub source_text: Option<String>,
+    pub source_text: Option<SourceText>,
     pub body_is_strict: bool,
 }
 
@@ -393,7 +430,7 @@ pub struct ArrowFunction {
     pub params: Vec<Pattern>,
     pub body: ArrowBody,
     pub is_async: bool,
-    pub source_text: Option<String>,
+    pub source_text: Option<SourceText>,
     pub body_is_strict: bool,
 }
 
@@ -408,7 +445,7 @@ pub struct ClassDecl {
     pub name: String,
     pub super_class: Option<Box<Expression>>,
     pub body: Vec<ClassElement>,
-    pub source_text: Option<String>,
+    pub source_text: Option<SourceText>,
 }
 
 #[derive(Clone, Debug)]
@@ -416,13 +453,14 @@ pub struct ClassExpr {
     pub name: Option<String>,
     pub super_class: Option<Box<Expression>>,
     pub body: Vec<ClassElement>,
-    pub source_text: Option<String>,
+    pub source_text: Option<SourceText>,
 }
 
 #[derive(Clone, Debug)]
 pub enum ClassElement {
     Method(ClassMethod),
     Property(ClassProperty),
+    AutoAccessor(ClassProperty),
     StaticBlock(Vec<Statement>),
 }
 
@@ -432,7 +470,6 @@ pub struct ClassMethod {
     pub kind: ClassMethodKind,
     pub value: FunctionExpr,
     pub is_static: bool,
-    #[allow(dead_code)]
     pub computed: bool,
 }
 
@@ -449,7 +486,6 @@ pub struct ClassProperty {
     pub key: PropertyKey,
     pub value: Option<Expression>,
     pub is_static: bool,
-    #[allow(dead_code)]
     pub computed: bool,
 }
 
@@ -466,16 +502,10 @@ impl Expression {
     }
 }
 
-#[allow(dead_code)]
-pub fn utf16_eq(code_units: &[u16], s: &str) -> bool {
-    let expected: Vec<u16> = s.encode_utf16().collect();
-    code_units == expected.as_slice()
-}
-
 #[derive(Clone, Debug)]
 pub struct TemplateLiteral {
     pub id: u64,
-    pub quasis: Vec<Option<String>>,
+    pub quasis: Vec<Option<Vec<u16>>>,
     pub raw_quasis: Vec<String>,
     pub expressions: Vec<Expression>,
 }

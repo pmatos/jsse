@@ -113,6 +113,7 @@ fn run_file(path: &Path, force_module: bool, can_block: bool) -> ExitCode {
 fn run_repl() -> ExitCode {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
+    let mut interp = interpreter::Interpreter::new();
 
     println!("jsse v{}", env!("CARGO_PKG_VERSION"));
     println!("Type JavaScript expressions. Press Ctrl-D to exit.");
@@ -131,7 +132,7 @@ fn run_repl() -> ExitCode {
             Ok(_) => {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() {
-                    match run_source(trimmed, false, None, false) {
+                    match run_source_with_interp(&mut interp, trimmed, false, None) {
                         Ok(()) => {}
                         Err(EngineError::Parse(msg)) => eprintln!("SyntaxError: {msg}"),
                         Err(EngineError::Runtime(msg)) => eprintln!("{msg}"),

@@ -84,11 +84,6 @@ fn to_num(interp: &mut Interpreter, val: &JsValue) -> Result<f64, Completion> {
     }
 }
 
-#[allow(dead_code)]
-fn utf16_len(s: &str) -> usize {
-    s.encode_utf16().count()
-}
-
 fn utf16_units(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
@@ -1187,9 +1182,8 @@ impl Interpreter {
                     let rx = interp.create_regexp(&source, "");
                     if let JsValue::Object(ref ro) = rx
                         && let Some(key) = interp.get_symbol_key("search")
-                        && let Some(obj) = interp.get_object(ro.id)
                     {
-                        let method = obj.borrow().get_property(&key);
+                        let method = interp.get_property_on_id(ro.id, &key);
                         if !matches!(method, JsValue::Undefined | JsValue::Null) {
                             let this_str = JsValue::String(JsString::from_str(&s));
                             return interp.call_function(&method, &rx, &[this_str]);
@@ -1243,9 +1237,8 @@ impl Interpreter {
                     let rx = interp.create_regexp(&source, "");
                     if let JsValue::Object(ref ro) = rx
                         && let Some(key) = interp.get_symbol_key("match")
-                        && let Some(obj) = interp.get_object(ro.id)
                     {
-                        let method = obj.borrow().get_property(&key);
+                        let method = interp.get_property_on_id(ro.id, &key);
                         if !matches!(method, JsValue::Undefined | JsValue::Null) {
                             let this_str = JsValue::String(JsString::from_str(&s));
                             return interp.call_function(&method, &rx, &[this_str]);
@@ -1663,11 +1656,12 @@ impl Interpreter {
         }
 
         // Aliases
-        let trim_start_fn = proto.borrow().get_property("trimStart");
+        let proto_id = proto.borrow().id.unwrap();
+        let trim_start_fn = self.get_property_on_id(proto_id, "trimStart");
         proto
             .borrow_mut()
             .insert_builtin("trimLeft".to_string(), trim_start_fn);
-        let trim_end_fn = proto.borrow().get_property("trimEnd");
+        let trim_end_fn = self.get_property_on_id(proto_id, "trimEnd");
         proto
             .borrow_mut()
             .insert_builtin("trimRight".to_string(), trim_end_fn);
@@ -1716,7 +1710,7 @@ impl Interpreter {
                 .insert_builtin("constructor".to_string(), str_val.clone());
         }
 
-        self.realm_mut().string_prototype = Some(proto);
+        self.realm_mut().string_prototype = Some(proto.borrow().id.unwrap());
     }
 }
 

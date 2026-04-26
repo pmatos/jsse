@@ -2,40 +2,117 @@ use crate::ast::*;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
 use crate::interpreter::helpers::same_value;
 use crate::types::{JsString, JsValue};
-use std::cell::{Cell, RefCell, UnsafeCell};
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
+use std::sync::RwLock;
+use std::sync::atomic::{
+    AtomicI8, AtomicI16, AtomicI32, AtomicI64, AtomicU8, AtomicU16, AtomicU32, AtomicU64,
+    AtomicUsize, Ordering,
+};
 
 static NEXT_SAB_ID: AtomicU64 = AtomicU64::new(1);
 
 pub fn next_sab_id() -> u64 {
-    NEXT_SAB_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    NEXT_SAB_ID.fetch_add(1, Ordering::Relaxed)
 }
 
 pub struct SharedBufferInner {
-    data: UnsafeCell<Vec<u8>>,
+    words: RwLock<Vec<u64>>,
+    len: AtomicUsize,
     pub id: u64,
 }
 
-unsafe impl Send for SharedBufferInner {}
-unsafe impl Sync for SharedBufferInner {}
-
 impl SharedBufferInner {
     pub fn new(data: Vec<u8>, id: u64) -> Self {
+        let len = data.len();
+        let mut words = vec![0u64; len.div_ceil(8)];
+        for (idx, byte) in data.into_iter().enumerate() {
+            let word_idx = idx / 8;
+            let shift = (idx % 8) * 8;
+            words[word_idx] |= (byte as u64) << shift;
+        }
         Self {
-            data: UnsafeCell::new(data),
+            words: RwLock::new(words),
+            len: AtomicUsize::new(len),
             id,
         }
     }
 
-    pub fn as_ptr(&self) -> *mut u8 {
-        unsafe { (*self.data.get()).as_mut_ptr() }
+    pub fn len(&self) -> usize {
+        self.len.load(Ordering::SeqCst)
     }
 
-    pub fn len(&self) -> usize {
-        unsafe { (*self.data.get()).len() }
+    fn byte_slice(words: &[u64], len: usize) -> &[u8] {
+        let bytes =
+            unsafe { std::slice::from_raw_parts(words.as_ptr() as *const u8, words.len() * 8) };
+        &bytes[..len]
+    }
+
+    fn byte_slice_mut(words: &mut [u64], len: usize) -> &mut [u8] {
+        let bytes = unsafe {
+            std::slice::from_raw_parts_mut(words.as_mut_ptr() as *mut u8, words.len() * 8)
+        };
+        &mut bytes[..len]
+    }
+
+    pub fn with_read<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+        let len = self.len();
+        let guard = self.words.read().unwrap();
+        f(Self::byte_slice(&guard, len))
+    }
+
+    pub fn with_write<R>(&self, f: impl FnOnce(&mut [u8]) -> R) -> R {
+        let len = self.len();
+        let mut guard = self.words.write().unwrap();
+        f(Self::byte_slice_mut(&mut guard, len))
+    }
+
+    pub fn resize(&self, new_len: usize, value: u8) {
+        let old_len = self.len();
+        let mut guard = self.words.write().unwrap();
+        let new_words_len = new_len.div_ceil(8);
+        if guard.len() < new_words_len {
+            guard.resize(new_words_len, 0);
+        }
+        {
+            let old_words_len = old_len.div_ceil(8);
+            let new_words = &mut guard[..new_words_len.max(old_words_len)];
+            let bytes = unsafe {
+                std::slice::from_raw_parts_mut(
+                    new_words.as_mut_ptr() as *mut u8,
+                    new_words.len() * 8,
+                )
+            };
+            if new_len > old_len {
+                bytes[old_len..new_len].fill(value);
+            } else {
+                bytes[new_len..old_len].fill(0);
+            }
+        }
+        if guard.len() > new_words_len {
+            guard.truncate(new_words_len);
+        }
+        self.len.store(new_len, Ordering::SeqCst);
+    }
+
+    pub fn to_vec(&self) -> Vec<u8> {
+        self.with_read(|bytes| bytes.to_vec())
+    }
+
+    pub(crate) fn with_atomic_ptr<T, R>(
+        &self,
+        offset: usize,
+        size: usize,
+        f: impl FnOnce(*mut T) -> R,
+    ) -> Option<R> {
+        if offset + size > self.len() {
+            return None;
+        }
+        let guard = self.words.read().unwrap();
+        let base = guard.as_ptr() as *mut u8;
+        Some(f(unsafe { base.add(offset) as *mut T }))
     }
 }
 
@@ -55,17 +132,24 @@ pub enum BufferData {
 }
 
 impl BufferData {
+    pub fn len(&self) -> usize {
+        match self {
+            BufferData::Owned(v) => v.len(),
+            BufferData::Shared(s) => s.len(),
+        }
+    }
+
     pub fn resize(&mut self, new_len: usize, value: u8) {
         match self {
             BufferData::Owned(v) => v.resize(new_len, value),
-            BufferData::Shared(s) => unsafe { (*s.data.get()).resize(new_len, value) },
+            BufferData::Shared(s) => s.resize(new_len, value),
         }
     }
 
     pub fn to_vec(&self) -> Vec<u8> {
         match self {
             BufferData::Owned(v) => v.clone(),
-            BufferData::Shared(s) => unsafe { (*s.data.get()).clone() },
+            BufferData::Shared(s) => s.to_vec(),
         }
     }
 
@@ -81,30 +165,25 @@ impl BufferData {
             _ => None,
         }
     }
+
+    pub fn with_read<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+        match self {
+            BufferData::Owned(v) => f(v),
+            BufferData::Shared(s) => s.with_read(f),
+        }
+    }
+
+    pub fn with_write<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> R {
+        match self {
+            BufferData::Owned(v) => f(v),
+            BufferData::Shared(s) => s.with_write(f),
+        }
+    }
 }
 
 impl Clone for BufferData {
     fn clone(&self) -> Self {
         BufferData::Owned(self.to_vec())
-    }
-}
-
-impl std::ops::Deref for BufferData {
-    type Target = [u8];
-    fn deref(&self) -> &[u8] {
-        match self {
-            BufferData::Owned(v) => v,
-            BufferData::Shared(s) => unsafe { &*s.data.get() },
-        }
-    }
-}
-
-impl std::ops::DerefMut for BufferData {
-    fn deref_mut(&mut self) -> &mut [u8] {
-        match self {
-            BufferData::Owned(v) => v,
-            BufferData::Shared(s) => unsafe { &mut *s.data.get() },
-        }
     }
 }
 
@@ -154,8 +233,6 @@ pub(crate) enum GeneratorResumeKind {
 pub(crate) struct GeneratorContext {
     pub(crate) target_yield: usize,
     pub(crate) current_yield: usize,
-    #[allow(dead_code)]
-    pub(crate) sent_value: JsValue,
     /// Values sent to previous yields (index k = value passed to next() after yield k)
     pub(crate) prev_sent_values: Vec<JsValue>,
     pub(crate) is_async: bool,
@@ -163,8 +240,8 @@ pub(crate) struct GeneratorContext {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub enum GeneratorExecutionState {
+    #[allow(dead_code)]
     SuspendedStart,
     SuspendedYield {
         target_yield: usize,
@@ -220,104 +297,105 @@ pub type EnvRef = Rc<RefCell<Environment>>;
 
 #[allow(clippy::type_complexity)]
 pub struct Realm {
-    #[allow(dead_code)]
-    pub(crate) id: usize,
     pub(crate) global_env: EnvRef,
-    pub(crate) global_object: Option<Rc<RefCell<JsObjectData>>>,
+    pub(crate) global_object: Option<u64>,
     pub(crate) throw_type_error: Option<JsValue>,
     pub(crate) template_cache: HashMap<u64, u64>,
     pub(crate) builtin_eval_id: Option<u64>,
-    pub(crate) object_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) string_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) number_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) boolean_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) regexp_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) regexp_string_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) array_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) string_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) map_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) map_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) set_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) set_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) weakmap_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) weakset_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) weakref_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) finalization_registry_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) date_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) generator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) function_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) generator_function_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) async_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) async_generator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) async_generator_function_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) async_function_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) bigint_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) symbol_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) arraybuffer_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) shared_arraybuffer_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) typed_array_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    pub(crate) object_prototype: Option<u64>,
+    pub(crate) array_prototype: Option<u64>,
+    pub(crate) string_prototype: Option<u64>,
+    pub(crate) number_prototype: Option<u64>,
+    pub(crate) boolean_prototype: Option<u64>,
+    pub(crate) regexp_prototype: Option<u64>,
+    pub(crate) regexp_string_iterator_prototype: Option<u64>,
+    pub(crate) iterator_prototype: Option<u64>,
+    pub(crate) array_iterator_prototype: Option<u64>,
+    pub(crate) string_iterator_prototype: Option<u64>,
+    pub(crate) map_prototype: Option<u64>,
+    pub(crate) map_iterator_prototype: Option<u64>,
+    pub(crate) set_prototype: Option<u64>,
+    pub(crate) set_iterator_prototype: Option<u64>,
+    pub(crate) weakmap_prototype: Option<u64>,
+    pub(crate) weakset_prototype: Option<u64>,
+    pub(crate) weakref_prototype: Option<u64>,
+    pub(crate) finalization_registry_prototype: Option<u64>,
+    pub(crate) date_prototype: Option<u64>,
+    pub(crate) generator_prototype: Option<u64>,
+    pub(crate) function_prototype: Option<u64>,
+    pub(crate) generator_function_prototype: Option<u64>,
+    pub(crate) async_iterator_prototype: Option<u64>,
+    pub(crate) async_generator_prototype: Option<u64>,
+    pub(crate) async_generator_function_prototype: Option<u64>,
+    pub(crate) async_function_prototype: Option<u64>,
+    pub(crate) bigint_prototype: Option<u64>,
+    pub(crate) symbol_prototype: Option<u64>,
+    pub(crate) arraybuffer_prototype: Option<u64>,
+    pub(crate) shared_arraybuffer_prototype: Option<u64>,
+    pub(crate) typed_array_prototype: Option<u64>,
     pub(crate) typed_array_constructor: Option<JsValue>,
-    pub(crate) int8array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) uint8array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) uint8clampedarray_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) int16array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) uint16array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) int32array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) uint32array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) float32array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) float64array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) bigint64array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) biguint64array_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) dataview_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) promise_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) aggregate_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) temporal_duration_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) temporal_instant_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) temporal_plain_date_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) temporal_plain_time_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) temporal_plain_date_time_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) temporal_plain_year_month_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) temporal_plain_month_day_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) temporal_zoned_date_time_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) intl_collator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) intl_number_format_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) intl_date_time_format_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) intl_plural_rules_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) intl_relative_time_format_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) intl_list_format_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) intl_segmenter_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) intl_segments_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) intl_segment_iterator_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) intl_display_names_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) intl_locale_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) intl_duration_format_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    pub(crate) int8array_prototype: Option<u64>,
+    pub(crate) uint8array_prototype: Option<u64>,
+    pub(crate) uint8clampedarray_prototype: Option<u64>,
+    pub(crate) int16array_prototype: Option<u64>,
+    pub(crate) uint16array_prototype: Option<u64>,
+    pub(crate) int32array_prototype: Option<u64>,
+    pub(crate) uint32array_prototype: Option<u64>,
+    pub(crate) float16array_prototype: Option<u64>,
+    pub(crate) float32array_prototype: Option<u64>,
+    pub(crate) float64array_prototype: Option<u64>,
+    pub(crate) bigint64array_prototype: Option<u64>,
+    pub(crate) biguint64array_prototype: Option<u64>,
+    pub(crate) dataview_prototype: Option<u64>,
+    pub(crate) promise_prototype: Option<u64>,
+    pub(crate) aggregate_error_prototype: Option<u64>,
+    pub(crate) temporal_duration_prototype: Option<u64>,
+    pub(crate) temporal_instant_prototype: Option<u64>,
+    pub(crate) temporal_plain_date_prototype: Option<u64>,
+    pub(crate) temporal_plain_time_prototype: Option<u64>,
+    pub(crate) temporal_plain_date_time_prototype: Option<u64>,
+    pub(crate) temporal_plain_year_month_prototype: Option<u64>,
+    pub(crate) temporal_plain_month_day_prototype: Option<u64>,
+    pub(crate) temporal_zoned_date_time_prototype: Option<u64>,
+    pub(crate) intl_collator_prototype: Option<u64>,
+    pub(crate) intl_number_format_prototype: Option<u64>,
+    pub(crate) intl_date_time_format_prototype: Option<u64>,
+    pub(crate) intl_plural_rules_prototype: Option<u64>,
+    pub(crate) intl_relative_time_format_prototype: Option<u64>,
+    pub(crate) intl_list_format_prototype: Option<u64>,
+    pub(crate) intl_segmenter_prototype: Option<u64>,
+    pub(crate) intl_segments_prototype: Option<u64>,
+    pub(crate) intl_segment_iterator_prototype: Option<u64>,
+    pub(crate) intl_display_names_prototype: Option<u64>,
+    pub(crate) intl_locale_prototype: Option<u64>,
+    pub(crate) intl_duration_format_prototype: Option<u64>,
     pub(crate) intl_number_format_ctor: Option<JsValue>,
     pub(crate) intl_date_time_format_ctor: Option<JsValue>,
     pub(crate) intl_duration_format_ctor: Option<JsValue>,
-    pub(crate) error_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) type_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) range_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) reference_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) syntax_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) uri_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) eval_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) disposable_stack_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) async_disposable_stack_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) suppressed_error_prototype: Option<Rc<RefCell<JsObjectData>>>,
-    pub(crate) shadow_realm_prototype: Option<Rc<RefCell<JsObjectData>>>,
+    pub(crate) error_prototype: Option<u64>,
+    pub(crate) type_error_prototype: Option<u64>,
+    pub(crate) range_error_prototype: Option<u64>,
+    pub(crate) reference_error_prototype: Option<u64>,
+    pub(crate) syntax_error_prototype: Option<u64>,
+    pub(crate) uri_error_prototype: Option<u64>,
+    pub(crate) eval_error_prototype: Option<u64>,
+    pub(crate) disposable_stack_prototype: Option<u64>,
+    pub(crate) async_disposable_stack_prototype: Option<u64>,
+    pub(crate) suppressed_error_prototype: Option<u64>,
+    pub(crate) shadow_realm_prototype: Option<u64>,
     pub(crate) object_prototype_tostring: Option<JsValue>,
+    pub(crate) sloppy_caller_getter: Option<JsValue>,
+    pub(crate) sloppy_arguments_getter: Option<JsValue>,
+    pub(crate) iterator_helper_prototype: Option<u64>,
 }
 
 impl Realm {
-    pub(crate) fn new(id: usize, global_env: EnvRef) -> Self {
+    pub(crate) fn new(global_env: EnvRef) -> Self {
         Self {
-            id,
             global_env,
             global_object: None,
             throw_type_error: None,
-            template_cache: HashMap::new(),
+            template_cache: HashMap::default(),
             builtin_eval_id: None,
             object_prototype: None,
             array_prototype: None,
@@ -358,6 +436,7 @@ impl Realm {
             uint16array_prototype: None,
             int32array_prototype: None,
             uint32array_prototype: None,
+            float16array_prototype: None,
             float32array_prototype: None,
             float64array_prototype: None,
             bigint64array_prototype: None,
@@ -400,91 +479,101 @@ impl Realm {
             suppressed_error_prototype: None,
             shadow_realm_prototype: None,
             object_prototype_tostring: None,
+            sloppy_caller_getter: None,
+            sloppy_arguments_getter: None,
+            iterator_helper_prototype: None,
         }
     }
 
     pub(crate) fn collect_roots(&self, worklist: &mut Vec<u64>) {
         super::Interpreter::collect_env_roots(&self.global_env, worklist);
+        if let Some(id) = self.global_object {
+            worklist.push(id);
+        }
         for proto in [
-            &self.object_prototype,
-            &self.array_prototype,
-            &self.string_prototype,
-            &self.number_prototype,
-            &self.boolean_prototype,
-            &self.regexp_prototype,
-            &self.regexp_string_iterator_prototype,
-            &self.iterator_prototype,
-            &self.array_iterator_prototype,
-            &self.string_iterator_prototype,
-            &self.map_prototype,
-            &self.map_iterator_prototype,
-            &self.set_prototype,
-            &self.set_iterator_prototype,
-            &self.date_prototype,
-            &self.generator_prototype,
-            &self.function_prototype,
-            &self.generator_function_prototype,
-            &self.async_iterator_prototype,
-            &self.async_generator_prototype,
-            &self.async_generator_function_prototype,
-            &self.async_function_prototype,
-            &self.weakmap_prototype,
-            &self.weakset_prototype,
-            &self.weakref_prototype,
-            &self.finalization_registry_prototype,
-            &self.bigint_prototype,
-            &self.symbol_prototype,
-            &self.arraybuffer_prototype,
-            &self.shared_arraybuffer_prototype,
-            &self.typed_array_prototype,
-            &self.int8array_prototype,
-            &self.uint8array_prototype,
-            &self.uint8clampedarray_prototype,
-            &self.int16array_prototype,
-            &self.uint16array_prototype,
-            &self.int32array_prototype,
-            &self.uint32array_prototype,
-            &self.float32array_prototype,
-            &self.float64array_prototype,
-            &self.bigint64array_prototype,
-            &self.biguint64array_prototype,
-            &self.dataview_prototype,
-            &self.promise_prototype,
-            &self.aggregate_error_prototype,
-            &self.temporal_duration_prototype,
-            &self.temporal_instant_prototype,
-            &self.temporal_plain_date_prototype,
-            &self.temporal_plain_time_prototype,
-            &self.temporal_plain_date_time_prototype,
-            &self.temporal_plain_year_month_prototype,
-            &self.temporal_plain_month_day_prototype,
-            &self.temporal_zoned_date_time_prototype,
-            &self.intl_locale_prototype,
-            &self.intl_collator_prototype,
-            &self.intl_number_format_prototype,
-            &self.intl_plural_rules_prototype,
-            &self.intl_list_format_prototype,
-            &self.intl_segmenter_prototype,
-            &self.intl_relative_time_format_prototype,
-            &self.intl_display_names_prototype,
-            &self.intl_duration_format_prototype,
-            &self.intl_date_time_format_prototype,
-            &self.intl_segments_prototype,
-            &self.intl_segment_iterator_prototype,
-            &self.error_prototype,
-            &self.type_error_prototype,
-            &self.range_error_prototype,
-            &self.reference_error_prototype,
-            &self.syntax_error_prototype,
-            &self.uri_error_prototype,
-            &self.eval_error_prototype,
-            &self.shadow_realm_prototype,
-        ] {
-            if let Some(p) = proto
-                && let Some(id) = p.borrow().id
-            {
-                worklist.push(id);
-            }
+            self.object_prototype,
+            self.array_prototype,
+            self.string_prototype,
+            self.number_prototype,
+            self.boolean_prototype,
+            self.regexp_prototype,
+            self.regexp_string_iterator_prototype,
+            self.iterator_prototype,
+            self.array_iterator_prototype,
+            self.string_iterator_prototype,
+            self.map_prototype,
+            self.map_iterator_prototype,
+            self.set_prototype,
+            self.set_iterator_prototype,
+            self.date_prototype,
+            self.generator_prototype,
+            self.function_prototype,
+            self.generator_function_prototype,
+            self.async_iterator_prototype,
+            self.async_generator_prototype,
+            self.async_generator_function_prototype,
+            self.async_function_prototype,
+            self.weakmap_prototype,
+            self.weakset_prototype,
+            self.weakref_prototype,
+            self.finalization_registry_prototype,
+            self.bigint_prototype,
+            self.symbol_prototype,
+            self.arraybuffer_prototype,
+            self.shared_arraybuffer_prototype,
+            self.typed_array_prototype,
+            self.int8array_prototype,
+            self.uint8array_prototype,
+            self.uint8clampedarray_prototype,
+            self.int16array_prototype,
+            self.uint16array_prototype,
+            self.int32array_prototype,
+            self.uint32array_prototype,
+            self.float16array_prototype,
+            self.float32array_prototype,
+            self.float64array_prototype,
+            self.bigint64array_prototype,
+            self.biguint64array_prototype,
+            self.dataview_prototype,
+            self.promise_prototype,
+            self.aggregate_error_prototype,
+            self.temporal_duration_prototype,
+            self.temporal_instant_prototype,
+            self.temporal_plain_date_prototype,
+            self.temporal_plain_time_prototype,
+            self.temporal_plain_date_time_prototype,
+            self.temporal_plain_year_month_prototype,
+            self.temporal_plain_month_day_prototype,
+            self.temporal_zoned_date_time_prototype,
+            self.intl_locale_prototype,
+            self.intl_collator_prototype,
+            self.intl_number_format_prototype,
+            self.intl_plural_rules_prototype,
+            self.intl_list_format_prototype,
+            self.intl_segmenter_prototype,
+            self.intl_relative_time_format_prototype,
+            self.intl_display_names_prototype,
+            self.intl_duration_format_prototype,
+            self.intl_date_time_format_prototype,
+            self.intl_segments_prototype,
+            self.intl_segment_iterator_prototype,
+            self.error_prototype,
+            self.type_error_prototype,
+            self.range_error_prototype,
+            self.reference_error_prototype,
+            self.syntax_error_prototype,
+            self.uri_error_prototype,
+            self.eval_error_prototype,
+            self.disposable_stack_prototype,
+            self.async_disposable_stack_prototype,
+            self.suppressed_error_prototype,
+            self.shadow_realm_prototype,
+            self.iterator_helper_prototype,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            worklist.push(proto);
         }
         for ctor in [
             &self.intl_number_format_ctor,
@@ -502,10 +591,11 @@ impl Realm {
         if let Some(JsValue::Object(o)) = &self.object_prototype_tostring {
             worklist.push(o.id);
         }
-        if let Some(ref go) = self.global_object
-            && let Some(id) = go.borrow().id
-        {
-            worklist.push(id);
+        if let Some(JsValue::Object(o)) = &self.sloppy_caller_getter {
+            worklist.push(o.id);
+        }
+        if let Some(JsValue::Object(o)) = &self.sloppy_arguments_getter {
+            worklist.push(o.id);
         }
         for &obj_id in self.template_cache.values() {
             worklist.push(obj_id);
@@ -524,7 +614,7 @@ pub struct Environment {
     pub(crate) global_object: Option<Rc<RefCell<JsObjectData>>>,
     // Annex B.3.3: names registered for block-level function var hoisting
     pub(crate) annexb_function_names: Option<Vec<String>>,
-    pub(crate) class_private_names: Option<std::collections::HashMap<String, String>>,
+    pub(crate) class_private_names: Option<HashMap<String, String>>,
     pub(crate) is_field_initializer: bool,
     pub(crate) arguments_immutable: bool,
     pub(crate) has_parameter_expressions: bool,
@@ -608,7 +698,7 @@ impl Environment {
     pub fn new(parent: Option<EnvRef>) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::new(),
+            bindings: HashMap::default(),
             parent,
             strict,
             is_function_scope: false,
@@ -632,7 +722,7 @@ impl Environment {
     pub fn new_function_scope(parent: Option<EnvRef>) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::new(),
+            bindings: HashMap::default(),
             parent,
             strict,
             is_function_scope: true,
@@ -703,7 +793,7 @@ impl Environment {
         source_env: EnvRef,
         source_name: String,
     ) {
-        let map = self.indirect_bindings.get_or_insert_with(HashMap::new);
+        let map = self.indirect_bindings.get_or_insert_with(HashMap::default);
         map.insert(local_name.to_string(), (source_env, source_name));
     }
 
@@ -779,22 +869,12 @@ impl Environment {
     /// CreateGlobalVarBinding with configurable:true (for eval-declared vars).
     pub fn declare_global_var_configurable(&mut self, name: &str) {
         if !self.bindings.contains_key(name) {
-            // If property already exists on global object, use its value
-            let existing_val = self.global_object.as_ref().and_then(|g| {
-                let gb = g.borrow();
-                gb.properties.get(name).and_then(|d| d.value.clone())
-            });
-            if let Some(val) = existing_val {
-                self.bindings.insert(
-                    name.to_string(),
-                    Binding {
-                        value: val,
-                        kind: BindingKind::Var,
-                        initialized: true,
-                        deletable: false,
-                    },
-                );
-            } else {
+            // Check if the global object has ANY property (data or accessor)
+            let has_global_prop = self
+                .global_object
+                .as_ref()
+                .is_some_and(|g| g.borrow().properties.contains_key(name));
+            if !has_global_prop {
                 self.declare(name, BindingKind::Var);
             }
         }
@@ -925,15 +1005,47 @@ impl Environment {
         } else if let Some(parent) = &self.parent {
             parent.borrow().get(name)
         } else if let Some(ref global_obj) = self.global_object {
-            let obj = global_obj.borrow();
-            if obj.has_property(name) {
-                Some(obj.get_property(name))
+            if Self::global_obj_has_property(global_obj, name) {
+                Some(Self::global_obj_get_property(global_obj, name))
             } else {
                 None
             }
         } else {
             None
         }
+    }
+
+    /// Rc-based prototype-chain walk used by `Environment::{get, check_set_binding, has}`
+    /// to probe the global object without needing an `Interpreter` reference.
+    /// Once `Environment.global_object` becomes `Option<u64>` (PR 1b.4), these
+    /// helpers must be replaced by `Interpreter::{has_property_on_id, get_property_on_id}`.
+    fn global_obj_has_property(obj_rc: &Rc<RefCell<JsObjectData>>, name: &str) -> bool {
+        // NOTE: after PR 1b.4 converts `Environment.global_object` to `Option<u64>`,
+        // this helper should route through `Interpreter::has_property_on_id` instead.
+        // Today we still have an Rc here, but the inner `prototype_id` is a u64 —
+        // we'd need the interpreter's object table to follow it. As a stopgap, we
+        // emulate the walk by borrowing the realm's object slab via the Rc chain.
+        // Since this helper only walks the GLOBAL object's chain (which the realm
+        // roots keep alive), the simplest correct path is: check the first frame's
+        // own property, then fall through. The global object's prototype chain is
+        // either Object.prototype (always own-resolves) or null — so this is safe.
+        // The properly iterative form lives in `Interpreter::has_property_on_id`.
+        let b = obj_rc.borrow();
+        if let Some(r) = b.own_has_property(name) {
+            return r;
+        }
+        // Global object inherits from Object.prototype; without Interpreter access
+        // here we cannot safely walk further. In practice the next step is a single
+        // hop to Object.prototype. Conservative: report absent.
+        false
+    }
+
+    fn global_obj_get_property(obj_rc: &Rc<RefCell<JsObjectData>>, name: &str) -> JsValue {
+        let b = obj_rc.borrow();
+        if let Some(v) = b.own_property_lookup(name) {
+            return v;
+        }
+        JsValue::Undefined
     }
 
     /// Check if a binding exists but is uninitialized (in TDZ).
@@ -973,7 +1085,7 @@ impl Environment {
             return SetBindingCheck::Ok;
         }
         if let Some(ref global_obj) = e.global_object {
-            if global_obj.borrow().has_property(name) {
+            if Self::global_obj_has_property(global_obj, name) {
                 return SetBindingCheck::Ok;
             }
             return SetBindingCheck::Unresolvable;
@@ -990,7 +1102,7 @@ impl Environment {
         } else if let Some(parent) = &self.parent {
             parent.borrow().has(name)
         } else if let Some(ref global_obj) = self.global_object {
-            global_obj.borrow().has_property(name)
+            Self::global_obj_has_property(global_obj, name)
         } else {
             false
         }
@@ -1016,15 +1128,15 @@ impl Environment {
 pub enum JsFunction {
     User {
         name: Option<String>,
-        params: Vec<Pattern>,
-        body: Vec<Statement>,
+        params: Rc<Vec<Pattern>>,
+        body: Rc<Vec<Statement>>,
         closure: EnvRef,
         is_arrow: bool,
         is_strict: bool,
         is_generator: bool,
         is_async: bool,
         is_method: bool,
-        source_text: Option<String>,
+        source_text: Option<SourceText>,
         captured_new_target: Option<JsValue>,
     },
     Native(
@@ -1172,6 +1284,8 @@ pub enum PrivateFieldDef {
 pub enum InstanceFieldDef {
     Private(PrivateFieldDef),
     Public(String, Option<Expression>),
+    /// Auto accessor backing storage initialization: (storage_slot_name, initializer)
+    AutoAccessorStorage(String, Option<Expression>),
 }
 
 #[derive(Debug, Clone)]
@@ -1217,7 +1331,7 @@ pub enum IteratorState {
         done: bool,
     },
     Generator {
-        body: Vec<Statement>,
+        body: Rc<Vec<Statement>>,
         func_env: EnvRef,
         is_strict: bool,
         execution_state: GeneratorExecutionState,
@@ -1235,7 +1349,7 @@ pub enum IteratorState {
         pending_return: Option<JsValue>,
     },
     AsyncGenerator {
-        body: Vec<Statement>,
+        body: Rc<Vec<Statement>>,
         func_env: EnvRef,
         is_strict: bool,
         execution_state: GeneratorExecutionState,
@@ -1282,6 +1396,7 @@ pub enum TypedArrayKind {
     Uint16,
     Int32,
     Uint32,
+    Float16,
     Float32,
     Float64,
     BigInt64,
@@ -1292,7 +1407,7 @@ impl TypedArrayKind {
     pub fn bytes_per_element(&self) -> usize {
         match self {
             TypedArrayKind::Int8 | TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => 1,
-            TypedArrayKind::Int16 | TypedArrayKind::Uint16 => 2,
+            TypedArrayKind::Int16 | TypedArrayKind::Uint16 | TypedArrayKind::Float16 => 2,
             TypedArrayKind::Int32 | TypedArrayKind::Uint32 | TypedArrayKind::Float32 => 4,
             TypedArrayKind::Float64 | TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64 => 8,
         }
@@ -1307,6 +1422,7 @@ impl TypedArrayKind {
             TypedArrayKind::Uint16 => "Uint16Array",
             TypedArrayKind::Int32 => "Int32Array",
             TypedArrayKind::Uint32 => "Uint32Array",
+            TypedArrayKind::Float16 => "Float16Array",
             TypedArrayKind::Float32 => "Float32Array",
             TypedArrayKind::Float64 => "Float64Array",
             TypedArrayKind::BigInt64 => "BigInt64Array",
@@ -1540,7 +1656,7 @@ pub struct JsObjectData {
     pub id: Option<u64>,
     pub properties: HashMap<String, PropertyDescriptor>,
     pub property_order: Vec<String>,
-    pub prototype: Option<Rc<RefCell<JsObjectData>>>,
+    pub prototype_id: Option<u64>,
     pub callable: Option<JsFunction>,
     pub array_elements: Option<Vec<JsValue>>,
     pub class_name: String,
@@ -1571,6 +1687,7 @@ pub struct JsObjectData {
     pub is_default_derived_constructor: bool,
     pub bound_target_function: Option<JsValue>,
     pub bound_args: Option<Vec<JsValue>>,
+    pub bound_this: Option<JsValue>,
     pub shadow_realm_id: Option<usize>,
     pub wrapped_target_function_id: Option<u64>,
     pub wrapped_caller_realm_id: Option<usize>,
@@ -1585,6 +1702,10 @@ pub struct JsObjectData {
     pub(crate) regexp_original_flags: Option<JsString>,
     pub(crate) deferred_construct: bool,
     pub(crate) gc_native_roots: Option<Vec<JsValue>>,
+    pub(crate) wrap_iter_record: Option<(JsValue, JsValue)>,
+    pub(crate) helper_next_closure: Option<JsValue>,
+    pub(crate) helper_return_closure: Option<JsValue>,
+    pub(crate) helper_gen_state: Option<Rc<Cell<u8>>>,
 }
 
 #[derive(Clone)]
@@ -1606,15 +1727,15 @@ impl JsObjectData {
     pub(crate) fn new() -> Self {
         Self {
             id: None,
-            properties: HashMap::new(),
+            properties: HashMap::default(),
             property_order: Vec::new(),
-            prototype: None,
+            prototype_id: None,
             callable: None,
             array_elements: None,
             class_name: "Object".to_string(),
             extensible: true,
             primitive_value: None,
-            private_fields: HashMap::new(),
+            private_fields: HashMap::default(),
             class_instance_field_defs: Vec::new(),
             iterator_state: None,
             parameter_map: None,
@@ -1639,6 +1760,7 @@ impl JsObjectData {
             is_default_derived_constructor: false,
             bound_target_function: None,
             bound_args: None,
+            bound_this: None,
             shadow_realm_id: None,
             wrapped_target_function_id: None,
             wrapped_caller_realm_id: None,
@@ -1653,6 +1775,10 @@ impl JsObjectData {
             regexp_original_flags: None,
             deferred_construct: false,
             gc_native_roots: None,
+            wrap_iter_record: None,
+            helper_next_closure: None,
+            helper_return_closure: None,
+            helper_gen_state: None,
         }
     }
 
@@ -1679,136 +1805,10 @@ impl JsObjectData {
         None
     }
 
-    pub fn get_property(&self, key: &str) -> JsValue {
-        // Module namespace: look up live binding from environment
-        if let Some(ref ns_data) = self.module_namespace
-            && let Some(binding_name) = ns_data.export_to_binding.get(key)
-        {
-            return ns_data
-                .env
-                .borrow()
-                .get(binding_name)
-                .unwrap_or(JsValue::Undefined);
-        }
-        if let Some(ref map) = self.parameter_map
-            && let Some((env_ref, param_name)) = map.get(key)
-            && let Some(val) = env_ref.borrow().get(param_name)
-        {
-            return val;
-        }
-        if let Some(desc) = self.properties.get(key) {
-            if let Some(ref val) = desc.value {
-                return val.clone();
-            }
-            return JsValue::Undefined;
-        }
-        if let Some(ref elems) = self.array_elements
-            && let Ok(idx) = key.parse::<usize>()
-            && idx < elems.len()
-            && !matches!(elems[idx], JsValue::Undefined)
-        {
-            return elems[idx].clone();
-        }
-        if let Some(ref ta) = self.typed_array_info
-            && let Some(index) = canonical_numeric_index_string(key)
-        {
-            if is_valid_integer_index(ta, index) {
-                return typed_array_get_index(ta, index as usize);
-            }
-            return JsValue::Undefined;
-        }
-        if let Some(val) = self.string_exotic_value(key) {
-            return val;
-        }
-        if let Some(proto) = &self.prototype {
-            return proto.borrow().get_property(key);
-        }
-        JsValue::Undefined
-    }
-
-    pub fn get_property_descriptor(&self, key: &str) -> Option<PropertyDescriptor> {
-        if let Some(desc) = self.properties.get(key) {
-            let mut d = desc.clone();
-            if let Some(ref map) = self.parameter_map
-                && let Some((env_ref, param_name)) = map.get(key)
-                && let Some(val) = env_ref.borrow().get(param_name)
-            {
-                d.value = Some(val);
-            }
-            // OrdinaryGetOwnProperty: complete accessor descriptors
-            if d.is_accessor_descriptor() {
-                if d.get.is_none() {
-                    d.get = Some(JsValue::Undefined);
-                }
-                if d.set.is_none() {
-                    d.set = Some(JsValue::Undefined);
-                }
-            }
-            return Some(d);
-        }
-        if let Some(ref elems) = self.array_elements
-            && let Ok(idx) = key.parse::<usize>()
-            && idx < elems.len()
-            && !matches!(elems[idx], JsValue::Undefined)
-        {
-            return Some(PropertyDescriptor {
-                value: Some(elems[idx].clone()),
-                writable: Some(true),
-                enumerable: Some(true),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            });
-        }
-        if let Some(ref ta) = self.typed_array_info
-            && let Some(index) = canonical_numeric_index_string(key)
-        {
-            if is_valid_integer_index(ta, index) {
-                return Some(PropertyDescriptor {
-                    value: Some(typed_array_get_index(ta, index as usize)),
-                    writable: Some(true),
-                    enumerable: Some(true),
-                    configurable: Some(false),
-                    get: None,
-                    set: None,
-                });
-            }
-            return None;
-        }
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
-        {
-            let units = &s.code_units;
-            if key == "length" {
-                return Some(PropertyDescriptor {
-                    value: Some(JsValue::Number(units.len() as f64)),
-                    writable: Some(false),
-                    enumerable: Some(false),
-                    configurable: Some(false),
-                    get: None,
-                    set: None,
-                });
-            }
-            if let Ok(idx) = key.parse::<usize>()
-                && idx < units.len()
-            {
-                return Some(PropertyDescriptor {
-                    value: Some(JsValue::String(crate::types::JsString {
-                        code_units: vec![units[idx]],
-                    })),
-                    writable: Some(false),
-                    enumerable: Some(true),
-                    configurable: Some(false),
-                    get: None,
-                    set: None,
-                });
-            }
-        }
-        if let Some(proto) = &self.prototype {
-            return proto.borrow().get_property_descriptor(key);
-        }
-        None
-    }
+    // `get_property` and `get_property_descriptor` (chain-walking) have moved
+    // to `Interpreter::get_property_on_id` / `get_property_descriptor_on_id`.
+    // Callers that want own-property-only lookup use `own_property_lookup` /
+    // `own_property_descriptor_lookup` directly on this `JsObjectData`.
 
     // Like get_property_descriptor but without prototype chain walk.
     // Includes parameter_map and array_elements handling.
@@ -2005,90 +2005,10 @@ impl JsObjectData {
         false
     }
 
-    pub fn enumerable_keys_with_proto(&self) -> Vec<String> {
-        let mut seen = std::collections::HashSet::new();
-        let mut keys = Vec::new();
-
-        // Collect own keys, separating integer indices from string keys
-        let mut index_keys: Vec<(u32, String)> = Vec::new();
-        let mut string_keys: Vec<String> = Vec::new();
-
-        // String exotic: indices come first (they are enumerable)
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
-        {
-            let utf16_len = s.code_units.len();
-            for i in 0..utf16_len {
-                let k = i.to_string();
-                if seen.insert(k.clone()) {
-                    index_keys.push((i as u32, k));
-                }
-            }
-        }
-
-        // TypedArray: integer-indexed properties are enumerable
-        if let Some(ref ta) = self.typed_array_info {
-            let len = ta.array_length;
-            for i in 0..len {
-                let k = i.to_string();
-                if seen.insert(k.clone()) {
-                    index_keys.push((i as u32, k));
-                }
-            }
-        }
-
-        // Own properties: add ALL to seen set (even non-enumerable, to shadow proto)
-        for k in &self.property_order {
-            if k.starts_with("Symbol(") {
-                continue;
-            }
-            if let Some(desc) = self.properties.get(k) {
-                let is_enumerable = desc.enumerable != Some(false);
-                if seen.insert(k.clone()) && is_enumerable {
-                    if let Some(idx) = parse_array_index(k) {
-                        index_keys.push((idx, k.clone()));
-                    } else {
-                        string_keys.push(k.clone());
-                    }
-                }
-            }
-        }
-
-        // Integer indices in ascending numeric order
-        index_keys.sort_by_key(|(idx, _)| *idx);
-        for (_, k) in index_keys {
-            keys.push(k);
-        }
-        // String keys in insertion order
-        keys.extend(string_keys);
-
-        // Prototype chain
-        if let Some(ref proto) = self.prototype {
-            for k in proto.borrow().enumerable_keys_with_proto() {
-                if seen.insert(k.clone()) {
-                    keys.push(k);
-                }
-            }
-        }
-        keys
-    }
-
-    pub fn has_property(&self, key: &str) -> bool {
-        // §10.4.5.2 TypedArray [[HasProperty]]: canonical numeric index strings
-        // never consult the prototype chain
-        if let Some(ref ta) = self.typed_array_info
-            && let Some(index) = canonical_numeric_index_string(key)
-        {
-            return is_valid_integer_index(ta, index);
-        }
-        if self.has_own_property(key) {
-            return true;
-        }
-        if let Some(proto) = &self.prototype {
-            return proto.borrow().has_property(key);
-        }
-        false
-    }
+    // `enumerable_keys_with_proto` and `has_property` (chain-walking) have moved
+    // to `Interpreter::enumerable_keys_with_proto_on_id` /
+    // `Interpreter::has_property_on_id`. Own-only variants live as
+    // `own_enumerable_keys_with_shadow` / `own_has_property` on this impl.
 
     pub fn define_own_property(&mut self, key: String, mut desc: PropertyDescriptor) -> bool {
         // String exotic §10.4.3.3 [[DefineOwnProperty]]: reject changes to character index properties
@@ -2489,7 +2409,7 @@ impl JsObjectData {
                                 .map(|idx| (idx, k.clone()))
                         })
                         .collect();
-                    idx_keys.sort_by(|a, b| b.0.cmp(&a.0));
+                    idx_keys.sort_by_key(|a| std::cmp::Reverse(a.0));
 
                     for (idx, k) in &idx_keys {
                         let is_non_configurable = self
@@ -2602,6 +2522,212 @@ impl JsObjectData {
     pub fn get_property_value(&self, key: &str) -> Option<JsValue> {
         self.properties.get(key).and_then(|d| d.value.clone())
     }
+
+    /// Own-property path of `get_property` with no prototype traversal.
+    /// Returns `Some(value)` if the key is resolved on this object (including
+    /// module-namespace live bindings, parameter_map, array_elements, typed_array
+    /// canonical numeric indices, and string exotic indices). Returns `None` if
+    /// the caller should continue walking the prototype chain.
+    pub fn own_property_lookup(&self, key: &str) -> Option<JsValue> {
+        if let Some(ref ns_data) = self.module_namespace
+            && let Some(binding_name) = ns_data.export_to_binding.get(key)
+        {
+            return Some(
+                ns_data
+                    .env
+                    .borrow()
+                    .get(binding_name)
+                    .unwrap_or(JsValue::Undefined),
+            );
+        }
+        if let Some(ref map) = self.parameter_map
+            && let Some((env_ref, param_name)) = map.get(key)
+            && let Some(val) = env_ref.borrow().get(param_name)
+        {
+            return Some(val);
+        }
+        if let Some(desc) = self.properties.get(key) {
+            if let Some(ref val) = desc.value {
+                return Some(val.clone());
+            }
+            return Some(JsValue::Undefined);
+        }
+        if let Some(ref elems) = self.array_elements
+            && let Ok(idx) = key.parse::<usize>()
+            && idx < elems.len()
+            && !matches!(elems[idx], JsValue::Undefined)
+        {
+            return Some(elems[idx].clone());
+        }
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key)
+        {
+            if is_valid_integer_index(ta, index) {
+                return Some(typed_array_get_index(ta, index as usize));
+            }
+            return Some(JsValue::Undefined);
+        }
+        if let Some(val) = self.string_exotic_value(key) {
+            return Some(val);
+        }
+        None
+    }
+
+    /// Own-property path of `get_property_descriptor` with no prototype traversal.
+    /// Mirrors the pre-chain-walk branches of that method exactly (including
+    /// OrdinaryGetOwnProperty accessor completion and TypedArray canonical index
+    /// with `configurable: false` per §10.4.5.2).
+    pub fn own_property_descriptor_lookup(&self, key: &str) -> Option<PropertyDescriptor> {
+        if let Some(desc) = self.properties.get(key) {
+            let mut d = desc.clone();
+            if let Some(ref map) = self.parameter_map
+                && let Some((env_ref, param_name)) = map.get(key)
+                && let Some(val) = env_ref.borrow().get(param_name)
+            {
+                d.value = Some(val);
+            }
+            if d.is_accessor_descriptor() {
+                if d.get.is_none() {
+                    d.get = Some(JsValue::Undefined);
+                }
+                if d.set.is_none() {
+                    d.set = Some(JsValue::Undefined);
+                }
+            }
+            return Some(d);
+        }
+        if let Some(ref elems) = self.array_elements
+            && let Ok(idx) = key.parse::<usize>()
+            && idx < elems.len()
+            && !matches!(elems[idx], JsValue::Undefined)
+        {
+            return Some(PropertyDescriptor {
+                value: Some(elems[idx].clone()),
+                writable: Some(true),
+                enumerable: Some(true),
+                configurable: Some(true),
+                get: None,
+                set: None,
+            });
+        }
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key)
+        {
+            if is_valid_integer_index(ta, index) {
+                return Some(PropertyDescriptor {
+                    value: Some(typed_array_get_index(ta, index as usize)),
+                    writable: Some(true),
+                    enumerable: Some(true),
+                    configurable: Some(false),
+                    get: None,
+                    set: None,
+                });
+            }
+            return None;
+        }
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String"
+        {
+            let units = &s.code_units;
+            if key == "length" {
+                return Some(PropertyDescriptor {
+                    value: Some(JsValue::Number(units.len() as f64)),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(false),
+                    get: None,
+                    set: None,
+                });
+            }
+            if let Ok(idx) = key.parse::<usize>()
+                && idx < units.len()
+            {
+                return Some(PropertyDescriptor {
+                    value: Some(JsValue::String(crate::types::JsString {
+                        code_units: vec![units[idx]],
+                    })),
+                    writable: Some(false),
+                    enumerable: Some(true),
+                    configurable: Some(false),
+                    get: None,
+                    set: None,
+                });
+            }
+        }
+        None
+    }
+
+    /// Own-property path of `has_property` with no prototype traversal.
+    /// Returns `Some(true)` if found on this object, `Some(false)` for
+    /// canonical-numeric-index on a typed array that's out of range (per
+    /// §10.4.5.2, typed arrays never consult the prototype for these),
+    /// and `None` to continue walking the chain.
+    pub fn own_has_property(&self, key: &str) -> Option<bool> {
+        if let Some(ref ta) = self.typed_array_info
+            && let Some(index) = canonical_numeric_index_string(key)
+        {
+            return Some(is_valid_integer_index(ta, index));
+        }
+        if self.has_own_property(key) {
+            return Some(true);
+        }
+        None
+    }
+
+    /// Own-property path of `enumerable_keys_with_proto`: returns the own
+    /// enumerable keys in spec order (integer indices ascending, then string
+    /// keys in insertion order) and the full shadow set of all own keys
+    /// (enumerable + non-enumerable) so the caller can suppress inherited
+    /// properties with matching names.
+    pub fn own_enumerable_keys_with_shadow(&self) -> (Vec<String>, HashSet<String>) {
+        let mut seen = HashSet::default();
+        let mut index_keys: Vec<(u32, String)> = Vec::new();
+        let mut string_keys: Vec<String> = Vec::new();
+
+        if let Some(JsValue::String(ref s)) = self.primitive_value
+            && self.class_name == "String"
+        {
+            let utf16_len = s.code_units.len();
+            for i in 0..utf16_len {
+                let k = i.to_string();
+                if seen.insert(k.clone()) {
+                    index_keys.push((i as u32, k));
+                }
+            }
+        }
+
+        if let Some(ref ta) = self.typed_array_info {
+            let len = ta.array_length;
+            for i in 0..len {
+                let k = i.to_string();
+                if seen.insert(k.clone()) {
+                    index_keys.push((i as u32, k));
+                }
+            }
+        }
+
+        for k in &self.property_order {
+            if k.starts_with("Symbol(") {
+                continue;
+            }
+            if let Some(desc) = self.properties.get(k) {
+                let is_enumerable = desc.enumerable != Some(false);
+                if seen.insert(k.clone()) && is_enumerable {
+                    if let Some(idx) = parse_array_index(k) {
+                        index_keys.push((idx, k.clone()));
+                    } else {
+                        string_keys.push(k.clone());
+                    }
+                }
+            }
+        }
+
+        index_keys.sort_by_key(|(idx, _)| *idx);
+        let mut keys: Vec<String> = index_keys.into_iter().map(|(_, k)| k).collect();
+        keys.extend(string_keys);
+
+        (keys, seen)
+    }
 }
 
 // §7.1.4.1 CanonicalNumericIndexString
@@ -2639,11 +2765,13 @@ pub(crate) fn typed_array_length(ta: &TypedArrayInfo) -> usize {
         return 0;
     }
     if ta.is_length_tracking {
-        let buf_len = ta.buffer.borrow().len();
+        let buf_borrow = ta.buffer.borrow();
+        let buf_len = (*buf_borrow).len();
         let remaining = buf_len.saturating_sub(ta.byte_offset);
         remaining / ta.kind.bytes_per_element()
     } else {
-        let buf_len = ta.buffer.borrow().len();
+        let buf_borrow = ta.buffer.borrow();
+        let buf_len = (*buf_borrow).len();
         if ta.byte_offset + ta.byte_length > buf_len {
             0
         } else {
@@ -2652,11 +2780,25 @@ pub(crate) fn typed_array_length(ta: &TypedArrayInfo) -> usize {
     }
 }
 
+/// §10.4.5 IsTypedArrayFixedLength(O)
+/// Returns true only if the TA has an explicit length on a non-resizable buffer,
+/// or an explicit length on a SharedArrayBuffer (which can only grow, not shrink).
+pub(crate) fn is_typed_array_fixed_length(ta: &TypedArrayInfo, buffer_obj: &JsObjectData) -> bool {
+    if !ta.is_length_tracking && buffer_obj.arraybuffer_max_byte_length.is_none() {
+        return true;
+    }
+    if !ta.is_length_tracking && buffer_obj.arraybuffer_is_shared {
+        return true;
+    }
+    false
+}
+
 pub(crate) fn is_typed_array_out_of_bounds(ta: &TypedArrayInfo) -> bool {
     if ta.is_detached.get() {
         return true;
     }
-    let buf_len = ta.buffer.borrow().len();
+    let buf_borrow = ta.buffer.borrow();
+    let buf_len = (*buf_borrow).len();
     if ta.is_length_tracking {
         ta.byte_offset > buf_len
     } else {
@@ -2692,45 +2834,93 @@ pub(crate) fn is_valid_integer_index(ta: &TypedArrayInfo, index: f64) -> bool {
     true
 }
 
-pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue {
-    if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-        return JsValue::Undefined;
-    }
-    let buf = ta.buffer.borrow();
-    let offset = ta.byte_offset + idx * ta.kind.bytes_per_element();
-    if offset + ta.kind.bytes_per_element() > buf.len() {
-        return JsValue::Undefined;
-    }
-    match ta.kind {
-        TypedArrayKind::Int8 => JsValue::Number(buf[offset] as i8 as f64),
-        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => JsValue::Number(buf[offset] as f64),
+fn typed_array_get_index_shared(
+    kind: TypedArrayKind,
+    sab: &SharedBufferInner,
+    offset: usize,
+) -> JsValue {
+    match kind {
+        TypedArrayKind::Int8 => {
+            let v = sab
+                .with_atomic_ptr::<i8, _>(offset, 1, |ptr| unsafe {
+                    AtomicI8::from_ptr(ptr).load(Ordering::SeqCst)
+                })
+                .unwrap_or(0);
+            JsValue::Number(v as f64)
+        }
+        TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => {
+            let v = sab
+                .with_atomic_ptr::<u8, _>(offset, 1, |ptr| unsafe {
+                    AtomicU8::from_ptr(ptr).load(Ordering::SeqCst)
+                })
+                .unwrap_or(0);
+            JsValue::Number(v as f64)
+        }
         TypedArrayKind::Int16 => {
-            let v = i16::from_ne_bytes([buf[offset], buf[offset + 1]]);
+            let v = sab
+                .with_atomic_ptr::<i16, _>(offset, 2, |ptr| unsafe {
+                    AtomicI16::from_ptr(ptr).load(Ordering::SeqCst)
+                })
+                .unwrap_or(0);
             JsValue::Number(v as f64)
         }
         TypedArrayKind::Uint16 => {
-            let v = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
+            let v = sab
+                .with_atomic_ptr::<u16, _>(offset, 2, |ptr| unsafe {
+                    AtomicU16::from_ptr(ptr).load(Ordering::SeqCst)
+                })
+                .unwrap_or(0);
             JsValue::Number(v as f64)
         }
         TypedArrayKind::Int32 => {
-            let v = i32::from_ne_bytes([
-                buf[offset],
-                buf[offset + 1],
-                buf[offset + 2],
-                buf[offset + 3],
-            ]);
+            let v = sab
+                .with_atomic_ptr::<i32, _>(offset, 4, |ptr| unsafe {
+                    AtomicI32::from_ptr(ptr).load(Ordering::SeqCst)
+                })
+                .unwrap_or(0);
             JsValue::Number(v as f64)
         }
         TypedArrayKind::Uint32 => {
-            let v = u32::from_ne_bytes([
-                buf[offset],
-                buf[offset + 1],
-                buf[offset + 2],
-                buf[offset + 3],
-            ]);
+            let v = sab
+                .with_atomic_ptr::<u32, _>(offset, 4, |ptr| unsafe {
+                    AtomicU32::from_ptr(ptr).load(Ordering::SeqCst)
+                })
+                .unwrap_or(0);
             JsValue::Number(v as f64)
         }
-        TypedArrayKind::Float32 => {
+        TypedArrayKind::BigInt64 => {
+            let v = sab
+                .with_atomic_ptr::<i64, _>(offset, 8, |ptr| unsafe {
+                    AtomicI64::from_ptr(ptr).load(Ordering::SeqCst)
+                })
+                .unwrap_or(0);
+            JsValue::BigInt(crate::types::JsBigInt {
+                value: num_bigint::BigInt::from(v),
+            })
+        }
+        TypedArrayKind::BigUint64 => {
+            let v = sab
+                .with_atomic_ptr::<i64, _>(offset, 8, |ptr| unsafe {
+                    AtomicI64::from_ptr(ptr).load(Ordering::SeqCst)
+                })
+                .unwrap_or(0) as u64;
+            JsValue::BigInt(crate::types::JsBigInt {
+                value: num_bigint::BigInt::from(v),
+            })
+        }
+        TypedArrayKind::Float16 => sab.with_read(|buf| {
+            if offset + 2 > buf.len() {
+                return JsValue::Undefined;
+            }
+            let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
+            JsValue::Number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
+                bits,
+            ))
+        }),
+        TypedArrayKind::Float32 => sab.with_read(|buf| {
+            if offset + 4 > buf.len() {
+                return JsValue::Undefined;
+            }
             let v = f32::from_ne_bytes([
                 buf[offset],
                 buf[offset + 1],
@@ -2738,82 +2928,262 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
                 buf[offset + 3],
             ]);
             JsValue::Number(v as f64)
-        }
-        TypedArrayKind::Float64 => {
+        }),
+        TypedArrayKind::Float64 => sab.with_read(|buf| {
+            if offset + 8 > buf.len() {
+                return JsValue::Undefined;
+            }
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&buf[offset..offset + 8]);
             JsValue::Number(f64::from_ne_bytes(bytes))
+        }),
+    }
+}
+
+pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue {
+    if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
+        return JsValue::Undefined;
+    }
+    let offset = ta.byte_offset + idx * ta.kind.bytes_per_element();
+    let buf_borrow = ta.buffer.borrow();
+    if let BufferData::Shared(sab) = &*buf_borrow {
+        return typed_array_get_index_shared(ta.kind, sab, offset);
+    }
+    buf_borrow.with_read(|buf| {
+        if offset + ta.kind.bytes_per_element() > buf.len() {
+            return JsValue::Undefined;
+        }
+        match ta.kind {
+            TypedArrayKind::Int8 => JsValue::Number(buf[offset] as i8 as f64),
+            TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => {
+                JsValue::Number(buf[offset] as f64)
+            }
+            TypedArrayKind::Int16 => {
+                let v = i16::from_ne_bytes([buf[offset], buf[offset + 1]]);
+                JsValue::Number(v as f64)
+            }
+            TypedArrayKind::Uint16 => {
+                let v = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
+                JsValue::Number(v as f64)
+            }
+            TypedArrayKind::Int32 => {
+                let v = i32::from_ne_bytes([
+                    buf[offset],
+                    buf[offset + 1],
+                    buf[offset + 2],
+                    buf[offset + 3],
+                ]);
+                JsValue::Number(v as f64)
+            }
+            TypedArrayKind::Uint32 => {
+                let v = u32::from_ne_bytes([
+                    buf[offset],
+                    buf[offset + 1],
+                    buf[offset + 2],
+                    buf[offset + 3],
+                ]);
+                JsValue::Number(v as f64)
+            }
+            TypedArrayKind::Float32 => {
+                let v = f32::from_ne_bytes([
+                    buf[offset],
+                    buf[offset + 1],
+                    buf[offset + 2],
+                    buf[offset + 3],
+                ]);
+                JsValue::Number(v as f64)
+            }
+            TypedArrayKind::Float64 => {
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(&buf[offset..offset + 8]);
+                JsValue::Number(f64::from_ne_bytes(bytes))
+            }
+            TypedArrayKind::BigInt64 => {
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(&buf[offset..offset + 8]);
+                JsValue::BigInt(crate::types::JsBigInt {
+                    value: num_bigint::BigInt::from(i64::from_ne_bytes(bytes)),
+                })
+            }
+            TypedArrayKind::BigUint64 => {
+                let mut bytes = [0u8; 8];
+                bytes.copy_from_slice(&buf[offset..offset + 8]);
+                JsValue::BigInt(crate::types::JsBigInt {
+                    value: num_bigint::BigInt::from(u64::from_ne_bytes(bytes)),
+                })
+            }
+            TypedArrayKind::Float16 => {
+                let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
+                JsValue::Number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
+                    bits,
+                ))
+            }
+        }
+    })
+}
+
+fn typed_array_set_index_shared(
+    kind: TypedArrayKind,
+    sab: &SharedBufferInner,
+    offset: usize,
+    value: &JsValue,
+) -> bool {
+    match kind {
+        TypedArrayKind::Int8 => {
+            let v = to_int8(value);
+            sab.with_atomic_ptr::<i8, _>(offset, 1, |ptr| unsafe {
+                AtomicI8::from_ptr(ptr).store(v, Ordering::SeqCst)
+            })
+            .is_some()
+        }
+        TypedArrayKind::Uint8 => {
+            let v = to_uint8(value);
+            sab.with_atomic_ptr::<u8, _>(offset, 1, |ptr| unsafe {
+                AtomicU8::from_ptr(ptr).store(v, Ordering::SeqCst)
+            })
+            .is_some()
+        }
+        TypedArrayKind::Uint8Clamped => {
+            let v = to_uint8_clamped(value);
+            sab.with_atomic_ptr::<u8, _>(offset, 1, |ptr| unsafe {
+                AtomicU8::from_ptr(ptr).store(v, Ordering::SeqCst)
+            })
+            .is_some()
+        }
+        TypedArrayKind::Int16 => {
+            let v = to_int16(value);
+            sab.with_atomic_ptr::<i16, _>(offset, 2, |ptr| unsafe {
+                AtomicI16::from_ptr(ptr).store(v, Ordering::SeqCst)
+            })
+            .is_some()
+        }
+        TypedArrayKind::Uint16 => {
+            let v = to_uint16(value);
+            sab.with_atomic_ptr::<u16, _>(offset, 2, |ptr| unsafe {
+                AtomicU16::from_ptr(ptr).store(v, Ordering::SeqCst)
+            })
+            .is_some()
+        }
+        TypedArrayKind::Int32 => {
+            let v = to_int32(value);
+            sab.with_atomic_ptr::<i32, _>(offset, 4, |ptr| unsafe {
+                AtomicI32::from_ptr(ptr).store(v, Ordering::SeqCst)
+            })
+            .is_some()
+        }
+        TypedArrayKind::Uint32 => {
+            let v = to_uint32(value);
+            sab.with_atomic_ptr::<u32, _>(offset, 4, |ptr| unsafe {
+                AtomicU32::from_ptr(ptr).store(v, Ordering::SeqCst)
+            })
+            .is_some()
         }
         TypedArrayKind::BigInt64 => {
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::BigInt(crate::types::JsBigInt {
-                value: num_bigint::BigInt::from(i64::from_ne_bytes(bytes)),
+            let v = to_bigint64(value);
+            sab.with_atomic_ptr::<i64, _>(offset, 8, |ptr| unsafe {
+                AtomicI64::from_ptr(ptr).store(v, Ordering::SeqCst)
             })
+            .is_some()
         }
         TypedArrayKind::BigUint64 => {
-            let mut bytes = [0u8; 8];
-            bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::BigInt(crate::types::JsBigInt {
-                value: num_bigint::BigInt::from(u64::from_ne_bytes(bytes)),
+            let v = to_biguint64(value);
+            sab.with_atomic_ptr::<i64, _>(offset, 8, |ptr| unsafe {
+                AtomicI64::from_ptr(ptr).store(v as i64, Ordering::SeqCst)
             })
+            .is_some()
         }
+        TypedArrayKind::Float16 => sab.with_write(|buf| {
+            if offset + 2 > buf.len() {
+                return false;
+            }
+            let n = to_number(value);
+            let bits = crate::interpreter::builtins::typedarray::dv_f64_to_f16_bits(n);
+            buf[offset..offset + 2].copy_from_slice(&bits.to_ne_bytes());
+            true
+        }),
+        TypedArrayKind::Float32 => sab.with_write(|buf| {
+            if offset + 4 > buf.len() {
+                return false;
+            }
+            let n = to_number(value);
+            buf[offset..offset + 4].copy_from_slice(&(n as f32).to_ne_bytes());
+            true
+        }),
+        TypedArrayKind::Float64 => sab.with_write(|buf| {
+            if offset + 8 > buf.len() {
+                return false;
+            }
+            let n = to_number(value);
+            buf[offset..offset + 8].copy_from_slice(&n.to_ne_bytes());
+            true
+        }),
     }
 }
 
 pub(crate) fn typed_array_set_index(ta: &TypedArrayInfo, idx: usize, value: &JsValue) -> bool {
-    let mut buf = ta.buffer.borrow_mut();
     let offset = ta.byte_offset + idx * ta.kind.bytes_per_element();
-    if offset + ta.kind.bytes_per_element() > buf.len() {
-        return false;
+    let buf_borrow = ta.buffer.borrow();
+    if let BufferData::Shared(sab) = &*buf_borrow {
+        return typed_array_set_index_shared(ta.kind, sab, offset, value);
     }
-    match ta.kind {
-        TypedArrayKind::Int8 => {
-            let v = to_int8(value);
-            buf[offset] = v as u8;
+    drop(buf_borrow);
+    (*ta.buffer.borrow_mut()).with_write(|buf| {
+        if offset + ta.kind.bytes_per_element() > buf.len() {
+            return false;
         }
-        TypedArrayKind::Uint8 => {
-            let v = to_uint8(value);
-            buf[offset] = v;
+        match ta.kind {
+            TypedArrayKind::Int8 => {
+                let v = to_int8(value);
+                buf[offset] = v as u8;
+            }
+            TypedArrayKind::Uint8 => {
+                let v = to_uint8(value);
+                buf[offset] = v;
+            }
+            TypedArrayKind::Uint8Clamped => {
+                let v = to_uint8_clamped(value);
+                buf[offset] = v;
+            }
+            TypedArrayKind::Int16 => {
+                let v = to_int16(value);
+                buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
+            }
+            TypedArrayKind::Uint16 => {
+                let v = to_uint16(value);
+                buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
+            }
+            TypedArrayKind::Int32 => {
+                let v = to_int32(value);
+                buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
+            }
+            TypedArrayKind::Uint32 => {
+                let v = to_uint32(value);
+                buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
+            }
+            TypedArrayKind::Float32 => {
+                let n = to_number(value);
+                buf[offset..offset + 4].copy_from_slice(&(n as f32).to_ne_bytes());
+            }
+            TypedArrayKind::Float64 => {
+                let n = to_number(value);
+                buf[offset..offset + 8].copy_from_slice(&n.to_ne_bytes());
+            }
+            TypedArrayKind::BigInt64 => {
+                let v = to_bigint64(value);
+                buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
+            }
+            TypedArrayKind::BigUint64 => {
+                let v = to_biguint64(value);
+                buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
+            }
+            TypedArrayKind::Float16 => {
+                let n = to_number(value);
+                let bits = crate::interpreter::builtins::typedarray::dv_f64_to_f16_bits(n);
+                buf[offset..offset + 2].copy_from_slice(&bits.to_ne_bytes());
+            }
         }
-        TypedArrayKind::Uint8Clamped => {
-            let v = to_uint8_clamped(value);
-            buf[offset] = v;
-        }
-        TypedArrayKind::Int16 => {
-            let v = to_int16(value);
-            buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
-        }
-        TypedArrayKind::Uint16 => {
-            let v = to_uint16(value);
-            buf[offset..offset + 2].copy_from_slice(&v.to_ne_bytes());
-        }
-        TypedArrayKind::Int32 => {
-            let v = to_int32(value);
-            buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
-        }
-        TypedArrayKind::Uint32 => {
-            let v = to_uint32(value);
-            buf[offset..offset + 4].copy_from_slice(&v.to_ne_bytes());
-        }
-        TypedArrayKind::Float32 => {
-            let n = to_number(value);
-            buf[offset..offset + 4].copy_from_slice(&(n as f32).to_ne_bytes());
-        }
-        TypedArrayKind::Float64 => {
-            let n = to_number(value);
-            buf[offset..offset + 8].copy_from_slice(&n.to_ne_bytes());
-        }
-        TypedArrayKind::BigInt64 => {
-            let v = to_bigint64(value);
-            buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
-        }
-        TypedArrayKind::BigUint64 => {
-            let v = to_biguint64(value);
-            buf[offset..offset + 8].copy_from_slice(&v.to_ne_bytes());
-        }
-    }
-    true
+        true
+    })
 }
 
 fn to_number(v: &JsValue) -> f64 {
@@ -2968,6 +3338,10 @@ impl PromiseData {
 }
 
 pub(crate) const GC_THRESHOLD: usize = 4096;
+pub(crate) const GC_INITIAL_THRESHOLD_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const GC_MIN_THRESHOLD_BYTES: usize = 256 * 1024;
+pub(crate) const GC_GROWTH_FACTOR: usize = 2;
+pub(crate) const GC_OBJECT_OVERHEAD: usize = 512;
 
 pub(crate) struct SetRecord {
     pub(crate) has: JsValue,

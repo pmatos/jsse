@@ -168,16 +168,47 @@ class BoaAdapter(EngineAdapter):
         return False
 
 
+class Engine262Adapter(EngineAdapter):
+    def __init__(self, binary: str):
+        super().__init__(binary)
+        self.engine262_bin = os.environ.get(
+            "ENGINE262_BIN", "/tmp/engine262/bin/engine262.js"
+        )
+
+    def build_command(self, test_file, tmp_path, harness_files, is_module, flags=None):
+        cmd = [self.binary, self.engine262_bin]
+        if is_module:
+            cmd.append("--module")
+        cmd.append(tmp_path)
+        return cmd
+
+    def needs_harness_in_source(self, is_module):
+        return True
+
+    def is_parse_error(self, exit_code, stderr):
+        return "SyntaxError" in stderr
+
+    def skip_module(self):
+        return False
+
+    def setup_preexec(self):
+        mem_limit = 4 * 1024 * 1024 * 1024  # 4 GB — engine262 runs on Node
+        resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
+        _set_pdeathsig()
+
+
 _ADAPTER_CLASSES = {
     "jsse": JsseAdapter,
     "node": NodeAdapter,
     "boa": BoaAdapter,
+    "engine262": Engine262Adapter,
 }
 
 _DEFAULT_BINARIES = {
     "jsse": "./target/release/jsse",
     "node": "node",
     "boa": "boa",
+    "engine262": "node",
 }
 
 
@@ -276,6 +307,13 @@ def compute_scenarios(test_file: str, metadata: dict) -> list[tuple[str, str]]:
     if "onlyStrict" in flags:
         return [(test_file, "strict")]
     if "noStrict" in flags:
+        return [(test_file, "default")]
+
+    # SM strict tests include a harness that manages strict/lenient mode
+    # internally via testLenientAndStrict(). Running these with the runner's
+    # :strict variant double-wraps "use strict" and breaks lenient expectations.
+    includes = metadata.get("includes", [])
+    if "sm/non262-strict-shell.js" in includes:
         return [(test_file, "default")]
 
     # Dual mode: run both default and strict
@@ -439,18 +477,23 @@ def run_single_test(
 
     if negative:
         phase = negative.get("phase", "runtime")
+        neg_type = negative.get("type", "")
         if phase == "parse":
             passed = adapter.is_parse_error(exit_code, stderr_text)
+        elif phase == "resolution":
+            stdout_text = result.stdout.decode("utf-8", errors="replace")
+            output = stdout_text + stderr_text
+            passed = exit_code != 0 and neg_type != "" and neg_type in output
         else:
             passed = exit_code != 0
     elif is_async:
         stdout = result.stdout.decode("utf-8", errors="replace")
-        if "Test262:AsyncTestComplete" in stdout:
-            passed = exit_code == 0
-        elif "Test262:AsyncTestFailure" in stdout:
+        if "Test262:AsyncTestFailure" in stdout:
             passed = False
-        else:
+        elif "Test262:AsyncTestComplete" in stdout:
             passed = exit_code == 0
+        else:
+            passed = False
     else:
         passed = exit_code == 0
 
@@ -475,7 +518,7 @@ examples:
     )
     parser.add_argument(
         "--engine",
-        choices=["jsse", "node", "boa"],
+        choices=["jsse", "node", "boa", "engine262"],
         default="jsse",
         help="Engine to test (default: jsse)",
     )
@@ -519,6 +562,22 @@ examples:
         ),
     )
     parser.add_argument(
+        "--update-baseline",
+        action="store_true",
+        help=(
+            "Write the current pass list to test262-pass.txt. Without this flag, "
+            "the file is read-only and baseline comparison uses origin/main's copy."
+        ),
+    )
+    parser.add_argument(
+        "--baseline-ref",
+        default="origin/main",
+        help=(
+            "Git ref to read the pass baseline from (default: origin/main). "
+            "Falls back to the working-tree file if the ref is unavailable."
+        ),
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=None,
@@ -550,7 +609,7 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
 
     test_dir = test262_dir / "test"
     tests = []
-    for subdir in ("language", "built-ins", "annexB", "intl402", "staging"):
+    for subdir in ("language", "built-ins", "annexB", "intl402"):
         d = test_dir / subdir
         if d.is_dir():
             tests.extend(f for f in d.rglob("*.js") if not _is_fixture(f))
@@ -599,17 +658,23 @@ def main():
         binary = _DEFAULT_BINARIES[engine_name]
 
     binary_path = Path(binary)
-    if engine_name == "jsse" and not binary_path.is_file():
-        print(f"Error: jsse binary not found at {binary_path}", file=sys.stderr)
-        print("Build it first: cargo build --release", file=sys.stderr)
-        sys.exit(2)
+    if not binary_path.is_file():
+        import shutil
+        found = shutil.which(binary)
+        if found:
+            binary_path = Path(found)
+        elif engine_name == "jsse":
+            print(f"Error: jsse binary not found at {binary_path}", file=sys.stderr)
+            print("Build it first: cargo build --release", file=sys.stderr)
+            sys.exit(2)
 
     test262 = Path(args.test262)
     if not (test262 / "test").is_dir():
         print(f"Error: test262 directory not found at {test262}", file=sys.stderr)
         sys.exit(2)
 
-    tests = find_tests(test262, args.paths if args.paths else None)
+    selected_paths = args.paths if args.paths else None
+    tests = find_tests(test262, selected_paths)
 
     is_sample_run = args.sample is not None
     if is_sample_run:
@@ -620,6 +685,11 @@ def main():
         tests = sample_tests(tests, rate, args.seed)
         print(
             f"Sampling {rate*100:.1f}% of tests (seed={args.seed}): {len(tests)} files selected.",
+            file=sys.stderr,
+        )
+    elif selected_paths:
+        print(
+            "Selected paths: " + ", ".join(selected_paths),
             file=sys.stderr,
         )
 
@@ -705,13 +775,28 @@ def main():
         baseline_file = Path(f"test262-pass-{engine_name}.txt")
         fail_file = Path(f"/tmp/test262-fail-{engine_name}.txt")
 
-    # Regression detection
+    # Regression detection. For jsse, prefer the baseline at a git ref so that
+    # feature branches don't conflict on test262-pass.txt.
     regressions: list[str] = []
     new_passes: list[str] = []
     ran_tests = set(pass_list + fail_list)
     is_full_run = not args.paths
-    if baseline_file.exists():
-        baseline = set(baseline_file.read_text().strip().split("\n"))
+    baseline_source = None
+    baseline_text: str | None = None
+    if engine_name == "jsse":
+        try:
+            baseline_text = subprocess.check_output(
+                ["git", "show", f"{args.baseline_ref}:{baseline_file}"],
+                stderr=subprocess.DEVNULL,
+            ).decode("utf-8")
+            baseline_source = f"{args.baseline_ref}:{baseline_file}"
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            baseline_text = None
+    if baseline_text is None and baseline_file.exists():
+        baseline_text = baseline_file.read_text()
+        baseline_source = str(baseline_file)
+    if baseline_text is not None:
+        baseline = {line for line in baseline_text.strip().split("\n") if line}
         current = set(pass_list)
         regressions = sorted((baseline & ran_tests) - current)
         new_passes = sorted(current - baseline)
@@ -721,6 +806,10 @@ def main():
     print(f"Engine:  {engine_name} ({binary})")
     if is_sample_run:
         print(f"Sample:  {args.sample*100:.1f}% (seed={args.seed})")
+    elif selected_paths:
+        print(f"Paths:   {', '.join(selected_paths)}")
+    if baseline_source:
+        print(f"Baseline: {baseline_source}")
     print(f"Files:   {num_files}")
     print(f"Scenarios: {total}")
     print(f"Run:     {run_total}")
@@ -741,7 +830,12 @@ def main():
 
     if is_full_run and not is_sample_run:
         pass_list.sort()
-        baseline_file.write_text("\n".join(pass_list) + "\n")
+        if engine_name != "jsse" or args.update_baseline:
+            baseline_file.write_text("\n".join(pass_list) + "\n")
+        elif regressions or new_passes:
+            print(
+                f"\n(baseline unchanged; pass --update-baseline to rewrite {baseline_file})"
+            )
 
     fail_list.sort()
     fail_file.write_text("\n".join(fail_list) + "\n")

@@ -10,174 +10,6 @@ pub(crate) mod zoned_date_time;
 
 use super::*;
 
-/// Which default date/time components to use when constructing DTF from toLocaleString.
-#[allow(dead_code)]
-pub(crate) enum TemporalDefaults {
-    /// date + time (Instant, PlainDateTime, ZonedDateTime)
-    All,
-    /// date only (PlainDate)
-    Date,
-    /// time only (PlainTime)
-    Time,
-    /// year + month only (PlainYearMonth)
-    YearMonth,
-    /// month + day only (PlainMonthDay)
-    MonthDay,
-}
-
-/// Check if options object has any explicit date/time formatting properties.
-#[allow(dead_code)]
-fn has_datetime_options(interp: &mut Interpreter, options: &JsValue) -> bool {
-    if matches!(options, JsValue::Undefined | JsValue::Null) {
-        return false;
-    }
-    if let JsValue::Object(o) = options {
-        for key in &[
-            "dateStyle",
-            "timeStyle",
-            "year",
-            "month",
-            "day",
-            "weekday",
-            "hour",
-            "minute",
-            "second",
-            "fractionalSecondDigits",
-            "dayPeriod",
-            "timeZoneName",
-            "era",
-        ] {
-            if let Completion::Normal(v) = interp.get_object_property(o.id, key, options)
-                && !matches!(v, JsValue::Undefined)
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-/// Construct a DateTimeFormat with Temporal-type-appropriate defaults.
-/// If user didn't specify any date/time options, add defaults based on the Temporal type.
-#[allow(dead_code)]
-pub(crate) fn temporal_construct_dtf(
-    interp: &mut Interpreter,
-    dtf_ctor: &JsValue,
-    locales: &JsValue,
-    options: &JsValue,
-    defaults: TemporalDefaults,
-) -> Completion {
-    if has_datetime_options(interp, options) {
-        return interp.construct(dtf_ctor, &[locales.clone(), options.clone()]);
-    }
-
-    // Create options object with appropriate defaults
-    let opts_obj = interp.create_object();
-    if let Some(ref op) = interp.realm().object_prototype {
-        opts_obj.borrow_mut().prototype = Some(op.clone());
-    }
-
-    // Copy any existing properties from user options (e.g. timeZone)
-    if let JsValue::Object(o) = options
-        && let Some(obj) = interp.get_object(o.id)
-    {
-        let keys: Vec<String> = obj.borrow().property_order.clone();
-        for key in keys {
-            if let Completion::Normal(v) = interp.get_object_property(o.id, &key, options)
-                && !matches!(v, JsValue::Undefined)
-            {
-                opts_obj
-                    .borrow_mut()
-                    .insert_property(key, PropertyDescriptor::data(v, true, true, true));
-            }
-        }
-    }
-
-    // Add type-specific defaults
-    let numeric = JsValue::String(JsString::from_str("numeric"));
-    let two_digit = JsValue::String(JsString::from_str("2-digit"));
-    match defaults {
-        TemporalDefaults::All => {
-            opts_obj.borrow_mut().insert_property(
-                "year".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "month".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "day".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "hour".to_string(),
-                PropertyDescriptor::data(two_digit.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "minute".to_string(),
-                PropertyDescriptor::data(two_digit.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "second".to_string(),
-                PropertyDescriptor::data(two_digit.clone(), true, true, true),
-            );
-        }
-        TemporalDefaults::Date => {
-            opts_obj.borrow_mut().insert_property(
-                "year".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "month".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "day".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-        }
-        TemporalDefaults::Time => {
-            opts_obj.borrow_mut().insert_property(
-                "hour".to_string(),
-                PropertyDescriptor::data(two_digit.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "minute".to_string(),
-                PropertyDescriptor::data(two_digit.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "second".to_string(),
-                PropertyDescriptor::data(two_digit.clone(), true, true, true),
-            );
-        }
-        TemporalDefaults::YearMonth => {
-            opts_obj.borrow_mut().insert_property(
-                "year".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "month".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-        }
-        TemporalDefaults::MonthDay => {
-            opts_obj.borrow_mut().insert_property(
-                "month".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            opts_obj.borrow_mut().insert_property(
-                "day".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-        }
-    }
-
-    let opts_id = opts_obj.borrow().id.unwrap();
-    let opts_val = JsValue::Object(crate::types::JsObject { id: opts_id });
-    interp.construct(dtf_ctor, &[locales.clone(), opts_val])
-}
-
 /// Check if options object has a style that conflicts with the temporal type.
 /// In toLocaleString, each style must overlap with the type's data model:
 /// - dateStyle requires date data (PlainDate, PlainDateTime, PlainYearMonth, PlainMonthDay)
@@ -368,7 +200,7 @@ fn extract_calendar_annotation(s: &str) -> Option<String> {
             if let Some(eq) = annotation.find('=') {
                 let key = &annotation[..eq];
                 if key == "u-ca" {
-                    return Some(annotation[eq + 1..].to_string());
+                    return Some(annotation[eq + 1..].to_ascii_lowercase());
                 }
             }
             rest = &content[close + 1..];
@@ -377,6 +209,18 @@ fn extract_calendar_annotation(s: &str) -> Option<String> {
         }
     }
     None
+}
+
+pub(crate) fn validate_calendar_name(cal: &str) -> Option<String> {
+    if !cal.bytes().all(|b| b.is_ascii()) {
+        return None;
+    }
+    let normalized = canonicalize_temporal_calendar(cal);
+    if is_supported_temporal_calendar(&normalized) {
+        Some(normalized)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn validate_calendar(cal: &str) -> Option<String> {
@@ -388,14 +232,16 @@ pub(crate) fn validate_calendar(cal: &str) -> Option<String> {
         return Some(normalized);
     }
     if let Some(parsed) = parse_temporal_date_time_string(cal) {
-        let c = parsed.calendar.unwrap_or_else(|| "iso8601".to_string());
-        let cn = canonicalize_temporal_calendar(&c);
-        if is_supported_temporal_calendar(&cn) {
-            return Some(cn);
+        if let Some(c) = parsed.calendar {
+            let cn = canonicalize_temporal_calendar(&c);
+            if is_supported_temporal_calendar(&cn) {
+                return Some(cn);
+            }
+        } else {
+            return Some("iso8601".to_string());
         }
     }
     if parse_temporal_time_string(cal).is_some() {
-        // Extract calendar from [u-ca=...] annotation if present
         if let Some(ca_cal) = extract_calendar_annotation(cal) {
             let cn = canonicalize_temporal_calendar(&ca_cal);
             if is_supported_temporal_calendar(&cn) {
@@ -405,17 +251,23 @@ pub(crate) fn validate_calendar(cal: &str) -> Option<String> {
         return Some("iso8601".to_string());
     }
     if let Some(parsed) = parse_temporal_month_day_string(cal) {
-        let c = parsed.3.unwrap_or_else(|| "iso8601".to_string());
-        let cn = canonicalize_temporal_calendar(&c);
-        if is_supported_temporal_calendar(&cn) {
-            return Some(cn);
+        if let Some(c) = parsed.3 {
+            let cn = canonicalize_temporal_calendar(&c);
+            if is_supported_temporal_calendar(&cn) {
+                return Some(cn);
+            }
+        } else {
+            return Some("iso8601".to_string());
         }
     }
     if let Some(parsed) = parse_temporal_year_month_string(cal) {
-        let c = parsed.3.unwrap_or_else(|| "iso8601".to_string());
-        let cn = canonicalize_temporal_calendar(&c);
-        if is_supported_temporal_calendar(&cn) {
-            return Some(cn);
+        if let Some(c) = parsed.3 {
+            let cn = canonicalize_temporal_calendar(&c);
+            if is_supported_temporal_calendar(&cn) {
+                return Some(cn);
+            }
+        } else {
+            return Some("iso8601".to_string());
         }
     }
     None
@@ -458,6 +310,8 @@ pub(crate) struct CalendarFields {
     pub days_in_year: u16,
     pub months_in_year: u8,
     pub in_leap_year: bool,
+    pub cyclic_year: Option<u8>,
+    pub related_iso: Option<i32>,
 }
 
 pub(crate) fn iso_to_calendar_fields(
@@ -472,7 +326,7 @@ pub(crate) fn iso_to_calendar_fields(
     let d = iso_date.to_any().to_calendar(cal);
 
     let yi = d.year();
-    let (year, era, era_year) = if let Some(e) = yi.era() {
+    let (year, era, era_year, cyclic_year, related_iso) = if let Some(e) = yi.era() {
         let ext = yi.extended_year();
         // Japanese calendar: dates before 1873-01-01 use ce/bce instead of meiji etc.
         if calendar_id == "japanese"
@@ -480,15 +334,17 @@ pub(crate) fn iso_to_calendar_fields(
             && !matches!(e.era.to_string().as_str(), "ce" | "bce")
         {
             if ext >= 1 {
-                (ext, Some("ce".to_string()), Some(ext))
+                (ext, Some("ce".to_string()), Some(ext), None, None)
             } else {
-                (ext, Some("bce".to_string()), Some(1 - ext))
+                (ext, Some("bce".to_string()), Some(1 - ext), None, None)
             }
         } else {
-            (ext, Some(e.era.to_string()), Some(e.year))
+            (ext, Some(e.era.to_string()), Some(e.year), None, None)
         }
     } else {
-        (yi.era_year_or_related_iso(), None, None)
+        let related = yi.era_year_or_related_iso();
+        let cyclic = yi.cyclic().map(|c| c.year);
+        (related, None, None, cyclic, Some(related))
     };
 
     Some(CalendarFields {
@@ -503,6 +359,8 @@ pub(crate) fn iso_to_calendar_fields(
         days_in_year: d.days_in_year(),
         months_in_year: d.months_in_year(),
         in_leap_year: d.is_in_leap_year(),
+        cyclic_year,
+        related_iso,
     })
 }
 
@@ -587,6 +445,8 @@ pub(crate) fn iso_to_calendar_fields_from_year(
         days_in_year: d.days_in_year(),
         months_in_year: d.months_in_year(),
         in_leap_year: d.is_in_leap_year(),
+        cyclic_year: None,
+        related_iso: None,
     })
 }
 
@@ -773,6 +633,35 @@ pub(crate) fn calendar_fields_to_iso_overflow(
 /// calendar date (month_code, day) exists. This matches the spec behavior for
 /// Temporal.PlainMonthDay.
 ///
+/// Spec Table 6: Chinese/Dangi leap month reference years (used as extended_year).
+/// (month_number, ref_year_for_days_1_29, ref_year_for_day_30)
+/// None means the month+day combination has never occurred.
+const CHINESE_DANGI_LEAP_REF: [(u8, Option<i32>, Option<i32>); 12] = [
+    (1, None, None),       // M01L never occurs
+    (2, Some(1947), None), // M02L: no day 30
+    (3, Some(1966), Some(1955)),
+    (4, Some(1963), Some(1944)),
+    (5, Some(1971), Some(1952)),
+    (6, Some(1960), Some(1941)),
+    (7, Some(1968), Some(1938)),
+    (8, Some(1957), None),  // M08L: no day 30
+    (9, Some(2014), None),  // M09L: no day 30
+    (10, Some(1984), None), // M10L: no day 30
+    (11, Some(2033), None), // M11L: no day 30
+    (12, None, None),       // M12L never occurs
+];
+
+fn chinese_dangi_leap_ref(month_code: &str) -> Option<(Option<i32>, Option<i32>)> {
+    if !(month_code.len() == 4 && month_code.ends_with('L')) {
+        return None;
+    }
+    let mn: u8 = month_code[1..3].parse().ok()?;
+    CHINESE_DANGI_LEAP_REF
+        .iter()
+        .find(|(m, _, _)| *m == mn)
+        .map(|(_, r29, r30)| (*r29, *r30))
+}
+
 /// When `year_hint` is provided (from the property bag's `year` field), it's used
 /// for validation: in reject mode, the day must be valid in that specific year;
 /// in constrain mode, the day is clamped to valid range for that year. Either way,
@@ -790,6 +679,24 @@ pub(crate) fn calendar_month_day_to_iso(
         return None;
     }
     let kind = calendar_id_to_icu_kind(calendar_id)?;
+
+    // Bail out early for out-of-range years
+    if let Some(hint_year) = year_hint {
+        let cal = AnyCalendar::new(kind);
+        let mut f = IcuDateFields::default();
+        f.extended_year = Some(hint_year);
+        f.month_code = Some(b"M01");
+        f.day = Some(1);
+        match IcuDate::try_from_fields(f, Default::default(), cal) {
+            Ok(d) => {
+                let iso_year = d.to_iso().year().extended_year();
+                if !(-271821..=275760).contains(&iso_year) {
+                    return None;
+                }
+            }
+            Err(_) => return None,
+        }
+    }
 
     // If a year_hint is provided, validate/constrain against it first
     let actual_day = if let Some(hint_year) = year_hint {
@@ -825,6 +732,50 @@ pub(crate) fn calendar_month_day_to_iso(
     } else {
         day
     };
+
+    // Table 6 path for Chinese/Dangi leap months
+    if matches!(calendar_id, "chinese" | "dangi") && month_code.ends_with('L') {
+        if let Some((ref_1_29, ref_30)) = chinese_dangi_leap_ref(month_code) {
+            // Clamp day to 30 (lunisolar month max)
+            let mut eff_day = actual_day;
+            if eff_day > 30 {
+                if overflow == "reject" {
+                    return None;
+                }
+                eff_day = 30;
+            }
+
+            // Check if month+day combo is valid per Table 6
+            if ref_1_29.is_none() || (eff_day == 30 && ref_30.is_none()) {
+                if overflow == "reject" {
+                    return None;
+                }
+                let non_leap = &month_code[..3];
+                return calendar_month_day_to_iso(non_leap, eff_day, None, calendar_id, overflow);
+            }
+
+            let ref_year = if eff_day == 30 {
+                ref_30.unwrap()
+            } else {
+                ref_1_29.unwrap()
+            };
+            let cal = AnyCalendar::new(kind);
+            let mut f = IcuDateFields::default();
+            f.extended_year = Some(ref_year);
+            f.month_code = Some(month_code.as_bytes());
+            f.day = Some(eff_day);
+            if let Ok(d) = IcuDate::try_from_fields(f, Default::default(), cal) {
+                let iso = d.to_iso();
+                return Some((
+                    iso.year().extended_year(),
+                    iso.month().ordinal,
+                    iso.day_of_month().0,
+                ));
+            }
+            return None;
+        }
+        return None;
+    }
 
     // Now find the reference ISO year: latest ISO year ≤ 1972 where month_code+actual_day exists.
     // Convert ISO 1972-07-01 to the calendar, then try multiple calendar years that could
@@ -1573,49 +1524,6 @@ pub(crate) fn max_rounding_increment(unit: &str) -> Option<u64> {
     }
 }
 
-/// Validate rounding increment: truncate to integer, check range, check divisibility.
-/// Coerce and validate a rounding increment value.
-/// For since/until and PlainTime/PlainDateTime.round: uses max_rounding_increment (exclusive).
-/// `is_difference`: true for since/until, false for round.
-#[allow(dead_code)]
-pub(crate) fn validate_rounding_increment(
-    interp: &mut Interpreter,
-    inc_val: &JsValue,
-    unit: &str,
-    is_difference: bool,
-) -> Result<f64, Completion> {
-    let int_inc = coerce_rounding_increment(interp, inc_val)?;
-    // Check max_rounding_increment: increment < max AND max % increment == 0
-    if let Some(max) = max_rounding_increment(unit) {
-        let i = int_inc as u64;
-        if i >= max {
-            return Err(Completion::Throw(interp.create_range_error(&format!(
-                "roundingIncrement {int_inc} is out of range for {unit}"
-            ))));
-        }
-        if max % i != 0 {
-            return Err(Completion::Throw(interp.create_range_error(&format!(
-                "roundingIncrement {int_inc} does not divide evenly into {max}"
-            ))));
-        }
-    } else if !is_difference {
-        check_day_divisibility(interp, int_inc, unit)?;
-    }
-    Ok(int_inc)
-}
-
-/// For Instant.round: only requires increment to divide evenly into a solar day.
-#[allow(dead_code)]
-pub(crate) fn validate_rounding_increment_day_divisible(
-    interp: &mut Interpreter,
-    inc_val: &JsValue,
-    unit: &str,
-) -> Result<f64, Completion> {
-    let int_inc = coerce_rounding_increment(interp, inc_val)?;
-    check_day_divisibility(interp, int_inc, unit)?;
-    Ok(int_inc)
-}
-
 pub(crate) fn coerce_rounding_increment(
     interp: &mut Interpreter,
     inc_val: &JsValue,
@@ -1639,25 +1547,6 @@ pub(crate) fn coerce_rounding_increment(
         ));
     }
     Ok(int_inc)
-}
-
-#[allow(dead_code)]
-fn check_day_divisibility(
-    interp: &mut Interpreter,
-    int_inc: f64,
-    unit: &str,
-) -> Result<(), Completion> {
-    let unit_ns = temporal_unit_length_ns(unit) as u64;
-    if unit_ns > 0 {
-        let total_ns = int_inc as u64 * unit_ns;
-        let day_ns: u64 = 86_400_000_000_000;
-        if !day_ns.is_multiple_of(total_ns) {
-            return Err(Completion::Throw(interp.create_range_error(&format!(
-                "roundingIncrement {int_inc} for {unit} does not divide evenly into a day"
-            ))));
-        }
-    }
-    Ok(())
 }
 
 /// Validate a pre-coerced rounding increment value against unit constraints.
@@ -1894,30 +1783,6 @@ pub(crate) fn iso_week_of_year(year: i32, month: u8, day: u8) -> (u8, i32) {
     } else {
         (woy as u8, year)
     }
-}
-
-#[allow(dead_code)]
-pub(crate) fn balance_time(
-    hour: i64,
-    minute: i64,
-    second: i64,
-    millisecond: i64,
-    microsecond: i64,
-    nanosecond: i64,
-) -> (i64, u8, u8, u8, u16, u16, u16) {
-    let us = microsecond + nanosecond.div_euclid(1000);
-    let ns = nanosecond.rem_euclid(1000) as u16;
-    let ms = millisecond + us.div_euclid(1000);
-    let us_out = us.rem_euclid(1000) as u16;
-    let s = second + ms.div_euclid(1000);
-    let ms_out = ms.rem_euclid(1000) as u16;
-    let m = minute + s.div_euclid(60);
-    let s_out = s.rem_euclid(60) as u8;
-    let h = hour + m.div_euclid(60);
-    let m_out = m.rem_euclid(60) as u8;
-    let days = h.div_euclid(24);
-    let h_out = h.rem_euclid(24) as u8;
-    (days, h_out, m_out, s_out, ms_out, us_out, ns)
 }
 
 pub(crate) fn balance_iso_date(year: i32, month: i32, day: i32) -> (i32, u8, u8) {
@@ -2864,16 +2729,6 @@ fn normalize_iana_timezone(s: &str) -> String {
     resolve_iana_timezone(s).unwrap_or_else(|| s.to_string())
 }
 
-/// Normalize a timezone ID for comparison: canonical offset form or case-insensitive IANA
-#[allow(dead_code)]
-pub(crate) fn normalize_tz_id(s: &str) -> String {
-    // Try parsing as offset to get canonical form
-    if let Some(canonical) = parse_utc_offset_timezone(s) {
-        return canonical;
-    }
-    s.to_ascii_lowercase()
-}
-
 /// ParseTemporalTimeZoneString per spec: extract timezone identifier from a string
 pub(super) fn parse_temporal_time_zone_string(s: &str) -> Option<String> {
     // 1. Try as UTC offset
@@ -3136,7 +2991,7 @@ pub(crate) fn parse_temporal_date_time_string(s: &str) -> Option<ParsedIsoDateTi
                     calendar_critical = true;
                 }
                 if calendar.is_none() {
-                    calendar = Some(annotation[eq_pos + 1..].to_string());
+                    calendar = Some(annotation[eq_pos + 1..].to_ascii_lowercase());
                 }
             } else if is_critical {
                 return None;
@@ -3336,6 +3191,11 @@ pub(crate) fn parse_temporal_year_month_string(
                 let mut calendar = None;
                 pos = parse_annotations_extract_calendar(bytes, pos, &mut calendar)?;
                 if pos == bytes.len() {
+                    if let Some(ref cal) = calendar
+                        && cal != "iso8601"
+                    {
+                        return None;
+                    }
                     return Some((year, month, None, calendar, false, false));
                 }
             }
@@ -3375,6 +3235,11 @@ pub(crate) fn parse_temporal_month_day_string(
             && day >= 1
             && day <= iso_days_in_month(1972, month)
         {
+            if let Some(ref cal) = calendar
+                && cal != "iso8601"
+            {
+                return None;
+            }
             return Some((month, day, None, calendar, false));
         }
     }
@@ -3397,6 +3262,11 @@ pub(crate) fn parse_temporal_month_day_string(
                 && day >= 1
                 && day <= iso_days_in_month(1972, month)
             {
+                if let Some(ref cal) = calendar
+                    && cal != "iso8601"
+                {
+                    return None;
+                }
                 return Some((month, day, None, calendar, false));
             }
         }
@@ -3421,6 +3291,11 @@ pub(crate) fn parse_temporal_month_day_string(
                 && day >= 1
                 && day <= iso_days_in_month(1972, month)
             {
+                if let Some(ref cal) = calendar
+                    && cal != "iso8601"
+                {
+                    return None;
+                }
                 return Some((month, day, None, calendar, false));
             }
         }
@@ -3598,7 +3473,7 @@ fn parse_annotations_extract_calendar(
             }
             if key == "u-ca" {
                 if calendar.is_none() {
-                    *calendar = Some(annotation[eq_pos + 1..].to_string());
+                    *calendar = Some(annotation[eq_pos + 1..].to_ascii_lowercase());
                 }
             } else if is_critical {
                 return None;
@@ -3707,8 +3582,15 @@ fn parse_iso_offset(bytes: &[u8], start: usize) -> Option<(ParsedOffset, usize)>
         }
         minutes = m;
 
-        if has_sep && pos < bytes.len() && bytes[pos] == b':' {
-            pos += 1;
+        let has_seconds = if has_sep {
+            pos < bytes.len() && bytes[pos] == b':'
+        } else {
+            pos + 1 < bytes.len() && bytes[pos].is_ascii_digit() && bytes[pos + 1].is_ascii_digit()
+        };
+        if has_seconds {
+            if has_sep {
+                pos += 1; // skip ':'
+            }
             has_sub_minute = true;
             let (s, new_pos) = parse_two_digit(bytes, pos)?;
             pos = new_pos;
@@ -3721,6 +3603,9 @@ fn parse_iso_offset(bytes: &[u8], start: usize) -> Option<(ParsedOffset, usize)>
                     pos += 1;
                 }
                 let frac_len = pos - frac_start;
+                if frac_len == 0 || frac_len > 9 {
+                    return None;
+                }
                 if frac_len > 0 {
                     let mut frac_digits = [b'0'; 9];
                     let copy_len = 9.min(frac_len);
@@ -4082,36 +3967,6 @@ pub(crate) fn to_integer_if_integral(v: f64) -> Option<f64> {
     Some(v)
 }
 
-// Format fractional seconds for toString
-#[allow(dead_code)]
-pub(crate) fn format_fractional_seconds(
-    seconds: u8,
-    millisecond: u16,
-    microsecond: u16,
-    nanosecond: u16,
-    precision: Option<u8>,
-) -> String {
-    let s = format!("{seconds:02}");
-    let total_ns = millisecond as u32 * 1_000_000 + microsecond as u32 * 1_000 + nanosecond as u32;
-    match precision {
-        Some(0) => s,
-        Some(p) => {
-            let frac = format!("{total_ns:09}");
-            format!("{s}.{}", &frac[..p as usize])
-        }
-        None => {
-            // Auto: trim trailing zeros
-            if total_ns == 0 {
-                s
-            } else {
-                let frac = format!("{total_ns:09}");
-                let trimmed = frac.trim_end_matches('0');
-                format!("{s}.{trimmed}")
-            }
-        }
-    }
-}
-
 // ISO month code
 pub(crate) fn iso_month_code(month: u8) -> String {
     format!("M{month:02}")
@@ -4198,17 +4053,6 @@ pub(crate) fn resolve_month_fields(
     }
 }
 
-/// Convenience: read + resolve in one step (for callers where ordering doesn't matter).
-#[allow(dead_code)]
-pub(crate) fn resolve_month_with_code(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    current: u8,
-) -> Result<u8, Completion> {
-    let (month, month_code) = read_month_fields(interp, obj)?;
-    resolve_month_fields(interp, month, month_code, current)
-}
-
 // Get temporal unit name mapping
 pub(crate) fn temporal_unit_singular(unit: &str) -> Option<&'static str> {
     match unit {
@@ -4279,21 +4123,6 @@ pub(crate) fn default_largest_unit_for_duration(
         return "microsecond";
     }
     "nanosecond"
-}
-
-// Larger temporal unit ordering
-/// DateDurationSign: returns the sign of a date duration's components.
-#[allow(dead_code)]
-pub(crate) fn duration_date_sign(years: i32, months: i32, weeks: i32, days: i32) -> i32 {
-    for &v in &[years, months, weeks, days] {
-        if v > 0 {
-            return 1;
-        }
-        if v < 0 {
-            return -1;
-        }
-    }
-    0
 }
 
 pub(crate) fn negate_rounding_mode(mode: &str) -> String {

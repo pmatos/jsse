@@ -116,7 +116,12 @@ pub(crate) fn do_compare(
     let mut prefs = CollatorPreferences::from(&locale);
 
     if usage == "search" {
-        prefs.collation_type = Some(CollationType::Search);
+        let lang = locale.id.language.as_str();
+        if lang == "de" {
+            prefs.collation_type = Some(CollationType::Phonebk);
+        } else {
+            prefs.collation_type = Some(CollationType::Search);
+        }
     } else if collation != "default" {
         match collation {
             "phonebk" => prefs.collation_type = Some(CollationType::Phonebk),
@@ -164,25 +169,6 @@ pub(crate) fn do_compare(
     }
 }
 
-#[allow(dead_code)]
-fn collation_type_for_name(name: &str) -> Option<CollationType> {
-    match name {
-        "phonebk" => Some(CollationType::Phonebk),
-        "dict" => Some(CollationType::Dict),
-        "compat" => Some(CollationType::Compat),
-        "emoji" => Some(CollationType::Emoji),
-        "eor" => Some(CollationType::Eor),
-        "phonetic" => Some(CollationType::Phonetic),
-        "pinyin" => Some(CollationType::Pinyin),
-        "searchjl" => Some(CollationType::Searchjl),
-        "stroke" => Some(CollationType::Stroke),
-        "trad" => Some(CollationType::Trad),
-        "unihan" => Some(CollationType::Unihan),
-        "zhuyin" => Some(CollationType::Zhuyin),
-        _ => None,
-    }
-}
-
 fn is_collation_supported_for_locale(locale_str: &str, collation_name: &str) -> bool {
     // "eor" and "emoji" are universally supported (root collation data)
     if collation_name == "eor" || collation_name == "emoji" {
@@ -223,8 +209,9 @@ fn is_thai_locale(locale_str: &str) -> bool {
 impl Interpreter {
     pub(crate) fn setup_intl_collator(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
-        if let Some(ref op) = self.realm().object_prototype {
-            proto.borrow_mut().prototype = Some(op.clone());
+        if let Some(op_id) = self.realm().object_prototype {
+            proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(op_id).borrow().id.unwrap());
         }
         proto.borrow_mut().class_name = "Intl.Collator".to_string();
 
@@ -380,8 +367,9 @@ impl Interpreter {
                     }) = data
                     {
                         let result = interp.create_object();
-                        if let Some(ref op) = interp.realm().object_prototype {
-                            result.borrow_mut().prototype = Some(op.clone());
+                        if let Some(op_id) = interp.realm().object_prototype {
+                            result.borrow_mut().prototype_id =
+                                Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                         }
 
                         let props = vec![
@@ -421,12 +409,12 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_collator_prototype = Some(proto.clone());
+        self.realm_mut().intl_collator_prototype = Some(proto.borrow().id.unwrap());
 
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone = proto.clone();
+        let proto_clone_id = proto.borrow().id.unwrap();
 
         let collator_ctor = self.create_function(JsFunction::constructor(
             "Collator".to_string(),
@@ -650,14 +638,14 @@ impl Interpreter {
                 };
 
                 // OrdinaryCreateFromConstructor — realm-aware prototype
-                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                    realm.intl_collator_prototype.clone()
-                }) {
-                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                let proto = match interp
+                    .get_prototype_from_new_target_realm(|realm| realm.intl_collator_prototype)
+                {
+                    Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto);
+                obj.borrow_mut().prototype_id = Some(proto);
                 obj.borrow_mut().class_name = "Intl.Collator".to_string();
                 obj.borrow_mut().intl_data = Some(IntlData::Collator {
                     locale,

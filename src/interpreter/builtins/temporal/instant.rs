@@ -7,9 +7,6 @@ use num_bigint::BigInt;
 
 const NS_MAX: i128 = 8_640_000_000_000_000_000_000; // ±8.64×10²¹
 const NS_PER_MS: i128 = 1_000_000;
-#[allow(dead_code)]
-const NS_PER_US: i128 = 1_000;
-
 pub(super) fn is_valid_epoch_ns(ns: &BigInt) -> bool {
     let max = BigInt::from(NS_MAX);
     let min = BigInt::from(-NS_MAX);
@@ -563,7 +560,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("toZonedDateTimeISO".to_string(), to_zdt_fn);
 
-        self.realm_mut().temporal_instant_prototype = Some(proto.clone());
+        self.realm_mut().temporal_instant_prototype = Some(proto.borrow().id.unwrap());
 
         // Constructor
         let constructor = self.create_function(JsFunction::constructor(
@@ -585,20 +582,14 @@ impl Interpreter {
                 }
                 let result = create_instant_result(interp, epoch_ns);
                 if let Completion::Normal(JsValue::Object(ref o)) = result {
-                    let dp = interp
-                        .realm()
-                        .temporal_instant_prototype
-                        .as_ref()
-                        .and_then(|p| p.borrow().id);
-                    interp.apply_new_target_prototype(o.id, dp, |r| {
-                        r.temporal_instant_prototype.clone()
-                    });
+                    let dp = interp.realm().temporal_instant_prototype;
+                    interp.apply_new_target_prototype(o.id, dp, |r| r.temporal_instant_prototype);
                 }
                 result
             },
         ));
 
-        // Constructor.prototype
+        // Constructor.prototype_id
         if let JsValue::Object(ref o) = constructor
             && let Some(obj) = self.get_object(o.id)
         {
@@ -833,8 +824,9 @@ fn get_instant_ns(interp: &mut Interpreter, this: &JsValue) -> Result<BigInt, Co
 fn create_instant_result(interp: &mut Interpreter, epoch_ns: BigInt) -> Completion {
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.Instant".to_string();
-    if let Some(ref proto) = interp.realm().temporal_instant_prototype {
-        obj.borrow_mut().prototype = Some(proto.clone());
+    if let Some(proto_id) = interp.realm().temporal_instant_prototype {
+        obj.borrow_mut().prototype_id =
+            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::Instant {
         epoch_nanoseconds: epoch_ns,
@@ -1509,17 +1501,4 @@ fn find_offset_in_time(time: &str) -> Option<usize> {
     } else {
         None // No offset found — bare date-time string
     }
-}
-
-/// Legacy wrapper for non-validated timezone parsing (used by ZDT etc.)
-#[allow(dead_code)]
-fn parse_timezone_offset(s: &str) -> (String, i64) {
-    if s == "UTC" {
-        return ("UTC".to_string(), 0);
-    }
-    if let Some(v) = parse_plain_offset(s) {
-        return v;
-    }
-    // Named timezone — for now just treat as UTC (full IANA support in Phase 9)
-    (s.to_string(), 0)
 }

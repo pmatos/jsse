@@ -115,13 +115,14 @@ impl Interpreter {
                     ],
                     "numberingSystem" => vec![
                         "adlm", "ahom", "arab", "arabext", "bali", "beng", "bhks", "brah", "cakm",
-                        "cham", "deva", "diak", "fullwide", "gong", "gonm", "gujr", "guru",
-                        "hanidec", "hmng", "hmnp", "java", "kali", "kawi", "khmr", "knda", "lana",
-                        "lanatham", "laoo", "latn", "lepc", "limb", "mathbold", "mathdbl",
-                        "mathmono", "mathsanb", "mathsans", "mlym", "modi", "mong", "mroo", "mtei",
-                        "mymr", "mymrshan", "mymrtlng", "nagm", "newa", "nkoo", "olck", "orya",
-                        "osma", "rohg", "saur", "segment", "shrd", "sind", "sinh", "sora", "sund",
-                        "takr", "talu", "tamldec", "telu", "thai", "tibt", "tirh", "tnsa", "vaii",
+                        "cham", "deva", "diak", "fullwide", "gara", "gong", "gonm", "gujr", "gukh",
+                        "guru", "hanidec", "hmng", "hmnp", "java", "kali", "kawi", "khmr", "knda",
+                        "krai", "lana", "lanatham", "laoo", "latn", "lepc", "limb", "mathbold",
+                        "mathdbl", "mathmono", "mathsanb", "mathsans", "mlym", "modi", "mong",
+                        "mroo", "mtei", "mymr", "mymrepka", "mymrpao", "mymrshan", "mymrtlng",
+                        "nagm", "newa", "nkoo", "olck", "onao", "orya", "osma", "outlined", "rohg",
+                        "saur", "segment", "shrd", "sind", "sinh", "sora", "sund", "sunu", "takr",
+                        "talu", "tamldec", "telu", "thai", "tibt", "tirh", "tnsa", "tols", "vaii",
                         "wara", "wcho",
                     ],
                     "timeZone" => vec![
@@ -582,7 +583,7 @@ impl Interpreter {
     ) -> Result<JsValue, JsValue> {
         if matches!(options, JsValue::Undefined) {
             let obj = self.create_object();
-            obj.borrow_mut().prototype = None; // ObjectCreate(null)
+            obj.borrow_mut().prototype_id = None; // ObjectCreate(null)
             let id = obj.borrow().id.unwrap();
             return Ok(JsValue::Object(crate::types::JsObject { id }));
         }
@@ -604,7 +605,7 @@ impl Interpreter {
     ) -> Result<JsValue, JsValue> {
         if matches!(options, JsValue::Undefined) {
             let obj = self.create_object();
-            obj.borrow_mut().prototype = None;
+            obj.borrow_mut().prototype_id = None;
             let id = obj.borrow().id.unwrap();
             return Ok(JsValue::Object(crate::types::JsObject { id }));
         }
@@ -737,12 +738,12 @@ impl Interpreter {
                     let known_languages = [
                         "af", "am", "ar", "as", "az", "be", "bg", "bn", "bo", "br", "bs", "ca",
                         "cs", "cy", "da", "de", "el", "en", "eo", "es", "et", "eu", "fa", "fi",
-                        "fil", "fo", "fr", "ga", "gl", "gu", "ha", "he", "hi", "hr", "hu", "hy",
-                        "id", "ig", "is", "it", "ja", "ka", "kk", "km", "kn", "ko", "kok", "ku",
-                        "ky", "lb", "ln", "lo", "lt", "lv", "mk", "ml", "mn", "mr", "ms", "mt",
-                        "my", "nb", "ne", "nl", "nn", "no", "or", "pa", "pl", "ps", "pt", "ro",
-                        "ru", "si", "sk", "sl", "sq", "sr", "sv", "sw", "ta", "te", "th", "tk",
-                        "tr", "uk", "ur", "uz", "vi", "wo", "yo", "zh", "zu",
+                        "fil", "fo", "fr", "ga", "gl", "gu", "gv", "ha", "he", "hi", "hr", "hu",
+                        "hy", "id", "ig", "is", "it", "ja", "ka", "kk", "km", "kn", "ko", "kok",
+                        "ku", "ky", "lb", "ln", "lo", "lt", "lv", "mk", "ml", "mn", "mr", "ms",
+                        "mt", "my", "nb", "ne", "nl", "nn", "no", "or", "pa", "pl", "ps", "pt",
+                        "ro", "ru", "si", "sk", "sl", "sq", "sr", "sv", "sw", "ta", "te", "th",
+                        "tk", "tr", "uk", "ur", "uz", "vi", "wo", "yo", "zh", "zu",
                     ];
                     if known_languages.contains(&lang.as_str()) {
                         return true;

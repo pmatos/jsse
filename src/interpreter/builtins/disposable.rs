@@ -3,8 +3,9 @@ use super::*;
 impl Interpreter {
     pub(crate) fn setup_disposable_stack(&mut self) {
         let ds_proto = self.create_object();
-        if let Some(ref op) = self.realm().object_prototype {
-            ds_proto.borrow_mut().prototype = Some(op.clone());
+        if let Some(op_id) = self.realm().object_prototype {
+            ds_proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(op_id).borrow().id.unwrap());
         }
 
         // Symbol.toStringTag
@@ -307,13 +308,10 @@ impl Interpreter {
                         let env = interp.realm().global_env.borrow();
                         if let Some(ctor_val) = env.get("DisposableStack")
                             && let JsValue::Object(ctor) = &ctor_val
-                            && let Some(ctor_obj) = interp.get_object(ctor.id)
                         {
-                            let proto_val = ctor_obj.borrow().get_property("prototype");
-                            if let JsValue::Object(p) = &proto_val
-                                && let Some(proto_rc) = interp.get_object(p.id)
-                            {
-                                new_obj.borrow_mut().prototype = Some(proto_rc);
+                            let proto_val = interp.get_property_on_id(ctor.id, "prototype");
+                            if let JsValue::Object(p) = &proto_val {
+                                new_obj.borrow_mut().prototype_id = Some(p.id);
                             }
                         }
                     }
@@ -336,7 +334,7 @@ impl Interpreter {
             .insert_builtin("move".to_string(), move_fn);
 
         // Store prototype in realm for OrdinaryCreateFromConstructor
-        self.realm_mut().disposable_stack_prototype = Some(ds_proto.clone());
+        self.realm_mut().disposable_stack_prototype = Some(ds_proto.borrow().id.unwrap());
 
         // Constructor
         self.register_global_fn(
@@ -353,7 +351,7 @@ impl Interpreter {
                     }
                     // OrdinaryCreateFromConstructor — realm-aware prototype
                     let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                        realm.disposable_stack_prototype.clone()
+                        realm.disposable_stack_prototype
                     }) {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
@@ -363,7 +361,7 @@ impl Interpreter {
                         let mut b = obj.borrow_mut();
                         b.class_name = "DisposableStack".to_string();
                         if let Some(p) = proto {
-                            b.prototype = Some(p);
+                            b.prototype_id = Some(p);
                         }
                         b.disposable_stack = Some(DisposableStackData {
                             stack: Vec::new(),
@@ -459,8 +457,9 @@ impl Interpreter {
 
     pub(crate) fn setup_async_disposable_stack(&mut self) {
         let ads_proto = self.create_object();
-        if let Some(ref op) = self.realm().object_prototype {
-            ads_proto.borrow_mut().prototype = Some(op.clone());
+        if let Some(op_id) = self.realm().object_prototype {
+            ads_proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(op_id).borrow().id.unwrap());
         }
 
         // Symbol.toStringTag
@@ -557,6 +556,16 @@ impl Interpreter {
                         }
                     }
                     if matches!(value, JsValue::Null | JsValue::Undefined) {
+                        let resource = DisposableResource {
+                            value: value.clone(),
+                            hint: DisposeHint::Async,
+                            dispose_method: JsValue::Undefined,
+                        };
+                        if let Some(obj2) = interp.get_object(o.id)
+                            && let Some(ds) = &mut obj2.borrow_mut().disposable_stack
+                        {
+                            ds.stack.push(resource);
+                        }
                         return Completion::Normal(value);
                     }
                     // Try Symbol.asyncDispose first, then Symbol.dispose
@@ -564,20 +573,24 @@ impl Interpreter {
                     let mut hint = DisposeHint::Async;
                     if let Some(key) = interp.get_symbol_key("asyncDispose")
                         && let JsValue::Object(vo) = &value
-                        && let Some(vobj) = interp.get_object(vo.id)
                     {
-                        let m = vobj.borrow().get_property(&key);
-                        if !matches!(m, JsValue::Undefined) {
+                        let m = match interp.get_object_property(vo.id, &key, &value) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if !matches!(m, JsValue::Undefined | JsValue::Null) {
                             method = m;
                         }
                     }
                     if matches!(method, JsValue::Undefined)
                         && let Some(key) = interp.get_symbol_key("dispose")
                         && let JsValue::Object(vo) = &value
-                        && let Some(vobj) = interp.get_object(vo.id)
                     {
-                        let m = vobj.borrow().get_property(&key);
-                        if !matches!(m, JsValue::Undefined) {
+                        let m = match interp.get_object_property(vo.id, &key, &value) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if !matches!(m, JsValue::Undefined | JsValue::Null) {
                             method = m;
                             hint = DisposeHint::Sync;
                         }
@@ -761,9 +774,10 @@ impl Interpreter {
                     };
                     let new_obj = interp.create_object();
                     {
-                        let default_proto = interp.realm().async_disposable_stack_prototype.clone();
-                        if let Some(p) = default_proto {
-                            new_obj.borrow_mut().prototype = Some(p);
+                        let default_proto_id = interp.realm().async_disposable_stack_prototype;
+                        if let Some(pid) = default_proto_id {
+                            new_obj.borrow_mut().prototype_id =
+                                Some(interp.get_object_expect(pid).borrow().id.unwrap());
                         }
                     }
                     {
@@ -785,7 +799,7 @@ impl Interpreter {
             .insert_builtin("move".to_string(), move_fn);
 
         // Store prototype in realm for OrdinaryCreateFromConstructor
-        self.realm_mut().async_disposable_stack_prototype = Some(ads_proto.clone());
+        self.realm_mut().async_disposable_stack_prototype = Some(ads_proto.borrow().id.unwrap());
 
         // Constructor
         self.register_global_fn(
@@ -804,7 +818,7 @@ impl Interpreter {
                     }
                     // OrdinaryCreateFromConstructor — realm-aware prototype
                     let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                        realm.async_disposable_stack_prototype.clone()
+                        realm.async_disposable_stack_prototype
                     }) {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
@@ -814,7 +828,7 @@ impl Interpreter {
                         let mut b = obj.borrow_mut();
                         b.class_name = "AsyncDisposableStack".to_string();
                         if let Some(p) = proto {
-                            b.prototype = Some(p);
+                            b.prototype_id = Some(p);
                         }
                         b.disposable_stack = Some(DisposableStackData {
                             stack: Vec::new(),
@@ -885,19 +899,26 @@ impl Interpreter {
             };
 
             let mut current_error: Option<JsValue> = None;
+            let mut needs_await = false;
+            let mut has_awaited = false;
             for resource in stack.iter().rev() {
+                if resource.hint == DisposeHint::Async
+                    && matches!(resource.dispose_method, JsValue::Undefined)
+                {
+                    needs_await = true;
+                    continue;
+                }
                 let result = self.call_function(&resource.dispose_method, &resource.value, &[]);
                 match result {
-                    Completion::Normal(v) => {
-                        if resource.hint == DisposeHint::Async {
-                            match self.await_value(&v) {
-                                Completion::Normal(_) => {}
-                                Completion::Throw(e) => {
-                                    current_error =
-                                        Some(self.wrap_suppressed_error(e, current_error));
-                                }
-                                _ => {}
+                    Completion::Normal(v) if resource.hint == DisposeHint::Async => {
+                        needs_await = true;
+                        has_awaited = true;
+                        match self.await_value(&v) {
+                            Completion::Normal(_) => {}
+                            Completion::Throw(e) => {
+                                current_error = Some(self.wrap_suppressed_error(e, current_error));
                             }
+                            _ => {}
                         }
                     }
                     Completion::Throw(e) => {
@@ -905,6 +926,9 @@ impl Interpreter {
                     }
                     _ => {}
                 }
+            }
+            if needs_await && !has_awaited {
+                let _ = self.await_value(&JsValue::Undefined);
             }
 
             if let Some(err) = current_error {

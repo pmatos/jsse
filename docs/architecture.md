@@ -1,132 +1,105 @@
 # JSSE Architecture Overview
 
-A from-scratch JavaScript engine in Rust. No JS parser or engine libraries — every component is implemented from first principles.
+JSSE is a from-scratch JavaScript engine in Rust. The execution model is a direct AST-walking interpreter: source text is tokenized, parsed into an AST, and evaluated without a bytecode or JIT layer.
 
 ## Pipeline
 
-```
-Source Code (.js / -e string / REPL)
+```text
+Source (.js file / -e string / REPL)
         |
         v
-    +-------+
-    | Lexer |   src/lexer.rs  (~1,200 lines)
-    +-------+
-        |  Token stream
+    src/lexer.rs
+        |
         v
-    +--------+
-    | Parser |  src/parser.rs  (~1,800 lines)
-    +--------+
-        |  AST (src/ast.rs, ~380 lines)
+    src/parser/
+        |
         v
-    +-------------+
-    | Interpreter |  src/interpreter.rs  (~6,200 lines)
-    +-------------+
-        |  JsValue results (src/types.rs, ~550 lines)
+    src/ast.rs
+        |
+        v
+    src/interpreter/
+        |
         v
     stdout / exit code
 ```
 
-## Components
+## Main Components
 
-### Lexer (`src/lexer.rs`)
+### Lexer
 
-Converts source text into tokens. Handles all ES2024 token types:
+`src/lexer.rs` converts source text into tokens, including:
 
-- Identifiers and keywords (with Unicode support via `unicode-ident`)
-- Numeric literals (decimal, hex, octal, binary, BigInt)
-- String literals (single/double quotes, escape sequences)
-- Template literals with substitution tracking
-- RegExp literals
-- All punctuators and operators
-- Line terminator tracking (for ASI in parser)
+- identifiers and keywords with Unicode support
+- numeric, string, template, and RegExp literals
+- punctuators and operators
+- line terminator tracking for ASI-sensitive parsing
 
-### Parser (`src/parser.rs`)
+### Parser
 
-Recursive descent parser producing an AST. Features:
+The parser lives under `src/parser/` and is split by responsibility:
 
-- All statement types (variable declarations, control flow, try/catch, classes, functions)
-- All expression types (binary, unary, assignment, member access, calls, templates)
-- Destructuring patterns (array and object, with rest/defaults)
-- Arrow functions, async, generators (syntax level)
-- Automatic Semicolon Insertion (ASI)
-- Single-token pushback for lookahead
+- `src/parser/mod.rs`: parser entrypoints and shared helpers
+- `src/parser/expressions.rs`: expression parsing
+- `src/parser/statements.rs`: statement parsing
+- `src/parser/declarations.rs`: declarations, destructuring, and class/function parsing
+- `src/parser/modules.rs`: module-specific syntax
 
-### AST (`src/ast.rs`)
+The parser is recursive descent and produces the AST defined in `src/ast.rs`.
 
-Pure data structures — no logic. Key types:
+### AST and Runtime Values
 
-- `Program` → `Vec<Statement>`
-- `Statement`: Block, Variable, If, While, DoWhile, For, ForIn, ForOf, Switch, Try, Return, Throw, Class, Function, Labeled, With
-- `Expression`: Literal, Identifier, Binary, Unary, Assign, Call, New, Member, Arrow, Template, Spread, etc.
-- `Pattern`: Identifier, Array, Object, Assign, Rest (for destructuring)
-- Operator enums: BinaryOp, UnaryOp, LogicalOp, AssignOp, UpdateOp
+`src/ast.rs` holds syntax tree data structures only.
 
-### Types (`src/types.rs`)
+Core JavaScript value types live in `src/types.rs`, including:
 
-JavaScript value system:
+- `JsValue`
+- `JsString`
+- `JsSymbol`
+- `JsBigInt`
+- numeric and bigint operation helpers
 
-- `JsValue` enum: Undefined, Null, Boolean, Number, String, Symbol, BigInt, Object
-- `JsString`: stores UTF-16 code units for spec-correct string indexing
-- `JsSymbol`: unique ID + optional description, well-known symbols
-- `JsBigInt`: wraps `num-bigint::BigInt`
-- `JsObject`: ID reference into interpreter's object store
-- Number/BigInt operation modules for arithmetic, bitwise, comparison
+### Interpreter
 
-### Interpreter (`src/interpreter.rs`)
+The interpreter lives under `src/interpreter/` and is split across runtime subsystems:
 
-Tree-walking interpreter. The largest component. Key subsystems:
+- `src/interpreter/mod.rs`: interpreter state, object store, module loading, runtime entrypoints
+- `src/interpreter/exec.rs`: statement execution
+- `src/interpreter/eval.rs`: expression evaluation
+- `src/interpreter/types.rs`: runtime object, environment, and completion types
+- `src/interpreter/helpers.rs`: coercion, equality, JSON, date, and other shared helpers
+- `src/interpreter/gc.rs`: mark-and-sweep garbage collection
+- `src/interpreter/builtins/`: built-in constructors, prototypes, and related runtime support
 
-**Object Model**
-- `JsObjectData`: properties (HashMap + insertion-order Vec), prototype chain, callable slot, array elements, class name, primitive value wrapper
-- `PropertyDescriptor`: value/writable/enumerable/configurable + get/set for accessors
-- Prototype chain lookup for property access
-- `Object.defineProperty` with full descriptor validation
+Key runtime responsibilities:
 
-**Environment & Scoping**
-- `Environment`: linked list of scopes (global → function → block)
-- `Binding`: value + kind (Var/Let/Const) + initialized flag
-- TDZ enforcement for let/const
-- Var hoisting to function/global scope
+- object model and property descriptors
+- environment chains and lexical scoping
+- completion handling (`return`, `throw`, `break`, `continue`)
+- built-ins and host/test262 support
+- module loading and dynamic import
+- typed arrays, buffers, and Atomics
 
-**Execution**
-- `Completion` enum: Normal, Return, Throw, Break, Continue
-- Statement execution dispatches by statement type
-- Expression evaluation with proper operator semantics
-- ToPrimitive coercion (valueOf/toString) for operators
-- Abstract equality and relational comparison per spec
+## Built-ins Layout
 
-**Built-in Objects**
-- Object: create, defineProperty, keys, values, entries, freeze, seal, assign, is, hasOwn, fromEntries, getPrototypeOf, setPrototypeOf
-- Function: call, apply, bind
-- Array: push, pop, shift, unshift, map, filter, reduce, find, sort, flat, flatMap, splice, slice, concat, indexOf, includes, every, some, at, copyWithin, entries, keys, values
-- String: charAt, indexOf, slice, substring, split, replace, trim, padStart, padEnd, repeat, startsWith, endsWith, match, search, codePointAt
-- Number: isFinite, isNaN, isInteger, isSafeInteger, toFixed, toExponential, toPrecision
-- Math: abs, floor, ceil, round, sqrt, pow, min, max, random, log, sin, cos, tan, atan2, hypot, etc.
-- JSON: stringify, parse
-- RegExp: test, exec (via Rust `regex` crate)
-- Error types: Error, TypeError, ReferenceError, SyntaxError, RangeError
-- Symbol: constructor + well-known symbols (iterator, hasInstance, toPrimitive, toStringTag)
+`src/interpreter/builtins/mod.rs` wires globals and shared helpers together. Larger built-in families live in dedicated modules such as:
 
-### CLI (`src/main.rs`)
+- arrays, strings, numbers, collections, iterators, promises, dates, regexp, typed arrays, atomics
+- feature-specific support such as generators, disposable resources, and Temporal/Intl support where present in the tree
 
-Entry point with three modes:
-1. File execution: `jsse <file.js>`
-2. Inline eval: `jsse -e "expression"`
-3. REPL: `jsse` (no args)
+When adding or debugging a built-in, start in `builtins/mod.rs` to find the setup path, then move into the specialized module for the implementation details.
 
-Uses `clap` for argument parsing. Exit codes: 0 success, 1 runtime error, 2 syntax error.
+## Entry Points and Tooling
 
-## Testing
+- `src/main.rs`: CLI entrypoint for file execution, `-e`, and REPL
+- `scripts/run-test262.py`: primary conformance runner
+- `scripts/run-custom-tests.py`: custom repo tests
 
-- **test262**: Primary validation. Run via `uv run python scripts/run-test262.py`. Parallel execution, YAML frontmatter parsing, negative test handling.
-- **Custom tests**: `tests/` directory for cases not covered by test262.
-- **Lint**: `scripts/lint.sh` for clippy + rustfmt.
+## Validation Flow
 
-## Dependencies
+The main validation target is test262. A typical workflow is:
 
-| Crate | Purpose |
-|-------|---------|
-| `clap` | CLI argument parsing |
-| `num-bigint` | BigInt arithmetic |
-| `unicode-ident` | Unicode identifier validation |
-| `regex` | RegExp implementation |
+1. build with `cargo build --release`
+2. run targeted or full `test262` via `uv run python scripts/run-test262.py`
+3. review the full-run results and update any published documentation you intend to keep current
+
+Custom tests in `tests/` and the CI workflow complement test262, but test262 remains the primary correctness signal for language and built-in behavior.

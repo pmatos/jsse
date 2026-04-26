@@ -19,10 +19,10 @@ pub enum Token {
     RegExpLiteral { pattern: String, flags: String },
 
     // Template literals: (cooked, raw) — cooked is None for invalid escapes in tagged templates
-    NoSubstitutionTemplate(Option<String>, String),
-    TemplateHead(Option<String>, String),
-    TemplateMiddle(Option<String>, String),
-    TemplateTail(Option<String>, String),
+    NoSubstitutionTemplate(Option<Vec<u16>>, String),
+    TemplateHead(Option<Vec<u16>>, String),
+    TemplateMiddle(Option<Vec<u16>>, String),
+    TemplateTail(Option<Vec<u16>>, String),
 
     // Punctuators
     LeftBrace,                // {
@@ -235,8 +235,6 @@ impl fmt::Display for Keyword {
 pub struct SourceLocation {
     pub line: u32,
     pub column: u32,
-    #[allow(dead_code)]
-    pub offset: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -312,7 +310,6 @@ impl<'a> Lexer<'a> {
         SourceLocation {
             line: self.line,
             column: self.column,
-            offset: self.offset,
         }
     }
 
@@ -565,6 +562,69 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    fn read_template_escape_into(&mut self, out: &mut Vec<u16>) -> Result<(), LexError> {
+        match self.advance() {
+            None => Err(self.error("Unterminated escape sequence")),
+            Some('0') if !self.peek().is_some_and(|c| c.is_ascii_digit()) => {
+                out.push(0);
+                Ok(())
+            }
+            Some('0'..='7') => {
+                Err(self.error("Octal escape sequences are not allowed in template literals"))
+            }
+            Some('8' | '9') => Err(self.error("\\8 and \\9 are not allowed in template literals")),
+            Some('b') => {
+                out.push(8);
+                Ok(())
+            }
+            Some('t') => {
+                out.push(9);
+                Ok(())
+            }
+            Some('n') => {
+                out.push(10);
+                Ok(())
+            }
+            Some('v') => {
+                out.push(11);
+                Ok(())
+            }
+            Some('f') => {
+                out.push(12);
+                Ok(())
+            }
+            Some('r') => {
+                out.push(13);
+                Ok(())
+            }
+            Some('x') => {
+                let h1 = self
+                    .advance()
+                    .ok_or_else(|| self.error("Invalid hex escape"))?;
+                let h2 = self
+                    .advance()
+                    .ok_or_else(|| self.error("Invalid hex escape"))?;
+                let val = hex_val(h1)
+                    .and_then(|a| hex_val(h2).map(|b| a * 16 + b))
+                    .ok_or_else(|| self.error("Invalid hex escape"))?;
+                out.push(val as u16);
+                Ok(())
+            }
+            Some('u') => self.read_string_unicode_escape_into(out),
+            Some(ch) if Self::is_line_terminator(ch) => {
+                self.handle_newline(ch);
+                Ok(())
+            }
+            Some(ch) => {
+                let mut buf = [0u16; 2];
+                for cu in ch.encode_utf16(&mut buf).iter() {
+                    out.push(*cu);
+                }
+                Ok(())
+            }
+        }
+    }
+
     /// For invalid escape sequences in tagged templates: advance past the
     /// escape identifier character(s) without consuming template delimiters.
     fn scan_invalid_template_escape(&mut self, raw: &mut String) {
@@ -621,49 +681,6 @@ impl<'a> Lexer<'a> {
                 raw.push(self.advance().unwrap());
             }
             None => {}
-        }
-    }
-
-    fn read_escape_sequence(&mut self) -> Result<String, LexError> {
-        match self.advance() {
-            None => Err(self.error("Unterminated escape sequence")),
-            Some('n') => Ok("\n".to_string()),
-            Some('r') => Ok("\r".to_string()),
-            Some('t') => Ok("\t".to_string()),
-            Some('b') => Ok("\u{0008}".to_string()),
-            Some('f') => Ok("\u{000C}".to_string()),
-            Some('v') => Ok("\u{000B}".to_string()),
-            Some('8' | '9') => {
-                // NonOctalDecimalEscapeSequence — not valid in template literals
-                Err(self.error("\\8 and \\9 are not allowed in template literals"))
-            }
-            Some(ch @ '0'..='7') => {
-                if ch == '0' && !self.peek().is_some_and(|c| c.is_ascii_digit()) {
-                    return Ok("\0".to_string()); // \0 (null character, not octal)
-                }
-                // Legacy octal — not valid in template literals
-                Err(self.error("Octal escape sequences are not allowed in template literals"))
-            }
-            Some('x') => {
-                let h1 = self
-                    .advance()
-                    .ok_or_else(|| self.error("Invalid hex escape"))?;
-                let h2 = self
-                    .advance()
-                    .ok_or_else(|| self.error("Invalid hex escape"))?;
-                let val = hex_val(h1)
-                    .and_then(|a| hex_val(h2).map(|b| a * 16 + b))
-                    .ok_or_else(|| self.error("Invalid hex escape"))?;
-                Ok(char::from_u32(val)
-                    .map(|c| c.to_string())
-                    .unwrap_or_default())
-            }
-            Some('u') => self.read_unicode_escape(),
-            Some(ch) if Self::is_line_terminator(ch) => {
-                self.handle_newline(ch);
-                Ok(String::new())
-            }
-            Some(ch) => Ok(ch.to_string()),
         }
     }
 
@@ -1252,8 +1269,8 @@ impl<'a> Lexer<'a> {
     }
 
     // Returns (cooked, raw, is_tail). is_tail=true means ended with backtick, false means ${
-    fn read_template_chars(&mut self) -> Result<(Option<String>, String, bool), LexError> {
-        let mut cooked = Some(String::new());
+    fn read_template_chars(&mut self) -> Result<(Option<Vec<u16>>, String, bool), LexError> {
+        let mut cooked: Option<Vec<u16>> = Some(Vec::new());
         let mut raw = String::new();
         loop {
             match self.advance() {
@@ -1268,25 +1285,22 @@ impl<'a> Lexer<'a> {
                     let before_offset = self.offset;
                     let saved_line = self.line;
                     let saved_col = self.column;
-                    match self.read_escape_sequence() {
-                        Ok(esc) => {
+                    let mut tmp_buf = Vec::new();
+                    match self.read_template_escape_into(&mut tmp_buf) {
+                        Ok(()) => {
                             let raw_slice = &self.source[before_offset..self.offset];
                             let normalized = raw_slice.replace("\r\n", "\n").replace('\r', "\n");
                             raw.push_str(&normalized);
                             if let Some(ref mut c) = cooked {
-                                c.push_str(&esc);
+                                c.extend_from_slice(&tmp_buf);
                             }
                         }
                         Err(_) => {
-                            // Restore position so we don't consume past the escape
                             self.offset = before_offset;
                             self.line = saved_line;
                             self.column = saved_col;
-                            // Re-sync chars iterator with the restored offset
                             self.chars = self.source[self.offset..].chars();
                             self.current = self.chars.next();
-                            // Skip the escape identifier char and scan until next
-                            // unescaped special char, collecting raw text
                             self.scan_invalid_template_escape(&mut raw);
                             cooked = None;
                         }
@@ -1295,23 +1309,27 @@ impl<'a> Lexer<'a> {
                 Some(ch) if Self::is_line_terminator(ch) => {
                     self.handle_newline(ch);
                     if ch == '\r' || ch == '\n' {
-                        // §12.9.6: TV/TRV normalizes <CR><LF> and <CR> to <LF>
                         raw.push('\n');
                         if let Some(ref mut c) = cooked {
-                            c.push('\n');
+                            c.push(b'\n' as u16);
                         }
                     } else {
-                        // LS (U+2028) and PS (U+2029) are preserved as-is
                         raw.push(ch);
                         if let Some(ref mut c) = cooked {
-                            c.push(ch);
+                            let mut buf = [0u16; 2];
+                            for cu in ch.encode_utf16(&mut buf).iter() {
+                                c.push(*cu);
+                            }
                         }
                     }
                 }
                 Some(ch) => {
                     raw.push(ch);
                     if let Some(ref mut c) = cooked {
-                        c.push(ch);
+                        let mut buf = [0u16; 2];
+                        for cu in ch.encode_utf16(&mut buf).iter() {
+                            c.push(*cu);
+                        }
                     }
                 }
             }
@@ -1558,20 +1576,6 @@ impl<'a> Lexer<'a> {
             _ => Err(self.error(format!("Unexpected character: {ch}"))),
         }
     }
-
-    #[allow(dead_code)]
-    pub fn tokenize_all(&mut self) -> Result<Vec<Token>, LexError> {
-        let mut tokens = Vec::new();
-        loop {
-            let token = self.next_token()?;
-            if token == Token::Eof {
-                tokens.push(token);
-                break;
-            }
-            tokens.push(token);
-        }
-        Ok(tokens)
-    }
 }
 
 fn hex_val(ch: char) -> Option<u32> {
@@ -1612,7 +1616,16 @@ mod tests {
 
     fn lex(src: &str) -> Vec<Token> {
         let mut lexer = Lexer::new(src);
-        lexer.tokenize_all().unwrap()
+        let mut tokens = Vec::new();
+        loop {
+            let token = lexer.next_token().unwrap();
+            if token == Token::Eof {
+                tokens.push(token);
+                break;
+            }
+            tokens.push(token);
+        }
+        tokens
     }
 
     fn lex_no_lt(src: &str) -> Vec<Token> {
@@ -1724,7 +1737,10 @@ mod tests {
         assert_eq!(
             lex_no_lt("`hello`"),
             vec![
-                Token::NoSubstitutionTemplate(Some("hello".into()), "hello".into()),
+                Token::NoSubstitutionTemplate(
+                    Some("hello".encode_utf16().collect()),
+                    "hello".into()
+                ),
                 Token::Eof
             ]
         );

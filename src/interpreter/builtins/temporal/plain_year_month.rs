@@ -3,7 +3,7 @@ use crate::interpreter::builtins::temporal::{
     add_iso_date, difference_iso_date, get_prop, is_undefined, iso_days_in_month, iso_days_in_year,
     iso_is_leap_year, iso_month_code, parse_difference_options, parse_overflow_option,
     parse_temporal_year_month_string, resolve_month_fields, round_date_duration,
-    to_temporal_calendar_slot_value, validate_calendar,
+    to_temporal_calendar_slot_value, validate_calendar_name,
 };
 
 pub(super) fn create_plain_year_month_result(
@@ -20,8 +20,9 @@ pub(super) fn create_plain_year_month_result(
     }
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.PlainYearMonth".to_string();
-    if let Some(ref proto) = interp.realm().temporal_plain_year_month_prototype {
-        obj.borrow_mut().prototype = Some(proto.clone());
+    if let Some(proto_id) = interp.realm().temporal_plain_year_month_prototype {
+        obj.borrow_mut().prototype_id =
+            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::PlainYearMonth {
         iso_year: y,
@@ -344,7 +345,7 @@ fn to_temporal_plain_year_month(
                 )));
             }
             let cal = parsed.3.unwrap_or_else(|| "iso8601".to_string());
-            let cal = match validate_calendar(&cal) {
+            let cal = match validate_calendar_name(&cal) {
                 Some(c) => c,
                 None => {
                     return Err(Completion::Throw(
@@ -352,11 +353,29 @@ fn to_temporal_plain_year_month(
                     ));
                 }
             };
-            // §13.35 step 5.h: reject non-iso8601 calendar from string
             if cal != "iso8601" {
-                return Err(Completion::Throw(interp.create_range_error(&format!(
-                    "PlainYearMonth from string requires iso8601 calendar, got: {cal}"
-                ))));
+                // Non-ISO calendar: parse ISO date, convert to calendar year/month
+                let iso_year = parsed.0;
+                let iso_month = parsed.1;
+                let iso_day = parsed.2.unwrap_or(1);
+                if let Some(fields) =
+                    super::iso_to_calendar_fields(iso_year, iso_month, iso_day, &cal)
+                {
+                    // Convert calendar year+month back to ISO for storage
+                    if let Some((ref_y, ref_m, ref_d)) = super::calendar_fields_to_iso(
+                        fields.era.as_deref(),
+                        fields.year,
+                        Some(&fields.month_code),
+                        Some(fields.month_ordinal),
+                        1,
+                        &cal,
+                    ) {
+                        return Ok((ref_y, ref_m, ref_d, cal));
+                    }
+                }
+                return Err(Completion::Throw(
+                    interp.create_range_error("Invalid calendar fields for PlainYearMonth"),
+                ));
             }
             if !super::iso_year_month_within_limits(parsed.0, parsed.1) {
                 return Err(Completion::Throw(
@@ -1152,7 +1171,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("toPlainDate".to_string(), to_pd_fn);
 
-        self.realm_mut().temporal_plain_year_month_prototype = Some(proto.clone());
+        self.realm_mut().temporal_plain_year_month_prototype = Some(proto.borrow().id.unwrap());
 
         // Constructor
         let constructor = self.create_function(JsFunction::constructor(
@@ -1230,13 +1249,9 @@ impl Interpreter {
                 }
                 let result = create_plain_year_month_result(interp, y, m, rd, &cal);
                 if let Completion::Normal(JsValue::Object(ref o)) = result {
-                    let dp = interp
-                        .realm()
-                        .temporal_plain_year_month_prototype
-                        .as_ref()
-                        .and_then(|p| p.borrow().id);
+                    let dp = interp.realm().temporal_plain_year_month_prototype;
                     interp.apply_new_target_prototype(o.id, dp, |r| {
-                        r.temporal_plain_year_month_prototype.clone()
+                        r.temporal_plain_year_month_prototype
                     });
                 }
                 result
@@ -1445,42 +1460,6 @@ impl Interpreter {
     }
 }
 
-#[allow(dead_code)]
-fn get_opt_i32(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: i32,
-) -> Result<i32, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        Ok(to_integer_with_truncation(interp, &val)? as i32)
-    }
-}
-
-#[allow(dead_code)]
-fn get_opt_u8(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: u8,
-) -> Result<u8, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        Ok(to_integer_with_truncation(interp, &val)? as u8)
-    }
-}
-
 fn format_year_month(y: i32, m: u8, ref_day: u8, cal: &str, show_calendar: &str) -> String {
     let year_str = if (0..=9999).contains(&y) {
         format!("{y:04}")
@@ -1501,10 +1480,8 @@ fn format_year_month(y: i32, m: u8, ref_day: u8, cal: &str, show_calendar: &str)
         "critical" => {
             result.push_str(&format!("[!u-ca={cal}]"));
         }
-        "auto" => {
-            if cal != "iso8601" {
-                result.push_str(&format!("[u-ca={cal}]"));
-            }
+        "auto" if cal != "iso8601" => {
+            result.push_str(&format!("[u-ca={cal}]"));
         }
         _ => {}
     }

@@ -1,6 +1,8 @@
 use crate::ast::*;
 use crate::lexer::{Keyword, LexError, Lexer, Token};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::fmt;
+use std::rc::Rc;
 
 mod declarations;
 mod expressions;
@@ -33,6 +35,7 @@ impl From<LexError> for ParseError {
 
 pub struct Parser<'a> {
     source: &'a str,
+    source_text_source: Rc<str>,
     lexer: Lexer<'a>,
     current: Token,
     current_token_start: usize,
@@ -57,14 +60,13 @@ pub struct Parser<'a> {
     no_in: bool,
     pub last_string_literal_has_escape: bool,
     pub last_string_literal_has_legacy_octal: bool,
-    private_name_scopes: Vec<(std::collections::HashSet<String>, Vec<(String, usize)>)>,
+    private_name_scopes: Vec<(HashSet<String>, Vec<(String, usize)>)>,
     in_field_initializer_eval: bool,
     in_static_block: bool,
-    function_param_names: Option<std::collections::HashSet<String>>,
+    function_param_names: Option<HashSet<String>>,
     eval_new_target_allowed: bool,
     last_expr_parenthesized: bool,
     last_obj_had_proto_dup: bool,
-    in_class_field_initializer: bool,
 }
 
 impl<'a> Parser<'a> {
@@ -81,8 +83,10 @@ impl<'a> Parser<'a> {
         };
         let token_start = lexer.token_start();
         let token_end = lexer.offset();
+        let source_text_source = Rc::from(source);
         Ok(Self {
             source,
+            source_text_source,
             lexer,
             current,
             current_token_start: token_start,
@@ -114,7 +118,6 @@ impl<'a> Parser<'a> {
             eval_new_target_allowed: false,
             last_expr_parenthesized: false,
             last_obj_had_proto_dup: false,
-            in_class_field_initializer: false,
         })
     }
 
@@ -151,11 +154,6 @@ impl<'a> Parser<'a> {
         self.pushback = Some((old_current, old_lt, old_ts, old_te));
     }
 
-    #[allow(dead_code)]
-    fn peek(&self) -> &Token {
-        &self.current
-    }
-
     fn eat(&mut self, expected: &Token) -> Result<(), ParseError> {
         if &self.current == expected {
             self.advance()?;
@@ -186,8 +184,16 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn source_since(&self, start: usize) -> String {
-        self.source[start..self.prev_token_end].to_string()
+    fn source_since(&self, start: usize) -> Option<SourceText> {
+        let end = self.prev_token_end;
+        if end <= start {
+            return Some(SourceText::new(
+                self.source_text_source.clone(),
+                start,
+                start,
+            ));
+        }
+        Some(SourceText::new(self.source_text_source.clone(), start, end))
     }
 
     pub fn set_strict(&mut self, strict: bool) {
@@ -195,7 +201,7 @@ impl<'a> Parser<'a> {
         self.lexer.strict = strict;
     }
 
-    pub fn set_eval_in_class_with_names(&mut self, names: std::collections::HashSet<String>) {
+    pub fn set_eval_in_class_with_names(&mut self, names: HashSet<String>) {
         self.private_name_scopes.push((names, Vec::new()));
     }
 
@@ -214,14 +220,13 @@ impl<'a> Parser<'a> {
         self.allow_super_property = true;
     }
 
-    #[allow(dead_code)]
     pub fn set_eval_allow_super_call(&mut self) {
         self.allow_super_call = true;
     }
 
     fn push_private_scope(&mut self) {
         self.private_name_scopes
-            .push((std::collections::HashSet::new(), Vec::new()));
+            .push((HashSet::default(), Vec::new()));
     }
 
     fn declare_private_name(&mut self, name: &str) {
@@ -417,7 +422,7 @@ impl<'a> Parser<'a> {
     }
 
     fn check_duplicate_params_strict(&self, params: &[Pattern]) -> Result<(), ParseError> {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         let mut names = Vec::new();
         for p in params {
             Self::collect_bound_names(p, &mut names);
@@ -433,7 +438,15 @@ impl<'a> Parser<'a> {
     fn is_strict_reserved_word(name: &str) -> bool {
         matches!(
             name,
-            "implements" | "interface" | "package" | "private" | "protected" | "public"
+            "implements"
+                | "interface"
+                | "package"
+                | "private"
+                | "protected"
+                | "public"
+                | "yield"
+                | "let"
+                | "static"
         )
     }
 
@@ -616,6 +629,13 @@ impl<'a> Parser<'a> {
                     }
                 }
                 crate::ast::ClassElement::Property(p) => {
+                    if let crate::ast::PropertyKey::Computed(e) = &p.key
+                        && Self::contains_arguments(e)
+                    {
+                        return true;
+                    }
+                }
+                crate::ast::ClassElement::AutoAccessor(p) => {
                     if let crate::ast::PropertyKey::Computed(e) = &p.key
                         && Self::contains_arguments(e)
                     {
@@ -1093,7 +1113,7 @@ impl<'a> Parser<'a> {
         self.set_strict(true);
 
         let mut module_items = Vec::new();
-        let mut exported_names = std::collections::HashSet::new();
+        let mut exported_names = HashSet::default();
 
         while self.current != Token::Eof {
             let item = self.parse_module_item()?;
@@ -1207,11 +1227,11 @@ impl<'a> Parser<'a> {
 
     /// §16.2.1.1 Static Semantics: Early Errors for Module
     fn validate_module_early_errors(&self, items: &[ModuleItem]) -> Result<(), ParseError> {
-        use std::collections::HashSet;
+        use HashSet;
 
-        let mut lex_names: HashSet<String> = HashSet::new();
-        let mut var_names: HashSet<String> = HashSet::new();
-        let mut exported_bindings: HashSet<String> = HashSet::new();
+        let mut lex_names: HashSet<String> = HashSet::default();
+        let mut var_names: HashSet<String> = HashSet::default();
+        let mut exported_bindings: HashSet<String> = HashSet::default();
 
         // Collect all lexically-declared and var-declared names
         for item in items {
@@ -1267,11 +1287,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    fn collect_module_var_names(
-        &self,
-        stmt: &Statement,
-        names: &mut std::collections::HashSet<String>,
-    ) {
+    fn collect_module_var_names(&self, stmt: &Statement, names: &mut HashSet<String>) {
         match stmt {
             Statement::Variable(decl) if decl.kind == VarKind::Var => {
                 for d in &decl.declarations {
@@ -1287,7 +1303,7 @@ impl<'a> Parser<'a> {
     fn collect_module_lex_names(
         &self,
         stmt: &Statement,
-        names: &mut std::collections::HashSet<String>,
+        names: &mut HashSet<String>,
     ) -> Result<(), ParseError> {
         match stmt {
             Statement::Variable(decl) if decl.kind != VarKind::Var => {
@@ -1303,30 +1319,26 @@ impl<'a> Parser<'a> {
                 }
             }
             // In modules, function/class/generator declarations are lexically scoped
-            Statement::FunctionDeclaration(f) => {
-                if !f.name.is_empty() && !names.insert(f.name.clone()) {
-                    return Err(
-                        self.error(format!("Identifier '{}' has already been declared", f.name))
-                    );
-                }
+            Statement::FunctionDeclaration(f)
+                if !f.name.is_empty() && !names.insert(f.name.clone()) =>
+            {
+                return Err(
+                    self.error(format!("Identifier '{}' has already been declared", f.name))
+                );
             }
-            Statement::ClassDeclaration(c) => {
-                if !c.name.is_empty() && !names.insert(c.name.clone()) {
-                    return Err(
-                        self.error(format!("Identifier '{}' has already been declared", c.name))
-                    );
-                }
+            Statement::ClassDeclaration(c)
+                if !c.name.is_empty() && !names.insert(c.name.clone()) =>
+            {
+                return Err(
+                    self.error(format!("Identifier '{}' has already been declared", c.name))
+                );
             }
             _ => {}
         }
         Ok(())
     }
 
-    fn collect_export_var_names(
-        &self,
-        export: &ExportDeclaration,
-        names: &mut std::collections::HashSet<String>,
-    ) {
+    fn collect_export_var_names(&self, export: &ExportDeclaration, names: &mut HashSet<String>) {
         if let ExportDeclaration::Named {
             declaration: Some(decl),
             ..
@@ -1339,7 +1351,7 @@ impl<'a> Parser<'a> {
     fn collect_export_lex_names(
         &self,
         export: &ExportDeclaration,
-        names: &mut std::collections::HashSet<String>,
+        names: &mut HashSet<String>,
     ) -> Result<(), ParseError> {
         match export {
             ExportDeclaration::Named {
@@ -1348,30 +1360,26 @@ impl<'a> Parser<'a> {
             } => {
                 self.collect_module_lex_names(decl, names)?;
             }
-            ExportDeclaration::DefaultFunction(f) => {
-                if !f.name.is_empty() && !names.insert(f.name.clone()) {
-                    return Err(
-                        self.error(format!("Identifier '{}' has already been declared", f.name))
-                    );
-                }
+            ExportDeclaration::DefaultFunction(f)
+                if !f.name.is_empty() && !names.insert(f.name.clone()) =>
+            {
+                return Err(
+                    self.error(format!("Identifier '{}' has already been declared", f.name))
+                );
             }
-            ExportDeclaration::DefaultClass(c) => {
-                if !c.name.is_empty() && !names.insert(c.name.clone()) {
-                    return Err(
-                        self.error(format!("Identifier '{}' has already been declared", c.name))
-                    );
-                }
+            ExportDeclaration::DefaultClass(c)
+                if !c.name.is_empty() && !names.insert(c.name.clone()) =>
+            {
+                return Err(
+                    self.error(format!("Identifier '{}' has already been declared", c.name))
+                );
             }
             _ => {}
         }
         Ok(())
     }
 
-    fn collect_exported_bindings(
-        &self,
-        export: &ExportDeclaration,
-        names: &mut std::collections::HashSet<String>,
-    ) {
+    fn collect_exported_bindings(&self, export: &ExportDeclaration, names: &mut HashSet<String>) {
         if let ExportDeclaration::Named {
             specifiers,
             source: None,

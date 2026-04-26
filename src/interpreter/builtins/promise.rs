@@ -188,7 +188,7 @@ impl Interpreter {
 
     pub(crate) fn setup_promise(&mut self) {
         let proto = self.create_object();
-        self.realm_mut().promise_prototype = Some(proto.clone());
+        self.realm_mut().promise_prototype = Some(proto.borrow().id.unwrap());
 
         // Promise.prototype.then
         let then_fn = self.create_function(JsFunction::native(
@@ -395,7 +395,7 @@ impl Interpreter {
         );
 
         // Promise constructor
-        let _promise_proto = self.realm().promise_prototype.clone();
+        let _promise_proto = self.realm().promise_prototype;
         let ctor = self.create_function(JsFunction::constructor(
             "Promise".to_string(),
             1,
@@ -414,7 +414,7 @@ impl Interpreter {
                 }
                 // OrdinaryCreateFromConstructor — realm-aware prototype
                 let proto = match interp
-                    .get_prototype_from_new_target_realm(|realm| realm.promise_prototype.clone())
+                    .get_prototype_from_new_target_realm(|realm| realm.promise_prototype)
                 {
                     Ok(p) => p,
                     Err(e) => return Completion::Throw(e),
@@ -424,7 +424,7 @@ impl Interpreter {
                     && let JsValue::Object(po) = &promise
                     && let Some(pobj) = interp.get_object(po.id)
                 {
-                    pobj.borrow_mut().prototype = Some(p);
+                    pobj.borrow_mut().prototype_id = Some(p);
                 }
                 let promise_id = if let JsValue::Object(ref o) = promise {
                     o.id
@@ -703,6 +703,42 @@ impl Interpreter {
                 .insert_builtin("try".to_string(), try_fn);
         }
 
+        // Promise.allKeyed (await-dictionary proposal — stub)
+        let all_keyed_fn = self.create_function(JsFunction::native(
+            "allKeyed".to_string(),
+            1,
+            |interp, _this, _args| {
+                Completion::Throw(
+                    interp.create_type_error("Promise.allKeyed is not yet implemented"),
+                )
+            },
+        ));
+        if let JsValue::Object(ref o) = ctor
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj
+                .borrow_mut()
+                .insert_builtin("allKeyed".to_string(), all_keyed_fn);
+        }
+
+        // Promise.allSettledKeyed (await-dictionary proposal — stub)
+        let all_settled_keyed_fn = self.create_function(JsFunction::native(
+            "allSettledKeyed".to_string(),
+            1,
+            |interp, _this, _args| {
+                Completion::Throw(
+                    interp.create_type_error("Promise.allSettledKeyed is not yet implemented"),
+                )
+            },
+        ));
+        if let JsValue::Object(ref o) = ctor
+            && let Some(func_obj) = self.get_object(o.id)
+        {
+            func_obj
+                .borrow_mut()
+                .insert_builtin("allSettledKeyed".to_string(), all_settled_keyed_fn);
+        }
+
         // Register Promise as global
         self.realm()
             .global_env
@@ -713,11 +749,10 @@ impl Interpreter {
 
     pub(crate) fn create_promise_object(&mut self) -> JsValue {
         let mut data = JsObjectData::new();
-        data.prototype = self.realm().promise_prototype.clone();
+        data.prototype_id = self.realm().promise_prototype;
         data.class_name = "Promise".to_string();
         data.promise_data = Some(PromiseData::new());
-        let obj = Rc::new(RefCell::new(data));
-        let id = self.allocate_object_slot(obj);
+        let id = self.alloc_object(data);
         JsValue::Object(crate::types::JsObject { id })
     }
 
@@ -807,6 +842,25 @@ impl Interpreter {
             },
         ));
 
+        // The native closures above capture promise_id as a bare u64, which is
+        // invisible to the GC. Pin the Promise via gc_native_roots on both
+        // resolving functions so the Promise survives as long as either
+        // resolve or reject is reachable.
+        if promise_id != 0 {
+            let pin = JsValue::Object(crate::types::JsObject { id: promise_id });
+            for fn_val in [&resolve_fn, &reject_fn] {
+                if let JsValue::Object(o) = fn_val
+                    && let Some(fn_obj) = self.get_object(o.id)
+                {
+                    let mut borrowed = fn_obj.borrow_mut();
+                    borrowed
+                        .gc_native_roots
+                        .get_or_insert_with(Vec::new)
+                        .push(pin.clone());
+                }
+            }
+        }
+
         (resolve_fn, reject_fn)
     }
 
@@ -864,6 +918,12 @@ impl Interpreter {
             ];
             if let Some(ref h) = reaction.handler {
                 roots.push(h.clone());
+            }
+            // Root the downstream promise so GC can trace it from the microtask queue.
+            // The resolve/reject closures only capture promise_id as a u64, which is
+            // invisible to the GC tracer.
+            if let Some(pid) = reaction.promise_id {
+                roots.push(JsValue::Object(crate::types::JsObject { id: pid }));
             }
             self.microtask_queue.push((
                 roots,
@@ -932,6 +992,7 @@ impl Interpreter {
             then_fn.clone(),
             resolve_fn.clone(),
             reject_fn.clone(),
+            JsValue::Object(crate::types::JsObject { id: promise_id }),
         ];
         self.microtask_queue.push((
             roots,
@@ -1712,8 +1773,8 @@ impl Interpreter {
         {
             let mut o = obj.borrow_mut();
             o.class_name = "AggregateError".to_string();
-            if let Some(ref proto) = self.realm().aggregate_error_prototype {
-                o.prototype = Some(proto.clone());
+            if let Some(proto_id) = self.realm().aggregate_error_prototype {
+                o.prototype_id = Some(self.get_object_expect(proto_id).borrow().id.unwrap());
             }
             o.insert_builtin(
                 "message".to_string(),
@@ -1768,7 +1829,6 @@ impl Interpreter {
         false
     }
 
-    #[allow(dead_code)]
     pub(crate) fn is_promise(&self, val: &JsValue) -> bool {
         if let JsValue::Object(o) = val
             && let Some(obj) = self.get_object(o.id)

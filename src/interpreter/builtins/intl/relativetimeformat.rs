@@ -464,8 +464,9 @@ fn extract_rtf_data(
 impl Interpreter {
     pub(crate) fn setup_intl_relative_time_format(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
-        if let Some(ref op) = self.realm().object_prototype {
-            proto.borrow_mut().prototype = Some(op.clone());
+        if let Some(op_id) = self.realm().object_prototype {
+            proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(op_id).borrow().id.unwrap());
         }
         proto.borrow_mut().class_name = "Intl.RelativeTimeFormat".to_string();
 
@@ -580,8 +581,9 @@ impl Interpreter {
                     .into_iter()
                     .map(|(ptype, pvalue, punit)| {
                         let part_obj = interp.create_object();
-                        if let Some(ref op) = interp.realm().object_prototype {
-                            part_obj.borrow_mut().prototype = Some(op.clone());
+                        if let Some(op_id) = interp.realm().object_prototype {
+                            part_obj.borrow_mut().prototype_id =
+                                Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                         }
                         part_obj.borrow_mut().insert_property(
                             "type".to_string(),
@@ -636,8 +638,9 @@ impl Interpreter {
                     };
 
                 let result = interp.create_object();
-                if let Some(ref op) = interp.realm().object_prototype {
-                    result.borrow_mut().prototype = Some(op.clone());
+                if let Some(op_id) = interp.realm().object_prototype {
+                    result.borrow_mut().prototype_id =
+                        Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                 }
 
                 let props = vec![
@@ -664,12 +667,12 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_relative_time_format_prototype = Some(proto.clone());
+        self.realm_mut().intl_relative_time_format_prototype = Some(proto.borrow().id.unwrap());
 
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone = proto.clone();
+        let proto_clone_id = proto.borrow().id.unwrap();
 
         let rtf_ctor = self.create_function(JsFunction::constructor(
             "RelativeTimeFormat".to_string(),
@@ -751,13 +754,14 @@ impl Interpreter {
 
                 let known_numbering_systems = [
                     "adlm", "ahom", "arab", "arabext", "bali", "beng", "bhks", "brah", "cakm",
-                    "cham", "deva", "diak", "fullwide", "gong", "gonm", "gujr", "guru", "hanidec",
-                    "hmng", "hmnp", "java", "kali", "kawi", "khmr", "knda", "lana", "lanatham",
-                    "laoo", "latn", "lepc", "limb", "mathbold", "mathdbl", "mathmono", "mathsanb",
-                    "mathsans", "mlym", "modi", "mong", "mroo", "mtei", "mymr", "mymrshan",
-                    "mymrtlng", "nagm", "newa", "nkoo", "olck", "orya", "osma", "rohg", "saur",
-                    "segment", "shrd", "sind", "sinh", "sora", "sund", "takr", "talu", "tamldec",
-                    "telu", "thai", "tibt", "tirh", "tnsa", "vaii", "wara", "wcho",
+                    "cham", "deva", "diak", "fullwide", "gara", "gong", "gonm", "gujr", "gukh",
+                    "guru", "hanidec", "hmng", "hmnp", "java", "kali", "kawi", "khmr", "knda",
+                    "krai", "lana", "lanatham", "laoo", "latn", "lepc", "limb", "mathbold",
+                    "mathdbl", "mathmono", "mathsanb", "mathsans", "mlym", "modi", "mong", "mroo",
+                    "mtei", "mymr", "mymrepka", "mymrpao", "mymrshan", "mymrtlng", "nagm", "newa",
+                    "nkoo", "olck", "onao", "orya", "osma", "outlined", "rohg", "saur", "segment",
+                    "shrd", "sind", "sinh", "sora", "sund", "sunu", "takr", "talu", "tamldec",
+                    "telu", "thai", "tibt", "tirh", "tnsa", "tols", "vaii", "wara", "wcho",
                 ];
 
                 // Extract nu extension from locale if present
@@ -822,13 +826,13 @@ impl Interpreter {
                 };
 
                 let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                    realm.intl_relative_time_format_prototype.clone()
+                    realm.intl_relative_time_format_prototype
                 }) {
-                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                    Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto);
+                obj.borrow_mut().prototype_id = Some(proto);
                 obj.borrow_mut().class_name = "Intl.RelativeTimeFormat".to_string();
                 obj.borrow_mut().intl_data = Some(IntlData::RelativeTimeFormat {
                     locale,

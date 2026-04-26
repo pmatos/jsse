@@ -5,7 +5,7 @@ use crate::interpreter::builtins::temporal::{
     iso_time_valid, iso_week_of_year, nanoseconds_to_time, parse_difference_options,
     parse_overflow_option, parse_temporal_date_time_string, resolve_month_fields,
     round_number_to_increment, temporal_unit_singular, time_to_nanoseconds,
-    to_temporal_calendar_slot_value, validate_calendar,
+    to_temporal_calendar_slot_value, validate_calendar_name,
 };
 
 pub(super) fn create_plain_date_time_result(
@@ -23,8 +23,9 @@ pub(super) fn create_plain_date_time_result(
 ) -> Completion {
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.PlainDateTime".to_string();
-    if let Some(ref proto) = interp.realm().temporal_plain_date_time_prototype {
-        obj.borrow_mut().prototype = Some(proto.clone());
+    if let Some(proto_id) = interp.realm().temporal_plain_date_time_prototype {
+        obj.borrow_mut().prototype_id =
+            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::PlainDateTime {
         iso_year: y,
@@ -201,7 +202,7 @@ fn parse_date_time_string(
         )));
     }
     let cal = parsed.calendar.unwrap_or_else(|| "iso8601".to_string());
-    let cal = match validate_calendar(&cal) {
+    let cal = match validate_calendar_name(&cal) {
         Some(c) => c,
         None => {
             return Err(Completion::Throw(
@@ -531,10 +532,8 @@ fn format_plain_date_time(
         "critical" => {
             result.push_str(&format!("[!u-ca={cal}]"));
         }
-        "auto" => {
-            if cal != "iso8601" {
-                result.push_str(&format!("[u-ca={cal}]"));
-            }
+        "auto" if cal != "iso8601" => {
+            result.push_str(&format!("[u-ca={cal}]"));
         }
         _ => {} // "never"
     }
@@ -2033,102 +2032,6 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("toPlainTime".to_string(), to_pt_fn);
 
-        // toPlainYearMonth()
-        let to_ym_fn = self.create_function(JsFunction::native(
-            "toPlainYearMonth".to_string(),
-            0,
-            |interp, this, _args| {
-                let (y, m, _d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, this) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                super::plain_year_month::create_plain_year_month_result(interp, y, m, 1, &cal)
-            },
-        ));
-        proto
-            .borrow_mut()
-            .insert_builtin("toPlainYearMonth".to_string(), to_ym_fn);
-
-        // toPlainMonthDay()
-        let to_md_fn = self.create_function(JsFunction::native(
-            "toPlainMonthDay".to_string(),
-            0,
-            |interp, this, _args| {
-                let (_y, m, d, _, _, _, _, _, _, cal) = match get_pdt_fields(interp, this) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                // Per spec, ISO 8601 calendar uses reference year 1972
-                super::plain_month_day::create_plain_month_day_result(interp, m, d, 1972, &cal)
-            },
-        ));
-        proto
-            .borrow_mut()
-            .insert_builtin("toPlainMonthDay".to_string(), to_md_fn);
-
-        // getISOFields()
-        let get_iso_fn = self.create_function(JsFunction::native(
-            "getISOFields".to_string(),
-            0,
-            |interp, this, _args| {
-                let (y, m, d, h, mi, s, ms, us, ns, cal) = match get_pdt_fields(interp, this) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let obj = interp.create_object();
-                obj.borrow_mut().insert_property(
-                    "calendar".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str(&cal)),
-                        true,
-                        true,
-                        true,
-                    ),
-                );
-                obj.borrow_mut().insert_property(
-                    "isoDay".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(d as f64), true, true, true),
-                );
-                obj.borrow_mut().insert_property(
-                    "isoHour".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(h as f64), true, true, true),
-                );
-                obj.borrow_mut().insert_property(
-                    "isoMicrosecond".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(us as f64), true, true, true),
-                );
-                obj.borrow_mut().insert_property(
-                    "isoMillisecond".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(ms as f64), true, true, true),
-                );
-                obj.borrow_mut().insert_property(
-                    "isoMinute".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(mi as f64), true, true, true),
-                );
-                obj.borrow_mut().insert_property(
-                    "isoMonth".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(m as f64), true, true, true),
-                );
-                obj.borrow_mut().insert_property(
-                    "isoNanosecond".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(ns as f64), true, true, true),
-                );
-                obj.borrow_mut().insert_property(
-                    "isoSecond".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(s as f64), true, true, true),
-                );
-                obj.borrow_mut().insert_property(
-                    "isoYear".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(y as f64), true, true, true),
-                );
-                let id = obj.borrow().id.unwrap();
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
-            },
-        ));
-        proto
-            .borrow_mut()
-            .insert_builtin("getISOFields".to_string(), get_iso_fn);
-
         // toZonedDateTime(timeZone, options?)
         let to_zdt_fn = self.create_function(JsFunction::native(
             "toZonedDateTime".to_string(),
@@ -2198,7 +2101,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("toZonedDateTime".to_string(), to_zdt_fn);
 
-        self.realm_mut().temporal_plain_date_time_prototype = Some(proto.clone());
+        self.realm_mut().temporal_plain_date_time_prototype = Some(proto.borrow().id.unwrap());
 
         // Constructor
         let constructor = self.create_function(JsFunction::constructor(
@@ -2288,20 +2191,16 @@ impl Interpreter {
                 let result =
                     create_plain_date_time_result(interp, y, m, d, h, mi, s, ms, us, ns, &cal);
                 if let Completion::Normal(JsValue::Object(ref o)) = result {
-                    let dp = interp
-                        .realm()
-                        .temporal_plain_date_time_prototype
-                        .as_ref()
-                        .and_then(|p| p.borrow().id);
+                    let dp = interp.realm().temporal_plain_date_time_prototype;
                     interp.apply_new_target_prototype(o.id, dp, |r| {
-                        r.temporal_plain_date_time_prototype.clone()
+                        r.temporal_plain_date_time_prototype
                     });
                 }
                 result
             },
         ));
 
-        // Constructor.prototype
+        // Constructor.prototype_id
         if let JsValue::Object(ref o) = constructor
             && let Some(obj) = self.get_object(o.id)
         {
@@ -2583,60 +2482,6 @@ fn get_constructor_field_u16(
             }
         }
         Err(e) => Err(Completion::Throw(e)),
-    }
-}
-
-#[allow(dead_code)]
-fn get_date_field_i32(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: i32,
-) -> Result<i32, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        Ok(to_integer_with_truncation(interp, &val)? as i32)
-    }
-}
-
-#[allow(dead_code)]
-fn get_date_field_u8(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: u8,
-) -> Result<u8, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        Ok(to_integer_with_truncation(interp, &val)? as u8)
-    }
-}
-
-#[allow(dead_code)]
-fn get_date_field_u16(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: u16,
-) -> Result<u16, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        Ok(to_integer_with_truncation(interp, &val)? as u16)
     }
 }
 

@@ -363,9 +363,8 @@ impl Interpreter {
         // Get the @@toPrimitive well-known symbol key
         if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
             && let JsValue::Object(sym_obj) = &sym_val
-            && let Some(sym_data) = self.get_object(sym_obj.id)
         {
-            let to_prim_sym = sym_data.borrow().get_property("toPrimitive");
+            let to_prim_sym = self.get_property_on_id(sym_obj.id, "toPrimitive");
             if let JsValue::Symbol(s) = &to_prim_sym {
                 let key = format!(
                     "Symbol({})",
@@ -384,9 +383,8 @@ impl Interpreter {
         // [Symbol.toStringTag] = "Symbol"
         if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
             && let JsValue::Object(sym_obj) = &sym_val
-            && let Some(sym_data) = self.get_object(sym_obj.id)
         {
-            let tag_sym = sym_data.borrow().get_property("toStringTag");
+            let tag_sym = self.get_property_on_id(sym_obj.id, "toStringTag");
             if let JsValue::Symbol(s) = &tag_sym {
                 let key = format!(
                     "Symbol({})",
@@ -426,7 +424,7 @@ impl Interpreter {
                 .insert_builtin("constructor".to_string(), ctor_val);
         }
 
-        self.realm_mut().symbol_prototype = Some(proto);
+        self.realm_mut().symbol_prototype = Some(proto.borrow().id.unwrap());
     }
 
     pub(crate) fn setup_number_prototype(&mut self) {
@@ -687,7 +685,7 @@ impl Interpreter {
                 .insert_builtin("constructor".to_string(), num_val);
         }
 
-        self.realm_mut().number_prototype = Some(proto);
+        self.realm_mut().number_prototype = Some(proto.borrow().id.unwrap());
     }
 
     pub(crate) fn setup_boolean_prototype(&mut self) {
@@ -770,6 +768,6 @@ impl Interpreter {
                 .insert_builtin("constructor".to_string(), bool_val);
         }
 
-        self.realm_mut().boolean_prototype = Some(proto);
+        self.realm_mut().boolean_prototype = Some(proto.borrow().id.unwrap());
     }
 }

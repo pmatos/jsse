@@ -78,10 +78,6 @@ fn obj_get(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<JsValue, 
     }
 }
 
-fn obj_set(interp: &mut Interpreter, o: &JsValue, key: &str, value: JsValue) {
-    let _ = obj_set_throw(interp, o, key, value);
-}
-
 // Set(O, P, V, true) — invoke setters on prototype, check writable, throw on failure
 fn obj_set_throw(
     interp: &mut Interpreter,
@@ -105,8 +101,8 @@ fn obj_set_throw(
             }
         }
         // Check for setter in prototype chain
-        if let Some(obj) = interp.get_object(obj_ref.id) {
-            let desc = obj.borrow().get_property_descriptor(key);
+        {
+            let desc = interp.get_property_descriptor_on_id(obj_ref.id, key);
             if let Some(ref d) = desc {
                 if let Some(ref setter) = d.set
                     && !matches!(setter, JsValue::Undefined)
@@ -175,11 +171,6 @@ fn obj_set_throw(
     Ok(())
 }
 
-#[allow(dead_code)]
-fn create_data_property(interp: &mut Interpreter, o: &JsValue, key: &str, value: JsValue) {
-    let _ = create_data_property_or_throw(interp, o, key, value);
-}
-
 pub(crate) fn create_data_property_or_throw(
     interp: &mut Interpreter,
     o: &JsValue,
@@ -224,13 +215,14 @@ pub(crate) fn create_data_property_or_throw(
         }
         if let Some(obj) = interp.get_object(obj_ref.id) {
             // Check extensibility — if object is not extensible and property doesn't exist, fail
+            let not_extensible = !obj.borrow().extensible;
+            if not_extensible && !interp.has_property_on_id(obj_ref.id, key) {
+                return Err(interp.create_type_error(&format!(
+                    "Cannot add property {key}, object is not extensible"
+                )));
+            }
             {
                 let borrow = obj.borrow();
-                if !borrow.extensible && !borrow.has_property(key) {
-                    return Err(interp.create_type_error(&format!(
-                        "Cannot add property {key}, object is not extensible"
-                    )));
-                }
                 // Check for non-configurable existing property
                 if let Some(desc) = borrow.get_own_property(key)
                     && desc.configurable == Some(false)
@@ -1345,11 +1337,17 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let to_locale_str_method =
-                            match obj_get(interp, &element_obj, "toLocaleString") {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
+                        let JsValue::Object(ref obj_ref) = element_obj else {
+                            unreachable!()
+                        };
+                        let to_locale_str_method = match interp.get_object_property(
+                            obj_ref.id,
+                            "toLocaleString",
+                            &next_element,
+                        ) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
                         if interp.is_callable(&to_locale_str_method) {
                             match interp.call_function(
                                 &to_locale_str_method,
@@ -1800,10 +1798,6 @@ impl Interpreter {
                         _ => {}
                     }
                 }
-                if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::Number(len as f64)) {
-                    interp.gc_unroot_value(&a);
-                    return Completion::Throw(e);
-                }
                 interp.gc_unroot_value(&a);
                 Completion::Normal(a)
             },
@@ -1878,10 +1872,6 @@ impl Interpreter {
                         }
                         _ => {}
                     }
-                }
-                if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::Number(to as f64)) {
-                    interp.gc_unroot_value(&a);
-                    return Completion::Throw(e);
                 }
                 interp.gc_unroot_value(&a);
                 Completion::Normal(a)
@@ -3357,33 +3347,50 @@ impl Interpreter {
                     } else {
                         interp.create_array(Vec::new())
                     };
+                    interp.gc_root_value(&a);
 
                     let iterator = match interp.call_function(&iter_method, &source, &[]) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
+                            interp.gc_unroot_value(&a);
                             return Completion::Throw(e);
                         }
-                        other => return other,
+                        other => {
+                            interp.gc_unroot_value(&a);
+                            return other;
+                        }
                     };
+                    interp.gc_root_value(&iterator);
                     let mut k: usize = 0;
                     loop {
                         let next = match interp.iterator_step(&iterator) {
                             Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
+                            Err(e) => {
+                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_value(&a);
+                                return Completion::Throw(e);
+                            }
                         };
                         let next = match next {
                             Some(result) => result,
                             None => {
                                 if let Err(e) = set_length_throw(interp, &a, k) {
+                                    interp.gc_unroot_value(&iterator);
+                                    interp.gc_unroot_value(&a);
                                     return Completion::Throw(e);
                                 }
+                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_value(&a);
                                 return Completion::Normal(a);
                             }
                         };
+                        interp.gc_root_value(&next);
                         let value = match interp.iterator_value(&next) {
                             Ok(v) => v,
                             Err(e) => {
-                                let _ = interp.iterator_close(&iterator, JsValue::Undefined);
+                                interp.gc_unroot_value(&next);
+                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_value(&a);
                                 return Completion::Throw(e);
                             }
                         };
@@ -3395,7 +3402,10 @@ impl Interpreter {
                             ) {
                                 Completion::Normal(v) => v,
                                 other => {
+                                    interp.gc_unroot_value(&next);
                                     let _ = interp.iterator_close(&iterator, JsValue::Undefined);
+                                    interp.gc_unroot_value(&iterator);
+                                    interp.gc_unroot_value(&a);
                                     return other;
                                 }
                             }
@@ -3405,9 +3415,13 @@ impl Interpreter {
                         if let Err(e) =
                             create_data_property_or_throw(interp, &a, &k.to_string(), mapped_value)
                         {
+                            interp.gc_unroot_value(&next);
                             let _ = interp.iterator_close(&iterator, JsValue::Undefined);
+                            interp.gc_unroot_value(&iterator);
+                            interp.gc_unroot_value(&a);
                             return Completion::Throw(e);
                         }
+                        interp.gc_unroot_value(&next);
                         k += 1;
                     }
                 } else {
@@ -3416,25 +3430,40 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
+                    interp.gc_root_value(&array_like);
                     let len = match length_of_array_like(interp, &array_like) {
                         Ok(v) => v,
-                        Err(c) => return c,
+                        Err(c) => {
+                            interp.gc_unroot_value(&array_like);
+                            return c;
+                        }
                     };
 
                     let a = if interp.is_constructor(&c) {
                         match interp.construct(&c, &[JsValue::Number(len as f64)]) {
                             Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            other => return other,
+                            Completion::Throw(e) => {
+                                interp.gc_unroot_value(&array_like);
+                                return Completion::Throw(e);
+                            }
+                            other => {
+                                interp.gc_unroot_value(&array_like);
+                                return other;
+                            }
                         }
                     } else {
                         interp.create_array(Vec::new())
                     };
+                    interp.gc_root_value(&a);
 
                     for k in 0..len {
                         let kvalue = match obj_get(interp, &array_like, &k.to_string()) {
                             Ok(v) => v,
-                            Err(c) => return c,
+                            Err(c) => {
+                                interp.gc_unroot_value(&a);
+                                interp.gc_unroot_value(&array_like);
+                                return c;
+                            }
                         };
                         let mapped_value = if mapping {
                             match interp.call_function(
@@ -3443,7 +3472,11 @@ impl Interpreter {
                                 &[kvalue, JsValue::Number(k as f64)],
                             ) {
                                 Completion::Normal(v) => v,
-                                other => return other,
+                                other => {
+                                    interp.gc_unroot_value(&a);
+                                    interp.gc_unroot_value(&array_like);
+                                    return other;
+                                }
                             }
                         } else {
                             kvalue
@@ -3451,12 +3484,18 @@ impl Interpreter {
                         if let Err(e) =
                             create_data_property_or_throw(interp, &a, &k.to_string(), mapped_value)
                         {
+                            interp.gc_unroot_value(&a);
+                            interp.gc_unroot_value(&array_like);
                             return Completion::Throw(e);
                         }
                     }
                     if let Err(e) = set_length_throw(interp, &a, len) {
+                        interp.gc_unroot_value(&a);
+                        interp.gc_unroot_value(&array_like);
                         return Completion::Throw(e);
                     }
+                    interp.gc_unroot_value(&a);
+                    interp.gc_unroot_value(&array_like);
                     Completion::Normal(a)
                 }
             },
@@ -3823,7 +3862,7 @@ impl Interpreter {
         // Array.prototype[@@unscopables] (§23.1.3.38)
         {
             let unscopables_obj = self.create_object();
-            unscopables_obj.borrow_mut().prototype = None;
+            unscopables_obj.borrow_mut().prototype_id = None;
             let names = [
                 "at",
                 "copyWithin",
@@ -3835,7 +3874,6 @@ impl Interpreter {
                 "findLastIndex",
                 "flat",
                 "flatMap",
-                "groupBy",
                 "includes",
                 "keys",
                 "toReversed",
@@ -3856,16 +3894,15 @@ impl Interpreter {
             );
         }
 
-        self.realm_mut().array_prototype = Some(proto);
+        self.realm_mut().array_prototype = Some(proto.borrow().id.unwrap());
     }
 
     pub(crate) fn create_array(&mut self, values: Vec<JsValue>) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
+        obj_data.prototype_id = self
             .realm()
             .array_prototype
-            .clone()
-            .or(self.realm().object_prototype.clone());
+            .or(self.realm().object_prototype);
         obj_data.class_name = "Array".to_string();
         for (i, v) in values.iter().enumerate() {
             obj_data.insert_value(i.to_string(), v.clone());
@@ -3875,19 +3912,17 @@ impl Interpreter {
             PropertyDescriptor::data(JsValue::Number(values.len() as f64), true, false, false),
         );
         obj_data.array_elements = Some(values);
-        let obj = Rc::new(RefCell::new(obj_data));
-        let id = self.allocate_object_slot(obj);
+        let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
 
     pub(crate) fn create_array_with_holes(&mut self, items: Vec<Option<JsValue>>) -> JsValue {
         let len = items.len();
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
+        obj_data.prototype_id = self
             .realm()
             .array_prototype
-            .clone()
-            .or(self.realm().object_prototype.clone());
+            .or(self.realm().object_prototype);
         obj_data.class_name = "Array".to_string();
         let mut array_elements = Vec::with_capacity(len);
         for (i, item) in items.into_iter().enumerate() {
@@ -3907,18 +3942,16 @@ impl Interpreter {
             PropertyDescriptor::data(JsValue::Number(len as f64), true, false, false),
         );
         obj_data.array_elements = Some(array_elements);
-        let obj = Rc::new(RefCell::new(obj_data));
-        let id = self.allocate_object_slot(obj);
+        let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
 
     pub(crate) fn create_array_with_length(&mut self, len: usize) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
+        obj_data.prototype_id = self
             .realm()
             .array_prototype
-            .clone()
-            .or(self.realm().object_prototype.clone());
+            .or(self.realm().object_prototype);
         obj_data.class_name = "Array".to_string();
         obj_data.insert_property(
             "length".to_string(),
@@ -3926,8 +3959,7 @@ impl Interpreter {
         );
         // Use a small Vec for sparse arrays — don't pre-allocate huge arrays
         obj_data.array_elements = Some(Vec::new());
-        let obj = Rc::new(RefCell::new(obj_data));
-        let id = self.allocate_object_slot(obj);
+        let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
 }

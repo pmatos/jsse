@@ -1,5 +1,4 @@
 use super::super::*;
-use std::collections::HashMap;
 
 type ZipState = Rc<
     RefCell<(
@@ -281,7 +280,7 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
 
     // Create null-prototype result object with key-value pairs
     let result_obj = interp.create_object();
-    result_obj.borrow_mut().prototype = None;
+    result_obj.borrow_mut().prototype_id = None;
     for (key, val) in &values {
         result_obj.borrow_mut().insert_property(
             key.clone(),
@@ -670,14 +669,13 @@ impl Interpreter {
             "[Symbol.dispose]".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id) {
-                        let return_method = obj.borrow().get_property("return");
-                        if matches!(&return_method, JsValue::Object(ro) if interp.get_object(ro.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
-                        {
-                            return interp.call_function(&return_method, this, &[]);
-                        }
+                if let JsValue::Object(o) = this {
+                    let return_method = interp.get_property_on_id(o.id, "return");
+                    if matches!(&return_method, JsValue::Object(ro) if interp.get_object(ro.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                    {
+                        return interp.call_function(&return_method, this, &[]);
                     }
+                }
                 Completion::Normal(JsValue::Undefined)
             },
         ));
@@ -687,7 +685,7 @@ impl Interpreter {
                 .insert_property(key, PropertyDescriptor::data(dispose_fn, true, false, true));
         }
 
-        self.realm_mut().iterator_prototype = Some(iter_proto.clone());
+        self.realm_mut().iterator_prototype = Some(iter_proto.borrow().id.unwrap());
 
         // Iterator constructor (abstract — throws TypeError when called directly)
         let iterator_ctor = self.create_function(JsFunction::constructor(
@@ -719,21 +717,21 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                        realm.iterator_prototype.clone()
-                    }) {
+                    let proto = match interp
+                        .get_prototype_from_new_target_realm(|realm| realm.iterator_prototype)
+                    {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
                     };
                     if let Some(p) = proto {
-                        obj.borrow_mut().prototype = Some(p);
+                        obj.borrow_mut().prototype_id = Some(p);
                     }
                 }
                 Completion::Normal(this.clone())
             },
         ));
 
-        // Set Iterator.prototype
+        // Set Iterator.prototype_id
         if let JsValue::Object(ctor_obj) = &iterator_ctor
             && let Some(obj) = self.get_object(ctor_obj.id)
         {
@@ -845,7 +843,7 @@ impl Interpreter {
 
         // %ArrayIteratorPrototype% (§23.1.5.1)
         let arr_iter_proto = self.create_object();
-        arr_iter_proto.borrow_mut().prototype = Some(iter_proto.clone());
+        arr_iter_proto.borrow_mut().prototype_id = Some(iter_proto.borrow().id.unwrap());
         arr_iter_proto.borrow_mut().class_name = "Array Iterator".to_string();
 
         let arr_iter_next = self.create_function(JsFunction::native(
@@ -985,7 +983,12 @@ impl Interpreter {
                                         .properties
                                         .get(&idx_str)
                                         .is_some_and(|d| d.get.is_some());
-                                    let fast_val = if !has_accessor {
+                                    let is_hole = borrowed
+                                        .array_elements
+                                        .as_ref()
+                                        .is_some_and(|e| index < e.len())
+                                        && !borrowed.properties.contains_key(&idx_str);
+                                    let fast_val = if !has_accessor && !is_hole {
                                         borrowed
                                             .array_elements
                                             .as_ref()
@@ -1179,11 +1182,11 @@ impl Interpreter {
             ),
         );
 
-        self.realm_mut().array_iterator_prototype = Some(arr_iter_proto);
+        self.realm_mut().array_iterator_prototype = Some(arr_iter_proto.borrow().id.unwrap());
 
         // %StringIteratorPrototype% (§22.1.5.1)
         let str_iter_proto = self.create_object();
-        str_iter_proto.borrow_mut().prototype = Some(iter_proto.clone());
+        str_iter_proto.borrow_mut().prototype_id = Some(iter_proto.borrow().id.unwrap());
         str_iter_proto.borrow_mut().class_name = "String Iterator".to_string();
 
         let str_iter_next = self.create_function(JsFunction::native(
@@ -1265,23 +1268,51 @@ impl Interpreter {
             ),
         );
 
-        self.realm_mut().string_iterator_prototype = Some(str_iter_proto);
+        self.realm_mut().string_iterator_prototype = Some(str_iter_proto.borrow().id.unwrap());
     }
 
-    fn create_iterator_helper_object(&mut self, next_fn: JsValue, return_fn: JsValue) -> JsValue {
-        // Generator state: 0=suspended-start, 1=suspended-yield, 2=executing, 3=completed
-        let state = Rc::new(std::cell::Cell::new(0u8));
+    fn ensure_iterator_helper_prototype(&mut self) {
+        if self.realm().iterator_helper_prototype.is_some() {
+            return;
+        }
+        let proto = self.create_object();
+        proto.borrow_mut().prototype_id = self.realm().iterator_prototype;
+        proto.borrow_mut().class_name = "Iterator Helper".to_string();
 
-        // Keep references for GC rooting on the guarded wrappers
-        let next_fn_root = next_fn.clone();
-        let return_fn_root = return_fn.clone();
-
-        let state_next = state.clone();
-        let guarded_next = self.create_function(JsFunction::native(
+        // next() — reads helper_next_closure and helper_gen_state from this
+        let next_fn = self.create_function(JsFunction::native(
             "next".to_string(),
             0,
-            move |interp, this, args| {
-                let s = state_next.get();
+            |interp, this, args| {
+                let this_id = match this {
+                    JsValue::Object(o) => o.id,
+                    _ => {
+                        return Completion::Throw(
+                            interp.create_type_error("Iterator Helper next called on non-object"),
+                        );
+                    }
+                };
+                let (next_closure, gen_state) = {
+                    let obj = match interp.get_object(this_id) {
+                        Some(o) => o,
+                        None => {
+                            return Completion::Throw(interp.create_type_error(
+                                "Iterator Helper next called on invalid object",
+                            ));
+                        }
+                    };
+                    let b = obj.borrow();
+                    match (&b.helper_next_closure, &b.helper_gen_state) {
+                        (Some(nc), Some(gs)) => (nc.clone(), gs.clone()),
+                        _ => {
+                            return Completion::Throw(
+                                interp
+                                    .create_type_error("next method called on incompatible object"),
+                            );
+                        }
+                    }
+                };
+                let s = gen_state.get();
                 if s == 2 {
                     return Completion::Throw(
                         interp.create_type_error("Generator is already running"),
@@ -1292,9 +1323,8 @@ impl Interpreter {
                         interp.create_iter_result_object(JsValue::Undefined, true),
                     );
                 }
-                state_next.set(2); // executing
-                let result = interp.call_function(&next_fn, this, args);
-                // If result is done, set completed; otherwise suspended-yield
+                gen_state.set(2);
+                let result = interp.call_function(&next_closure, this, args);
                 let is_done = if let Completion::Normal(ref v) = result {
                     if let JsValue::Object(o) = v {
                         matches!(
@@ -1307,23 +1337,48 @@ impl Interpreter {
                 } else {
                     false
                 };
-                state_next.set(if is_done { 3 } else { 1 });
+                gen_state.set(if is_done { 3 } else { 1 });
                 result
             },
         ));
-        // Root the wrapped next_fn so GC can trace it
-        if let JsValue::Object(o) = &guarded_next
-            && let Some(obj) = self.get_object(o.id)
-        {
-            obj.borrow_mut().gc_native_roots = Some(vec![next_fn_root]);
-        }
+        proto
+            .borrow_mut()
+            .insert_builtin("next".to_string(), next_fn);
 
-        let state_ret = state.clone();
-        let guarded_return = self.create_function(JsFunction::native(
+        // return() — reads helper_return_closure and helper_gen_state from this
+        let return_fn = self.create_function(JsFunction::native(
             "return".to_string(),
             0,
-            move |interp, this, args| {
-                let s = state_ret.get();
+            |interp, this, args| {
+                let this_id = match this {
+                    JsValue::Object(o) => o.id,
+                    _ => {
+                        return Completion::Throw(
+                            interp.create_type_error("Iterator Helper return called on non-object"),
+                        );
+                    }
+                };
+                let (return_closure, gen_state) =
+                    {
+                        let obj = match interp.get_object(this_id) {
+                            Some(o) => o,
+                            None => {
+                                return Completion::Throw(interp.create_type_error(
+                                    "Iterator Helper return called on invalid object",
+                                ));
+                            }
+                        };
+                        let b = obj.borrow();
+                        match (&b.helper_return_closure, &b.helper_gen_state) {
+                            (Some(rc), Some(gs)) => (rc.clone(), gs.clone()),
+                            _ => {
+                                return Completion::Throw(interp.create_type_error(
+                                    "return method called on incompatible object",
+                                ));
+                            }
+                        }
+                    };
+                let s = gen_state.get();
                 if s == 2 {
                     return Completion::Throw(
                         interp.create_type_error("Generator is already running"),
@@ -1335,45 +1390,33 @@ impl Interpreter {
                     );
                 }
                 if s == 0 {
-                    // suspended-start: set to completed, then close iterators
-                    state_ret.set(3);
-                    return interp.call_function(&return_fn, this, args);
+                    gen_state.set(3);
+                    return interp.call_function(&return_closure, this, args);
                 }
-                // suspended-yield: set to executing
-                state_ret.set(2);
-                let result = interp.call_function(&return_fn, this, args);
-                state_ret.set(3); // always completed after return
+                gen_state.set(2);
+                let result = interp.call_function(&return_closure, this, args);
+                gen_state.set(3);
                 result
             },
         ));
-        // Root the wrapped return_fn so GC can trace it
-        if let JsValue::Object(o) = &guarded_return
-            && let Some(obj) = self.get_object(o.id)
-        {
-            obj.borrow_mut().gc_native_roots = Some(vec![return_fn_root]);
-        }
+        proto
+            .borrow_mut()
+            .insert_builtin("return".to_string(), return_fn);
 
-        let obj = self.create_object();
-        obj.borrow_mut().prototype = self.realm().iterator_prototype.clone();
-        obj.borrow_mut().class_name = "Iterator Helper".to_string();
-        obj.borrow_mut()
-            .insert_builtin("next".to_string(), guarded_next);
-        obj.borrow_mut()
-            .insert_builtin("return".to_string(), guarded_return);
-        // Add @@iterator returning this
+        // @@iterator returning this
         let iter_self_fn = self.create_function(JsFunction::native(
             "[Symbol.iterator]".to_string(),
             0,
             |_interp, this, _args| Completion::Normal(this.clone()),
         ));
         if let Some(key) = self.get_symbol_iterator_key() {
-            obj.borrow_mut().insert_property(
+            proto.borrow_mut().insert_property(
                 key,
                 PropertyDescriptor::data(iter_self_fn, true, false, true),
             );
         }
-        // Add @@toStringTag
-        obj.borrow_mut().insert_property(
+        // @@toStringTag
+        proto.borrow_mut().insert_property(
             "Symbol(Symbol.toStringTag)".to_string(),
             PropertyDescriptor::data(
                 JsValue::String(JsString::from_str("Iterator Helper")),
@@ -1382,6 +1425,22 @@ impl Interpreter {
                 true,
             ),
         );
+
+        self.realm_mut().iterator_helper_prototype = Some(proto.borrow().id.unwrap());
+    }
+
+    fn create_iterator_helper_object(&mut self, next_fn: JsValue, return_fn: JsValue) -> JsValue {
+        self.ensure_iterator_helper_prototype();
+        let state = Rc::new(std::cell::Cell::new(0u8));
+
+        let obj = self.create_object();
+        obj.borrow_mut().prototype_id = self.realm().iterator_helper_prototype;
+        obj.borrow_mut().class_name = "Iterator Helper".to_string();
+        obj.borrow_mut().helper_next_closure = Some(next_fn.clone());
+        obj.borrow_mut().helper_return_closure = Some(return_fn.clone());
+        obj.borrow_mut().helper_gen_state = Some(state);
+        obj.borrow_mut().gc_native_roots = Some(vec![next_fn, return_fn]);
+
         let id = obj.borrow().id.unwrap();
         JsValue::Object(crate::types::JsObject { id })
     }
@@ -1503,15 +1562,14 @@ impl Interpreter {
                                 &JsValue::Undefined,
                                 &[value, JsValue::Number(counter)],
                             ) {
-                                Completion::Normal(v) => {
-                                    if interp.to_boolean_val(&v) {
+                                Completion::Normal(v)
+                                    if interp.to_boolean_val(&v) => {
                                         // Propagate IteratorClose errors
                                         if let Err(e) = iterator_close_getter(interp, &iter) {
                                             return Completion::Throw(e);
                                         }
                                         return Completion::Normal(JsValue::Boolean(true));
                                     }
-                                }
                                 Completion::Throw(e) => {
                                     let _ = iterator_close_with_completion(interp, &iter, Err(e.clone()));
                                     return Completion::Throw(e);
@@ -1559,14 +1617,13 @@ impl Interpreter {
                                 &JsValue::Undefined,
                                 &[value, JsValue::Number(counter)],
                             ) {
-                                Completion::Normal(v) => {
-                                    if !interp.to_boolean_val(&v) {
+                                Completion::Normal(v)
+                                    if !interp.to_boolean_val(&v) => {
                                         if let Err(e) = iterator_close_getter(interp, &iter) {
                                             return Completion::Throw(e);
                                         }
                                         return Completion::Normal(JsValue::Boolean(false));
                                     }
-                                }
                                 Completion::Throw(e) => {
                                     let _ = iterator_close_with_completion(interp, &iter, Err(e.clone()));
                                     return Completion::Throw(e);
@@ -1614,14 +1671,13 @@ impl Interpreter {
                                 &JsValue::Undefined,
                                 &[value.clone(), JsValue::Number(counter)],
                             ) {
-                                Completion::Normal(v) => {
-                                    if interp.to_boolean_val(&v) {
+                                Completion::Normal(v)
+                                    if interp.to_boolean_val(&v) => {
                                         if let Err(e) = iterator_close_getter(interp, &iter) {
                                             return Completion::Throw(e);
                                         }
                                         return Completion::Normal(value);
                                     }
-                                }
                                 Completion::Throw(e) => {
                                     let _ = iterator_close_with_completion(interp, &iter, Err(e.clone()));
                                     return Completion::Throw(e);
@@ -1905,13 +1961,12 @@ impl Interpreter {
                                         counter += 1.0;
                                         state_next.borrow_mut().3 = counter;
                                         match test_result {
-                                            Completion::Normal(v) => {
-                                                if interp.to_boolean_val(&v) {
+                                            Completion::Normal(v)
+                                                if interp.to_boolean_val(&v) => {
                                                     return Completion::Normal(
                                                         interp.create_iter_result_object(value, false),
                                                     );
                                                 }
-                                            }
                                             Completion::Throw(e) => {
                                                 state_next.borrow_mut().4 = false;
                                                 let _ = iterator_close_getter(interp, &iter);
@@ -2395,7 +2450,11 @@ impl Interpreter {
                                         Ok(Some(result)) => {
                                             let value = match interp.iterator_value(&result) {
                                                 Ok(v) => v,
-                                                Err(e) => return Completion::Throw(e),
+                                                Err(e) => {
+                                                    state_next.borrow_mut().6 = false;
+                                                    let _ = iterator_close_getter(interp, &outer_iter);
+                                                    return Completion::Throw(e);
+                                                }
                                             };
                                             return Completion::Normal(
                                                 interp.create_iter_result_object(value, false),
@@ -2533,16 +2592,10 @@ impl Interpreter {
 
     fn setup_iterator_static_methods(&mut self, iterator_ctor: &JsValue) {
         // Iterator.from(obj) — per spec §27.1.4.2
-        // Shared state map: wrapper_id -> (iter, next_method, alive)
-        #[allow(clippy::type_complexity)]
-        let wrap_state_map: Rc<RefCell<HashMap<u64, (JsValue, JsValue, bool)>>> =
-            Rc::new(RefCell::new(HashMap::new()));
-
         // Create shared WrapForValidIteratorPrototype
         let wrap_valid_proto = self.create_object();
-        wrap_valid_proto.borrow_mut().prototype = self.realm().iterator_prototype.clone();
+        wrap_valid_proto.borrow_mut().prototype_id = self.realm().iterator_prototype;
 
-        let map_for_next = wrap_state_map.clone();
         let wrap_next_fn = self.create_function(JsFunction::native(
             "next".to_string(),
             0,
@@ -2554,53 +2607,23 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
                 };
-                let entry = map_for_next.borrow().get(&this_id).cloned();
-                let (iter, next_method, alive) = match entry {
-                    Some(s) => s,
+                let record = interp
+                    .get_object(this_id)
+                    .and_then(|o| o.borrow().wrap_iter_record.clone());
+                let (iter, next_method) = match record {
+                    Some(r) => r,
                     None => {
                         let err = interp.create_type_error("next requires an Iterator wrapper");
                         return Completion::Throw(err);
                     }
                 };
-                if !alive {
-                    return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::Undefined, true),
-                    );
-                }
-                match interp.call_function(&next_method, &iter, &[]) {
-                    Completion::Normal(v) => {
-                        if !matches!(v, JsValue::Object(_)) {
-                            let err = interp.create_type_error("Iterator result is not an object");
-                            return Completion::Throw(err);
-                        }
-                        match interp.iterator_complete(&v) {
-                            Ok(true) => {
-                                if let Some(s) = map_for_next.borrow_mut().get_mut(&this_id) {
-                                    s.2 = false;
-                                }
-                            }
-                            Err(e) => return Completion::Throw(e),
-                            _ => {}
-                        }
-                        Completion::Normal(v)
-                    }
-                    Completion::Throw(e) => {
-                        if let Some(s) = map_for_next.borrow_mut().get_mut(&this_id) {
-                            s.2 = false;
-                        }
-                        Completion::Throw(e)
-                    }
-                    _ => Completion::Normal(
-                        interp.create_iter_result_object(JsValue::Undefined, true),
-                    ),
-                }
+                interp.call_function(&next_method, &iter, &[])
             },
         ));
         wrap_valid_proto
             .borrow_mut()
             .insert_builtin("next".to_string(), wrap_next_fn);
 
-        let map_for_ret = wrap_state_map.clone();
         let wrap_return_fn = self.create_function(JsFunction::native(
             "return".to_string(),
             0,
@@ -2612,25 +2635,16 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
                 };
-                let entry = map_for_ret.borrow().get(&this_id).cloned();
-                let (iter, _next_method, alive) = match entry {
-                    Some(s) => s,
+                let record = interp
+                    .get_object(this_id)
+                    .and_then(|o| o.borrow().wrap_iter_record.clone());
+                let (iter, _next_method) = match record {
+                    Some(r) => r,
                     None => {
                         let err = interp.create_type_error("return requires an Iterator wrapper");
                         return Completion::Throw(err);
                     }
                 };
-                if let Some(s) = map_for_ret.borrow_mut().get_mut(&this_id) {
-                    s.2 = false;
-                }
-                if !alive {
-                    return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::Undefined, true),
-                    );
-                }
-                // Per spec: Get returnMethod = GetMethod(iterator, "return")
-                // If undefined, return CreateIterResult(undefined, true)
-                // Otherwise return Call(returnMethod, iterator)
                 if let JsValue::Object(io) = &iter {
                     let return_method = match interp.get_object_property(io.id, "return", &iter) {
                         Completion::Normal(v) => v,
@@ -2652,10 +2666,10 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("return".to_string(), wrap_return_fn);
 
-        let wrap_valid_proto_rc = Some(wrap_valid_proto);
+        let wrap_valid_proto_id = wrap_valid_proto.borrow().id.unwrap();
 
-        let map_for_from = wrap_state_map.clone();
-        let wvp_for_from = wrap_valid_proto_rc.clone();
+        let wvp_for_from: Option<u64> = Some(wrap_valid_proto_id);
+        let iterator_ctor_for_from = iterator_ctor.clone();
         let from_fn = self.create_function(JsFunction::native(
             "from".to_string(),
             1,
@@ -2668,30 +2682,11 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                // OrdinaryHasInstance: check if iter_val has %IteratorPrototype% in chain
-                let has_iter_proto = if let JsValue::Object(io) = &iter_val {
-                    if let Some(iter_obj) = interp.get_object(io.id) {
-                        let ip = interp.realm().iterator_prototype.clone();
-                        if let Some(ref ip) = ip {
-                            let mut proto = iter_obj.borrow().prototype.clone();
-                            let mut found = false;
-                            while let Some(p) = proto {
-                                if Rc::ptr_eq(&p, ip) {
-                                    found = true;
-                                    break;
-                                }
-                                proto = p.borrow().prototype.clone();
-                            }
-                            found
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                } else {
-                    false
-                };
+                // OrdinaryHasInstance(%Iterator%, iteratorRecord.[[Iterator]])
+                let has_iter_proto = matches!(
+                    interp.ordinary_has_instance(&iterator_ctor_for_from, &iter_val),
+                    Completion::Normal(JsValue::Boolean(true))
+                );
 
                 if has_iter_proto {
                     return Completion::Normal(iter_val);
@@ -2699,17 +2694,13 @@ impl Interpreter {
 
                 // Create wrapper with shared WrapForValidIteratorPrototype
                 let wrapper = interp.create_object();
-                wrapper.borrow_mut().prototype = wvp_for_from.clone();
+                wrapper.borrow_mut().prototype_id = wvp_for_from;
                 wrapper.borrow_mut().class_name = "Iterator".to_string();
+                wrapper.borrow_mut().wrap_iter_record =
+                    Some((iter_val.clone(), next_method.clone()));
+                wrapper.borrow_mut().gc_native_roots = Some(vec![iter_val, next_method]);
 
                 let wrapper_id = wrapper.borrow().id.unwrap();
-                // Store GC roots for the wrapped iterator
-                wrapper.borrow_mut().gc_native_roots =
-                    Some(vec![iter_val.clone(), next_method.clone()]);
-                map_for_from
-                    .borrow_mut()
-                    .insert(wrapper_id, (iter_val, next_method, true));
-
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: wrapper_id }))
             },
         ));
@@ -3570,12 +3561,11 @@ impl Interpreter {
 
     pub(crate) fn create_array_iterator(&mut self, array_id: u64, kind: IteratorKind) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
+        obj_data.prototype_id = self
             .realm()
             .array_iterator_prototype
-            .clone()
-            .or(self.realm().iterator_prototype.clone())
-            .or(self.realm().object_prototype.clone());
+            .or(self.realm().iterator_prototype)
+            .or(self.realm().object_prototype);
         obj_data.class_name = "Array Iterator".to_string();
         obj_data.iterator_state = Some(IteratorState::ArrayIterator {
             array_id,
@@ -3583,8 +3573,7 @@ impl Interpreter {
             kind,
             done: false,
         });
-        let obj = Rc::new(RefCell::new(obj_data));
-        let id = self.allocate_object_slot(obj);
+        let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
 
@@ -3594,12 +3583,11 @@ impl Interpreter {
         kind: IteratorKind,
     ) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
+        obj_data.prototype_id = self
             .realm()
             .array_iterator_prototype
-            .clone()
-            .or(self.realm().iterator_prototype.clone())
-            .or(self.realm().object_prototype.clone());
+            .or(self.realm().iterator_prototype)
+            .or(self.realm().object_prototype);
         obj_data.class_name = "Array Iterator".to_string();
         obj_data.iterator_state = Some(IteratorState::TypedArrayIterator {
             typed_array_id,
@@ -3607,34 +3595,31 @@ impl Interpreter {
             kind,
             done: false,
         });
-        let obj = Rc::new(RefCell::new(obj_data));
-        let id = self.allocate_object_slot(obj);
+        let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
 
     pub(crate) fn create_string_iterator(&mut self, string: JsString) -> JsValue {
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = self
+        obj_data.prototype_id = self
             .realm()
             .string_iterator_prototype
-            .clone()
-            .or(self.realm().iterator_prototype.clone())
-            .or(self.realm().object_prototype.clone());
+            .or(self.realm().iterator_prototype)
+            .or(self.realm().object_prototype);
         obj_data.class_name = "String Iterator".to_string();
         obj_data.iterator_state = Some(IteratorState::StringIterator {
             string,
             position: 0,
             done: false,
         });
-        let obj = Rc::new(RefCell::new(obj_data));
-        let id = self.allocate_object_slot(obj);
+        let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
 
     pub(crate) fn setup_generator_prototype(&mut self) {
         let gen_proto = self.create_object();
         gen_proto.borrow_mut().class_name = "Generator".to_string();
-        gen_proto.borrow_mut().prototype = self.realm().iterator_prototype.clone();
+        gen_proto.borrow_mut().prototype_id = self.realm().iterator_prototype;
 
         // next(value)
         let next_fn = self.create_function(JsFunction::native(
@@ -3727,24 +3712,24 @@ impl Interpreter {
             ),
         );
 
-        self.realm_mut().generator_prototype = Some(gen_proto.clone());
+        self.realm_mut().generator_prototype = Some(gen_proto.borrow().id.unwrap());
 
         // %GeneratorFunction.prototype% - the prototype of generator function objects
         let gf_proto = self.create_object();
         gf_proto.borrow_mut().class_name = "GeneratorFunction".to_string();
 
-        // [[Prototype]] = Function.prototype
+        // [[Prototype]] = Function.prototype_id
         // Get Function.prototype from global Function
         if let Some(func_val) = self.realm().global_env.borrow().get("Function")
             && let JsValue::Object(func_obj) = func_val
-            && let Some(func_data) = self.get_object(func_obj.id)
-            && let JsValue::Object(func_proto_obj) = func_data.borrow().get_property("prototype")
+            && let JsValue::Object(func_proto_obj) =
+                self.get_property_on_id(func_obj.id, "prototype")
             && let Some(func_proto) = self.get_object(func_proto_obj.id)
         {
-            gf_proto.borrow_mut().prototype = Some(func_proto);
+            gf_proto.borrow_mut().prototype_id = Some(func_proto.borrow().id.unwrap());
         }
 
-        // GeneratorFunction.prototype.prototype = Generator.prototype
+        // GeneratorFunction.prototype.prototype_id = Generator.prototype_id
         let gen_proto_id = gen_proto.borrow().id.unwrap();
         gf_proto.borrow_mut().insert_property(
             "prototype".to_string(),
@@ -3767,7 +3752,7 @@ impl Interpreter {
             ),
         );
 
-        // Set constructor on Generator.prototype pointing back to GeneratorFunction.prototype
+        // Set constructor on Generator.prototype pointing back to GeneratorFunction.prototype_id
         let gf_proto_id = gf_proto.borrow().id.unwrap();
         gen_proto.borrow_mut().insert_property(
             "constructor".to_string(),
@@ -3779,7 +3764,7 @@ impl Interpreter {
             ),
         );
 
-        self.realm_mut().generator_function_prototype = Some(gf_proto);
+        self.realm_mut().generator_function_prototype = Some(gf_proto.borrow().id.unwrap());
     }
 
     pub(crate) fn setup_async_generator_prototype(&mut self) {
@@ -3952,11 +3937,11 @@ impl Interpreter {
             );
         }
 
-        self.realm_mut().async_iterator_prototype = Some(async_iter_proto.clone());
+        self.realm_mut().async_iterator_prototype = Some(async_iter_proto.borrow().id.unwrap());
 
         // %AsyncGeneratorPrototype%
         let gen_proto = self.create_object();
-        gen_proto.borrow_mut().prototype = Some(async_iter_proto);
+        gen_proto.borrow_mut().prototype_id = Some(async_iter_proto.borrow().id.unwrap());
         gen_proto.borrow_mut().class_name = "AsyncGenerator".to_string();
 
         // next(value)
@@ -4012,12 +3997,12 @@ impl Interpreter {
             ),
         );
 
-        self.realm_mut().async_generator_prototype = Some(gen_proto.clone());
+        self.realm_mut().async_generator_prototype = Some(gen_proto.borrow().id.unwrap());
 
         // %AsyncGeneratorFunction.prototype%
         let agf_proto = self.create_object();
         agf_proto.borrow_mut().class_name = "AsyncGeneratorFunction".to_string();
-        // prototype property points to AsyncGenerator.prototype
+        // prototype property points to AsyncGenerator.prototype_id
         let gen_proto_id = gen_proto.borrow().id.unwrap();
         agf_proto.borrow_mut().insert_property(
             "prototype".to_string(),
@@ -4038,7 +4023,7 @@ impl Interpreter {
                 true,
             ),
         );
-        // Set constructor on AsyncGenerator.prototype pointing back to AsyncGeneratorFunction.prototype
+        // Set constructor on AsyncGenerator.prototype pointing back to AsyncGeneratorFunction.prototype_id
         let agf_proto_id = agf_proto.borrow().id.unwrap();
         gen_proto.borrow_mut().insert_property(
             "constructor".to_string(),
@@ -4049,6 +4034,6 @@ impl Interpreter {
                 true,
             ),
         );
-        self.realm_mut().async_generator_function_prototype = Some(agf_proto);
+        self.realm_mut().async_generator_function_prototype = Some(agf_proto.borrow().id.unwrap());
     }
 }

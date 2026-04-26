@@ -66,21 +66,24 @@ impl Interpreter {
                             interp.create_type_error("BigInt.prototype.toString requires a BigInt"),
                         );
                     };
-                    let radix = args
-                        .first()
-                        .map(|v| {
-                            if v.is_undefined() {
-                                10
-                            } else {
-                                to_number(v) as u32
+                    let radix =
+                        match args.first() {
+                            Some(v) if !v.is_undefined() => {
+                                let num = match interp.to_number_value(v) {
+                                    Ok(n) => n,
+                                    Err(e) => return Completion::Throw(e),
+                                };
+                                let r = num as u32;
+                                if !(2..=36).contains(&r) {
+                                    return Completion::Throw(interp.create_error(
+                                        "RangeError",
+                                        "radix must be between 2 and 36",
+                                    ));
+                                }
+                                r
                             }
-                        })
-                        .unwrap_or(10);
-                    if !(2..=36).contains(&radix) {
-                        return Completion::Throw(
-                            interp.create_error("RangeError", "radix must be between 2 and 36"),
-                        );
-                    }
+                            _ => 10,
+                        };
                     let s = if radix == 10 {
                         n.to_string()
                     } else {
@@ -246,6 +249,10 @@ impl Interpreter {
                         value: num_bigint::BigInt::from(0),
                     }));
                 }
+                let bit_len = b.value.bits() + 1; // +1 for sign bit
+                if bit_len <= bits {
+                    return Completion::Normal(bigint_val);
+                }
                 let modulus = num_bigint::BigInt::from(1) << bits;
                 let mut result = &b.value % &modulus;
                 if result < num_bigint::BigInt::from(0) {
@@ -283,6 +290,9 @@ impl Interpreter {
                         value: num_bigint::BigInt::from(0),
                     }));
                 }
+                if b.value >= num_bigint::BigInt::from(0) && b.value.bits() <= bits {
+                    return Completion::Normal(bigint_val);
+                }
                 let modulus = num_bigint::BigInt::from(1) << bits;
                 let mut result = &b.value % &modulus;
                 if result < num_bigint::BigInt::from(0) {
@@ -319,7 +329,7 @@ impl Interpreter {
             );
         }
 
-        self.realm_mut().bigint_prototype = Some(proto);
+        self.realm_mut().bigint_prototype = Some(proto.borrow().id.unwrap());
     }
 }
 

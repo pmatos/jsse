@@ -108,6 +108,15 @@ fn base_locale(locale_str: &str) -> String {
 
 fn get_plural_categories_sorted(locale_str: &str, plural_type: &str) -> Vec<&'static str> {
     let base = base_locale(locale_str);
+
+    // ICU4X lacks full plural rule data for some locales; supplement manually
+    if plural_type == "cardinal" {
+        let lang = base.split('-').next().unwrap_or(&base);
+        if lang == "gv" {
+            return vec!["one", "two", "few", "many", "other"];
+        }
+    }
+
     let icu_locale: IcuLocale = base.parse().unwrap_or_else(|_| "en".parse().unwrap());
     let prefs = PluralRulesPreferences::from(&icu_locale);
     let mut opts = IcuPluralRulesOptions::default();
@@ -143,8 +152,9 @@ fn get_plural_categories_sorted(locale_str: &str, plural_type: &str) -> Vec<&'st
 impl Interpreter {
     pub(crate) fn setup_intl_plural_rules(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
-        if let Some(ref op) = self.realm().object_prototype {
-            proto.borrow_mut().prototype = Some(op.clone());
+        if let Some(op_id) = self.realm().object_prototype {
+            proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(op_id).borrow().id.unwrap());
         }
         proto.borrow_mut().class_name = "Intl.PluralRules".to_string();
 
@@ -338,8 +348,9 @@ impl Interpreter {
                     }) = data
                     {
                         let result = interp.create_object();
-                        if let Some(ref op) = interp.realm().object_prototype {
-                            result.borrow_mut().prototype = Some(op.clone());
+                        if let Some(op_id) = interp.realm().object_prototype {
+                            result.borrow_mut().prototype_id =
+                                Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                         }
 
                         // Spec order: locale, type, notation, minimumIntegerDigits,
@@ -515,12 +526,12 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_plural_rules_prototype = Some(proto.clone());
+        self.realm_mut().intl_plural_rules_prototype = Some(proto.borrow().id.unwrap());
 
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone = proto.clone();
+        let proto_clone_id = proto.borrow().id.unwrap();
 
         let ctor = self.create_function(JsFunction::constructor(
             "PluralRules".to_string(),
@@ -935,13 +946,13 @@ impl Interpreter {
                 let locale = base_locale(&raw_locale);
 
                 let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                    realm.intl_plural_rules_prototype.clone()
+                    realm.intl_plural_rules_prototype
                 }) {
-                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                    Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto);
+                obj.borrow_mut().prototype_id = Some(proto);
                 obj.borrow_mut().class_name = "Intl.PluralRules".to_string();
                 obj.borrow_mut().intl_data = Some(IntlData::PluralRules {
                     locale,

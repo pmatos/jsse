@@ -229,7 +229,7 @@ impl Interpreter {
                     };
 
                     let is_neg = rounded < 0;
-                    let abs_ns = if is_neg { -rounded } else { rounded } as i128;
+                    let abs_ns = if is_neg { -rounded } else { rounded };
                     let sign_f = if is_neg {
                         -1.0
                     } else if abs_ns == 0 {
@@ -528,7 +528,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("valueOf".to_string(), value_of_fn);
 
-        self.realm_mut().temporal_plain_time_prototype = Some(proto.clone());
+        self.realm_mut().temporal_plain_time_prototype = Some(proto.borrow().id.unwrap());
 
         // Constructor
         let constructor = self.create_function(JsFunction::constructor(
@@ -700,20 +700,15 @@ impl Interpreter {
                     nanosecond,
                 );
                 if let Completion::Normal(JsValue::Object(ref o)) = result {
-                    let dp = interp
-                        .realm()
-                        .temporal_plain_time_prototype
-                        .as_ref()
-                        .and_then(|p| p.borrow().id);
-                    interp.apply_new_target_prototype(o.id, dp, |r| {
-                        r.temporal_plain_time_prototype.clone()
-                    });
+                    let dp = interp.realm().temporal_plain_time_prototype;
+                    interp
+                        .apply_new_target_prototype(o.id, dp, |r| r.temporal_plain_time_prototype);
                 }
                 result
             },
         ));
 
-        // Constructor.prototype
+        // Constructor.prototype_id
         if let JsValue::Object(ref o) = constructor
             && let Some(obj) = self.get_object(o.id)
         {
@@ -881,8 +876,9 @@ pub(super) fn create_plain_time_result(
 ) -> Completion {
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.PlainTime".to_string();
-    if let Some(ref proto) = interp.realm().temporal_plain_time_prototype {
-        obj.borrow_mut().prototype = Some(proto.clone());
+    if let Some(proto_id) = interp.realm().temporal_plain_time_prototype {
+        obj.borrow_mut().prototype_id =
+            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::PlainTime {
         hour: h,
@@ -1085,24 +1081,6 @@ fn parse_time_string(
         None => Err(Completion::Throw(
             interp.create_range_error(&format!("Invalid time string: {s}")),
         )),
-    }
-}
-
-#[allow(dead_code)]
-fn get_time_field(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: f64,
-) -> Result<f64, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        to_integer_with_truncation(interp, &val)
     }
 }
 

@@ -71,7 +71,7 @@ fn is_valid_variants_value(s: &str) -> bool {
         return false;
     }
     let parts: Vec<&str> = s.split('-').collect();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::default();
     for part in &parts {
         let lower = part.to_ascii_lowercase();
         if !seen.insert(lower) {
@@ -89,21 +89,6 @@ fn is_valid_variants_value(s: &str) -> bool {
         }
     }
     true
-}
-
-#[allow(dead_code)]
-fn number_to_weekday_string(n: f64) -> Option<&'static str> {
-    match n as i64 {
-        0 => Some("sun"),
-        1 => Some("mon"),
-        2 => Some("tue"),
-        3 => Some("wed"),
-        4 => Some("thu"),
-        5 => Some("fri"),
-        6 => Some("sat"),
-        7 => Some("sun"),
-        _ => None,
-    }
 }
 
 fn string_digit_to_weekday(s: &str) -> Option<&'static str> {
@@ -168,8 +153,9 @@ fn build_intl_data_from_locale(locale: &IcuLocale) -> IntlData {
 
 fn create_locale_object_from_icu(interp: &mut Interpreter, locale: &IcuLocale) -> JsValue {
     let obj = interp.create_object();
-    if let Some(ref proto) = interp.realm().intl_locale_prototype {
-        obj.borrow_mut().prototype = Some(proto.clone());
+    if let Some(proto_id) = interp.realm().intl_locale_prototype {
+        obj.borrow_mut().prototype_id =
+            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
     }
     obj.borrow_mut().class_name = "Intl.Locale".to_string();
     obj.borrow_mut().intl_data = Some(build_intl_data_from_locale(locale));
@@ -203,8 +189,9 @@ where
 impl Interpreter {
     pub(crate) fn setup_intl_locale(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
-        if let Some(ref op) = self.realm().object_prototype {
-            proto.borrow_mut().prototype = Some(op.clone());
+        if let Some(op_id) = self.realm().object_prototype {
+            proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(op_id).borrow().id.unwrap());
         }
         proto.borrow_mut().class_name = "Intl.Locale".to_string();
 
@@ -824,8 +811,9 @@ impl Interpreter {
                     };
 
                     let info_obj = interp.create_object();
-                    if let Some(ref op) = interp.realm().object_prototype {
-                        info_obj.borrow_mut().prototype = Some(op.clone());
+                    if let Some(op_id) = interp.realm().object_prototype {
+                        info_obj.borrow_mut().prototype_id =
+                            Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                     }
                     info_obj.borrow_mut().insert_property(
                         "direction".to_string(),
@@ -958,8 +946,9 @@ impl Interpreter {
                     weekend_days.sort();
 
                     let info_obj = interp.create_object();
-                    if let Some(ref op) = interp.realm().object_prototype {
-                        info_obj.borrow_mut().prototype = Some(op.clone());
+                    if let Some(op_id) = interp.realm().object_prototype {
+                        info_obj.borrow_mut().prototype_id =
+                            Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                     }
                     info_obj.borrow_mut().insert_property(
                         "firstDay".to_string(),
@@ -994,12 +983,12 @@ impl Interpreter {
             .insert_builtin("getWeekInfo".to_string(), get_week_info_fn);
 
         // Store the prototype
-        self.realm_mut().intl_locale_prototype = Some(proto.clone());
+        self.realm_mut().intl_locale_prototype = Some(proto.borrow().id.unwrap());
 
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone = proto.clone();
+        let proto_clone_id = proto.borrow().id.unwrap();
 
         let locale_ctor = self.create_function(JsFunction::constructor(
             "Locale".to_string(),
@@ -1347,16 +1336,16 @@ impl Interpreter {
                     }
                 }
 
-                let locale_proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                    realm.intl_locale_prototype.clone()
-                }) {
-                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                let locale_proto = match interp
+                    .get_prototype_from_new_target_realm(|realm| realm.intl_locale_prototype)
+                {
+                    Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
 
                 if is_fallback_tag {
                     let obj = interp.create_object();
-                    obj.borrow_mut().prototype = Some(locale_proto.clone());
+                    obj.borrow_mut().prototype_id = Some(locale_proto);
                     obj.borrow_mut().class_name = "Intl.Locale".to_string();
                     let lower_tag = tag_string.to_ascii_lowercase();
                     obj.borrow_mut().intl_data = Some(IntlData::Locale {
@@ -1382,7 +1371,7 @@ impl Interpreter {
                     canonicalize_unicode_keyword_values(&mut locale);
 
                     let obj = interp.create_object();
-                    obj.borrow_mut().prototype = Some(locale_proto);
+                    obj.borrow_mut().prototype_id = Some(locale_proto);
                     obj.borrow_mut().class_name = "Intl.Locale".to_string();
                     obj.borrow_mut().intl_data = Some(build_intl_data_from_locale(&locale));
                     let obj_id = obj.borrow().id.unwrap();

@@ -1,7 +1,6 @@
 use super::super::super::*;
 use fixed_decimal::{
-    Decimal, FloatPrecision, RoundingIncrement, SignDisplay, SignedRoundingMode,
-    UnsignedRoundingMode,
+    Decimal, FloatPrecision, SignDisplay, SignedRoundingMode, UnsignedRoundingMode,
 };
 use icu::decimal::options::{DecimalFormatterOptions, GroupingStrategy};
 use icu::decimal::{DecimalFormatter, DecimalFormatterPreferences};
@@ -61,9 +60,11 @@ pub(crate) fn is_known_numbering_system(ns: &str) -> bool {
             | "deva"
             | "diak"
             | "fullwide"
+            | "gara"
             | "gong"
             | "gonm"
             | "gujr"
+            | "gukh"
             | "guru"
             | "hanidec"
             | "hmng"
@@ -73,6 +74,7 @@ pub(crate) fn is_known_numbering_system(ns: &str) -> bool {
             | "kawi"
             | "khmr"
             | "knda"
+            | "krai"
             | "lana"
             | "lanatham"
             | "laoo"
@@ -90,13 +92,17 @@ pub(crate) fn is_known_numbering_system(ns: &str) -> bool {
             | "mroo"
             | "mtei"
             | "mymr"
+            | "mymrepka"
+            | "mymrpao"
             | "mymrshan"
             | "mymrtlng"
             | "nagm"
             | "newa"
             | "nkoo"
             | "olck"
+            | "onao"
             | "orya"
+            | "outlined"
             | "osma"
             | "rohg"
             | "saur"
@@ -106,6 +112,7 @@ pub(crate) fn is_known_numbering_system(ns: &str) -> bool {
             | "sinh"
             | "sora"
             | "sund"
+            | "sunu"
             | "takr"
             | "talu"
             | "tamldec"
@@ -114,6 +121,7 @@ pub(crate) fn is_known_numbering_system(ns: &str) -> bool {
             | "tibt"
             | "tirh"
             | "tnsa"
+            | "tols"
             | "vaii"
             | "wara"
             | "wcho"
@@ -828,15 +836,24 @@ pub(crate) fn numbering_system_zero(ns: &str) -> Option<char> {
         "gonm" => Some('\u{11D50}'),
         "hmng" => Some('\u{16B50}'),
         "hmnp" => Some('\u{1E140}'),
+        "gara" => Some('\u{10D40}'),
+        "gukh" => Some('\u{16130}'),
         "kali" => Some('\u{A900}'),
+        "krai" => Some('\u{16D70}'),
         "lanatham" => Some('\u{1A90}'),
         "modi" => Some('\u{11650}'),
         "mymrshan" => Some('\u{1090}'),
+        "mymrepka" => Some('\u{116DA}'),
+        "mymrpao" => Some('\u{116D0}'),
         "mymrtlng" => Some('\u{A9F0}'),
         "newa" => Some('\u{11450}'),
+        "onao" => Some('\u{1E5F1}'),
+        "outlined" => Some('\u{1CCF0}'),
         "sind" => Some('\u{112F0}'),
         "sinh" => Some('\u{0DE6}'),
+        "sunu" => Some('\u{11BF0}'),
         "tirh" => Some('\u{114D0}'),
+        "tols" => Some('\u{11DE0}'),
         "wcho" => Some('\u{1E2F0}'),
         "latn" | "" => None,
         _ => None,
@@ -912,25 +929,6 @@ pub(crate) fn apply_arabic_separators(s: &str, ns: &str) -> String {
     result
 }
 
-#[allow(dead_code)]
-fn js_rounding_increment_to_fd(inc: u32) -> RoundingIncrement {
-    match inc {
-        2 => RoundingIncrement::MultiplesOf2,
-        5 => RoundingIncrement::MultiplesOf5,
-        10 => RoundingIncrement::MultiplesOf2, // approx: 10 = 2*5
-        20 => RoundingIncrement::MultiplesOf2,
-        25 => RoundingIncrement::MultiplesOf25,
-        50 => RoundingIncrement::MultiplesOf5,
-        100 => RoundingIncrement::MultiplesOf2,
-        200 => RoundingIncrement::MultiplesOf2,
-        500 => RoundingIncrement::MultiplesOf5,
-        1000 => RoundingIncrement::MultiplesOf2,
-        2000 => RoundingIncrement::MultiplesOf2,
-        5000 => RoundingIncrement::MultiplesOf5,
-        _ => RoundingIncrement::MultiplesOf1,
-    }
-}
-
 fn js_sign_display_to_fd(sign_display: &str) -> SignDisplay {
     match sign_display {
         "always" => SignDisplay::Always,
@@ -994,22 +992,6 @@ fn currency_position_after(locale: &str) -> bool {
             | "id"
             | "ms"
     )
-}
-
-#[allow(dead_code)]
-fn locale_uses_narrow_currency(locale: &str, cur_code: &str) -> bool {
-    if cur_code == "USD" {
-        let lang = locale
-            .split('-')
-            .next()
-            .unwrap_or(locale)
-            .split('_')
-            .next()
-            .unwrap_or(locale);
-        !matches!(lang, "en" | "de" | "fr" | "es" | "pt" | "nl" | "it")
-    } else {
-        false
-    }
 }
 
 fn locale_percent_has_space(locale: &str) -> bool {
@@ -2920,20 +2902,12 @@ pub(crate) fn format_to_parts_internal(
     parts
 }
 
-#[allow(dead_code)]
-fn classify_number_chunk(s: &str) -> (String, String) {
-    if s.contains('.') {
-        ("fraction".to_string(), s.to_string())
-    } else {
-        ("integer".to_string(), s.to_string())
-    }
-}
-
 impl Interpreter {
     pub(crate) fn setup_intl_number_format(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
-        if let Some(ref op) = self.realm().object_prototype {
-            proto.borrow_mut().prototype = Some(op.clone());
+        if let Some(op_id) = self.realm().object_prototype {
+            proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(op_id).borrow().id.unwrap());
         }
         proto.borrow_mut().class_name = "Intl.NumberFormat".to_string();
 
@@ -3148,8 +3122,8 @@ impl Interpreter {
                             .into_iter()
                             .map(|(typ, val)| {
                                 let part_obj = interp.create_object();
-                                if let Some(ref op) = interp.realm().object_prototype {
-                                    part_obj.borrow_mut().prototype = Some(op.clone());
+                                if let Some(op_id) = interp.realm().object_prototype {
+                                    part_obj.borrow_mut().prototype_id = Some(op_id);
                                 }
                                 part_obj.borrow_mut().insert_property(
                                     "type".to_string(),
@@ -3417,8 +3391,8 @@ impl Interpreter {
 
                             let make_part = |interp: &mut Interpreter, typ: &str, val: &str, source: &str| -> JsValue {
                                 let part = interp.create_object();
-                                if let Some(ref op) = interp.realm().object_prototype {
-                                    part.borrow_mut().prototype = Some(op.clone());
+                                if let Some(op_id) = interp.realm().object_prototype {
+                                    part.borrow_mut().prototype_id = Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                                 }
                                 part.borrow_mut().insert_property(
                                     "type".to_string(),
@@ -3532,8 +3506,9 @@ impl Interpreter {
                     }) = data
                     {
                         let result = interp.create_object();
-                        if let Some(ref op) = interp.realm().object_prototype {
-                            result.borrow_mut().prototype = Some(op.clone());
+                        if let Some(op_id) = interp.realm().object_prototype {
+                            result.borrow_mut().prototype_id =
+                                Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                         }
 
                         let mut props: Vec<(&str, JsValue)> = vec![
@@ -3658,12 +3633,12 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_number_format_prototype = Some(proto.clone());
+        self.realm_mut().intl_number_format_prototype = Some(proto.borrow().id.unwrap());
 
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone = proto.clone();
+        let proto_clone_id = proto.borrow().id.unwrap();
 
         let nf_ctor = self.create_function(JsFunction::constructor(
             "NumberFormat".to_string(),
@@ -4356,13 +4331,13 @@ impl Interpreter {
                 };
 
                 let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                    realm.intl_number_format_prototype.clone()
+                    realm.intl_number_format_prototype
                 }) {
-                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                    Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto);
+                obj.borrow_mut().prototype_id = Some(proto);
                 obj.borrow_mut().class_name = "Intl.NumberFormat".to_string();
                 obj.borrow_mut().intl_data = Some(IntlData::NumberFormat {
                     locale,

@@ -1,5 +1,5 @@
 use crate::ast::*;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 #[derive(Debug, Clone)]
 pub struct GeneratorAnalysis {
@@ -78,7 +78,7 @@ impl AnalysisContext {
             current_try: None,
             current_loop: None,
             current_label: None,
-            seen_vars: HashSet::new(),
+            seen_vars: HashSet::default(),
         }
     }
 }
@@ -885,10 +885,6 @@ mod tests {
 
     fn make_yield(delegate: bool) -> Expression {
         Expression::Yield(None, delegate)
-    }
-
-    fn make_yield_expr(expr: Expression, delegate: bool) -> Expression {
-        Expression::Yield(Some(Box::new(expr)), delegate)
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use crate::ast::*;
 use crate::interpreter::generator_analysis::*;
 use crate::types::JsValue;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
@@ -124,6 +124,7 @@ struct TransformContext {
     #[allow(dead_code)]
     analysis: GeneratorAnalysis,
     yield_counter: usize,
+    temp_counter: usize,
     break_targets: HashMap<Option<String>, usize>,
     continue_targets: HashMap<Option<String>, usize>,
     try_stack: Vec<TryInfo>,
@@ -149,8 +150,9 @@ impl TransformContext {
             current_statements: Vec::new(),
             analysis,
             yield_counter: 0,
-            break_targets: HashMap::new(),
-            continue_targets: HashMap::new(),
+            temp_counter: 0,
+            break_targets: HashMap::default(),
+            continue_targets: HashMap::default(),
             try_stack: Vec::new(),
             temp_vars: Vec::new(),
             is_async,
@@ -160,7 +162,9 @@ impl TransformContext {
     }
 
     fn new_temp_var(&mut self, prefix: &str) -> String {
-        let name = format!("${}_{}", prefix, self.yield_counter);
+        let id = self.temp_counter;
+        self.temp_counter += 1;
+        let name = format!("${}_{}", prefix, id);
         self.temp_vars.push(name.clone());
         name
     }
@@ -404,8 +408,7 @@ fn transform_statements(stmts: &[Statement], ctx: &mut TransformContext, after_s
             // for proper Return(None) vs Return(Some) tick distinction
             transform_yielding_statement(stmt, ctx, next_after);
         } else if (ctx.is_async && has_block_with_await_using(stmt))
-            || (matches!(stmt, Statement::Break(_) | Statement::Continue(_))
-                && !ctx.break_targets.is_empty())
+            || (stmt_has_break_or_continue(stmt) && !ctx.break_targets.is_empty())
         {
             transform_yielding_statement(stmt, ctx, next_after);
         } else {
@@ -1406,21 +1409,31 @@ fn transform_if_statement(if_stmt: &IfStatement, ctx: &mut TransformContext, aft
         });
 
         ctx.current_state_id = true_state;
-        if stmt_has_suspension(&if_stmt.consequent, ctx.is_async, ctx.detect_for_await) {
+        if stmt_has_suspension(&if_stmt.consequent, ctx.is_async, ctx.detect_for_await)
+            || (!ctx.break_targets.is_empty() && stmt_has_break_or_continue(&if_stmt.consequent))
+        {
             transform_yielding_statement(&if_stmt.consequent, ctx, after_if);
+            if ctx.current_state_id != after_if {
+                ctx.finalize_current_state(StateTerminator::Goto(after_if));
+            }
         } else {
             ctx.emit_statement(*if_stmt.consequent.clone());
+            ctx.finalize_current_state(StateTerminator::Goto(after_if));
         }
-        ctx.finalize_current_state(StateTerminator::Goto(after_if));
 
         if let Some(alt) = &if_stmt.alternate {
             ctx.current_state_id = false_state;
-            if stmt_has_suspension(alt, ctx.is_async, ctx.detect_for_await) {
+            if stmt_has_suspension(alt, ctx.is_async, ctx.detect_for_await)
+                || (!ctx.break_targets.is_empty() && stmt_has_break_or_continue(alt))
+            {
                 transform_yielding_statement(alt, ctx, after_if);
+                if ctx.current_state_id != after_if {
+                    ctx.finalize_current_state(StateTerminator::Goto(after_if));
+                }
             } else {
                 ctx.emit_statement(*alt.clone());
+                ctx.finalize_current_state(StateTerminator::Goto(after_if));
             }
-            ctx.finalize_current_state(StateTerminator::Goto(after_if));
         }
 
         ctx.current_state_id = after_if;
@@ -1439,21 +1452,31 @@ fn transform_if_statement(if_stmt: &IfStatement, ctx: &mut TransformContext, aft
         });
 
         ctx.current_state_id = true_state;
-        if stmt_has_suspension(&if_stmt.consequent, ctx.is_async, ctx.detect_for_await) {
+        if stmt_has_suspension(&if_stmt.consequent, ctx.is_async, ctx.detect_for_await)
+            || (!ctx.break_targets.is_empty() && stmt_has_break_or_continue(&if_stmt.consequent))
+        {
             transform_yielding_statement(&if_stmt.consequent, ctx, after_if);
+            if ctx.current_state_id != after_if {
+                ctx.finalize_current_state(StateTerminator::Goto(after_if));
+            }
         } else {
             ctx.emit_statement(*if_stmt.consequent.clone());
+            ctx.finalize_current_state(StateTerminator::Goto(after_if));
         }
-        ctx.finalize_current_state(StateTerminator::Goto(after_if));
 
         if let Some(alt) = &if_stmt.alternate {
             ctx.current_state_id = false_state;
-            if stmt_has_suspension(alt, ctx.is_async, ctx.detect_for_await) {
+            if stmt_has_suspension(alt, ctx.is_async, ctx.detect_for_await)
+                || (!ctx.break_targets.is_empty() && stmt_has_break_or_continue(alt))
+            {
                 transform_yielding_statement(alt, ctx, after_if);
+                if ctx.current_state_id != after_if {
+                    ctx.finalize_current_state(StateTerminator::Goto(after_if));
+                }
             } else {
                 ctx.emit_statement(*alt.clone());
+                ctx.finalize_current_state(StateTerminator::Goto(after_if));
             }
-            ctx.finalize_current_state(StateTerminator::Goto(after_if));
         }
 
         ctx.current_state_id = after_if;
@@ -1476,8 +1499,8 @@ fn transform_while_statement(
 
     ctx.finalize_current_state(StateTerminator::Goto(test_state));
 
-    ctx.break_targets.insert(None, after_loop);
-    ctx.continue_targets.insert(None, test_state);
+    let prev_break = ctx.break_targets.insert(None, after_loop);
+    let prev_continue = ctx.continue_targets.insert(None, test_state);
 
     ctx.current_state_id = test_state;
     if expr_has_suspension(&while_stmt.test, ctx.is_async) {
@@ -1503,13 +1526,24 @@ fn transform_while_statement(
         || stmt_has_break_or_continue(&while_stmt.body)
     {
         transform_yielding_statement(&while_stmt.body, ctx, test_state);
+        if ctx.current_state_id != test_state {
+            ctx.finalize_current_state(StateTerminator::Goto(test_state));
+        }
     } else {
         ctx.emit_statement(*while_stmt.body.clone());
+        ctx.finalize_current_state(StateTerminator::Goto(test_state));
     }
-    ctx.finalize_current_state(StateTerminator::Goto(test_state));
 
-    ctx.break_targets.remove(&None);
-    ctx.continue_targets.remove(&None);
+    if let Some(prev) = prev_break {
+        ctx.break_targets.insert(None, prev);
+    } else {
+        ctx.break_targets.remove(&None);
+    }
+    if let Some(prev) = prev_continue {
+        ctx.continue_targets.insert(None, prev);
+    } else {
+        ctx.continue_targets.remove(&None);
+    }
 
     ctx.current_state_id = after_loop;
 }
@@ -1530,18 +1564,21 @@ fn transform_do_while_statement(
 
     ctx.finalize_current_state(StateTerminator::Goto(body_state));
 
-    ctx.break_targets.insert(None, after_loop);
-    ctx.continue_targets.insert(None, test_state);
+    let prev_break = ctx.break_targets.insert(None, after_loop);
+    let prev_continue = ctx.continue_targets.insert(None, test_state);
 
     ctx.current_state_id = body_state;
     if stmt_has_suspension(&do_while_stmt.body, ctx.is_async, ctx.detect_for_await)
         || stmt_has_break_or_continue(&do_while_stmt.body)
     {
         transform_yielding_statement(&do_while_stmt.body, ctx, test_state);
+        if ctx.current_state_id != test_state {
+            ctx.finalize_current_state(StateTerminator::Goto(test_state));
+        }
     } else {
         ctx.emit_statement(*do_while_stmt.body.clone());
+        ctx.finalize_current_state(StateTerminator::Goto(test_state));
     }
-    ctx.finalize_current_state(StateTerminator::Goto(test_state));
 
     ctx.current_state_id = test_state;
     if expr_has_suspension(&do_while_stmt.test, ctx.is_async) {
@@ -1562,8 +1599,16 @@ fn transform_do_while_statement(
         });
     }
 
-    ctx.break_targets.remove(&None);
-    ctx.continue_targets.remove(&None);
+    if let Some(prev) = prev_break {
+        ctx.break_targets.insert(None, prev);
+    } else {
+        ctx.break_targets.remove(&None);
+    }
+    if let Some(prev) = prev_continue {
+        ctx.continue_targets.insert(None, prev);
+    } else {
+        ctx.continue_targets.remove(&None);
+    }
 
     ctx.current_state_id = after_loop;
 }
@@ -1608,8 +1653,8 @@ fn transform_for_statement(
 
     ctx.finalize_current_state(StateTerminator::Goto(test_state));
 
-    ctx.break_targets.insert(None, after_loop);
-    ctx.continue_targets.insert(None, update_state);
+    let prev_break = ctx.break_targets.insert(None, after_loop);
+    let prev_continue = ctx.continue_targets.insert(None, update_state);
 
     ctx.current_state_id = test_state;
     if let Some(test) = &for_stmt.test {
@@ -1639,10 +1684,13 @@ fn transform_for_statement(
         || stmt_has_break_or_continue(&for_stmt.body)
     {
         transform_yielding_statement(&for_stmt.body, ctx, update_state);
+        if ctx.current_state_id != update_state {
+            ctx.finalize_current_state(StateTerminator::Goto(update_state));
+        }
     } else {
         ctx.emit_statement(*for_stmt.body.clone());
+        ctx.finalize_current_state(StateTerminator::Goto(update_state));
     }
-    ctx.finalize_current_state(StateTerminator::Goto(update_state));
 
     ctx.current_state_id = update_state;
     if let Some(update) = &for_stmt.update {
@@ -1654,8 +1702,16 @@ fn transform_for_statement(
     }
     ctx.finalize_current_state(StateTerminator::Goto(test_state));
 
-    ctx.break_targets.remove(&None);
-    ctx.continue_targets.remove(&None);
+    if let Some(prev) = prev_break {
+        ctx.break_targets.insert(None, prev);
+    } else {
+        ctx.break_targets.remove(&None);
+    }
+    if let Some(prev) = prev_continue {
+        ctx.continue_targets.insert(None, prev);
+    } else {
+        ctx.continue_targets.remove(&None);
+    }
 
     ctx.current_state_id = after_loop;
 }
@@ -1687,8 +1743,8 @@ fn transform_for_of_statement(
     let iter_var = ctx.new_temp_var("forofiter");
     let next_var = ctx.new_temp_var("forofnext");
 
-    ctx.break_targets.insert(None, after_loop);
-    ctx.continue_targets.insert(None, head_state);
+    let prev_break = ctx.break_targets.insert(None, after_loop);
+    let prev_continue = ctx.continue_targets.insert(None, head_state);
 
     // If the iterable expression contains a suspension point, evaluate it first
     let iterable_expr = if expr_has_suspension(&for_of_stmt.right, ctx.is_async) {
@@ -1723,13 +1779,24 @@ fn transform_for_of_statement(
     ctx.current_state_id = body_state;
     if stmt_has_suspension(&for_of_stmt.body, ctx.is_async, ctx.detect_for_await) {
         transform_yielding_statement(&for_of_stmt.body, ctx, head_state);
+        if ctx.current_state_id != head_state {
+            ctx.finalize_current_state(StateTerminator::Goto(head_state));
+        }
     } else {
         ctx.emit_statement(*for_of_stmt.body.clone());
+        ctx.finalize_current_state(StateTerminator::Goto(head_state));
     }
-    ctx.finalize_current_state(StateTerminator::Goto(head_state));
 
-    ctx.break_targets.remove(&None);
-    ctx.continue_targets.remove(&None);
+    if let Some(prev) = prev_break {
+        ctx.break_targets.insert(None, prev);
+    } else {
+        ctx.break_targets.remove(&None);
+    }
+    if let Some(prev) = prev_continue {
+        ctx.continue_targets.insert(None, prev);
+    } else {
+        ctx.continue_targets.remove(&None);
+    }
 
     ctx.current_state_id = after_loop;
 }
@@ -1832,7 +1899,7 @@ fn transform_switch_statement(
         after_state
     };
 
-    ctx.break_targets.insert(None, after_switch);
+    let prev_break = ctx.break_targets.insert(None, after_switch);
 
     let mut temp_discriminant = switch_stmt.discriminant.clone();
     if expr_has_suspension(&switch_stmt.discriminant, ctx.is_async) {
@@ -1894,7 +1961,11 @@ fn transform_switch_statement(
         ctx.finalize_current_state(StateTerminator::Goto(next_state));
     }
 
-    ctx.break_targets.remove(&None);
+    if let Some(prev) = prev_break {
+        ctx.break_targets.insert(None, prev);
+    } else {
+        ctx.break_targets.remove(&None);
+    }
     ctx.current_state_id = after_switch;
 }
 

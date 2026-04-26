@@ -5,6 +5,22 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
+fn buffer_len(buf: &Rc<RefCell<BufferData>>) -> usize {
+    (*buf.borrow()).len()
+}
+
+fn buffer_bytes(buf: &Rc<RefCell<BufferData>>) -> Vec<u8> {
+    (*buf.borrow()).to_vec()
+}
+
+fn with_buffer_read<R>(buf: &Rc<RefCell<BufferData>>, f: impl FnOnce(&[u8]) -> R) -> R {
+    (*buf.borrow()).with_read(f)
+}
+
+fn with_buffer_write<R>(buf: &Rc<RefCell<BufferData>>, f: impl FnOnce(&mut [u8]) -> R) -> R {
+    (*buf.borrow_mut()).with_write(f)
+}
+
 fn to_int32_modular(n: f64) -> i32 {
     if n.is_nan() || n.is_infinite() || n == 0.0 {
         return 0;
@@ -32,7 +48,7 @@ impl Interpreter {
     fn setup_arraybuffer(&mut self) {
         let ab_proto = self.create_object();
         ab_proto.borrow_mut().class_name = "ArrayBuffer".to_string();
-        self.realm_mut().arraybuffer_prototype = Some(ab_proto.clone());
+        self.realm_mut().arraybuffer_prototype = Some(ab_proto.borrow().id.unwrap());
 
         // byteLength getter
         let byte_length_getter = self.create_function(JsFunction::native(
@@ -54,7 +70,7 @@ impl Interpreter {
                         {
                             return Completion::Normal(JsValue::Number(0.0));
                         }
-                        let len = buf_data.borrow().len();
+                        let len = buffer_len(buf_data);
                         return Completion::Normal(JsValue::Number(len as f64));
                     }
                 }
@@ -144,6 +160,41 @@ impl Interpreter {
             },
         );
 
+        // immutable getter
+        let immutable_getter = self.create_function(JsFunction::native(
+            "get immutable".to_string(),
+            0,
+            |interp, this_val, _args| {
+                if let JsValue::Object(o) = this_val
+                    && let Some(obj) = interp.get_object(o.id)
+                {
+                    let obj_ref = obj.borrow();
+                    if obj_ref.arraybuffer_data.is_some() {
+                        if obj_ref.arraybuffer_is_shared {
+                            return Completion::Throw(
+                                interp.create_type_error("not an ArrayBuffer"),
+                            );
+                        }
+                        return Completion::Normal(JsValue::Boolean(
+                            obj_ref.arraybuffer_is_immutable,
+                        ));
+                    }
+                }
+                Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+            },
+        ));
+        ab_proto.borrow_mut().insert_property(
+            "immutable".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(immutable_getter),
+                set: None,
+                enumerable: Some(false),
+                configurable: Some(true),
+            },
+        );
+
         // maxByteLength getter
         let max_byte_length_getter = self.create_function(JsFunction::native(
             "get maxByteLength".to_string(),
@@ -165,7 +216,7 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Number(0.0));
                         }
                         let max = obj_ref.arraybuffer_max_byte_length.unwrap_or_else(|| {
-                            obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len()
+                            buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
                         });
                         return Completion::Normal(JsValue::Number(max as f64));
                     }
@@ -216,7 +267,7 @@ impl Interpreter {
                         }
                         let buf_len = {
                             let obj_ref = obj.borrow();
-                            obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len()
+                            buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
                         };
                         let len = buf_len as f64;
                         let start_arg = if let Some(a) = args.first() {
@@ -318,7 +369,7 @@ impl Interpreter {
                             let new_rc = interp.get_object(new_id).unwrap();
                             let new_ref = new_rc.borrow();
                             let new_byte_len =
-                                new_ref.arraybuffer_data.as_ref().unwrap().borrow().len();
+                                buffer_len(new_ref.arraybuffer_data.as_ref().unwrap());
                             if new_byte_len < new_len {
                                 return Completion::Throw(interp.create_type_error(
                                     "species constructor returned an ArrayBuffer that is too small",
@@ -335,16 +386,17 @@ impl Interpreter {
                                     interp.create_type_error("ArrayBuffer is detached"),
                                 );
                             }
-                            obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
+                            buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
                         };
                         // Copy data
                         if new_len > 0 {
                             let new_obj = interp.get_object(new_id).unwrap();
                             let new_ref = new_obj.borrow();
                             let new_buf = new_ref.arraybuffer_data.as_ref().unwrap();
-                            let mut new_buf_ref = new_buf.borrow_mut();
-                            new_buf_ref[..new_len]
-                                .copy_from_slice(&buf_data[start..start + new_len]);
+                            with_buffer_write(new_buf, |new_buf_ref| {
+                                new_buf_ref[..new_len]
+                                    .copy_from_slice(&buf_data[start..start + new_len]);
+                            });
                         }
                         return Completion::Normal(new_val);
                     }
@@ -382,7 +434,7 @@ impl Interpreter {
                     let new_len_arg = args.first().unwrap_or(&JsValue::Undefined);
                     let old_len = {
                         let obj_ref = obj.borrow();
-                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len()
+                        buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
                     let new_len = if matches!(new_len_arg, JsValue::Undefined) {
                         old_len
@@ -429,8 +481,9 @@ impl Interpreter {
                     }
                     let old_data = {
                         let obj_ref = obj.borrow();
-                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
+                        buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
+                    let old_data_len = old_data.len();
                     let mut new_data = vec![0u8; new_len];
                     let copy_len = old_len.min(new_len);
                     new_data[..copy_len].copy_from_slice(&old_data[..copy_len]);
@@ -442,6 +495,7 @@ impl Interpreter {
                         obj_ref.arraybuffer_data =
                             Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
+                    interp.gc_untrack_external_bytes(old_data_len);
                     let new_ab = interp.create_arraybuffer_resizable(new_data, max_byte_length);
                     let id = new_ab.borrow().id.unwrap();
                     return Completion::Normal(JsValue::Object(JsObject { id }));
@@ -478,7 +532,7 @@ impl Interpreter {
                     }
                     let old_len = {
                         let obj_ref = obj.borrow();
-                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len()
+                        buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
                     let new_len_arg = args.first().unwrap_or(&JsValue::Undefined);
                     let new_len = if matches!(new_len_arg, JsValue::Undefined) {
@@ -511,8 +565,9 @@ impl Interpreter {
                     }
                     let old_data = {
                         let obj_ref = obj.borrow();
-                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
+                        buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
+                    let old_data_len = old_data.len();
                     let mut new_data = vec![0u8; new_len];
                     let copy_len = old_len.min(new_len);
                     new_data[..copy_len].copy_from_slice(&old_data[..copy_len]);
@@ -524,6 +579,7 @@ impl Interpreter {
                         obj_ref.arraybuffer_data =
                             Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
+                    interp.gc_untrack_external_bytes(old_data_len);
                     let new_ab = interp.create_arraybuffer(new_data);
                     let id = new_ab.borrow().id.unwrap();
                     return Completion::Normal(JsValue::Object(JsObject { id }));
@@ -560,7 +616,7 @@ impl Interpreter {
                     }
                     let old_len = {
                         let obj_ref = obj.borrow();
-                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().len()
+                        buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
                     let new_len_arg = args.first().unwrap_or(&JsValue::Undefined);
                     let new_len = if matches!(new_len_arg, JsValue::Undefined) {
@@ -592,8 +648,9 @@ impl Interpreter {
                     }
                     let old_data = {
                         let obj_ref = obj.borrow();
-                        obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
+                        buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
                     };
+                    let old_data_len = old_data.len();
                     let mut new_data = vec![0u8; new_len];
                     let copy_len = old_len.min(new_len);
                     new_data[..copy_len].copy_from_slice(&old_data[..copy_len]);
@@ -606,6 +663,7 @@ impl Interpreter {
                         obj_ref.arraybuffer_data =
                             Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
+                    interp.gc_untrack_external_bytes(old_data_len);
                     // Create immutable ArrayBuffer
                     let new_ab = interp.create_arraybuffer(new_data);
                     new_ab.borrow_mut().arraybuffer_is_immutable = true;
@@ -670,9 +728,18 @@ impl Interpreter {
                             ),
                         );
                     }
-                    let obj_ref = obj.borrow();
-                    let buf = obj_ref.arraybuffer_data.as_ref().unwrap();
-                    buf.borrow_mut().resize(new_len, 0u8);
+                    let old_len = {
+                        let obj_ref = obj.borrow();
+                        let buf = obj_ref.arraybuffer_data.as_ref().unwrap();
+                        let old = buf.borrow().len();
+                        buf.borrow_mut().resize(new_len, 0u8);
+                        old
+                    };
+                    if new_len > old_len {
+                        interp.gc_track_external_bytes(new_len - old_len);
+                    } else {
+                        interp.gc_untrack_external_bytes(old_len - new_len);
+                    }
                     return Completion::Normal(JsValue::Undefined);
                 }
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
@@ -690,7 +757,7 @@ impl Interpreter {
             .insert_property(sym_key, PropertyDescriptor::data(tag, false, false, true));
 
         // ArrayBuffer constructor
-        let ab_proto_clone = ab_proto.clone();
+        let ab_proto_clone_id = ab_proto.borrow().id.unwrap();
         let ctor = self.create_function(JsFunction::constructor(
             "ArrayBuffer".to_string(),
             1,
@@ -739,10 +806,10 @@ impl Interpreter {
                     None
                 };
                 // OrdinaryCreateFromConstructor BEFORE data allocation (spec ordering)
-                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                    realm.arraybuffer_prototype.clone()
-                }) {
-                    Ok(p) => Some(p.unwrap_or_else(|| ab_proto_clone.clone())),
+                let proto = match interp
+                    .get_prototype_from_new_target_realm(|realm| realm.arraybuffer_prototype)
+                {
+                    Ok(p) => p.or(Some(ab_proto_clone_id)),
                     Err(e) => return Completion::Throw(e),
                 };
                 // Allocation limit: 256 MiB.
@@ -760,17 +827,19 @@ impl Interpreter {
                 } else {
                     vec![0u8; len]
                 };
+                let buf_len = buf.len();
                 let buf_rc = Rc::new(RefCell::new(BufferData::Owned(buf)));
                 let detached = Rc::new(Cell::new(false));
                 let obj = interp.create_object();
                 {
                     let mut o = obj.borrow_mut();
                     o.class_name = "ArrayBuffer".to_string();
-                    o.prototype = proto;
+                    o.prototype_id = proto;
                     o.arraybuffer_data = Some(buf_rc);
                     o.arraybuffer_detached = Some(detached);
                     o.arraybuffer_max_byte_length = max_byte_length;
                 }
+                interp.gc_track_external_bytes(buf_len);
                 let id = obj.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(JsObject { id }))
             },
@@ -858,17 +927,20 @@ impl Interpreter {
         data: Vec<u8>,
         max_byte_length: Option<usize>,
     ) -> Rc<RefCell<JsObjectData>> {
+        let data_len = data.len();
         let buf_rc = Rc::new(RefCell::new(BufferData::Owned(data)));
         let detached = Rc::new(Cell::new(false));
         let obj = self.create_object();
+        let ab_proto = self.realm().arraybuffer_prototype;
         {
             let mut o = obj.borrow_mut();
             o.class_name = "ArrayBuffer".to_string();
-            o.prototype = self.realm().arraybuffer_prototype.clone();
+            o.prototype_id = ab_proto;
             o.arraybuffer_data = Some(buf_rc);
             o.arraybuffer_detached = Some(detached);
             o.arraybuffer_max_byte_length = max_byte_length;
         }
+        self.gc_track_external_bytes(data_len);
         obj
     }
 
@@ -876,52 +948,47 @@ impl Interpreter {
         if let JsValue::Object(o) = ab_val
             && let Some(obj) = self.get_object(o.id)
         {
-            let mut obj_ref = obj.borrow_mut();
-            if obj_ref.arraybuffer_data.is_some() {
+            let old_len;
+            {
+                let obj_ref = obj.borrow();
+                if obj_ref.arraybuffer_data.is_none() {
+                    drop(obj_ref);
+                    return Completion::Throw(self.create_type_error("not an ArrayBuffer"));
+                }
                 if obj_ref.arraybuffer_is_shared {
+                    drop(obj_ref);
                     return Completion::Throw(
                         self.create_type_error("Cannot detach a SharedArrayBuffer"),
                     );
                 }
+                old_len = if let Some(ref bd) = obj_ref.arraybuffer_data {
+                    if let BufferData::Owned(ref v) = *bd.borrow() {
+                        v.len()
+                    } else {
+                        0
+                    }
+                } else {
+                    0
+                };
+            }
+            {
+                let mut obj_ref = obj.borrow_mut();
                 if let Some(ref det) = obj_ref.arraybuffer_detached {
                     det.set(true);
                 }
                 obj_ref.arraybuffer_data =
                     Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
-                return Completion::Normal(JsValue::Undefined);
             }
+            self.gc_untrack_external_bytes(old_len);
+            return Completion::Normal(JsValue::Undefined);
         }
         Completion::Throw(self.create_type_error("not an ArrayBuffer"))
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn create_shared_arraybuffer(
-        &mut self,
-        data: Vec<u8>,
-        max_byte_length: Option<usize>,
-    ) -> Rc<RefCell<JsObjectData>> {
-        use crate::interpreter::types::{SharedBufferInner, next_sab_id};
-        let sab_id = next_sab_id();
-        let inner = Arc::new(SharedBufferInner::new(data, sab_id));
-        let buf_rc = Rc::new(RefCell::new(BufferData::Shared(inner.clone())));
-        let obj = self.create_object();
-        {
-            let mut o = obj.borrow_mut();
-            o.class_name = "SharedArrayBuffer".to_string();
-            o.prototype = self.realm().shared_arraybuffer_prototype.clone();
-            o.arraybuffer_data = Some(buf_rc);
-            o.arraybuffer_detached = None;
-            o.arraybuffer_max_byte_length = max_byte_length;
-            o.arraybuffer_is_shared = true;
-            o.sab_shared = Some(inner);
-        }
-        obj
     }
 
     fn setup_shared_arraybuffer(&mut self) {
         let sab_proto = self.create_object();
         sab_proto.borrow_mut().class_name = "SharedArrayBuffer".to_string();
-        self.realm_mut().shared_arraybuffer_prototype = Some(sab_proto.clone());
+        self.realm_mut().shared_arraybuffer_prototype = Some(sab_proto.borrow().id.unwrap());
 
         // byteLength getter
         let byte_length_getter = self.create_function(JsFunction::native(
@@ -935,7 +1002,7 @@ impl Interpreter {
                     if obj_ref.arraybuffer_is_shared
                         && let Some(ref buf) = obj_ref.arraybuffer_data
                     {
-                        return Completion::Normal(JsValue::Number(buf.borrow().len() as f64));
+                        return Completion::Normal(JsValue::Number(buffer_len(buf) as f64));
                     }
                 }
                 Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
@@ -967,7 +1034,7 @@ impl Interpreter {
                     {
                         let max = obj_ref
                             .arraybuffer_max_byte_length
-                            .unwrap_or_else(|| buf.borrow().len());
+                            .unwrap_or_else(|| buffer_len(buf));
                         return Completion::Normal(JsValue::Number(max as f64));
                     }
                 }
@@ -1057,7 +1124,7 @@ impl Interpreter {
                     }
                     let obj_ref = obj.borrow();
                     let buf = obj_ref.arraybuffer_data.as_ref().unwrap();
-                    let current_len = buf.borrow().len();
+                    let current_len = buffer_len(buf);
                     if new_len < current_len {
                         return Completion::Throw(
                             interp.create_error("RangeError", "SharedArrayBuffer cannot shrink"),
@@ -1089,7 +1156,7 @@ impl Interpreter {
                             );
                         }
                         if let Some(ref buf) = obj_ref.arraybuffer_data {
-                            buf.borrow().len()
+                            buffer_len(buf)
                         } else {
                             return Completion::Throw(
                                 interp.create_type_error("not a SharedArrayBuffer"),
@@ -1177,7 +1244,7 @@ impl Interpreter {
                     {
                         let new_rc = interp.get_object(new_id).unwrap();
                         let new_ref = new_rc.borrow();
-                        let new_byte_len = new_ref.arraybuffer_data.as_ref().unwrap().borrow().len();
+                        let new_byte_len = buffer_len(new_ref.arraybuffer_data.as_ref().unwrap());
                         if new_byte_len < new_len {
                             return Completion::Throw(
                                 interp.create_type_error("species constructor returned a SharedArrayBuffer that is too small"),
@@ -1188,14 +1255,15 @@ impl Interpreter {
                     if new_len > 0 {
                         let buf_data = {
                             let obj_ref = obj.borrow();
-                            obj_ref.arraybuffer_data.as_ref().unwrap().borrow().clone()
+                            buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
                         };
                         let new_obj = interp.get_object(new_id).unwrap();
                         let new_ref = new_obj.borrow();
                         let new_buf = new_ref.arraybuffer_data.as_ref().unwrap();
-                        let mut new_buf_ref = new_buf.borrow_mut();
-                        new_buf_ref[..new_len]
-                            .copy_from_slice(&buf_data[start..start + new_len]);
+                        with_buffer_write(new_buf, |new_buf_ref| {
+                            new_buf_ref[..new_len]
+                                .copy_from_slice(&buf_data[start..start + new_len]);
+                        });
                     }
                     return Completion::Normal(new_val);
                 }
@@ -1216,7 +1284,7 @@ impl Interpreter {
         }
 
         // SharedArrayBuffer constructor
-        let sab_proto_clone = sab_proto.clone();
+        let sab_proto_clone_id = sab_proto.borrow().id.unwrap();
         let ctor = self.create_function(JsFunction::constructor(
             "SharedArrayBuffer".to_string(),
             1,
@@ -1266,10 +1334,10 @@ impl Interpreter {
                     None
                 };
                 // OrdinaryCreateFromConstructor BEFORE data allocation (spec ordering)
-                let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                    realm.shared_arraybuffer_prototype.clone()
-                }) {
-                    Ok(p) => Some(p.unwrap_or_else(|| sab_proto_clone.clone())),
+                let proto = match interp
+                    .get_prototype_from_new_target_realm(|realm| realm.shared_arraybuffer_prototype)
+                {
+                    Ok(p) => p.or(Some(sab_proto_clone_id)),
                     Err(e) => return Completion::Throw(e),
                 };
                 // Allocation limit: 256 MiB.
@@ -1289,7 +1357,7 @@ impl Interpreter {
                     let buf_rc = Rc::new(RefCell::new(BufferData::Shared(inner.clone())));
                     let mut o = obj.borrow_mut();
                     o.class_name = "SharedArrayBuffer".to_string();
-                    o.prototype = proto;
+                    o.prototype_id = proto;
                     o.arraybuffer_data = Some(buf_rc);
                     o.arraybuffer_detached = None;
                     o.arraybuffer_max_byte_length = max_byte_length;
@@ -1301,7 +1369,7 @@ impl Interpreter {
             },
         ));
 
-        // Wire SharedArrayBuffer.prototype
+        // Wire SharedArrayBuffer.prototype_id
         let sab_proto_val = {
             let id = sab_proto.borrow().id.unwrap();
             JsValue::Object(crate::types::JsObject { id })
@@ -1357,7 +1425,7 @@ impl Interpreter {
     fn setup_typed_array_base_prototype(&mut self) {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "TypedArray".to_string();
-        self.realm_mut().typed_array_prototype = Some(proto.clone());
+        self.realm_mut().typed_array_prototype = Some(proto.borrow().id.unwrap());
 
         // byteOffset getter
         let byte_offset_getter = self.create_function(JsFunction::native(
@@ -1606,19 +1674,21 @@ impl Interpreter {
                                 let byte_count = src_len * bpe;
                                 if same_buffer {
                                     // Clone source bytes first to handle overlap
-                                    let src_bytes: Vec<u8> = {
-                                        let buf = ta.buffer.borrow();
+                                    let src_bytes = with_buffer_read(&ta.buffer, |buf| {
                                         buf[src_start..src_start + byte_count].to_vec()
-                                    };
-                                    let mut buf = ta.buffer.borrow_mut();
-                                    buf[dst_start..dst_start + byte_count]
-                                        .copy_from_slice(&src_bytes);
+                                    });
+                                    with_buffer_write(&ta.buffer, |buf| {
+                                        buf[dst_start..dst_start + byte_count]
+                                            .copy_from_slice(&src_bytes);
+                                    });
                                 } else {
-                                    let src_buf = src_ta.buffer.borrow();
-                                    let mut dst_buf = ta.buffer.borrow_mut();
-                                    dst_buf[dst_start..dst_start + byte_count].copy_from_slice(
-                                        &src_buf[src_start..src_start + byte_count],
-                                    );
+                                    let src_bytes = with_buffer_read(&src_ta.buffer, |buf| {
+                                        buf[src_start..src_start + byte_count].to_vec()
+                                    });
+                                    with_buffer_write(&ta.buffer, |buf| {
+                                        buf[dst_start..dst_start + byte_count]
+                                            .copy_from_slice(&src_bytes);
+                                    });
                                 }
                             } else if same_buffer {
                                 // Clone all source values first
@@ -1755,12 +1825,12 @@ impl Interpreter {
                     let bpe = ta.kind.bytes_per_element();
                     let new_offset = ta.byte_offset + begin * bpe;
 
-                    let length_arg = if end_is_undefined && ta.is_length_tracking {
-                        JsValue::Undefined
+                    let offset_val = JsValue::Number(new_offset as f64);
+                    let ctor_args: Vec<JsValue> = if end_is_undefined && ta.is_length_tracking {
+                        vec![buf_val, offset_val]
                     } else {
-                        JsValue::Number(new_len as f64)
+                        vec![buf_val, offset_val, JsValue::Number(new_len as f64)]
                     };
-                    let ctor_args = [buf_val, JsValue::Number(new_offset as f64), length_arg];
                     return match interp.typed_array_species_create(this_val, &ctor_args) {
                         Ok(v) => Completion::Normal(v),
                         Err(e) => Completion::Throw(e),
@@ -1873,25 +1943,25 @@ impl Interpreter {
                                 let byte_count = count * bpe;
                                 let same_buf = Rc::ptr_eq(&ta.buffer, &new_ta.buffer);
                                 if same_buf {
-                                    let mut buf = ta.buffer.borrow_mut();
-                                    if src_start + byte_count <= buf.len()
-                                        && dst_start + byte_count <= buf.len()
-                                    {
-                                        // Spec: copy byte-by-byte in forward order (overlapping-write semantics)
-                                        for j in 0..byte_count {
-                                            buf[dst_start + j] = buf[src_start + j];
+                                    with_buffer_write(&ta.buffer, |buf| {
+                                        if src_start + byte_count <= buf.len()
+                                            && dst_start + byte_count <= buf.len()
+                                        {
+                                            for j in 0..byte_count {
+                                                buf[dst_start + j] = buf[src_start + j];
+                                            }
                                         }
-                                    }
+                                    });
                                 } else {
-                                    let src_buf = ta.buffer.borrow();
-                                    let mut dst_buf = new_ta.buffer.borrow_mut();
-                                    if src_start + byte_count <= src_buf.len()
-                                        && dst_start + byte_count <= dst_buf.len()
-                                    {
-                                        dst_buf[dst_start..dst_start + byte_count].copy_from_slice(
-                                            &src_buf[src_start..src_start + byte_count],
-                                        );
-                                    }
+                                    let src_bytes = with_buffer_read(&ta.buffer, |buf| {
+                                        buf[src_start..src_start + byte_count].to_vec()
+                                    });
+                                    with_buffer_write(&new_ta.buffer, |buf| {
+                                        if dst_start + byte_count <= buf.len() {
+                                            buf[dst_start..dst_start + byte_count]
+                                                .copy_from_slice(&src_bytes);
+                                        }
+                                    });
                                 }
                             } else {
                                 for i in 0..count {
@@ -1982,7 +2052,7 @@ impl Interpreter {
                         );
                     }
                     // Use original len for count (per spec), but bound copy by actual buffer
-                    let _cur_len = typed_array_length(&ta) as usize;
+                    let _cur_len = typed_array_length(&ta);
                     let count = if end <= start || target >= len as usize {
                         0
                     } else {
@@ -1990,18 +2060,19 @@ impl Interpreter {
                     };
                     if count > 0 {
                         let bpe = ta.kind.bytes_per_element();
-                        let mut buf = ta.buffer.borrow_mut();
-                        let buf_len = buf.len();
-                        let src_byte_start = ta.byte_offset + start * bpe;
-                        let dst_byte_start = ta.byte_offset + target * bpe;
-                        let max_src_bytes = buf_len.saturating_sub(src_byte_start);
-                        let max_dst_bytes = buf_len.saturating_sub(dst_byte_start);
-                        let byte_count = (count * bpe).min(max_src_bytes).min(max_dst_bytes);
-                        if byte_count > 0 {
-                            let src: Vec<u8> =
-                                buf[src_byte_start..src_byte_start + byte_count].to_vec();
-                            buf[dst_byte_start..dst_byte_start + byte_count].copy_from_slice(&src);
-                        }
+                        with_buffer_write(&ta.buffer, |buf| {
+                            let buf_len = buf.len();
+                            let src_byte_start = ta.byte_offset + start * bpe;
+                            let dst_byte_start = ta.byte_offset + target * bpe;
+                            let max_src_bytes = buf_len.saturating_sub(src_byte_start);
+                            let max_dst_bytes = buf_len.saturating_sub(dst_byte_start);
+                            let byte_count = (count * bpe).min(max_src_bytes).min(max_dst_bytes);
+                            if byte_count > 0 {
+                                let src = buf[src_byte_start..src_byte_start + byte_count].to_vec();
+                                buf[dst_byte_start..dst_byte_start + byte_count]
+                                    .copy_from_slice(&src);
+                            }
+                        });
                     }
                     return Completion::Normal(this_val.clone());
                 }
@@ -2487,8 +2558,8 @@ impl Interpreter {
 
         // toString must be the same function object as Array.prototype.toString (spec §23.2.3.30)
         {
-            let array_proto = self.realm().array_prototype.clone().unwrap();
-            let tostring_val = array_proto.borrow().get_property("toString");
+            let array_proto_id = self.realm().array_prototype.unwrap();
+            let tostring_val = self.get_property_on_id(array_proto_id, "toString");
             proto
                 .borrow_mut()
                 .insert_builtin("toString".to_string(), tostring_val);
@@ -2601,14 +2672,15 @@ impl Interpreter {
                     };
                     let len = typed_array_length(&ta);
                     let bpe = ta.kind.bytes_per_element();
-                    let new_buf = vec![0u8; len * bpe];
+                    let buf_byte_len = len * bpe;
+                    let new_buf = vec![0u8; buf_byte_len];
                     let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
                     let new_ta = TypedArrayInfo {
                         kind: ta.kind,
                         buffer: new_buf_rc.clone(),
                         byte_offset: 0,
-                        byte_length: len * bpe,
+                        byte_length: buf_byte_len,
                         array_length: len,
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
@@ -2618,13 +2690,15 @@ impl Interpreter {
                         typed_array_set_index(&new_ta, i, &val);
                     }
                     let ab_obj = interp.create_object();
+                    let ab_proto = interp.realm().arraybuffer_prototype;
                     {
                         let mut ab = ab_obj.borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype = interp.realm().arraybuffer_prototype.clone();
+                        ab.prototype_id = ab_proto;
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
+                    interp.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj.borrow().id.unwrap();
                     let buf_val = JsValue::Object(JsObject { id: ab_id });
                     let result = interp.create_typed_array_object(new_ta, buf_val);
@@ -2742,14 +2816,15 @@ impl Interpreter {
                     }
                     let len = typed_array_length(&ta);
                     let bpe = ta.kind.bytes_per_element();
-                    let new_buf = vec![0u8; len * bpe];
+                    let buf_byte_len = len * bpe;
+                    let new_buf = vec![0u8; buf_byte_len];
                     let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
                     let new_ta = TypedArrayInfo {
                         kind: ta.kind,
                         buffer: new_buf_rc.clone(),
                         byte_offset: 0,
-                        byte_length: len * bpe,
+                        byte_length: buf_byte_len,
                         array_length: len,
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
@@ -2758,13 +2833,15 @@ impl Interpreter {
                         typed_array_set_index(&new_ta, i, val);
                     }
                     let ab_obj = interp.create_object();
+                    let ab_proto = interp.realm().arraybuffer_prototype;
                     {
                         let mut ab = ab_obj.borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype = interp.realm().arraybuffer_prototype.clone();
+                        ab.prototype_id = ab_proto;
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
+                    interp.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj.borrow().id.unwrap();
                     let buf_val = JsValue::Object(JsObject { id: ab_id });
                     let result = interp.create_typed_array_object(new_ta, buf_val);
@@ -2790,46 +2867,34 @@ impl Interpreter {
                 ) -> Result<f64, JsValue> {
                     match val {
                         JsValue::Object(o) => {
-                            if let Some(obj) = interp.get_object(o.id) {
-                                let method = {
-                                    let borrow = obj.borrow();
-                                    borrow
-                                        .get_property_descriptor("valueOf")
-                                        .and_then(|d| d.value)
-                                };
-                                if let Some(func) = method
-                                    && interp.is_callable(&func)
-                                {
-                                    match interp.call_function(&func, val, &[]) {
-                                        Completion::Normal(v)
-                                            if !matches!(v, JsValue::Object(_)) =>
-                                        {
-                                            return to_number_throwing(interp, &v);
-                                        }
-                                        Completion::Normal(_) => {}
-                                        Completion::Throw(e) => return Err(e),
-                                        _ => {}
+                            let method = interp
+                                .get_property_descriptor_on_id(o.id, "valueOf")
+                                .and_then(|d| d.value);
+                            if let Some(func) = method
+                                && interp.is_callable(&func)
+                            {
+                                match interp.call_function(&func, val, &[]) {
+                                    Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
+                                        return to_number_throwing(interp, &v);
                                     }
+                                    Completion::Normal(_) => {}
+                                    Completion::Throw(e) => return Err(e),
+                                    _ => {}
                                 }
-                                let tostring_method = {
-                                    let borrow = obj.borrow();
-                                    borrow
-                                        .get_property_descriptor("toString")
-                                        .and_then(|d| d.value)
-                                };
-                                if let Some(func) = tostring_method
-                                    && interp.is_callable(&func)
-                                {
-                                    match interp.call_function(&func, val, &[]) {
-                                        Completion::Normal(v)
-                                            if !matches!(v, JsValue::Object(_)) =>
-                                        {
-                                            return to_number_throwing(interp, &v);
-                                        }
-                                        Completion::Normal(_) => {}
-                                        Completion::Throw(e) => return Err(e),
-                                        _ => {}
+                            }
+                            let tostring_method = interp
+                                .get_property_descriptor_on_id(o.id, "toString")
+                                .and_then(|d| d.value);
+                            if let Some(func) = tostring_method
+                                && interp.is_callable(&func)
+                            {
+                                match interp.call_function(&func, val, &[]) {
+                                    Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
+                                        return to_number_throwing(interp, &v);
                                     }
+                                    Completion::Normal(_) => {}
+                                    Completion::Throw(e) => return Err(e),
+                                    _ => {}
                                 }
                             }
                             Ok(f64::NAN)
@@ -2854,26 +2919,19 @@ impl Interpreter {
                     match val {
                         JsValue::BigInt(_) => Ok(val.clone()),
                         JsValue::Object(o) => {
-                            if let Some(obj) = interp.get_object(o.id) {
-                                let method = {
-                                    let borrow = obj.borrow();
-                                    borrow
-                                        .get_property_descriptor("valueOf")
-                                        .and_then(|d| d.value)
-                                };
-                                if let Some(func) = method
-                                    && interp.is_callable(&func)
-                                {
-                                    match interp.call_function(&func, val, &[]) {
-                                        Completion::Normal(v)
-                                            if !matches!(v, JsValue::Object(_)) =>
-                                        {
-                                            return to_bigint_throwing(interp, &v);
-                                        }
-                                        Completion::Normal(_) => {}
-                                        Completion::Throw(e) => return Err(e),
-                                        _ => {}
+                            let method = interp
+                                .get_property_descriptor_on_id(o.id, "valueOf")
+                                .and_then(|d| d.value);
+                            if let Some(func) = method
+                                && interp.is_callable(&func)
+                            {
+                                match interp.call_function(&func, val, &[]) {
+                                    Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
+                                        return to_bigint_throwing(interp, &v);
                                     }
+                                    Completion::Normal(_) => {}
+                                    Completion::Throw(e) => return Err(e),
+                                    _ => {}
                                 }
                             }
                             Err(interp.create_type_error("Cannot convert value to a BigInt"))
@@ -2974,14 +3032,15 @@ impl Interpreter {
                     }
 
                     let bpe = ta.kind.bytes_per_element();
-                    let new_buf = vec![0u8; len as usize * bpe];
+                    let buf_byte_len = len as usize * bpe;
+                    let new_buf = vec![0u8; buf_byte_len];
                     let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
                     let new_ta = TypedArrayInfo {
                         kind: ta.kind,
                         buffer: new_buf_rc.clone(),
                         byte_offset: 0,
-                        byte_length: len as usize * bpe,
+                        byte_length: buf_byte_len,
                         array_length: len as usize,
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
@@ -2995,13 +3054,15 @@ impl Interpreter {
                         typed_array_set_index(&new_ta, k, &elem);
                     }
                     let ab_obj = interp.create_object();
+                    let ab_proto = interp.realm().arraybuffer_prototype;
                     {
                         let mut ab = ab_obj.borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype = interp.realm().arraybuffer_prototype.clone();
+                        ab.prototype_id = ab_proto;
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
+                    interp.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj.borrow().id.unwrap();
                     let buf_val = JsValue::Object(JsObject { id: ab_id });
                     let result = interp.create_typed_array_object(new_ta, buf_val);
@@ -3138,23 +3199,6 @@ impl Interpreter {
         proto
             .borrow_mut()
             .insert_builtin("keys".to_string(), keys_fn);
-    }
-
-    #[allow(dead_code)]
-    fn create_array_from_ta(&mut self, ta: &TypedArrayInfo) -> Rc<RefCell<JsObjectData>> {
-        let elems: Vec<JsValue> = (0..typed_array_length(ta))
-            .map(|i| typed_array_get_index(ta, i))
-            .collect();
-        let len = elems.len();
-        let arr = self.create_object();
-        {
-            let mut a = arr.borrow_mut();
-            a.class_name = "Array".to_string();
-            a.prototype = self.realm().array_prototype.clone();
-            a.array_elements = Some(elems);
-            a.insert_builtin("length".to_string(), JsValue::Number(len as f64));
-        }
-        arr
     }
 
     fn setup_ta_higher_order_methods(&mut self, proto: &Rc<RefCell<JsObjectData>>) {
@@ -3584,6 +3628,7 @@ impl Interpreter {
             TypedArrayKind::Uint16,
             TypedArrayKind::Int32,
             TypedArrayKind::Uint32,
+            TypedArrayKind::Float16,
             TypedArrayKind::Float32,
             TypedArrayKind::Float64,
             TypedArrayKind::BigInt64,
@@ -3591,7 +3636,7 @@ impl Interpreter {
         ];
 
         // %TypedArray% constructor (not directly constructible, but holds from/of)
-        let ta_proto = self.realm().typed_array_prototype.clone().unwrap();
+        let ta_proto = self.get_object_expect(self.realm().typed_array_prototype.unwrap());
         let ta_ctor = self.create_function(JsFunction::constructor(
             "TypedArray".to_string(),
             0,
@@ -3602,18 +3647,28 @@ impl Interpreter {
                 )
             },
         ));
-        // TypedArray.from
+        // TypedArray.from — §23.2.2.1
         let ta_from_fn = self.create_function(JsFunction::native(
             "from".to_string(),
             1,
             |interp, this_val, args| {
-                // this_val is the constructor (e.g. Uint8Array)
+                // Step 1: C = this value
                 let source = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let map_fn = args.get(1).cloned();
+                let map_fn_arg = args.get(1).cloned();
                 let this_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
 
+                // Step 2: IsConstructor(C)
+                let is_ctor = matches!(this_val, JsValue::Object(o) if {
+                    interp.get_object(o.id).is_some_and(|obj| obj.borrow().callable.is_some())
+                });
+                if !is_ctor {
+                    return Completion::Throw(
+                        interp.create_type_error("TypedArray.from requires a constructor"),
+                    );
+                }
+
                 // Step 3: If mapfn is provided and not undefined, check callable
-                let mapping = if let Some(ref mf) = map_fn
+                let mapping = if let Some(ref mf) = map_fn_arg
                     && !matches!(mf, JsValue::Undefined)
                 {
                     let is_callable = matches!(mf, JsValue::Object(o) if {
@@ -3629,74 +3684,193 @@ impl Interpreter {
                     false
                 };
 
-                // Step 5: Let arrayLike be ! ToObject(source).
-                let source_obj = match interp.to_object(&source) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Completion::Throw(e),
-                    _ => {
-                        return Completion::Throw(
-                            interp.create_type_error("Cannot convert undefined or null to object"),
-                        );
+                // Step 4: Get @@iterator from raw source (before ToObject)
+                let using_iterator = if let JsValue::Object(ref o) = source {
+                    match interp.get_object_property(o.id, "Symbol(Symbol.iterator)", &source) {
+                        Completion::Normal(v)
+                            if !matches!(v, JsValue::Undefined | JsValue::Null) =>
+                        {
+                            Some(v)
+                        }
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => None,
                     }
-                };
-                // Collect source values (iterable or array-like)
-                let values = interp.collect_iterable_or_arraylike(&source_obj);
-                let values = match values {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = values.len();
-
-                // Create the target object by calling the constructor with len
-                let target_obj = match interp.typed_array_create(this_val, len) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-
-                // For each element: apply mapper if any, then Set(targetObj, k, value, true)
-                let ta_kind = if let JsValue::Object(ref o) = target_obj {
-                    interp
-                        .get_object(o.id)
-                        .and_then(|obj| obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind))
+                } else if matches!(source, JsValue::Undefined | JsValue::Null) {
+                    // GetMethod on non-object primitive: need ToObject first for null/undefined → TypeError
+                    return Completion::Throw(
+                        interp.create_type_error("Cannot convert undefined or null to object"),
+                    );
                 } else {
-                    None
-                };
-                let ta_kind = match ta_kind {
-                    Some(k) => k,
-                    None => {
-                        return Completion::Throw(
-                            interp.create_type_error("TypedArray.from: target is not a TypedArray"),
-                        );
-                    }
-                };
-
-                for (k, val) in values.iter().enumerate() {
-                    let mapped_val = if mapping {
-                        let mf = map_fn.as_ref().unwrap();
-                        match interp.call_function(
-                            mf,
-                            &this_arg,
-                            &[val.clone(), JsValue::Number(k as f64)],
-                        ) {
-                            Completion::Normal(v) => v,
-                            other => return other,
+                    // Primitive: wrap to object, check @@iterator
+                    let wrapped = match interp.to_object(&source) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => {
+                            return Completion::Throw(
+                                interp.create_type_error("Cannot convert to object"),
+                            );
+                        }
+                    };
+                    if let JsValue::Object(ref wo) = wrapped {
+                        match interp.get_object_property(wo.id, "Symbol(Symbol.iterator)", &wrapped)
+                        {
+                            Completion::Normal(v)
+                                if !matches!(v, JsValue::Undefined | JsValue::Null) =>
+                            {
+                                Some(v)
+                            }
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => None,
                         }
                     } else {
-                        val.clone()
-                    };
-                    // Coerce and Set (silently ignores OOB/detached)
-                    let coerced = match interp.typed_array_coerce_value(ta_kind, &mapped_val) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let key = k.to_string();
-                    if let JsValue::Object(ref o) = target_obj
-                        && let Some(obj) = interp.get_object(o.id)
-                    {
-                        obj.borrow_mut().set_property_value(&key, coerced);
+                        None
                     }
+                };
+
+                if let Some(iter_fn) = using_iterator {
+                    // Step 5: Iterable path — collect all values, then create TA, then set
+                    let values = match interp.iterate_with_function(&source, &iter_fn) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    let len = values.len();
+                    let target_obj = match interp.typed_array_create(this_val, len) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let ta_kind = if let JsValue::Object(ref o) = target_obj {
+                        interp.get_object(o.id).and_then(|obj| {
+                            obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind)
+                        })
+                    } else {
+                        None
+                    };
+                    let ta_kind =
+                        match ta_kind {
+                            Some(k) => k,
+                            None => {
+                                return Completion::Throw(interp.create_type_error(
+                                    "TypedArray.from: target is not a TypedArray",
+                                ));
+                            }
+                        };
+                    for (k, val) in values.iter().enumerate() {
+                        let mapped_val = if mapping {
+                            let mf = map_fn_arg.as_ref().unwrap();
+                            match interp.call_function(
+                                mf,
+                                &this_arg,
+                                &[val.clone(), JsValue::Number(k as f64)],
+                            ) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            }
+                        } else {
+                            val.clone()
+                        };
+                        let coerced = match interp.typed_array_coerce_value(ta_kind, &mapped_val) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let key = k.to_string();
+                        if let JsValue::Object(ref o) = target_obj
+                            && let Some(obj) = interp.get_object(o.id)
+                        {
+                            obj.borrow_mut().set_property_value(&key, coerced);
+                        }
+                    }
+                    Completion::Normal(target_obj)
+                } else {
+                    // Step 6: Array-like path — ToObject, get length, create TA, then get each element
+                    let array_like = match interp.to_object(&source) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => {
+                            return Completion::Throw(
+                                interp.create_type_error("Cannot convert to object"),
+                            );
+                        }
+                    };
+                    // Step 7: len = LengthOfArrayLike (ToLength calls ToNumber which invokes valueOf)
+                    let len = if let JsValue::Object(ref o) = array_like {
+                        let len_val = match interp.get_object_property(o.id, "length", &array_like)
+                        {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::Undefined,
+                        };
+                        let n = match interp.to_number_value(&len_val) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        use crate::interpreter::helpers::to_integer_or_infinity;
+                        let int_len = to_integer_or_infinity(n);
+                        if int_len < 0.0 {
+                            0
+                        } else {
+                            int_len.min(9007199254740991.0) as usize
+                        }
+                    } else {
+                        0
+                    };
+                    // Step 8: Create target TA
+                    let target_obj = match interp.typed_array_create(this_val, len) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let ta_kind = if let JsValue::Object(ref o) = target_obj {
+                        interp.get_object(o.id).and_then(|obj| {
+                            obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind)
+                        })
+                    } else {
+                        None
+                    };
+                    let ta_kind =
+                        match ta_kind {
+                            Some(k) => k,
+                            None => {
+                                return Completion::Throw(interp.create_type_error(
+                                    "TypedArray.from: target is not a TypedArray",
+                                ));
+                            }
+                        };
+                    // Step 9: For each k, get element from source
+                    for k in 0..len {
+                        let val = if let JsValue::Object(ref o) = array_like {
+                            match interp.get_object_property(o.id, &k.to_string(), &array_like) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                _ => JsValue::Undefined,
+                            }
+                        } else {
+                            JsValue::Undefined
+                        };
+                        let mapped_val = if mapping {
+                            let mf = map_fn_arg.as_ref().unwrap();
+                            match interp.call_function(
+                                mf,
+                                &this_arg,
+                                &[val.clone(), JsValue::Number(k as f64)],
+                            ) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            }
+                        } else {
+                            val
+                        };
+                        let coerced = match interp.typed_array_coerce_value(ta_kind, &mapped_val) {
+                            Ok(v) => v,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        let key = k.to_string();
+                        if let JsValue::Object(ref o) = target_obj
+                            && let Some(obj) = interp.get_object(o.id)
+                        {
+                            obj.borrow_mut().set_property_value(&key, coerced);
+                        }
+                    }
+                    Completion::Normal(target_obj)
                 }
-                Completion::Normal(target_obj)
             },
         ));
         if let JsValue::Object(o) = &ta_ctor
@@ -3803,14 +3977,14 @@ impl Interpreter {
         for kind in kinds {
             let name = kind.name().to_string();
             let bpe = kind.bytes_per_element();
-            let ta_proto_clone = ta_proto.clone();
+            let ta_proto_clone_id = ta_proto.borrow().id.unwrap();
             let ta_ctor_clone = ta_ctor.clone();
 
             // Create per-type prototype
             let type_proto = self.create_object();
             {
                 let mut p = type_proto.borrow_mut();
-                p.prototype = Some(ta_proto_clone.clone());
+                p.prototype_id = Some(ta_proto_clone_id);
                 p.class_name = name.clone();
                 p.insert_property(
                     "BYTES_PER_ELEMENT".to_string(),
@@ -3818,7 +3992,7 @@ impl Interpreter {
                 );
             }
 
-            let type_proto_clone = type_proto.clone();
+            let type_proto_clone_id = type_proto.borrow().id.unwrap();
             let ctor = self.create_function(JsFunction::constructor(
                 name.clone(), 3,
                 move |interp, _this, args| {
@@ -3829,21 +4003,22 @@ impl Interpreter {
                         );
                     }
                     // Helper closure to get prototype from NewTarget's realm (deferred)
-                    let get_proto = |interp: &mut Interpreter| -> Result<Rc<RefCell<JsObjectData>>, JsValue> {
+                    let get_proto = |interp: &mut Interpreter| -> Result<u64, JsValue> {
                         match interp.get_prototype_from_new_target_realm(|realm| match kind {
-                            TypedArrayKind::Int8 => realm.int8array_prototype.clone(),
-                            TypedArrayKind::Uint8 => realm.uint8array_prototype.clone(),
-                            TypedArrayKind::Uint8Clamped => realm.uint8clampedarray_prototype.clone(),
-                            TypedArrayKind::Int16 => realm.int16array_prototype.clone(),
-                            TypedArrayKind::Uint16 => realm.uint16array_prototype.clone(),
-                            TypedArrayKind::Int32 => realm.int32array_prototype.clone(),
-                            TypedArrayKind::Uint32 => realm.uint32array_prototype.clone(),
-                            TypedArrayKind::Float32 => realm.float32array_prototype.clone(),
-                            TypedArrayKind::Float64 => realm.float64array_prototype.clone(),
-                            TypedArrayKind::BigInt64 => realm.bigint64array_prototype.clone(),
-                            TypedArrayKind::BigUint64 => realm.biguint64array_prototype.clone(),
+                            TypedArrayKind::Int8 => realm.int8array_prototype,
+                            TypedArrayKind::Uint8 => realm.uint8array_prototype,
+                            TypedArrayKind::Uint8Clamped => realm.uint8clampedarray_prototype,
+                            TypedArrayKind::Int16 => realm.int16array_prototype,
+                            TypedArrayKind::Uint16 => realm.uint16array_prototype,
+                            TypedArrayKind::Int32 => realm.int32array_prototype,
+                            TypedArrayKind::Uint32 => realm.uint32array_prototype,
+                            TypedArrayKind::Float16 => realm.float16array_prototype,
+                            TypedArrayKind::Float32 => realm.float32array_prototype,
+                            TypedArrayKind::Float64 => realm.float64array_prototype,
+                            TypedArrayKind::BigInt64 => realm.bigint64array_prototype,
+                            TypedArrayKind::BigUint64 => realm.biguint64array_prototype,
                         }) {
-                            Ok(p) => Ok(p.unwrap_or_else(|| type_proto_clone.clone())),
+                            Ok(p) => Ok(p.unwrap_or(type_proto_clone_id)),
                             Err(e) => Err(e),
                         }
                     };
@@ -3853,7 +4028,7 @@ impl Interpreter {
                             Ok(p) => p,
                             Err(e) => return Completion::Throw(e),
                         };
-                        return interp.create_typed_array_from_length(kind, 0, &proto);
+                        return interp.create_typed_array_from_length(kind, 0, proto);
                     }
                     let first = &args[0];
                     match first {
@@ -3866,8 +4041,12 @@ impl Interpreter {
                                     let detached = src_ref.arraybuffer_detached.clone()
                                         .unwrap_or_else(|| Rc::new(Cell::new(false)));
                                     let is_resizable = src_ref.arraybuffer_max_byte_length.is_some();
-                                    let buf_len = buf_rc.borrow().len();
                                     drop(src_ref);
+                                    // §22.2.4.5 step 4: AllocateTypedArray (GetPrototypeFromConstructor) before ToIndex
+                                    let proto = match get_proto(interp) {
+                                        Ok(p) => p,
+                                        Err(e) => return Completion::Throw(e),
+                                    };
                                     let byte_offset = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
                                         let offset_val = match interp.to_index(&args[1]) {
                                             Completion::Normal(v) => v,
@@ -3876,12 +4055,7 @@ impl Interpreter {
                                         };
                                         if let JsValue::Number(n) = offset_val { n as usize } else { 0 }
                                     } else { 0 };
-                                    // §22.2.4.5 step 9: check detach after byteOffset ToIndex
-                                    if detached.get() {
-                                        return Completion::Throw(interp.create_type_error(
-                                            "Cannot construct TypedArray from detached ArrayBuffer"
-                                        ));
-                                    }
+                                    // §22.2.4.5 step 7: modulo check before detach check
                                     if byte_offset % bpe != 0 {
                                         return Completion::Throw(interp.create_error("RangeError",
                                             "start offset of typed array should be a multiple of BYTES_PER_ELEMENT"
@@ -3895,7 +4069,7 @@ impl Interpreter {
                                             Completion::Throw(e) => return Completion::Throw(e),
                                             _ => return Completion::Normal(JsValue::Undefined),
                                         };
-                                        // §22.2.4.5: check detach after length ToIndex
+                                        // §22.2.4.5 step 9: check detach after length ToIndex
                                         if detached.get() {
                                             return Completion::Throw(interp.create_type_error(
                                                 "Cannot construct TypedArray from detached ArrayBuffer"
@@ -3903,12 +4077,20 @@ impl Interpreter {
                                         }
                                         if let JsValue::Number(n) = len_val { n as usize } else { 0 }
                                     } else {
+                                        // §22.2.4.5 step 9: detach check (no length arg path)
+                                        if detached.get() {
+                                            return Completion::Throw(interp.create_type_error(
+                                                "Cannot construct TypedArray from detached ArrayBuffer"
+                                            ));
+                                        }
+                                        // Re-read buf_len in case side effects changed it
+                                        let buf_len = buffer_len(&buf_rc);
                                         if buf_len < byte_offset {
                                             return Completion::Throw(interp.create_error("RangeError",
                                                 "start offset is outside the bounds of the buffer"
                                             ));
                                         }
-                                        if !is_resizable && (buf_len - byte_offset) % bpe != 0 {
+                                        if !is_resizable && !(buf_len - byte_offset).is_multiple_of(bpe) {
                                             return Completion::Throw(interp.create_error("RangeError",
                                                 "byte length of typed array should be a multiple of BYTES_PER_ELEMENT"
                                             ));
@@ -3916,7 +4098,9 @@ impl Interpreter {
                                         (buf_len - byte_offset) / bpe
                                     };
                                     let byte_length = array_length * bpe;
-                                    if byte_offset + byte_length > buf_len {
+                                    // Re-read buffer length (side effects may have resized)
+                                    let current_buf_len = buffer_len(&buf_rc);
+                                    if byte_offset + byte_length > current_buf_len {
                                         return Completion::Throw(interp.create_error("RangeError", "invalid typed array length"));
                                     }
                                     let ta_info = TypedArrayInfo {
@@ -3928,12 +4112,8 @@ impl Interpreter {
                                         is_detached: detached,
                                         is_length_tracking,
                                     };
-                                    let proto = match get_proto(interp) {
-                                        Ok(p) => p,
-                                        Err(e) => return Completion::Throw(e),
-                                    };
                                     let buf_val = first.clone();
-                                    let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, &proto);
+                                    let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, proto);
                                     let id = result.borrow().id.unwrap();
                                     return Completion::Normal(JsValue::Object(JsObject { id }));
                                 }
@@ -3958,14 +4138,15 @@ impl Interpreter {
                                         ));
                                     }
                                     let len = typed_array_length(&src_ta);
-                                    let new_buf = vec![0u8; len * bpe];
+                                    let buf_byte_len = len * bpe;
+                                    let new_buf = vec![0u8; buf_byte_len];
                                     let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                                     let new_detached = Rc::new(Cell::new(false));
                                     let new_ta = TypedArrayInfo {
                                         kind,
                                         buffer: new_buf_rc.clone(),
                                         byte_offset: 0,
-                                        byte_length: len * bpe,
+                                        byte_length: buf_byte_len,
                                         array_length: len,
                                         is_detached: new_detached.clone(),
                                         is_length_tracking: false,
@@ -3975,20 +4156,22 @@ impl Interpreter {
                                         typed_array_set_index(&new_ta, i, &val);
                                     }
                                     let ab_obj = interp.create_object();
+                                    let ab_proto = interp.realm().arraybuffer_prototype;
                                     {
                                         let mut ab = ab_obj.borrow_mut();
                                         ab.class_name = "ArrayBuffer".to_string();
-                                        ab.prototype = interp.realm().arraybuffer_prototype.clone();
+                                        ab.prototype_id = ab_proto;
                                         ab.arraybuffer_data = Some(new_buf_rc);
                                         ab.arraybuffer_detached = Some(new_detached);
                                     }
+                                    interp.gc_track_external_bytes(buf_byte_len);
                                     let proto = match get_proto(interp) {
                                         Ok(p) => p,
                                         Err(e) => return Completion::Throw(e),
                                     };
                                     let ab_id = ab_obj.borrow().id.unwrap();
                                     let buf_val = JsValue::Object(JsObject { id: ab_id });
-                                    let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, &proto);
+                                    let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, proto);
                                     let id = result.borrow().id.unwrap();
                                     return Completion::Normal(JsValue::Object(JsObject { id }));
                                 }
@@ -4000,14 +4183,15 @@ impl Interpreter {
                                     Err(c) => return c,
                                 };
                                 let len = values.len();
-                                let new_buf = vec![0u8; len * bpe];
+                                let buf_byte_len = len * bpe;
+                                let new_buf = vec![0u8; buf_byte_len];
                                 let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                                 let new_detached = Rc::new(Cell::new(false));
                                 let new_ta = TypedArrayInfo {
                                     kind,
                                     buffer: new_buf_rc.clone(),
                                     byte_offset: 0,
-                                    byte_length: len * bpe,
+                                    byte_length: buf_byte_len,
                                     array_length: len,
                                     is_detached: new_detached.clone(),
                                     is_length_tracking: false,
@@ -4020,20 +4204,22 @@ impl Interpreter {
                                     typed_array_set_index(&new_ta, i, &coerced);
                                 }
                                 let ab_obj = interp.create_object();
+                                let ab_proto = interp.realm().arraybuffer_prototype;
                                 {
                                     let mut ab = ab_obj.borrow_mut();
                                     ab.class_name = "ArrayBuffer".to_string();
-                                    ab.prototype = interp.realm().arraybuffer_prototype.clone();
+                                    ab.prototype_id = ab_proto;
                                     ab.arraybuffer_data = Some(new_buf_rc);
                                     ab.arraybuffer_detached = Some(new_detached);
                                 }
+                                interp.gc_track_external_bytes(buf_byte_len);
                                 let proto = match get_proto(interp) {
                                     Ok(p) => p,
                                     Err(e) => return Completion::Throw(e),
                                 };
                                 let ab_id = ab_obj.borrow().id.unwrap();
                                 let buf_val = JsValue::Object(JsObject { id: ab_id });
-                                let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, &proto);
+                                let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, proto);
                                 let id = result.borrow().id.unwrap();
                                 return Completion::Normal(JsValue::Object(JsObject { id }));
                             }
@@ -4051,7 +4237,7 @@ impl Interpreter {
                                 Ok(p) => p,
                                 Err(e) => return Completion::Throw(e),
                             };
-                            interp.create_typed_array_from_length(kind, len, &proto)
+                            interp.create_typed_array_from_length(kind, len, proto)
                         }
                     }
                 },
@@ -4088,7 +4274,7 @@ impl Interpreter {
                 if let JsValue::Object(ta_o) = &ta_ctor_clone
                     && let Some(ta_obj) = self.get_object(ta_o.id)
                 {
-                    obj.borrow_mut().prototype = Some(ta_obj.clone());
+                    obj.borrow_mut().prototype_id = Some(ta_obj.borrow().id.unwrap());
                 }
             }
 
@@ -4099,39 +4285,41 @@ impl Interpreter {
             );
 
             // Store prototype for this kind
+            let type_proto_id = type_proto.borrow().id.unwrap();
             match kind {
-                TypedArrayKind::Int8 => {
-                    self.realm_mut().int8array_prototype = Some(type_proto.clone())
-                }
+                TypedArrayKind::Int8 => self.realm_mut().int8array_prototype = Some(type_proto_id),
                 TypedArrayKind::Uint8 => {
-                    self.realm_mut().uint8array_prototype = Some(type_proto.clone())
+                    self.realm_mut().uint8array_prototype = Some(type_proto_id)
                 }
                 TypedArrayKind::Uint8Clamped => {
-                    self.realm_mut().uint8clampedarray_prototype = Some(type_proto.clone())
+                    self.realm_mut().uint8clampedarray_prototype = Some(type_proto_id)
                 }
                 TypedArrayKind::Int16 => {
-                    self.realm_mut().int16array_prototype = Some(type_proto.clone())
+                    self.realm_mut().int16array_prototype = Some(type_proto_id)
                 }
                 TypedArrayKind::Uint16 => {
-                    self.realm_mut().uint16array_prototype = Some(type_proto.clone())
+                    self.realm_mut().uint16array_prototype = Some(type_proto_id)
                 }
                 TypedArrayKind::Int32 => {
-                    self.realm_mut().int32array_prototype = Some(type_proto.clone())
+                    self.realm_mut().int32array_prototype = Some(type_proto_id)
                 }
                 TypedArrayKind::Uint32 => {
-                    self.realm_mut().uint32array_prototype = Some(type_proto.clone())
+                    self.realm_mut().uint32array_prototype = Some(type_proto_id)
+                }
+                TypedArrayKind::Float16 => {
+                    self.realm_mut().float16array_prototype = Some(type_proto_id)
                 }
                 TypedArrayKind::Float32 => {
-                    self.realm_mut().float32array_prototype = Some(type_proto.clone())
+                    self.realm_mut().float32array_prototype = Some(type_proto_id)
                 }
                 TypedArrayKind::Float64 => {
-                    self.realm_mut().float64array_prototype = Some(type_proto.clone())
+                    self.realm_mut().float64array_prototype = Some(type_proto_id)
                 }
                 TypedArrayKind::BigInt64 => {
-                    self.realm_mut().bigint64array_prototype = Some(type_proto.clone())
+                    self.realm_mut().bigint64array_prototype = Some(type_proto_id)
                 }
                 TypedArrayKind::BigUint64 => {
-                    self.realm_mut().biguint64array_prototype = Some(type_proto.clone())
+                    self.realm_mut().biguint64array_prototype = Some(type_proto_id)
                 }
             }
 
@@ -4146,7 +4334,7 @@ impl Interpreter {
     fn setup_uint8array_base64_hex(&mut self) {
         // Get Uint8Array constructor from global env
         let uint8_ctor = self.realm().global_env.borrow().get("Uint8Array").unwrap();
-        let uint8_proto = self.realm().uint8array_prototype.clone().unwrap();
+        let uint8_proto = self.get_object_expect(self.realm().uint8array_prototype.unwrap());
 
         // --- Static methods on Uint8Array constructor ---
 
@@ -4218,13 +4406,14 @@ impl Interpreter {
                     Ok(ta) => ta,
                     Err(c) => return c,
                 };
-                let buf = ta.buffer.borrow();
                 let start = ta.byte_offset;
                 let end = start + ta.byte_length;
                 let mut result = String::with_capacity(ta.byte_length * 2);
-                for &b in &buf[start..end] {
-                    result.push_str(&format!("{:02x}", b));
-                }
+                with_buffer_read(&ta.buffer, |buf| {
+                    for &b in &buf[start..end] {
+                        result.push_str(&format!("{:02x}", b));
+                    }
+                });
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -4252,12 +4441,11 @@ impl Interpreter {
                     return c;
                 }
 
-                let buf = ta.buffer.borrow();
                 let start = ta.byte_offset;
                 let end = start + ta.byte_length;
-                let data = &buf[start..end];
-
-                let result = encode_base64(data, &alphabet, omit_padding);
+                let result = with_buffer_read(&ta.buffer, |buf| {
+                    encode_base64(&buf[start..end], &alphabet, omit_padding)
+                });
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
@@ -4287,11 +4475,12 @@ impl Interpreter {
                 let result = decode_hex(&input_str, Some(max_bytes));
                 let written = result.bytes.len();
                 {
-                    let mut buf = ta.buffer.borrow_mut();
-                    let start = ta.byte_offset;
-                    for (idx, &b) in result.bytes.iter().enumerate() {
-                        buf[start + idx] = b;
-                    }
+                    with_buffer_write(&ta.buffer, |buf| {
+                        let start = ta.byte_offset;
+                        for (idx, &b) in result.bytes.iter().enumerate() {
+                            buf[start + idx] = b;
+                        }
+                    });
                 }
                 if let Some(msg) = result.error {
                     return Completion::Throw(interp.create_error("SyntaxError", &msg));
@@ -4335,11 +4524,12 @@ impl Interpreter {
                 let result = decode_base64(&input_str, &alphabet, &last_chunk, Some(max_bytes));
                 let written = result.bytes.len();
                 {
-                    let mut buf = ta.buffer.borrow_mut();
-                    let start = ta.byte_offset;
-                    for (idx, &b) in result.bytes.iter().enumerate() {
-                        buf[start + idx] = b;
-                    }
+                    with_buffer_write(&ta.buffer, |buf| {
+                        let start = ta.byte_offset;
+                        for (idx, &b) in result.bytes.iter().enumerate() {
+                            buf[start + idx] = b;
+                        }
+                    });
                 }
                 if let Some(msg) = result.error {
                     return Completion::Throw(interp.create_error("SyntaxError", &msg));
@@ -4435,49 +4625,6 @@ impl Interpreter {
         Ok(result_val)
     }
 
-    /// TypedArrayCreateSameType(exemplar, argumentList) — §23.2.4.3
-    /// Creates a new TypedArray of the same kind, without using @@species.
-    #[allow(dead_code)]
-    fn typed_array_create_same_type(
-        &mut self,
-        exemplar_kind: TypedArrayKind,
-        len: usize,
-    ) -> Completion {
-        let proto = self.get_typed_array_prototype(exemplar_kind);
-        let bpe = exemplar_kind.bytes_per_element();
-        let buf = vec![0u8; len * bpe];
-        let buf_rc = Rc::new(RefCell::new(BufferData::Owned(buf)));
-        let detached = Rc::new(Cell::new(false));
-        let ta_info = TypedArrayInfo {
-            kind: exemplar_kind,
-            buffer: buf_rc.clone(),
-            byte_offset: 0,
-            byte_length: len * bpe,
-            array_length: len,
-            is_detached: detached.clone(),
-            is_length_tracking: false,
-        };
-        let ab_obj = self.create_object();
-        {
-            let mut ab = ab_obj.borrow_mut();
-            ab.class_name = "ArrayBuffer".to_string();
-            ab.prototype = self.realm().arraybuffer_prototype.clone();
-            ab.arraybuffer_data = Some(buf_rc);
-            ab.arraybuffer_detached = Some(detached);
-        }
-        let ab_id = ab_obj.borrow().id.unwrap();
-        let result = self.create_object();
-        {
-            let mut r = result.borrow_mut();
-            r.class_name = exemplar_kind.name().to_string();
-            r.prototype = proto;
-            r.view_buffer_object_id = Some(ab_id);
-            r.typed_array_info = Some(ta_info);
-        }
-        let id = result.borrow().id.unwrap();
-        Completion::Normal(JsValue::Object(JsObject { id }))
-    }
-
     /// Coerce a value for writing to a TypedArray element.
     /// For Number kinds: ToNumber(value). For BigInt kinds: ToBigInt(value).
     /// Returns the coerced JsValue or throws.
@@ -4497,32 +4644,35 @@ impl Interpreter {
         &mut self,
         kind: TypedArrayKind,
         len: usize,
-        type_proto: &Rc<RefCell<JsObjectData>>,
+        type_proto_id: u64,
     ) -> Completion {
         let bpe = kind.bytes_per_element();
-        let buf = vec![0u8; len * bpe];
+        let buf_byte_len = len * bpe;
+        let buf = vec![0u8; buf_byte_len];
         let buf_rc = Rc::new(RefCell::new(BufferData::Owned(buf)));
         let detached = Rc::new(Cell::new(false));
         let ta_info = TypedArrayInfo {
             kind,
             buffer: buf_rc.clone(),
             byte_offset: 0,
-            byte_length: len * bpe,
+            byte_length: buf_byte_len,
             array_length: len,
             is_detached: detached.clone(),
             is_length_tracking: false,
         };
         let ab_obj = self.create_object();
+        let ab_proto = self.realm().arraybuffer_prototype;
         {
             let mut ab = ab_obj.borrow_mut();
             ab.class_name = "ArrayBuffer".to_string();
-            ab.prototype = self.realm().arraybuffer_prototype.clone();
+            ab.prototype_id = ab_proto;
             ab.arraybuffer_data = Some(buf_rc);
             ab.arraybuffer_detached = Some(detached);
         }
+        self.gc_track_external_bytes(buf_byte_len);
         let ab_id = ab_obj.borrow().id.unwrap();
         let buf_val = JsValue::Object(JsObject { id: ab_id });
-        let result = self.create_typed_array_object_with_proto(ta_info, buf_val, type_proto);
+        let result = self.create_typed_array_object_with_proto(ta_info, buf_val, type_proto_id);
         let id = result.borrow().id.unwrap();
         Completion::Normal(JsValue::Object(JsObject { id }))
     }
@@ -4537,7 +4687,7 @@ impl Interpreter {
         {
             let mut o = obj.borrow_mut();
             o.class_name = info.kind.name().to_string();
-            o.prototype = proto;
+            o.prototype_id = proto;
             if let JsValue::Object(ref bobj) = buf_val {
                 o.view_buffer_object_id = Some(bobj.id);
             }
@@ -4546,17 +4696,17 @@ impl Interpreter {
         obj
     }
 
-    fn create_typed_array_object_with_proto(
+    pub(crate) fn create_typed_array_object_with_proto(
         &mut self,
         info: TypedArrayInfo,
         buf_val: JsValue,
-        proto: &Rc<RefCell<JsObjectData>>,
+        proto_id: u64,
     ) -> Rc<RefCell<JsObjectData>> {
         let obj = self.create_object();
         {
             let mut o = obj.borrow_mut();
             o.class_name = info.kind.name().to_string();
-            o.prototype = Some(proto.clone());
+            o.prototype_id = Some(proto_id);
             if let JsValue::Object(ref bobj) = buf_val {
                 o.view_buffer_object_id = Some(bobj.id);
             }
@@ -4565,19 +4715,20 @@ impl Interpreter {
         obj
     }
 
-    fn get_typed_array_prototype(&self, kind: TypedArrayKind) -> Option<Rc<RefCell<JsObjectData>>> {
+    fn get_typed_array_prototype(&self, kind: TypedArrayKind) -> Option<u64> {
         match kind {
-            TypedArrayKind::Int8 => self.realm().int8array_prototype.clone(),
-            TypedArrayKind::Uint8 => self.realm().uint8array_prototype.clone(),
-            TypedArrayKind::Uint8Clamped => self.realm().uint8clampedarray_prototype.clone(),
-            TypedArrayKind::Int16 => self.realm().int16array_prototype.clone(),
-            TypedArrayKind::Uint16 => self.realm().uint16array_prototype.clone(),
-            TypedArrayKind::Int32 => self.realm().int32array_prototype.clone(),
-            TypedArrayKind::Uint32 => self.realm().uint32array_prototype.clone(),
-            TypedArrayKind::Float32 => self.realm().float32array_prototype.clone(),
-            TypedArrayKind::Float64 => self.realm().float64array_prototype.clone(),
-            TypedArrayKind::BigInt64 => self.realm().bigint64array_prototype.clone(),
-            TypedArrayKind::BigUint64 => self.realm().biguint64array_prototype.clone(),
+            TypedArrayKind::Int8 => self.realm().int8array_prototype,
+            TypedArrayKind::Uint8 => self.realm().uint8array_prototype,
+            TypedArrayKind::Uint8Clamped => self.realm().uint8clampedarray_prototype,
+            TypedArrayKind::Int16 => self.realm().int16array_prototype,
+            TypedArrayKind::Uint16 => self.realm().uint16array_prototype,
+            TypedArrayKind::Int32 => self.realm().int32array_prototype,
+            TypedArrayKind::Uint32 => self.realm().uint32array_prototype,
+            TypedArrayKind::Float16 => self.realm().float16array_prototype,
+            TypedArrayKind::Float32 => self.realm().float32array_prototype,
+            TypedArrayKind::Float64 => self.realm().float64array_prototype,
+            TypedArrayKind::BigInt64 => self.realm().bigint64array_prototype,
+            TypedArrayKind::BigUint64 => self.realm().biguint64array_prototype,
         }
     }
 
@@ -4608,6 +4759,7 @@ impl Interpreter {
                     "Uint16Array" => Some(TypedArrayKind::Uint16),
                     "Int32Array" => Some(TypedArrayKind::Int32),
                     "Uint32Array" => Some(TypedArrayKind::Uint32),
+                    "Float16Array" => Some(TypedArrayKind::Float16),
                     "Float32Array" => Some(TypedArrayKind::Float32),
                     "Float64Array" => Some(TypedArrayKind::Float64),
                     "BigInt64Array" => Some(TypedArrayKind::BigInt64),
@@ -4615,34 +4767,44 @@ impl Interpreter {
                     _ => None,
                 };
                 if let Some(kind) = kind {
-                    let proto = self.get_typed_array_prototype(kind);
+                    // Get prototype from the constructor's .prototype property
+                    // (handles cross-realm constructors correctly)
+                    let proto: Option<u64> =
+                        match self.get_object_property(o.id, "prototype", ctor) {
+                            Completion::Normal(JsValue::Object(po)) => Some(po.id),
+                            _ => None,
+                        }
+                        .or_else(|| self.get_typed_array_prototype(kind));
                     let bpe = kind.bytes_per_element();
-                    let new_buf = vec![0u8; len * bpe];
+                    let buf_byte_len = len * bpe;
+                    let new_buf = vec![0u8; buf_byte_len];
                     let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
                     let ta = TypedArrayInfo {
                         kind,
                         buffer: new_buf_rc.clone(),
                         byte_offset: 0,
-                        byte_length: len * bpe,
+                        byte_length: buf_byte_len,
                         array_length: len,
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
                     };
                     let ab_obj = self.create_object();
+                    let ab_proto = self.realm().arraybuffer_prototype;
                     {
                         let mut ab = ab_obj.borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype = self.realm().arraybuffer_prototype.clone();
+                        ab.prototype_id = ab_proto;
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
+                    self.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj.borrow().id.unwrap();
                     let result = self.create_object();
                     {
                         let mut r = result.borrow_mut();
                         r.class_name = kind.name().to_string();
-                        r.prototype = proto;
+                        r.prototype_id = proto;
                         r.view_buffer_object_id = Some(ab_id);
                         r.typed_array_info = Some(ta);
                     }
@@ -4682,141 +4844,75 @@ impl Interpreter {
         )
     }
 
-    #[allow(dead_code)]
-    fn construct_typed_array_from_this(
+    /// Iterate using a known iterator function, collecting all values.
+    pub(crate) fn iterate_with_function(
         &mut self,
-        this_val: &JsValue,
-        values: &[JsValue],
-    ) -> Completion {
-        let len = values.len();
-        // Check `this` is callable (constructor)
-        if let JsValue::Object(o) = this_val {
-            let is_callable = self
-                .get_object(o.id)
-                .is_some_and(|obj| obj.borrow().callable.is_some());
-            if !is_callable {
-                return Completion::Throw(self.create_type_error("not a TypedArray constructor"));
-            }
-        } else {
-            return Completion::Throw(self.create_type_error("not a TypedArray constructor"));
+        source: &JsValue,
+        iter_fn: &JsValue,
+    ) -> Result<Vec<JsValue>, Completion> {
+        if !self.is_callable(iter_fn) {
+            return Err(Completion::Throw(
+                self.create_type_error("@@iterator is not a function"),
+            ));
         }
-
-        // Use fast path for known built-in TypedArray constructors
-        if let JsValue::Object(o) = this_val
-            && let Some(obj) = self.get_object(o.id)
-        {
-            let name = {
-                let obj_ref = obj.borrow();
-                if let Some(ref func) = obj_ref.callable {
-                    match func {
-                        JsFunction::Native(n, _, _, _) => Some(n.clone()),
-                        JsFunction::User { .. } => None,
-                    }
-                } else {
-                    None
-                }
-            };
-            if let Some(name) = name {
-                let kind = match name.as_str() {
-                    "Int8Array" => Some(TypedArrayKind::Int8),
-                    "Uint8Array" => Some(TypedArrayKind::Uint8),
-                    "Uint8ClampedArray" => Some(TypedArrayKind::Uint8Clamped),
-                    "Int16Array" => Some(TypedArrayKind::Int16),
-                    "Uint16Array" => Some(TypedArrayKind::Uint16),
-                    "Int32Array" => Some(TypedArrayKind::Int32),
-                    "Uint32Array" => Some(TypedArrayKind::Uint32),
-                    "Float32Array" => Some(TypedArrayKind::Float32),
-                    "Float64Array" => Some(TypedArrayKind::Float64),
-                    "BigInt64Array" => Some(TypedArrayKind::BigInt64),
-                    "BigUint64Array" => Some(TypedArrayKind::BigUint64),
-                    _ => None,
-                };
-                if let Some(kind) = kind {
-                    let proto = self.get_typed_array_prototype(kind);
-                    let bpe = kind.bytes_per_element();
-                    let new_buf = vec![0u8; len * bpe];
-                    let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
-                    let new_detached = Rc::new(Cell::new(false));
-                    let ta = TypedArrayInfo {
-                        kind,
-                        buffer: new_buf_rc.clone(),
-                        byte_offset: 0,
-                        byte_length: len * bpe,
-                        array_length: len,
-                        is_detached: new_detached.clone(),
-                        is_length_tracking: false,
-                    };
-                    for (i, val) in values.iter().enumerate() {
-                        let coerced = match self.typed_array_coerce_value(kind, val) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        typed_array_set_index(&ta, i, &coerced);
-                    }
-                    let ab_obj = self.create_object();
-                    {
-                        let mut ab = ab_obj.borrow_mut();
-                        ab.class_name = "ArrayBuffer".to_string();
-                        ab.prototype = self.realm().arraybuffer_prototype.clone();
-                        ab.arraybuffer_data = Some(new_buf_rc);
-                        ab.arraybuffer_detached = Some(new_detached);
-                    }
-                    let ab_id = ab_obj.borrow().id.unwrap();
-                    let result = self.create_object();
-                    {
-                        let mut r = result.borrow_mut();
-                        r.class_name = kind.name().to_string();
-                        r.prototype = proto;
-                        r.view_buffer_object_id = Some(ab_id);
-                        r.typed_array_info = Some(ta);
-                    }
-                    let id = result.borrow().id.unwrap();
-                    return Completion::Normal(JsValue::Object(JsObject { id }));
-                }
-            }
-        }
-
-        // Generic path: call this_val as constructor with len, validate result is TypedArray
-        let new_obj = match self.construct_with_new_target(
-            this_val,
-            &[JsValue::Number(len as f64)],
-            this_val.clone(),
-        ) {
+        let iter = match self.call_function(iter_fn, source, &[]) {
             Completion::Normal(v) => v,
-            other => return other,
+            Completion::Throw(e) => return Err(Completion::Throw(e)),
+            _ => return Err(Completion::Throw(self.create_type_error("bad iterator"))),
         };
-        // Validate result is a TypedArray
-        let ta_kind = if let JsValue::Object(ref o) = new_obj {
-            self.get_object(o.id)
-                .and_then(|obj| obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind))
-        } else {
-            None
-        };
-        let ta_kind = match ta_kind {
-            Some(k) => k,
-            None => {
-                return Completion::Throw(self.create_type_error(
-                    "TypedArray.of/from: constructor did not return a TypedArray",
+        if !matches!(iter, JsValue::Object(_)) {
+            return Err(Completion::Throw(self.create_type_error(
+                "Result of the Symbol.iterator method is not an object",
+            )));
+        }
+        let mut values = Vec::new();
+        while let JsValue::Object(io) = &iter {
+            let next_fn = match self.get_object_property(io.id, "next", &iter) {
+                Completion::Normal(v) => v,
+                _ => break,
+            };
+            let result = match self.call_function(&next_fn, &iter, &[]) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(Completion::Throw(e)),
+                _ => break,
+            };
+            if !matches!(result, JsValue::Object(_)) {
+                return Err(Completion::Throw(
+                    self.create_type_error("Iterator result is not an object"),
                 ));
             }
-        };
-        // Set each element using Set semantics (which respects OOB/detach)
-        for (i, val) in values.iter().enumerate() {
-            let key = i.to_string();
-            let coerced = match self.typed_array_coerce_value(ta_kind, val) {
-                Ok(v) => v,
-                Err(e) => return Completion::Throw(e),
-            };
-            if let JsValue::Object(ref o) = new_obj
-                && let Some(obj) = self.get_object(o.id)
-            {
-                obj.borrow_mut().set_property_value(&key, coerced);
+            if let JsValue::Object(ro) = &result {
+                let done = match self.get_object_property(ro.id, "done", &result) {
+                    Completion::Normal(v) => self.to_boolean_val(&v),
+                    _ => true,
+                };
+                if done {
+                    break;
+                }
+                let value = match self.get_object_property(ro.id, "value", &result) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(Completion::Throw(e)),
+                    _ => JsValue::Undefined,
+                };
+                values.push(value);
+            } else {
+                break;
             }
         }
-        Completion::Normal(new_obj)
+        Ok(values)
     }
 
     pub(crate) fn collect_iterable_or_arraylike(
+        &mut self,
+        val: &JsValue,
+    ) -> Result<Vec<JsValue>, Completion> {
+        self.gc_root_value(val);
+        let result = self.collect_iterable_or_arraylike_inner(val);
+        self.gc_unroot_value(val);
+        result
+    }
+
+    fn collect_iterable_or_arraylike_inner(
         &mut self,
         val: &JsValue,
     ) -> Result<Vec<JsValue>, Completion> {
@@ -4922,7 +5018,7 @@ impl Interpreter {
     fn setup_dataview(&mut self) {
         let dv_proto = self.create_object();
         dv_proto.borrow_mut().class_name = "DataView".to_string();
-        self.realm_mut().dataview_prototype = Some(dv_proto.clone());
+        self.realm_mut().dataview_prototype = Some(dv_proto.borrow().id.unwrap());
 
         // Getters: buffer, byteOffset, byteLength
         let buffer_getter = self.create_function(JsFunction::native(
@@ -4970,7 +5066,7 @@ impl Interpreter {
                                 interp.create_type_error("DataView buffer is detached"),
                             );
                         }
-                        let buf_len = dv.buffer.borrow().len();
+                        let buf_len = buffer_len(&dv.buffer);
                         if dv.is_length_tracking {
                             if dv.byte_offset > buf_len {
                                 return Completion::Throw(
@@ -5014,7 +5110,7 @@ impl Interpreter {
                                 interp.create_type_error("DataView buffer is detached"),
                             );
                         }
-                        let buf_len = dv.buffer.borrow().len();
+                        let buf_len = buffer_len(&dv.buffer);
                         if dv.is_length_tracking {
                             if dv.byte_offset > buf_len {
                                 return Completion::Throw(
@@ -5094,7 +5190,7 @@ impl Interpreter {
                                     interp.create_type_error("DataView buffer is detached"),
                                 );
                             }
-                            let buf_len = dv.buffer.borrow().len();
+                            let buf_len = buffer_len(&dv.buffer);
                             let effective_byte_length = if dv.is_length_tracking {
                                 if dv.byte_offset > buf_len {
                                     return Completion::Throw(
@@ -5117,8 +5213,9 @@ impl Interpreter {
                                 ));
                             }
                             let idx = dv.byte_offset + byte_offset;
-                            let buf = dv.buffer.borrow();
-                            let result = $read_fn(&buf[idx..idx + $size], little_endian);
+                            let result = with_buffer_read(&dv.buffer, |buf| {
+                                $read_fn(&buf[idx..idx + $size], little_endian)
+                            });
                             return Completion::Normal(result);
                         }
                         Completion::Throw(interp.create_type_error("not a DataView"))
@@ -5283,7 +5380,7 @@ impl Interpreter {
                                     interp.create_type_error("DataView buffer is detached"),
                                 );
                             }
-                            let buf_len = dv.buffer.borrow().len();
+                            let buf_len = buffer_len(&dv.buffer);
                             let effective_byte_length = if dv.is_length_tracking {
                                 if dv.byte_offset > buf_len {
                                     return Completion::Throw(
@@ -5306,8 +5403,9 @@ impl Interpreter {
                                 ));
                             }
                             let idx = dv.byte_offset + byte_offset;
-                            let mut buf = dv.buffer.borrow_mut();
-                            $write_fn(&mut buf[idx..idx + $size], num_value, little_endian);
+                            with_buffer_write(&dv.buffer, |buf| {
+                                $write_fn(&mut buf[idx..idx + $size], num_value, little_endian);
+                            });
                             return Completion::Normal(JsValue::Undefined);
                         }
                         Completion::Throw(interp.create_type_error("not a DataView"))
@@ -5372,7 +5470,7 @@ impl Interpreter {
                                     interp.create_type_error("DataView buffer is detached"),
                                 );
                             }
-                            let buf_len = dv.buffer.borrow().len();
+                            let buf_len = buffer_len(&dv.buffer);
                             let effective_byte_length = if dv.is_length_tracking {
                                 if dv.byte_offset > buf_len {
                                     return Completion::Throw(
@@ -5395,8 +5493,9 @@ impl Interpreter {
                                 ));
                             }
                             let idx = dv.byte_offset + byte_offset;
-                            let mut buf = dv.buffer.borrow_mut();
-                            $write_fn(&mut buf[idx..idx + $size], &bigint_value, little_endian);
+                            with_buffer_write(&dv.buffer, |buf| {
+                                $write_fn(&mut buf[idx..idx + $size], &bigint_value, little_endian);
+                            });
                             return Completion::Normal(JsValue::Undefined);
                         }
                         Completion::Throw(interp.create_type_error("not a DataView"))
@@ -5517,7 +5616,7 @@ impl Interpreter {
         );
 
         // DataView constructor
-        let dv_proto_clone = dv_proto.clone();
+        let dv_proto_clone_id = dv_proto.borrow().id.unwrap();
         let ctor = self.create_function(JsFunction::constructor(
             "DataView".to_string(),
             1,
@@ -5561,7 +5660,7 @@ impl Interpreter {
                             .arraybuffer_detached
                             .clone()
                             .unwrap_or_else(|| Rc::new(Cell::new(false)));
-                        let len = buf.borrow().len();
+                        let len = buffer_len(&buf);
                         let resizable = obj_ref.arraybuffer_max_byte_length.is_some();
                         let immutable = obj_ref.arraybuffer_is_immutable;
                         (buf, det, len, resizable, immutable)
@@ -5602,10 +5701,10 @@ impl Interpreter {
                         is_immutable: buf_is_immutable,
                     };
                     // OrdinaryCreateFromConstructor — realm-aware prototype
-                    let dv_proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                        realm.dataview_prototype.clone()
-                    }) {
-                        Ok(p) => p.unwrap_or_else(|| dv_proto_clone.clone()),
+                    let dv_proto = match interp
+                        .get_prototype_from_new_target_realm(|realm| realm.dataview_prototype)
+                    {
+                        Ok(p) => p.unwrap_or(dv_proto_clone_id),
                         Err(e) => return Completion::Throw(e),
                     };
                     // Re-validate after OrdinaryCreateFromConstructor (prototype getter
@@ -5622,7 +5721,7 @@ impl Interpreter {
                         let new_buf_len = obj_ref
                             .arraybuffer_data
                             .as_ref()
-                            .map(|b| b.borrow().len())
+                            .map(buffer_len)
                             .unwrap_or(0);
                         if byte_offset > new_buf_len {
                             return Completion::Throw(interp.create_error(
@@ -5640,7 +5739,7 @@ impl Interpreter {
                     {
                         let mut r = result.borrow_mut();
                         r.class_name = "DataView".to_string();
-                        r.prototype = Some(dv_proto);
+                        r.prototype_id = Some(dv_proto);
                         if let JsValue::Object(ref bobj) = buf_arg {
                             r.view_buffer_object_id = Some(bobj.id);
                         }
@@ -5731,7 +5830,7 @@ fn extract_ta_and_callback(
 }
 
 /// Convert IEEE 754 binary16 (half-precision) bits to f64.
-fn dv_f16_to_f64(bits: u16) -> f64 {
+pub(crate) fn dv_f16_to_f64(bits: u16) -> f64 {
     let sign = ((bits >> 15) & 1) as u64;
     let exp = ((bits >> 10) & 0x1F) as u64;
     let frac = (bits & 0x3FF) as u64;
@@ -5765,7 +5864,7 @@ fn dv_f16_to_f64(bits: u16) -> f64 {
 
 /// Convert f64 to IEEE 754 binary16 (half-precision) bits.
 /// Uses round-to-nearest-even (banker's rounding).
-fn dv_f64_to_f16_bits(val: f64) -> u16 {
+pub(crate) fn dv_f64_to_f16_bits(val: f64) -> u16 {
     if val.is_nan() {
         return 0x7E00; // NaN
     }
@@ -6486,18 +6585,20 @@ fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Compl
         is_length_tracking: false,
     };
     let ab_obj = interp.create_object();
+    let ab_proto = interp.realm().arraybuffer_prototype;
     {
         let mut ab = ab_obj.borrow_mut();
         ab.class_name = "ArrayBuffer".to_string();
-        ab.prototype = interp.realm().arraybuffer_prototype.clone();
+        ab.prototype_id = ab_proto;
         ab.arraybuffer_data = Some(buf_rc);
         ab.arraybuffer_detached = Some(detached);
     }
+    interp.gc_track_external_bytes(len);
     let ab_id = ab_obj.borrow().id.unwrap();
     let buf_val = JsValue::Object(JsObject { id: ab_id });
 
-    let proto = interp.realm().uint8array_prototype.clone().unwrap();
-    let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, &proto);
+    let proto_id = interp.realm().uint8array_prototype.unwrap();
+    let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, proto_id);
     let id = result.borrow().id.unwrap();
     Completion::Normal(JsValue::Object(JsObject { id }))
 }

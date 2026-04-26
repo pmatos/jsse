@@ -1,11 +1,12 @@
 use crate::ast::*;
 use crate::parser;
 use crate::types::{JsBigInt, JsString, JsValue, bigint_ops, number_ops};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct AgentBroadcastMsg {
     pub sab_shared: Arc<types::SharedBufferInner>,
@@ -23,6 +24,27 @@ mod exec;
 mod gc;
 pub(crate) mod generator_analysis;
 pub(crate) mod generator_transform;
+#[cfg(test)]
+mod tests;
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum ImportModuleType {
+    Text,
+    Bytes,
+}
+
+fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
+    for (key, value) in attrs {
+        if key == "type" {
+            return match value.as_str() {
+                "text" => Some(ImportModuleType::Text),
+                "bytes" => Some(ImportModuleType::Bytes),
+                _ => None,
+            };
+        }
+    }
+    None
+}
 
 #[allow(clippy::type_complexity)]
 pub struct Interpreter {
@@ -35,6 +57,10 @@ pub struct Interpreter {
     new_target: Option<JsValue>,
     free_list: Vec<usize>,
     gc_alloc_count: usize,
+    gc_requested: bool,
+    gc_bytes_since_gc: usize,
+    gc_external_bytes: usize,
+    gc_threshold_bytes: usize,
     generator_context: Option<GeneratorContext>,
     pub(crate) destructuring_yield: bool,
     pub(crate) pending_iter_close: Vec<JsValue>,
@@ -45,6 +71,7 @@ pub struct Interpreter {
     )>,
     cached_has_instance_key: Option<String>,
     module_registry: HashMap<PathBuf, Rc<RefCell<LoadedModule>>>,
+    synthetic_module_registry: HashMap<(PathBuf, ImportModuleType), Rc<RefCell<LoadedModule>>>,
     current_module_path: Option<PathBuf>,
     loading_deferred: bool,
     last_call_had_explicit_return: bool,
@@ -52,10 +79,12 @@ pub struct Interpreter {
     constructing_derived: bool,
     calling_as_construct: bool,
     pub(crate) call_stack_envs: Vec<EnvRef>,
+    pub(crate) call_stack_frames: Vec<CallFrame>,
     pub(crate) gc_temp_roots: Vec<u64>,
     // microtask roots are now stored inline in the microtask_queue tuples
-    pub(crate) class_private_names: Vec<std::collections::HashMap<String, String>>,
+    pub(crate) class_private_names: Vec<HashMap<String, String>>,
     next_class_brand_id: u64,
+    next_auto_accessor_id: u64,
     pub(crate) regexp_legacy_input: String,
     pub(crate) regexp_legacy_last_match: String,
     pub(crate) regexp_legacy_last_paren: String,
@@ -69,7 +98,10 @@ pub struct Interpreter {
     pub(crate) next_function_is_method: bool,
     pub(crate) is_agent_thread: bool,
     pub(crate) can_block: bool,
-    pub(crate) agent_reports: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<String>>>,
+    pub(crate) agent_reports: std::sync::Arc<(
+        std::sync::Mutex<std::collections::VecDeque<String>>,
+        std::sync::Condvar,
+    )>,
     pub(crate) agent_broadcast_txs: Vec<std::sync::mpsc::Sender<AgentBroadcastMsg>>,
     pub(crate) agent_handles: Vec<std::thread::JoinHandle<()>>,
     pub(crate) agent_broadcast_rx: Option<std::sync::mpsc::Receiver<AgentBroadcastMsg>>,
@@ -77,6 +109,12 @@ pub struct Interpreter {
         std::sync::Mutex<Vec<Box<dyn FnOnce(&mut Interpreter) + Send>>>,
         std::sync::Condvar,
     )>,
+    pub(crate) pending_async_jobs: Arc<AtomicUsize>,
+    /// Promise IDs whose resolution is blocked on a host-async worker thread
+    /// (e.g. Atomics.waitAsync, $262.agent.getReportAsync). Used by
+    /// drain_microtasks_until_idle to decide whether pending host work is
+    /// actually awaited by JS code (Promise has reactions) versus detached.
+    pub(crate) pending_async_promise_ids: Arc<std::sync::Mutex<std::collections::HashSet<u64>>>,
     pub(crate) iterator_next_cache: HashMap<u64, JsValue>,
     last_identifier_with_base: Option<u64>,
     pub(crate) async_gen_queues: HashMap<u64, std::collections::VecDeque<AsyncGenRequest>>,
@@ -87,6 +125,14 @@ pub struct Interpreter {
     pub(crate) static_module_load_depth: u32,
     module_async_evaluation_count: u64,
     module_async_info: HashMap<u64, PathBuf>,
+    pub(crate) with_scope_depth: u32,
+    pub(crate) has_ever_entered_with: bool,
+}
+
+pub(crate) struct CallFrame {
+    pub func_obj_id: u64,
+    pub arguments_obj: JsValue,
+    pub is_eval: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -153,25 +199,30 @@ impl Interpreter {
             }
         }
 
-        let realm = Realm::new(0, global);
+        let realm = Realm::new(global);
 
         let mut interp = Self {
             realms: vec![realm],
             current_realm_id: 0,
             objects: Vec::new(),
-            global_symbol_registry: HashMap::new(),
-            well_known_symbols: HashMap::new(),
+            global_symbol_registry: HashMap::default(),
+            well_known_symbols: HashMap::default(),
             next_symbol_id: 1,
             new_target: None,
             free_list: Vec::new(),
             gc_alloc_count: 0,
+            gc_requested: false,
+            gc_bytes_since_gc: 0,
+            gc_external_bytes: 0,
+            gc_threshold_bytes: GC_INITIAL_THRESHOLD_BYTES,
             generator_context: None,
             destructuring_yield: false,
             pending_iter_close: Vec::new(),
-            generator_inline_iters: HashMap::new(),
+            generator_inline_iters: HashMap::default(),
             microtask_queue: Vec::new(),
             cached_has_instance_key: None,
-            module_registry: HashMap::new(),
+            module_registry: HashMap::default(),
+            synthetic_module_registry: HashMap::default(),
             current_module_path: None,
             loading_deferred: false,
             last_call_had_explicit_return: false,
@@ -179,9 +230,11 @@ impl Interpreter {
             constructing_derived: false,
             calling_as_construct: false,
             call_stack_envs: Vec::new(),
+            call_stack_frames: Vec::new(),
             gc_temp_roots: Vec::new(),
             class_private_names: Vec::new(),
             next_class_brand_id: 0,
+            next_auto_accessor_id: 0,
             regexp_legacy_input: String::new(),
             regexp_legacy_last_match: String::new(),
             regexp_legacy_last_paren: String::new(),
@@ -189,13 +242,16 @@ impl Interpreter {
             regexp_legacy_right_context: String::new(),
             regexp_legacy_parens: Default::default(),
             regexp_constructor_id: None,
-            function_realm_map: HashMap::new(),
+            function_realm_map: HashMap::default(),
             in_tail_position: false,
             in_state_machine: false,
             next_function_is_method: false,
             is_agent_thread: false,
             can_block: false,
-            agent_reports: Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new())),
+            agent_reports: Arc::new((
+                std::sync::Mutex::new(std::collections::VecDeque::new()),
+                std::sync::Condvar::new(),
+            )),
             agent_broadcast_txs: Vec::new(),
             agent_handles: Vec::new(),
             agent_broadcast_rx: None,
@@ -203,16 +259,22 @@ impl Interpreter {
                 std::sync::Mutex::new(Vec::new()),
                 std::sync::Condvar::new(),
             )),
-            iterator_next_cache: HashMap::new(),
+            pending_async_jobs: Arc::new(AtomicUsize::new(0)),
+            pending_async_promise_ids: Arc::new(std::sync::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
+            iterator_next_cache: HashMap::default(),
             last_identifier_with_base: None,
-            async_gen_queues: HashMap::new(),
+            async_gen_queues: HashMap::default(),
             async_gen_yield_pending: false,
-            async_function_states: HashMap::new(),
+            async_function_states: HashMap::default(),
             next_async_function_id: 0,
             pending_async_dispose_await: false,
             static_module_load_depth: 0,
             module_async_evaluation_count: 0,
-            module_async_info: HashMap::new(),
+            module_async_info: HashMap::default(),
+            with_scope_depth: 0,
+            has_ever_entered_with: false,
         };
         interp.setup_globals();
         interp
@@ -249,7 +311,7 @@ impl Interpreter {
                 );
             }
         }
-        let realm = Realm::new(new_id, new_global_env);
+        let realm = Realm::new(new_global_env);
         self.realms.push(realm);
 
         let old_realm = self.current_realm_id;
@@ -281,7 +343,8 @@ impl Interpreter {
             "gc".to_string(),
             0,
             |interp, _this, _args| {
-                interp.maybe_gc();
+                interp.gc_requested = true;
+                interp.gc_safepoint();
                 Completion::Normal(JsValue::Undefined)
             },
         ));
@@ -455,7 +518,8 @@ impl Interpreter {
             "getReport".to_string(),
             0,
             |interp, _this, _args| {
-                let mut reports = interp.agent_reports.lock().unwrap();
+                let (ref reports_lock, _) = *interp.agent_reports;
+                let mut reports = reports_lock.lock().unwrap();
                 if let Some(report) = reports.pop_front() {
                     Completion::Normal(JsValue::String(JsString::from_str(&report)))
                 } else {
@@ -466,6 +530,74 @@ impl Interpreter {
         agent_obj
             .borrow_mut()
             .insert_builtin("getReport".to_string(), get_report_fn);
+
+        // $262.agent.getReportAsync()
+        let get_report_async_fn = self.create_function(JsFunction::native(
+            "getReportAsync".to_string(),
+            0,
+            |interp, _this, _args| {
+                let (resolve_fn, _reject_fn, promise_val) = interp.create_promise_parts();
+                interp.gc_root_value(&resolve_fn);
+
+                let immediate_report = {
+                    let (ref reports_lock, _) = *interp.agent_reports;
+                    reports_lock.lock().unwrap().pop_front()
+                };
+                if let Some(report) = immediate_report {
+                    let report_val = JsValue::String(JsString::from_str(&report));
+                    let _ = interp.call_function(&resolve_fn, &JsValue::Undefined, &[report_val]);
+                    interp.gc_unroot_value(&resolve_fn);
+                    return Completion::Normal(promise_val);
+                }
+
+                interp.pending_async_jobs.fetch_add(1, Ordering::SeqCst);
+                let reports = interp.agent_reports.clone();
+                let resolve = resolve_fn;
+                let pending = interp.agent_async_completions.clone();
+                let pending_jobs = interp.pending_async_jobs.clone();
+                let pending_promise_ids = interp.pending_async_promise_ids.clone();
+                let promise_id = if let JsValue::Object(ref o) = promise_val {
+                    o.id
+                } else {
+                    0
+                };
+                if promise_id != 0 {
+                    pending_promise_ids.lock().unwrap().insert(promise_id);
+                }
+
+                std::thread::spawn(move || {
+                    let report = {
+                        let (ref reports_lock, ref reports_cvar) = *reports;
+                        let mut queue = reports_lock.lock().unwrap();
+                        loop {
+                            if let Some(report) = queue.pop_front() {
+                                break report;
+                            }
+                            queue = reports_cvar.wait(queue).unwrap();
+                        }
+                    };
+                    let report_val = JsValue::String(JsString::from_str(&report));
+                    let (ref mtx, ref completion_cvar) = *pending;
+                    mtx.lock()
+                        .unwrap()
+                        .push(Box::new(move |interp: &mut Interpreter| {
+                            let _ =
+                                interp.call_function(&resolve, &JsValue::Undefined, &[report_val]);
+                            interp.gc_unroot_value(&resolve);
+                        }));
+                    if promise_id != 0 {
+                        pending_promise_ids.lock().unwrap().remove(&promise_id);
+                    }
+                    pending_jobs.fetch_sub(1, Ordering::SeqCst);
+                    completion_cvar.notify_one();
+                });
+
+                Completion::Normal(promise_val)
+            },
+        ));
+        agent_obj
+            .borrow_mut()
+            .insert_builtin("getReportAsync".to_string(), get_report_async_fn);
 
         // $262.agent.sleep(ms)
         let sleep_fn = self.create_function(JsFunction::native(
@@ -530,7 +662,7 @@ impl Interpreter {
             unreachable!()
         };
 
-        // AbstractModuleSource.prototype
+        // AbstractModuleSource.prototype_id
         let ams_proto = self.create_object();
         // constructor property
         ams_proto
@@ -577,17 +709,6 @@ impl Interpreter {
         JsValue::Object(crate::types::JsObject { id: dollar_262_id })
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn drain_agent_async_completions(&mut self) {
-        let completions: Vec<_> = {
-            let mut lock = self.agent_async_completions.0.lock().unwrap();
-            lock.drain(..).collect()
-        };
-        for f in completions {
-            f(self);
-        }
-    }
-
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
         if let JsValue::Object(o) = val {
             self.gc_temp_roots.push(o.id);
@@ -599,6 +720,12 @@ impl Interpreter {
             && let Some(pos) = self.gc_temp_roots.iter().rposition(|&id| id == o.id)
         {
             self.gc_temp_roots.remove(pos);
+        }
+    }
+
+    pub(crate) fn gc_unroot_args(&mut self, args: &[JsValue]) {
+        for v in args {
+            self.gc_unroot_value(v);
         }
     }
 
@@ -646,44 +773,18 @@ impl Interpreter {
         Ok(self.current_realm_id)
     }
 
-    // GetPrototypeFromConstructor — §10.2.4
-    #[allow(dead_code)]
-    pub(crate) fn get_prototype_from_new_target(
-        &mut self,
-        default_proto: &Option<Rc<RefCell<JsObjectData>>>,
-    ) -> Result<Option<Rc<RefCell<JsObjectData>>>, JsValue> {
-        let nt = match self.new_target.clone() {
-            Some(v) => v,
-            None => return Ok(default_proto.clone()),
-        };
-        if let JsValue::Object(nt_o) = &nt {
-            let proto_val = match self.get_object_property(nt_o.id, "prototype", &nt) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
-            };
-            if let JsValue::Object(po) = proto_val
-                && let Some(proto_rc) = self.get_object(po.id)
-            {
-                return Ok(Some(proto_rc));
-            }
-        }
-        Ok(default_proto.clone())
-    }
-
     // GetPrototypeFromConstructor with realm-aware fallback — §10.2.4
     pub(crate) fn get_prototype_from_new_target_realm<F>(
         &mut self,
         get_realm_proto: F,
-    ) -> Result<Option<Rc<RefCell<JsObjectData>>>, JsValue>
+    ) -> Result<Option<u64>, JsValue>
     where
-        F: Fn(&Realm) -> Option<Rc<RefCell<JsObjectData>>>,
+        F: Fn(&Realm) -> Option<u64>,
     {
         let nt = match self.new_target.clone() {
             Some(v) => v,
             None => {
-                let proto = get_realm_proto(&self.realms[self.current_realm_id]);
-                return Ok(proto);
+                return Ok(get_realm_proto(&self.realms[self.current_realm_id]));
             }
         };
         if let JsValue::Object(nt_o) = &nt {
@@ -692,18 +793,14 @@ impl Interpreter {
                 Completion::Throw(e) => return Err(e),
                 _ => JsValue::Undefined,
             };
-            if let JsValue::Object(po) = proto_val
-                && let Some(proto_rc) = self.get_object(po.id)
-            {
-                return Ok(Some(proto_rc));
+            if let JsValue::Object(po) = proto_val {
+                return Ok(Some(po.id));
             }
             // proto is not an object: use realm of newTarget
             let nt_realm_id = self.get_function_realm(&JsValue::Object(nt_o.clone()))?;
-            let proto = get_realm_proto(&self.realms[nt_realm_id]);
-            return Ok(proto);
+            return Ok(get_realm_proto(&self.realms[nt_realm_id]));
         }
-        let proto = get_realm_proto(&self.realms[self.current_realm_id]);
-        Ok(proto)
+        Ok(get_realm_proto(&self.realms[self.current_realm_id]))
     }
 
     fn register_global_fn(&mut self, name: &str, kind: BindingKind, func: JsFunction) {
@@ -803,6 +900,14 @@ impl Interpreter {
         }
     }
 
+    fn same_value_option(a: Option<&JsValue>, b: Option<&JsValue>) -> bool {
+        match (a, b) {
+            (Some(a), Some(b)) => crate::interpreter::helpers::same_value(a, b),
+            (None, None) => true,
+            _ => false,
+        }
+    }
+
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn from_property_descriptor(&mut self, desc: &PropertyDescriptor) -> JsValue {
         let result = self.create_object();
@@ -844,10 +949,9 @@ impl Interpreter {
 
     fn create_object(&mut self) -> Rc<RefCell<JsObjectData>> {
         let mut data = JsObjectData::new();
-        data.prototype = self.realm().object_prototype.clone();
-        let obj = Rc::new(RefCell::new(data));
-        self.allocate_object_slot(obj.clone());
-        obj
+        data.prototype_id = self.realm().object_prototype;
+        let id = self.alloc_object(data);
+        self.get_object_expect(id)
     }
 
     fn create_thrower_function(&mut self) -> JsValue {
@@ -865,20 +969,6 @@ impl Interpreter {
             },
         );
         self.create_function(func)
-    }
-
-    #[allow(dead_code)]
-    fn is_strict_mode_body(body: &[Statement]) -> bool {
-        for stmt in body {
-            if let Statement::Expression(Expression::Literal(Literal::String(s))) = stmt {
-                if utf16_eq(s, "use strict") {
-                    return true;
-                }
-            } else {
-                break;
-            }
-        }
-        false
     }
 
     fn create_function(&mut self, func: JsFunction) -> JsValue {
@@ -917,27 +1007,24 @@ impl Interpreter {
             JsFunction::Native(name, arity, _, _) => (name.clone(), *arity),
         };
         let mut obj_data = JsObjectData::new();
-        obj_data.prototype = if is_async_gen {
+        let proto_id = if is_async_gen {
             self.realm()
                 .async_generator_function_prototype
-                .clone()
-                .or(self.realm().object_prototype.clone())
+                .or(self.realm().object_prototype)
         } else if is_gen {
             self.realm()
                 .generator_function_prototype
-                .clone()
-                .or(self.realm().object_prototype.clone())
+                .or(self.realm().object_prototype)
         } else if is_async_non_gen {
             self.realm()
                 .async_function_prototype
-                .clone()
-                .or(self.realm().object_prototype.clone())
+                .or(self.realm().object_prototype)
         } else {
             self.realm()
                 .function_prototype
-                .clone()
-                .or(self.realm().object_prototype.clone())
+                .or(self.realm().object_prototype)
         };
+        obj_data.prototype_id = proto_id;
         obj_data.callable = Some(func);
         obj_data.class_name = if is_async_gen {
             "AsyncGeneratorFunction".to_string()
@@ -975,14 +1062,28 @@ impl Interpreter {
             && !*is_generator
             && !*is_async
         {
-            obj_data.insert_property(
-                "caller".to_string(),
-                PropertyDescriptor::data(JsValue::Null, false, false, true),
-            );
-            obj_data.insert_property(
-                "arguments".to_string(),
-                PropertyDescriptor::data(JsValue::Null, false, false, true),
-            );
+            if let Some(ref getter) = self.realm().sloppy_caller_getter.clone() {
+                obj_data.insert_property(
+                    "caller".to_string(),
+                    PropertyDescriptor::accessor(Some(getter.clone()), None, false, true),
+                );
+            } else {
+                obj_data.insert_property(
+                    "caller".to_string(),
+                    PropertyDescriptor::data(JsValue::Null, false, false, true),
+                );
+            }
+            if let Some(ref getter) = self.realm().sloppy_arguments_getter.clone() {
+                obj_data.insert_property(
+                    "arguments".to_string(),
+                    PropertyDescriptor::accessor(Some(getter.clone()), None, false, true),
+                );
+            } else {
+                obj_data.insert_property(
+                    "arguments".to_string(),
+                    PropertyDescriptor::data(JsValue::Null, false, false, true),
+                );
+            }
         }
         let is_constructable = match &obj_data.callable {
             Some(JsFunction::User {
@@ -1001,9 +1102,9 @@ impl Interpreter {
         if needs_prototype {
             let proto = self.create_object();
             if is_async_gen {
-                proto.borrow_mut().prototype = self.realm().async_generator_prototype.clone();
+                proto.borrow_mut().prototype_id = self.realm().async_generator_prototype;
             } else if is_gen {
-                proto.borrow_mut().prototype = self.realm().generator_prototype.clone();
+                proto.borrow_mut().prototype_id = self.realm().generator_prototype;
             }
             let proto_id = proto.borrow().id.unwrap();
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
@@ -1012,15 +1113,17 @@ impl Interpreter {
                 PropertyDescriptor::data(proto_val.clone(), true, false, false),
             );
         }
-        let obj = Rc::new(RefCell::new(obj_data));
-        let func_id = self.allocate_object_slot(obj.clone());
+        let func_id = self.alloc_object(obj_data);
         self.function_realm_map
             .insert(func_id, self.current_realm_id);
         let func_val = JsValue::Object(crate::types::JsObject { id: func_id });
         // Set prototype.constructor = func (not for generators)
         if is_constructable
             && !is_gen
-            && let Some(JsValue::Object(proto_ref)) = obj.borrow().get_property_value("prototype")
+            && let Some(JsValue::Object(proto_ref)) = self
+                .get_object_expect(func_id)
+                .borrow()
+                .get_property_value("prototype")
             && let Some(proto_obj) = self.get_object(proto_ref.id)
         {
             proto_obj
@@ -1030,8 +1133,101 @@ impl Interpreter {
         func_val
     }
 
-    fn get_object(&self, id: u64) -> Option<Rc<RefCell<JsObjectData>>> {
+    pub(crate) fn get_object(&self, id: u64) -> Option<Rc<RefCell<JsObjectData>>> {
         self.objects.get(id as usize).and_then(|slot| slot.clone())
+    }
+
+    /// Like `get_object` but panics if the id is dead. Matches the pattern
+    /// `self.objects[id as usize].as_ref().unwrap().clone()` used at most
+    /// call sites where the id is known live (held by a live JsValue).
+    pub(crate) fn get_object_expect(&self, id: u64) -> Rc<RefCell<JsObjectData>> {
+        self.objects[id as usize]
+            .as_ref()
+            .expect("dead object id")
+            .clone()
+    }
+
+    /// Iterative prototype-chain walk of `get_property`. Returns
+    /// `JsValue::Undefined` when the key is not found anywhere in the chain.
+    /// Each frame is pinned by the Rc returned from `get_object_expect` so
+    /// intermediate safepoints cannot sweep the next prototype before we reach it.
+    pub(crate) fn get_property_on_id(&self, start_id: u64, key: &str) -> JsValue {
+        let mut current = Some(start_id);
+        while let Some(id) = current {
+            let obj_rc = self.get_object_expect(id);
+            let b = obj_rc.borrow();
+            if let Some(v) = b.own_property_lookup(key) {
+                return v;
+            }
+            let next = b.prototype_id;
+            drop(b);
+            current = next;
+        }
+        JsValue::Undefined
+    }
+
+    /// Iterative prototype-chain walk of `get_property_descriptor`.
+    pub(crate) fn get_property_descriptor_on_id(
+        &self,
+        start_id: u64,
+        key: &str,
+    ) -> Option<PropertyDescriptor> {
+        let mut current = Some(start_id);
+        while let Some(id) = current {
+            let obj_rc = self.get_object_expect(id);
+            let b = obj_rc.borrow();
+            if let Some(d) = b.own_property_descriptor_lookup(key) {
+                return Some(d);
+            }
+            let next = b.prototype_id;
+            drop(b);
+            current = next;
+        }
+        None
+    }
+
+    /// Iterative prototype-chain walk of `has_property`. TypedArray canonical
+    /// numeric indices short-circuit the walk (per §10.4.5.2).
+    pub(crate) fn has_property_on_id(&self, start_id: u64, key: &str) -> bool {
+        let mut current = Some(start_id);
+        while let Some(id) = current {
+            let obj_rc = self.get_object_expect(id);
+            let b = obj_rc.borrow();
+            if let Some(result) = b.own_has_property(key) {
+                return result;
+            }
+            let next = b.prototype_id;
+            drop(b);
+            current = next;
+        }
+        false
+    }
+
+    /// Iterative prototype-chain walk of `enumerable_keys_with_proto`. Merges
+    /// each frame's emit with a global shadow set so non-enumerable own keys on
+    /// one frame correctly suppress enumerable inherited keys with matching
+    /// names on subsequent frames.
+    pub(crate) fn enumerable_keys_with_proto_on_id(&self, start_id: u64) -> Vec<String> {
+        let mut global_seen: HashSet<String> = HashSet::default();
+        let mut result: Vec<String> = Vec::new();
+        let mut current = Some(start_id);
+        while let Some(id) = current {
+            let obj_rc = self.get_object_expect(id);
+            let b = obj_rc.borrow();
+            let (keys, shadow) = b.own_enumerable_keys_with_shadow();
+            for k in keys {
+                if global_seen.insert(k.clone()) {
+                    result.push(k);
+                }
+            }
+            for k in shadow {
+                global_seen.insert(k);
+            }
+            let next = b.prototype_id;
+            drop(b);
+            current = next;
+        }
+        result
     }
 
     pub(crate) fn set_function_name(&self, val: &JsValue, name: &str) {
@@ -1121,8 +1317,8 @@ impl Interpreter {
                     },
                 );
 
-                let mut map = HashMap::new();
-                let mut mapped_names: HashSet<&str> = HashSet::new();
+                let mut map = HashMap::default();
+                let mut mapped_names: HashSet<&str> = HashSet::default();
                 for i in (0..param_names.len()).rev() {
                     let name = &param_names[i];
                     if mapped_names.contains(name.as_str()) {
@@ -1172,8 +1368,7 @@ impl Interpreter {
             let array_iter_fn = self
                 .realm()
                 .array_prototype
-                .as_ref()
-                .map(|proto| proto.borrow().get_property(&key));
+                .map(|id| self.get_property_on_id(id, &key));
             if let Some(iter_fn) = array_iter_fn
                 && !matches!(iter_fn, JsValue::Undefined)
                 && let JsValue::Object(ref o) = result
@@ -1198,9 +1393,8 @@ impl Interpreter {
             let name = &inner[7..]; // "toStringTag"
             if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
                 && let JsValue::Object(so) = sym_val
-                && let Some(sobj) = self.get_object(so.id)
             {
-                let val = sobj.borrow().get_property(name);
+                let val = self.get_property_on_id(so.id, name);
                 if let JsValue::Symbol(s) = val {
                     return JsValue::Symbol(s);
                 }
@@ -1237,7 +1431,7 @@ impl Interpreter {
     }
 
     pub fn run(&mut self, program: &Program) -> Completion {
-        self.maybe_gc();
+        self.gc_safepoint();
         let result = match program.source_type {
             SourceType::Script => {
                 let global = self.realm().global_env.clone();
@@ -1248,12 +1442,12 @@ impl Interpreter {
             }
             SourceType::Module => self.run_module(program, None),
         };
-        self.drain_microtasks();
+        self.drain_microtasks_until_idle();
         result
     }
 
     pub fn run_with_path(&mut self, program: &Program, path: &Path) -> Completion {
-        self.maybe_gc();
+        self.gc_safepoint();
         match program.source_type {
             SourceType::Script => {
                 let prev = self.current_module_path.take();
@@ -1264,7 +1458,7 @@ impl Interpreter {
                 }
                 let r = self.exec_statements(&program.body, &global);
                 // Drain microtasks before restoring path so async callbacks can use relative imports
-                self.drain_microtasks();
+                self.drain_microtasks_until_idle();
                 self.current_module_path = prev;
                 r
             }
@@ -1273,16 +1467,11 @@ impl Interpreter {
                 // Keep path set during microtask draining so async callbacks can use relative imports
                 let prev = self.current_module_path.take();
                 self.current_module_path = Some(path.to_path_buf());
-                self.drain_microtasks();
+                self.drain_microtasks_until_idle();
                 self.current_module_path = prev;
                 r
             }
         }
-    }
-
-    #[allow(dead_code)]
-    pub fn get_current_module_path(&self) -> Option<&Path> {
-        self.current_module_path.as_deref()
     }
 
     fn run_module(&mut self, program: &Program, module_path: Option<PathBuf>) -> Completion {
@@ -1305,13 +1494,13 @@ impl Interpreter {
         let loaded_module = Rc::new(RefCell::new(LoadedModule {
             path: canon_path_entry.clone(),
             env: module_env.clone(),
-            exports: HashMap::new(),
-            export_bindings: HashMap::new(),
+            exports: HashMap::default(),
+            export_bindings: HashMap::default(),
             cached_namespace: None,
             cached_deferred_namespace: None,
             cached_import_meta: None,
             error: None,
-            namespace_imports: HashMap::new(),
+            namespace_imports: HashMap::default(),
             star_export_sources: Vec::new(),
             evaluated: false,
             is_evaluating: false,
@@ -1376,33 +1565,57 @@ impl Interpreter {
         // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6)
         // For deferred imports, load without evaluation.
         for item in &program.module_items {
-            let (specifier, is_deferred) = match item {
+            let (specifier, is_deferred, import_type) = match item {
                 ModuleItem::ImportDeclaration(import) => {
                     let is_defer = import
                         .specifiers
                         .iter()
                         .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    (Some(import.source.as_str()), is_defer)
+                    (
+                        Some(import.source.as_str()),
+                        is_defer,
+                        import_module_type(&import.attributes),
+                    )
                 }
                 ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), false)
+                    (Some(source.as_str()), false, None)
                 }
                 ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                     source: Some(source),
                     ..
-                }) => (Some(source.as_str()), false),
-                _ => (None, false),
+                }) => (Some(source.as_str()), false, None),
+                _ => (None, false, None),
             };
             if let Some(spec) = specifier {
                 let module_path = self.current_module_path.clone();
                 if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
-                    if is_deferred {
-                        if let Err(e) = self.load_module_no_eval(&resolved) {
-                            self.current_module_path = prev_module_path;
-                            return Completion::Throw(e);
+                    match import_type {
+                        Some(ImportModuleType::Text) => {
+                            if let Err(e) = self.load_text_module(&resolved) {
+                                self.current_module_path = prev_module_path;
+                                return Completion::Throw(e);
+                            }
                         }
-                    } else {
-                        let _ = self.load_module(&resolved);
+                        Some(ImportModuleType::Bytes) => {
+                            if let Err(e) = self.load_bytes_module(&resolved) {
+                                self.current_module_path = prev_module_path;
+                                return Completion::Throw(e);
+                            }
+                        }
+                        None if is_deferred => {
+                            if let Err(e) = self.load_module_no_eval(&resolved) {
+                                Self::cache_module_error(&loaded_module, &e);
+                                self.current_module_path = prev_module_path;
+                                return Completion::Throw(e);
+                            }
+                        }
+                        None => {
+                            if let Err(e) = self.load_module(&resolved) {
+                                Self::cache_module_error(&loaded_module, &e);
+                                self.current_module_path = prev_module_path;
+                                return Completion::Throw(e);
+                            }
+                        }
                     }
                 }
             }
@@ -1415,6 +1628,7 @@ impl Interpreter {
                 && let Err(e) =
                     self.process_star_reexport(source, exported.as_ref(), &loaded_module)
             {
+                Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_module_path;
                 return Completion::Throw(e);
             }
@@ -1425,6 +1639,7 @@ impl Interpreter {
             if let ModuleItem::ImportDeclaration(import) = item
                 && let Err(e) = self.process_import(import, &module_env)
             {
+                Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_module_path;
                 return Completion::Throw(e);
             }
@@ -1440,6 +1655,7 @@ impl Interpreter {
                 }) = item
                     && let Err(e) = self.validate_named_reexports(canon_path, source, specifiers)
                 {
+                    Self::cache_module_error(&loaded_module, &e);
                     self.current_module_path = prev_module_path;
                     return Completion::Throw(e);
                 }
@@ -1449,6 +1665,7 @@ impl Interpreter {
         // Fourth pass: evaluate via inner_module_evaluation (Tarjan SCC + async protocol)
         let mut stack = vec![];
         if let Err(ref e) = self.inner_module_evaluation(&canon_path_entry, &mut stack, 0) {
+            Self::cache_module_error(&loaded_module, e);
             // Per spec §16.2.1.5.3 step 9: mark all modules on stack as evaluated with error
             for m_path in &stack {
                 if let Some(m) = self.module_registry.get(m_path) {
@@ -1482,6 +1699,45 @@ impl Interpreter {
     fn process_import(&mut self, import: &ImportDeclaration, env: &EnvRef) -> Result<(), JsValue> {
         let module_path = self.current_module_path.clone();
         let resolved = self.resolve_module_specifier(&import.source, module_path.as_deref())?;
+
+        let itype = import_module_type(&import.attributes);
+
+        // Text/bytes imports use synthetic module registry
+        if let Some(ref it) = itype {
+            let canon = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+            let key = (canon, it.clone());
+            let loaded = self
+                .synthetic_module_registry
+                .get(&key)
+                .cloned()
+                .ok_or_else(|| {
+                    JsValue::String(JsString::from_str(&format!(
+                        "Synthetic module not found for '{}'",
+                        import.source
+                    )))
+                })?;
+            for spec in &import.specifiers {
+                match spec {
+                    ImportSpecifier::Default(local) => {
+                        let val = loaded
+                            .borrow()
+                            .exports
+                            .get("default")
+                            .cloned()
+                            .unwrap_or(JsValue::Undefined);
+                        env.borrow_mut().declare(local, BindingKind::Const);
+                        env.borrow_mut().initialize_binding(local, val);
+                    }
+                    ImportSpecifier::Namespace(local) => {
+                        let ns = self.create_module_namespace(&loaded);
+                        env.borrow_mut().declare(local, BindingKind::Const);
+                        env.borrow_mut().initialize_binding(local, ns);
+                    }
+                    _ => {}
+                }
+            }
+            return Ok(());
+        }
 
         let is_deferred = import
             .specifiers
@@ -1555,7 +1811,7 @@ impl Interpreter {
         }
         let has_export = binding_info.is_some();
         if has_export {
-            let mut visited = std::collections::HashSet::new();
+            let mut visited = HashSet::default();
             match self.resolve_export_binding(resolved, imported, &mut visited) {
                 Ok((source_env, binding_name)) => {
                     if binding_name == "*namespace*" {
@@ -1571,11 +1827,14 @@ impl Interpreter {
                 Err(e) => return Err(e),
             }
         } else {
-            return Err(JsValue::String(JsString::from_str(&format!(
-                "Module '{}' has no export named '{}'",
-                loaded.borrow().path.display(),
-                imported
-            ))));
+            return Err(self.create_error(
+                "SyntaxError",
+                &format!(
+                    "Module '{}' has no export named '{}'",
+                    loaded.borrow().path.display(),
+                    imported
+                ),
+            ));
         }
         Ok(())
     }
@@ -1623,13 +1882,13 @@ impl Interpreter {
                         // — check if they resolve to the same (module, binding)
                         if existing != &new_reexport {
                             let is_ambiguous = if let Some(ref mp) = module_path {
-                                let mut v1 = std::collections::HashSet::new();
+                                let mut v1 = HashSet::default();
                                 let r1 = self.resolve_export_binding(mp, &export_name, &mut v1);
                                 module
                                     .borrow_mut()
                                     .export_bindings
                                     .insert(export_name.clone(), new_reexport.clone());
-                                let mut v2 = std::collections::HashSet::new();
+                                let mut v2 = HashSet::default();
                                 let r2 = self.resolve_export_binding(mp, &export_name, &mut v2);
                                 module
                                     .borrow_mut()
@@ -1703,6 +1962,10 @@ impl Interpreter {
         ))))
     }
 
+    fn cache_module_error(module: &Rc<RefCell<LoadedModule>>, err: &JsValue) {
+        module.borrow_mut().error = Some(err.clone());
+    }
+
     fn load_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
         self.static_module_load_depth += 1;
         let result = self.load_module_inner(path);
@@ -1752,12 +2015,12 @@ impl Interpreter {
                 path: canon_path.clone(),
                 env: module_env.clone(),
                 exports: {
-                    let mut m = HashMap::new();
+                    let mut m = HashMap::default();
                     m.insert("default".to_string(), parsed.clone());
                     m
                 },
                 export_bindings: {
-                    let mut m = HashMap::new();
+                    let mut m = HashMap::default();
                     m.insert("default".to_string(), "*default*".to_string());
                     m
                 },
@@ -1765,7 +2028,7 @@ impl Interpreter {
                 cached_deferred_namespace: None,
                 cached_import_meta: None,
                 error: None,
-                namespace_imports: HashMap::new(),
+                namespace_imports: HashMap::default(),
                 star_export_sources: Vec::new(),
                 evaluated: true,
                 is_evaluating: false,
@@ -1830,13 +2093,13 @@ impl Interpreter {
         let loaded_module = Rc::new(RefCell::new(LoadedModule {
             path: canon_path.clone(),
             env: module_env.clone(),
-            exports: HashMap::new(),
-            export_bindings: HashMap::new(),
+            exports: HashMap::default(),
+            export_bindings: HashMap::default(),
             cached_namespace: None,
             cached_deferred_namespace: None,
             cached_import_meta: None,
             error: None,
-            namespace_imports: HashMap::new(),
+            namespace_imports: HashMap::default(),
             star_export_sources: Vec::new(),
             evaluated: false,
             is_evaluating: false,
@@ -1905,34 +2168,73 @@ impl Interpreter {
             }
         }
 
+        // Host-resolve pre-pass (spec LoadRequestedModules): surface unresolvable
+        // specifier errors before any transitive Link-phase SyntaxError fires.
+        for item in &program.module_items {
+            let specifier = match item {
+                ModuleItem::ImportDeclaration(import) => Some(import.source.as_str()),
+                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
+                    Some(source.as_str())
+                }
+                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+                    source: Some(s), ..
+                }) => Some(s.as_str()),
+                _ => None,
+            };
+            if let Some(spec) = specifier
+                && let Err(e) = self.resolve_module_specifier(spec, Some(&canon_path))
+            {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
+                return Err(e);
+            }
+        }
+
         // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6)
         // For deferred imports, load without evaluation.
         // For non-deferred, load normally (which includes evaluation).
         for item in &program.module_items {
-            let (specifier, is_deferred) = match item {
+            let (specifier, is_deferred, itype) = match item {
                 ModuleItem::ImportDeclaration(import) => {
                     let is_defer = import
                         .specifiers
                         .iter()
                         .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    (Some(import.source.as_str()), is_defer)
+                    (
+                        Some(import.source.as_str()),
+                        is_defer,
+                        import_module_type(&import.attributes),
+                    )
                 }
                 ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), false)
+                    (Some(source.as_str()), false, None)
                 }
                 ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                     source: Some(source),
                     ..
-                }) => (Some(source.as_str()), false),
-                _ => (None, false),
+                }) => (Some(source.as_str()), false, None),
+                _ => (None, false, None),
             };
             if let Some(spec) = specifier {
                 let module_path = self.current_module_path.clone();
                 if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
-                    if is_deferred {
-                        self.load_module_no_eval(&resolved)?;
-                    } else {
-                        let _ = self.load_module(&resolved);
+                    match itype {
+                        Some(ImportModuleType::Text) => {
+                            self.load_text_module(&resolved)?;
+                        }
+                        Some(ImportModuleType::Bytes) => {
+                            self.load_bytes_module(&resolved)?;
+                        }
+                        None if is_deferred => {
+                            self.load_module_no_eval(&resolved)?;
+                        }
+                        None => {
+                            if let Err(e) = self.load_module(&resolved) {
+                                Self::cache_module_error(&loaded_module, &e);
+                                self.current_module_path = prev_path;
+                                return Err(e);
+                            }
+                        }
                     }
                 }
             }
@@ -1942,15 +2244,23 @@ impl Interpreter {
         // so that self-importing namespaces include star re-exported keys
         for item in &program.module_items {
             if let ModuleItem::ExportDeclaration(ExportDeclaration::All { source, exported }) = item
+                && let Err(e) =
+                    self.process_star_reexport(source, exported.as_ref(), &loaded_module)
             {
-                self.process_star_reexport(source, exported.as_ref(), &loaded_module)?;
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
+                return Err(e);
             }
         }
 
         // Third pass: process imports (after re-exports)
         for item in &program.module_items {
-            if let ModuleItem::ImportDeclaration(import) = item {
-                self.process_import(import, &module_env)?;
+            if let ModuleItem::ImportDeclaration(import) = item
+                && let Err(e) = self.process_import(import, &module_env)
+            {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
+                return Err(e);
             }
         }
 
@@ -1966,7 +2276,7 @@ impl Interpreter {
                     && let Err(e) = self.validate_named_reexports(&canon, source, specifiers)
                 {
                     self.current_module_path = prev_path;
-                    loaded_module.borrow_mut().error = Some(e.clone());
+                    Self::cache_module_error(&loaded_module, &e);
                     return Err(e);
                 }
             }
@@ -1984,6 +2294,17 @@ impl Interpreter {
         let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
         if let Some(existing) = self.module_registry.get(&canon_path) {
+            // Propagate parse/link errors (module never finished loading) eagerly.
+            // Let evaluation errors surface via ensure_deferred_namespace_evaluation
+            // when the deferred namespace is accessed, so identity is preserved
+            // per spec §16.2.1.5.3 (EnsureDeferredNamespaceEvaluation).
+            let (has_error, evaluated, err_clone) = {
+                let b = existing.borrow();
+                (b.error.is_some(), b.evaluated, b.error.clone())
+            };
+            if has_error && !evaluated {
+                return Err(err_clone.unwrap());
+            }
             return Ok(existing.clone());
         }
 
@@ -2030,13 +2351,13 @@ impl Interpreter {
         let loaded_module = Rc::new(RefCell::new(LoadedModule {
             path: canon_path.clone(),
             env: module_env.clone(),
-            exports: HashMap::new(),
-            export_bindings: HashMap::new(),
+            exports: HashMap::default(),
+            export_bindings: HashMap::default(),
             cached_namespace: None,
             cached_deferred_namespace: None,
             cached_import_meta: None,
             error: None,
-            namespace_imports: HashMap::new(),
+            namespace_imports: HashMap::default(),
             star_export_sources: Vec::new(),
             evaluated: false,
             is_evaluating: false,
@@ -2103,30 +2424,34 @@ impl Interpreter {
 
         // Pre-load pass: load sub-dependencies
         for item in &program.module_items {
-            let (specifier, _is_deferred) = match item {
-                ModuleItem::ImportDeclaration(import) => {
-                    let is_defer = import
-                        .specifiers
-                        .iter()
-                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    (Some(import.source.as_str()), is_defer)
-                }
+            let (specifier, itype) = match item {
+                ModuleItem::ImportDeclaration(import) => (
+                    Some(import.source.as_str()),
+                    import_module_type(&import.attributes),
+                ),
                 ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    (Some(source.as_str()), false)
+                    (Some(source.as_str()), None)
                 }
                 ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                     source: Some(source),
                     ..
-                }) => (Some(source.as_str()), false),
-                _ => (None, false),
+                }) => (Some(source.as_str()), None),
+                _ => (None, None),
             };
             if let Some(spec) = specifier {
                 let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref())
-                    && let Err(e) = self.load_module_no_eval(&resolved)
-                {
-                    self.loading_deferred = prev_loading_deferred;
-                    return Err(e);
+                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
+                    let result = match itype {
+                        Some(ImportModuleType::Text) => self.load_text_module(&resolved),
+                        Some(ImportModuleType::Bytes) => self.load_bytes_module(&resolved),
+                        None => self.load_module_no_eval(&resolved),
+                    };
+                    if let Err(e) = result {
+                        Self::cache_module_error(&loaded_module, &e);
+                        self.current_module_path = prev_path;
+                        self.loading_deferred = prev_loading_deferred;
+                        return Err(e);
+                    }
                 }
             }
         }
@@ -2137,6 +2462,8 @@ impl Interpreter {
                 && let Err(e) =
                     self.process_star_reexport(source, exported.as_ref(), &loaded_module)
             {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
                 self.loading_deferred = prev_loading_deferred;
                 return Err(e);
             }
@@ -2147,6 +2474,8 @@ impl Interpreter {
             if let ModuleItem::ImportDeclaration(import) = item
                 && let Err(e) = self.process_import(import, &module_env)
             {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
                 self.loading_deferred = prev_loading_deferred;
                 return Err(e);
             }
@@ -2165,7 +2494,7 @@ impl Interpreter {
                 {
                     self.loading_deferred = prev_loading_deferred;
                     self.current_module_path = prev_path;
-                    loaded_module.borrow_mut().error = Some(e.clone());
+                    Self::cache_module_error(&loaded_module, &e);
                     return Err(e);
                 }
             }
@@ -2176,6 +2505,126 @@ impl Interpreter {
         self.loading_deferred = prev_loading_deferred;
         self.current_module_path = prev_path;
         Ok(loaded_module)
+    }
+
+    fn create_synthetic_default_module(
+        &mut self,
+        canon_path: PathBuf,
+        value: JsValue,
+    ) -> Rc<RefCell<LoadedModule>> {
+        let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
+        module_env.borrow_mut().strict = true;
+        module_env
+            .borrow_mut()
+            .declare("*default*", BindingKind::Const);
+        module_env
+            .borrow_mut()
+            .initialize_binding("*default*", value.clone());
+        Rc::new(RefCell::new(LoadedModule {
+            path: canon_path,
+            env: module_env,
+            exports: {
+                let mut m = HashMap::default();
+                m.insert("default".to_string(), value);
+                m
+            },
+            export_bindings: {
+                let mut m = HashMap::default();
+                m.insert("default".to_string(), "*default*".to_string());
+                m
+            },
+            cached_namespace: None,
+            cached_deferred_namespace: None,
+            cached_import_meta: None,
+            error: None,
+            namespace_imports: HashMap::default(),
+            star_export_sources: Vec::new(),
+            evaluated: true,
+            is_evaluating: false,
+            deferred_only: false,
+            has_tla: false,
+            program_ast: None,
+            async_evaluation_order: None,
+            pending_async_dependencies: 0,
+            async_parent_modules: Vec::new(),
+            cycle_root: None,
+            top_level_capability: None,
+            dfs_index: None,
+            dfs_ancestor_index: None,
+        }))
+    }
+
+    fn load_text_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let key = (canon.clone(), ImportModuleType::Text);
+        if let Some(existing) = self.synthetic_module_registry.get(&key) {
+            return Ok(existing.clone());
+        }
+        let source = std::fs::read_to_string(path).map_err(|e| {
+            JsValue::String(JsString::from_str(&format!(
+                "Cannot read module '{}': {}",
+                path.display(),
+                e
+            )))
+        })?;
+        let value = JsValue::String(JsString::from_str(&source));
+        let module = self.create_synthetic_default_module(canon, value);
+        self.synthetic_module_registry.insert(key, module.clone());
+        Ok(module)
+    }
+
+    fn load_bytes_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let key = (canon.clone(), ImportModuleType::Bytes);
+        if let Some(existing) = self.synthetic_module_registry.get(&key) {
+            return Ok(existing.clone());
+        }
+        let bytes = std::fs::read(path).map_err(|e| {
+            JsValue::String(JsString::from_str(&format!(
+                "Cannot read module '{}': {}",
+                path.display(),
+                e
+            )))
+        })?;
+        let value = self.create_immutable_uint8array(&bytes);
+        let module = self.create_synthetic_default_module(canon, value);
+        self.synthetic_module_registry.insert(key, module.clone());
+        Ok(module)
+    }
+
+    fn create_immutable_uint8array(&mut self, bytes: &[u8]) -> JsValue {
+        use std::cell::Cell;
+        let len = bytes.len();
+        let buf_rc = Rc::new(RefCell::new(BufferData::Owned(bytes.to_vec())));
+        let detached = Rc::new(Cell::new(false));
+
+        let ab_obj = self.create_object();
+        {
+            let mut ab = ab_obj.borrow_mut();
+            ab.class_name = "ArrayBuffer".to_string();
+            ab.prototype_id = self.realm().arraybuffer_prototype;
+            ab.arraybuffer_data = Some(buf_rc.clone());
+            ab.arraybuffer_detached = Some(detached.clone());
+            ab.arraybuffer_is_immutable = true;
+        }
+        self.gc_track_external_bytes(len);
+        let ab_id = ab_obj.borrow().id.unwrap();
+        let buf_val = JsValue::Object(crate::types::JsObject { id: ab_id });
+
+        let ta_info = TypedArrayInfo {
+            kind: TypedArrayKind::Uint8,
+            buffer: buf_rc,
+            byte_offset: 0,
+            byte_length: len,
+            array_length: len,
+            is_detached: detached,
+            is_length_tracking: false,
+        };
+
+        let proto_id = self.realm().uint8array_prototype.unwrap();
+        let ta_obj = self.create_typed_array_object_with_proto(ta_info, buf_val, proto_id);
+        let ta_id = ta_obj.borrow().id.unwrap();
+        JsValue::Object(crate::types::JsObject { id: ta_id })
     }
 
     /// Execute a module's body synchronously (no DFS into dependencies).
@@ -2402,7 +2851,7 @@ impl Interpreter {
         for (dep_canon, is_deferred) in &dep_paths {
             if *is_deferred {
                 let mut to_eval = Vec::new();
-                let mut seen = std::collections::HashSet::new();
+                let mut seen = HashSet::default();
                 self.gather_async_transitive_deps(dep_canon, &mut to_eval, &mut seen);
                 for async_dep in to_eval {
                     if !evaluation_list.contains(&async_dep) {
@@ -2472,8 +2921,8 @@ impl Interpreter {
             if pending == 0 {
                 self.execute_async_module(&canon);
             }
-        } else if let Err(e) = self.execute_module_body_sync(&canon) {
-            return Err(e);
+        } else {
+            self.execute_module_body_sync(&canon)?
         }
 
         let my_dfs = module.borrow().dfs_index.unwrap_or(0);
@@ -2510,6 +2959,10 @@ impl Interpreter {
         for item in &program.module_items {
             let (specifier, is_deferred) = match item {
                 ModuleItem::ImportDeclaration(import) => {
+                    // Skip synthetic (text/bytes) imports — they're not DFS dependencies
+                    if import_module_type(&import.attributes).is_some() {
+                        continue;
+                    }
                     let is_defer = import
                         .specifiers
                         .iter()
@@ -2650,15 +3103,11 @@ impl Interpreter {
     fn module_has_tla(program: &crate::ast::Program) -> bool {
         for item in &program.module_items {
             match item {
-                ModuleItem::Statement(stmt) => {
-                    if Self::stmt_has_tla(stmt) {
-                        return true;
-                    }
+                ModuleItem::Statement(stmt) if Self::stmt_has_tla(stmt) => {
+                    return true;
                 }
-                ModuleItem::ExportDeclaration(export) => {
-                    if Self::export_has_tla(export) {
-                        return true;
-                    }
+                ModuleItem::ExportDeclaration(export) if Self::export_has_tla(export) => {
+                    return true;
                 }
                 _ => {}
             }
@@ -2815,7 +3264,7 @@ impl Interpreter {
     /// Eagerly evaluate async transitive dependencies of a deferred module
     fn evaluate_async_transitive_deps(&mut self, deferred_path: &Path) {
         let mut to_eval = Vec::new();
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         self.gather_async_transitive_deps(deferred_path, &mut to_eval, &mut seen);
 
         for path in to_eval {
@@ -2832,7 +3281,7 @@ impl Interpreter {
         &self,
         module_path: &Path,
         result: &mut Vec<PathBuf>,
-        seen: &mut std::collections::HashSet<PathBuf>,
+        seen: &mut HashSet<PathBuf>,
     ) {
         let canon = module_path
             .canonicalize()
@@ -2864,7 +3313,12 @@ impl Interpreter {
             drop(module_ref);
             for item in &items {
                 let specifier = match item {
-                    ModuleItem::ImportDeclaration(import) => Some(import.source.as_str()),
+                    ModuleItem::ImportDeclaration(import) => {
+                        if import_module_type(&import.attributes).is_some() {
+                            continue;
+                        }
+                        Some(import.source.as_str())
+                    }
                     ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
                         Some(source.as_str())
                     }
@@ -2911,11 +3365,7 @@ impl Interpreter {
     }
 
     /// Check if a module and all its transitive deps are ready for synchronous execution
-    fn ready_for_sync_execution(
-        &self,
-        path: &Path,
-        seen: &mut std::collections::HashSet<PathBuf>,
-    ) -> bool {
+    fn ready_for_sync_execution(&self, path: &Path, seen: &mut HashSet<PathBuf>) -> bool {
         let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if !seen.insert(canon.clone()) {
             return true; // cycle — spec says return true
@@ -2942,7 +3392,12 @@ impl Interpreter {
             drop(module_ref);
             for item in &items {
                 let specifier = match item {
-                    ModuleItem::ImportDeclaration(import) => Some(import.source.as_str()),
+                    ModuleItem::ImportDeclaration(import) => {
+                        if import_module_type(&import.attributes).is_some() {
+                            continue;
+                        }
+                        Some(import.source.as_str())
+                    }
                     ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
                         Some(source.as_str())
                     }
@@ -2973,7 +3428,7 @@ impl Interpreter {
         let resolved = self.resolve_module_specifier(source, Some(current_module))?;
 
         for spec in specifiers {
-            let mut visited = std::collections::HashSet::new();
+            let mut visited = HashSet::default();
             self.resolve_export(&resolved, &spec.local, &mut visited)?;
         }
         Ok(())
@@ -2985,7 +3440,7 @@ impl Interpreter {
         &mut self,
         module_path: &Path,
         export_name: &str,
-        visited: &mut std::collections::HashSet<(PathBuf, String)>,
+        visited: &mut HashSet<(PathBuf, String)>,
     ) -> Result<(EnvRef, String), JsValue> {
         let canon_path = module_path
             .canonicalize()
@@ -3081,7 +3536,7 @@ impl Interpreter {
         &mut self,
         module_path: &Path,
         export_name: &str,
-        visited: &mut std::collections::HashSet<(PathBuf, String)>,
+        visited: &mut HashSet<(PathBuf, String)>,
     ) -> Result<(), JsValue> {
         let canon_path = module_path
             .canonicalize()
@@ -3145,6 +3600,18 @@ impl Interpreter {
             return self.resolve_export(&resolved, &source_export, visited);
         }
 
+        // A default export cannot be provided by `export *`.
+        if export_name == "default" {
+            return Err(self.create_error(
+                "SyntaxError",
+                &format!(
+                    "Module '{}' has no export named '{}'",
+                    canon_path.display(),
+                    export_name
+                ),
+            ));
+        }
+
         // §16.2.1.6.3 step 8: check star re-exports
         let mut found_in_star = false;
         let mut first_star_source: Option<PathBuf> = None;
@@ -3155,13 +3622,13 @@ impl Interpreter {
                 if found_in_star {
                     // §16.2.1.6.3 step 10.d.ii: ambiguous — same name from multiple stars
                     // Check if they resolve to the same (module, binding)
-                    let mut va = std::collections::HashSet::new();
+                    let mut va = HashSet::default();
                     let ra = self.resolve_export_binding(
                         first_star_source.as_ref().unwrap(),
                         export_name,
                         &mut va,
                     );
-                    let mut vb = std::collections::HashSet::new();
+                    let mut vb = HashSet::default();
                     let rb = self.resolve_export_binding(&resolved, export_name, &mut vb);
                     match (ra, rb) {
                         (Ok((env1, name1)), Ok((env2, name2))) => {
@@ -3413,7 +3880,7 @@ impl Interpreter {
         });
         obj.borrow_mut().class_name = "Module".to_string();
         obj.borrow_mut().extensible = false; // Module namespaces are non-extensible
-        obj.borrow_mut().prototype = None; // Module namespaces have null prototype
+        obj.borrow_mut().prototype_id = None; // Module namespaces have null prototype
 
         // Add property descriptors for each export (values will be looked up dynamically)
         for name in &export_names {
@@ -3487,7 +3954,7 @@ impl Interpreter {
         });
         obj.borrow_mut().class_name = "Module".to_string();
         obj.borrow_mut().extensible = false;
-        obj.borrow_mut().prototype = None;
+        obj.borrow_mut().prototype_id = None;
 
         for name in &export_names {
             obj.borrow_mut().insert_property(
@@ -3557,8 +4024,8 @@ impl Interpreter {
                 env.borrow_mut().declare(&f.name, BindingKind::Var);
                 let func = JsFunction::User {
                     name: Some(f.name.clone()),
-                    params: f.params.clone(),
-                    body: f.body.clone(),
+                    params: Rc::new(f.params.clone()),
+                    body: Rc::new(f.body.clone()),
                     closure: env.clone(),
                     is_arrow: false,
                     is_strict: true, // Module code is always strict
@@ -3604,8 +4071,8 @@ impl Interpreter {
                     } else {
                         f.name.clone()
                     }),
-                    params: f.params.clone(),
-                    body: f.body.clone(),
+                    params: Rc::new(f.params.clone()),
+                    body: Rc::new(f.body.clone()),
                     closure: env.clone(),
                     is_arrow: false,
                     is_strict: true,
@@ -3630,35 +4097,6 @@ impl Interpreter {
             }
             _ => {}
         }
-    }
-
-    #[allow(dead_code)]
-    fn get_export_names(&self, export: &ExportDeclaration) -> Vec<String> {
-        let mut names = Vec::new();
-        match export {
-            ExportDeclaration::Named {
-                specifiers,
-                declaration,
-                ..
-            } => {
-                for spec in specifiers {
-                    names.push(spec.exported.clone());
-                }
-                if let Some(decl) = declaration {
-                    self.get_declaration_export_names(decl, &mut names);
-                }
-            }
-            ExportDeclaration::Default(_)
-            | ExportDeclaration::DefaultFunction(_)
-            | ExportDeclaration::DefaultClass(_) => {
-                names.push("default".to_string());
-            }
-            ExportDeclaration::All { .. } => {
-                // Re-exports: will need to load the source module to get names
-                // For now, skip these
-            }
-        }
-        names
     }
 
     // Returns (export_name, binding_name) pairs
@@ -3811,8 +4249,8 @@ impl Interpreter {
                 let enclosing_strict = env.borrow().strict;
                 let js_func = JsFunction::User {
                     name: Some(name),
-                    params: func.params.clone(),
-                    body: func.body.clone(),
+                    params: Rc::new(func.params.clone()),
+                    body: Rc::new(func.body.clone()),
                     closure: env.clone(),
                     is_arrow: false,
                     is_strict: func.body_is_strict || enclosing_strict,
@@ -3902,6 +4340,68 @@ impl Interpreter {
                 f(self);
             }
         }
+    }
+
+    /// Drain already-queued jobs, then wait for host async jobs such as
+    /// Atomics.waitAsync/getReportAsync when JS code is still awaiting them.
+    ///
+    /// A pending host-async Promise is considered "awaited" if it has any
+    /// fulfill/reject reactions registered (from `.then` / `await`). Detached
+    /// fire-and-forget host async work (e.g. `Atomics.waitAsync(ta, 0, 0, Infinity)`
+    /// with no `.then` / `await`) does not block process exit.
+    pub(crate) fn drain_microtasks_until_idle(&mut self) {
+        self.drain_microtasks();
+        if !self.has_awaited_pending_async() {
+            return;
+        }
+
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            self.drain_microtasks();
+            if !self.has_awaited_pending_async() {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                break;
+            }
+
+            let (ref mtx, ref cvar) = *self.agent_async_completions;
+            let lock = mtx.lock().unwrap();
+            if !lock.is_empty() {
+                drop(lock);
+                continue;
+            }
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                break;
+            }
+            let (_guard, _timeout_result) = cvar
+                .wait_timeout(lock, remaining.min(std::time::Duration::from_millis(100)))
+                .unwrap();
+            drop(_guard);
+        }
+
+        self.drain_microtasks();
+    }
+
+    /// True if any tracked pending host-async Promise has reactions registered,
+    /// meaning JS code is awaiting / handling it. Unrelated suspended async
+    /// functions or queued microtasks do not count — only per-promise evidence
+    /// tied to an in-flight host worker.
+    fn has_awaited_pending_async(&self) -> bool {
+        if self.pending_async_jobs.load(Ordering::SeqCst) == 0 {
+            return false;
+        }
+        let ids = self.pending_async_promise_ids.lock().unwrap();
+        for &id in ids.iter() {
+            if let Some(obj) = self.get_object(id)
+                && let Some(ref pd) = obj.borrow().promise_data
+                && (!pd.fulfill_reactions.is_empty() || !pd.reject_reactions.is_empty())
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// Like drain_microtasks but blocks waiting for async completions via Condvar.
@@ -4065,7 +4565,7 @@ impl Interpreter {
                         .map(|idx| (idx, k.clone()))
                 })
                 .collect();
-            idx_keys.sort_by(|a, b| b.0.cmp(&a.0));
+            idx_keys.sort_by_key(|a| std::cmp::Reverse(a.0));
 
             for (idx, k) in &idx_keys {
                 let is_non_configurable = obj
@@ -4216,10 +4716,9 @@ impl Interpreter {
     pub fn format_value(&self, val: &JsValue) -> String {
         match val {
             JsValue::Object(o) => {
-                if let Some(obj) = self.get_object(o.id) {
-                    let obj = obj.borrow();
-                    let name = obj.get_property("name");
-                    let message = obj.get_property("message");
+                if self.get_object(o.id).is_some() {
+                    let name = self.get_property_on_id(o.id, "name");
+                    let message = self.get_property_on_id(o.id, "message");
                     if let JsValue::String(ref msg) = message {
                         let msg_str = msg.to_rust_string();
                         if let JsValue::String(ref n) = name {
@@ -4276,10 +4775,11 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                     let buf = BufferData::Shared(sab_inner.clone());
                     let buf_rc = Rc::new(RefCell::new(buf));
                     let sab_obj = interp.create_object();
+                    let sab_proto = interp.realm().shared_arraybuffer_prototype;
                     {
                         let mut o = sab_obj.borrow_mut();
                         o.class_name = "SharedArrayBuffer".to_string();
-                        o.prototype = interp.realm().shared_arraybuffer_prototype.clone();
+                        o.prototype_id = sab_proto;
                         o.arraybuffer_data = Some(buf_rc);
                         o.arraybuffer_detached = None;
                         o.arraybuffer_is_shared = true;
@@ -4312,7 +4812,9 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                 Ok(s) => s,
                 Err(e) => return Completion::Throw(e),
             };
-            interp.agent_reports.lock().unwrap().push_back(s);
+            let (ref reports_lock, ref reports_cvar) = *interp.agent_reports;
+            reports_lock.lock().unwrap().push_back(s);
+            reports_cvar.notify_one();
             Completion::Normal(JsValue::Undefined)
         },
     ));

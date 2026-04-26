@@ -1175,8 +1175,9 @@ impl Interpreter {
                     let ns = ms * num_bigint::BigInt::from(1_000_000i64);
                     let obj = interp.create_object();
                     obj.borrow_mut().class_name = "Temporal.Instant".to_string();
-                    if let Some(ref proto) = interp.realm().temporal_instant_prototype {
-                        obj.borrow_mut().prototype = Some(proto.clone());
+                    if let Some(proto_id) = interp.realm().temporal_instant_prototype {
+                        obj.borrow_mut().prototype_id =
+                            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
                     }
                     obj.borrow_mut().temporal_data =
                         Some(crate::interpreter::types::TemporalData::Instant {
@@ -1256,9 +1257,8 @@ impl Interpreter {
         ));
         if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
             && let JsValue::Object(sym_obj) = &sym_val
-            && let Some(sym_data) = self.get_object(sym_obj.id)
         {
-            let tp_key = to_js_string(&sym_data.borrow().get_property("toPrimitive"));
+            let tp_key = to_js_string(&self.get_property_on_id(sym_obj.id, "toPrimitive"));
             proto.borrow_mut().insert_property(
                 tp_key,
                 PropertyDescriptor::data(to_prim_fn, false, false, true),
@@ -1266,7 +1266,7 @@ impl Interpreter {
         }
 
         // Date constructor
-        let date_proto_clone = proto.clone();
+        let date_proto_clone_id = proto.borrow().id.unwrap();
         let date_ctor = self.create_function(JsFunction::constructor(
             "Date".to_string(),
             7,
@@ -1374,15 +1374,15 @@ impl Interpreter {
                 {
                     // OrdinaryCreateFromConstructor — realm-aware prototype
                     let proto = match interp
-                        .get_prototype_from_new_target_realm(|realm| realm.date_prototype.clone())
+                        .get_prototype_from_new_target_realm(|realm| realm.date_prototype)
                     {
-                        Ok(p) => p.unwrap_or_else(|| date_proto_clone.clone()),
+                        Ok(p) => p.unwrap_or(date_proto_clone_id),
                         Err(e) => return Completion::Throw(e),
                     };
                     let mut b = obj.borrow_mut();
                     b.class_name = "Date".to_string();
                     b.primitive_value = Some(JsValue::Number(time_val));
-                    b.prototype = Some(proto);
+                    b.prototype_id = Some(proto);
                 }
                 Completion::Normal(this.clone())
             },
@@ -1569,12 +1569,13 @@ impl Interpreter {
             .insert_builtin("setYear".to_string(), set_year_fn);
 
         // Annex B: toGMTString() -- alias for toUTCString()
-        let to_gmt = proto.borrow().get_property("toUTCString");
+        let proto_id = proto.borrow().id.unwrap();
+        let to_gmt = self.get_property_on_id(proto_id, "toUTCString");
         proto
             .borrow_mut()
             .insert_builtin("toGMTString".to_string(), to_gmt);
 
-        self.realm_mut().date_prototype = Some(proto);
+        self.realm_mut().date_prototype = Some(proto.borrow().id.unwrap());
     }
 
     pub(crate) fn create_range_error(&mut self, msg: &str) -> JsValue {
@@ -1587,16 +1588,14 @@ impl Interpreter {
 
     pub(crate) fn create_error(&mut self, name: &str, msg: &str) -> JsValue {
         let env = self.realm().global_env.borrow();
-        let error_proto = env.get(name).and_then(|v| {
+        let error_proto_id: Option<u64> = env.get(name).and_then(|v| {
             if let JsValue::Object(o) = &v {
-                self.get_object(o.id).and_then(|ctor| {
-                    let pv = ctor.borrow().get_property("prototype");
-                    if let JsValue::Object(p) = &pv {
-                        self.get_object(p.id)
-                    } else {
-                        None
-                    }
-                })
+                let pv = self.get_property_on_id(o.id, "prototype");
+                if let JsValue::Object(p) = &pv {
+                    Some(p.id)
+                } else {
+                    None
+                }
             } else {
                 None
             }
@@ -1606,8 +1605,8 @@ impl Interpreter {
         {
             let mut o = obj.borrow_mut();
             o.class_name = name.to_string();
-            if let Some(proto) = error_proto {
-                o.prototype = Some(proto);
+            if let Some(proto_id) = error_proto_id {
+                o.prototype_id = Some(proto_id);
             }
             o.insert_builtin(
                 "message".to_string(),
@@ -1617,6 +1616,7 @@ impl Interpreter {
                 "name".to_string(),
                 JsValue::String(JsString::from_str(name)),
             );
+            o.insert_builtin("stack".to_string(), JsValue::String(JsString::from_str("")));
         }
         let id = obj.borrow().id.unwrap();
         JsValue::Object(crate::types::JsObject { id })

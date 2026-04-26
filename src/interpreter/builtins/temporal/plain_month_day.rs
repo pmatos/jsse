@@ -2,7 +2,7 @@ use super::*;
 use crate::interpreter::builtins::temporal::{
     get_prop, is_undefined, iso_date_valid, iso_days_in_month, iso_month_code,
     parse_overflow_option, parse_temporal_month_day_string, resolve_month_fields,
-    to_temporal_calendar_slot_value, validate_calendar,
+    to_temporal_calendar_slot_value, validate_calendar_name,
 };
 
 pub(super) fn create_plain_month_day_result(
@@ -14,8 +14,9 @@ pub(super) fn create_plain_month_day_result(
 ) -> Completion {
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.PlainMonthDay".to_string();
-    if let Some(ref proto) = interp.realm().temporal_plain_month_day_prototype {
-        obj.borrow_mut().prototype = Some(proto.clone());
+    if let Some(proto_id) = interp.realm().temporal_plain_month_day_prototype {
+        obj.borrow_mut().prototype_id =
+            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::PlainMonthDay {
         iso_month: m,
@@ -364,7 +365,7 @@ fn to_temporal_plain_month_day(
                 )));
             }
             let cal = parsed.3.unwrap_or_else(|| "iso8601".to_string());
-            let cal = match validate_calendar(&cal) {
+            let cal = match validate_calendar_name(&cal) {
                 Some(c) => c,
                 None => {
                     return Err(Completion::Throw(
@@ -372,11 +373,27 @@ fn to_temporal_plain_month_day(
                     ));
                 }
             };
-            // Reject non-iso8601 calendar from string
             if cal != "iso8601" {
-                return Err(Completion::Throw(interp.create_range_error(&format!(
-                    "PlainMonthDay from string requires iso8601 calendar, got: {cal}"
-                ))));
+                // Non-ISO calendar: convert the parsed ISO date to calendar fields
+                let iso_year = parsed.2.unwrap_or(1972);
+                if !(-271821..=275760).contains(&iso_year) {
+                    return Err(Completion::Throw(
+                        interp.create_range_error("ISO year out of range for non-ISO calendar"),
+                    ));
+                }
+                if let Some(fields) =
+                    super::iso_to_calendar_fields(iso_year, parsed.0, parsed.1, &cal)
+                {
+                    let mc = &fields.month_code;
+                    if let Some((ref_y, ref_m, ref_d)) =
+                        super::calendar_month_day_to_iso(mc, fields.day, None, &cal, "constrain")
+                    {
+                        return Ok((ref_m, ref_d, ref_y, cal));
+                    }
+                }
+                return Err(Completion::Throw(
+                    interp.create_range_error("Invalid calendar fields for PlainMonthDay"),
+                ));
             }
             Ok((parsed.0, parsed.1, 1972, cal))
         }
@@ -527,11 +544,12 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 has_any |= has_mc;
-                let (_new_ry, has_y) = match read_field_i32(interp, &item, "year", ry) {
+                let (prop_year, has_y) = match read_field_i32(interp, &item, "year", ry) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
                 has_any |= has_y;
+                let validation_year = if has_y { prop_year } else { ry };
                 if !has_any {
                     return Completion::Throw(
                         interp
@@ -580,7 +598,11 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     if overflow == "reject" {
-                        if !iso_date_valid(ry, new_m, new_d) {
+                        let cm = new_m;
+                        if !(1..=12).contains(&cm)
+                            || new_d < 1
+                            || new_d > iso_days_in_month(validation_year, cm)
+                        {
                             return Completion::Throw(
                                 interp.create_range_error("Invalid month/day"),
                             );
@@ -588,7 +610,7 @@ impl Interpreter {
                         create_plain_month_day_result(interp, new_m, new_d, ry, &cal)
                     } else {
                         let cm = new_m.clamp(1, 12);
-                        let cd = new_d.clamp(1, iso_days_in_month(ry, cm));
+                        let cd = new_d.clamp(1, iso_days_in_month(validation_year, cm));
                         create_plain_month_day_result(interp, cm, cd, ry, &cal)
                     }
                 }
@@ -853,7 +875,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("toPlainDate".to_string(), to_pd_fn);
 
-        self.realm_mut().temporal_plain_month_day_prototype = Some(proto.clone());
+        self.realm_mut().temporal_plain_month_day_prototype = Some(proto.borrow().id.unwrap());
 
         // Constructor
         let constructor = self.create_function(JsFunction::constructor(
@@ -927,13 +949,9 @@ impl Interpreter {
                 }
                 let result = create_plain_month_day_result(interp, m, d, ry, &cal);
                 if let Completion::Normal(JsValue::Object(ref o)) = result {
-                    let dp = interp
-                        .realm()
-                        .temporal_plain_month_day_prototype
-                        .as_ref()
-                        .and_then(|p| p.borrow().id);
+                    let dp = interp.realm().temporal_plain_month_day_prototype;
                     interp.apply_new_target_prototype(o.id, dp, |r| {
-                        r.temporal_plain_month_day_prototype.clone()
+                        r.temporal_plain_month_day_prototype
                     });
                 }
                 result
@@ -1143,6 +1161,11 @@ impl Interpreter {
                             if let Some((iso_y, iso_m, iso_d)) = super::calendar_fields_to_iso_overflow(
                                 Some(es), ey, Some(&mc), month_num.map(|v| v as u8), d_f as u8, &cal, &overflow,
                             ) {
+                                if !(-271821..=275760).contains(&iso_y) {
+                                    return Completion::Throw(
+                                        interp.create_range_error("Invalid calendar fields for PlainMonthDay"),
+                                    );
+                                }
                                 return create_plain_month_day_result(interp, iso_m, iso_d, iso_y, &cal);
                             }
                             if overflow == "reject" {
@@ -1204,24 +1227,6 @@ impl Interpreter {
     }
 }
 
-#[allow(dead_code)]
-fn get_opt_u8(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-    key: &str,
-    default: u8,
-) -> Result<u8, Completion> {
-    let val = match get_prop(interp, obj, key) {
-        Completion::Normal(v) => v,
-        other => return Err(other),
-    };
-    if is_undefined(&val) {
-        Ok(default)
-    } else {
-        Ok(to_integer_with_truncation(interp, &val)? as u8)
-    }
-}
-
 fn format_month_day(m: u8, d: u8, ref_year: i32, cal: &str, show_calendar: &str) -> String {
     let mut result = format!("{m:02}-{d:02}");
     let need_year = cal != "iso8601" || matches!(show_calendar, "always" | "critical");
@@ -1242,10 +1247,8 @@ fn format_month_day(m: u8, d: u8, ref_year: i32, cal: &str, show_calendar: &str)
         "critical" => {
             result.push_str(&format!("[!u-ca={cal}]"));
         }
-        "auto" => {
-            if cal != "iso8601" {
-                result.push_str(&format!("[u-ca={cal}]"));
-            }
+        "auto" if cal != "iso8601" => {
+            result.push_str(&format!("[u-ca={cal}]"));
         }
         _ => {}
     }

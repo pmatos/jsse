@@ -70,8 +70,13 @@ impl Interpreter {
                     // Skip if name conflicts with a parameter (binding exists but
                     // is NOT from a top-level var/function declaration)
                     let is_param = env.borrow().bindings.contains_key(&name)
-                        && !top_level_var_names.contains(&name);
+                        && !top_level_var_names.contains(&name)
+                        && name != "arguments";
                     if is_param {
+                        continue;
+                    }
+                    // Annex B §B.3.3.1 step 22.f: skip "arguments" in function scopes
+                    if name == "arguments" && !is_global && env.borrow().is_function_scope {
                         continue;
                     }
                     // Annex B: skip if non-simple params and name matches a parent binding
@@ -85,10 +90,6 @@ impl Interpreter {
                         if has_parent_binding {
                             continue;
                         }
-                    }
-                    // Annex B: skip "arguments" in function scope
-                    if name == "arguments" && !is_global && env.borrow().is_function_scope {
-                        continue;
                     }
                     if !env.borrow().bindings.contains_key(&name) {
                         if is_global {
@@ -108,7 +109,7 @@ impl Interpreter {
         self.call_stack_envs.push(env.clone());
         let mut result = Completion::Empty;
         for stmt in stmts {
-            self.maybe_gc();
+            self.gc_safepoint();
             let comp = self.exec_statement(stmt, env);
             match comp {
                 Completion::Normal(val) => result = Completion::Normal(val),
@@ -238,7 +239,7 @@ impl Interpreter {
         }
 
         // §16.1.7 step 6: For each var name, check HasLexicalDeclaration
-        let mut var_names = std::collections::HashSet::new();
+        let mut var_names = HashSet::default();
         Self::collect_var_names_from_stmts(stmts, &mut var_names);
         for name in &var_names {
             if let Some(binding) = env.borrow().bindings.get(name)
@@ -295,8 +296,8 @@ impl Interpreter {
         let enclosing_strict = env.borrow().strict;
         let func = JsFunction::User {
             name: Some(f.name.clone()),
-            params: f.params.clone(),
-            body: f.body.clone(),
+            params: Rc::new(f.params.clone()),
+            body: Rc::new(f.body.clone()),
             closure: env.clone(),
             is_arrow: false,
             is_strict: f.body_is_strict || enclosing_strict,
@@ -340,10 +341,8 @@ impl Interpreter {
                         }
                     }
                 }
-                Statement::ClassDeclaration(c) => {
-                    if !c.name.is_empty() {
-                        env.borrow_mut().declare(&c.name, BindingKind::Const);
-                    }
+                Statement::ClassDeclaration(c) if !c.name.is_empty() => {
+                    env.borrow_mut().declare(&c.name, BindingKind::Const);
                 }
                 _ => {}
             }
@@ -511,10 +510,7 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn collect_var_names_from_pattern(
-        pat: &Pattern,
-        out: &mut std::collections::HashSet<String>,
-    ) {
+    pub(crate) fn collect_var_names_from_pattern(pat: &Pattern, out: &mut HashSet<String>) {
         match pat {
             Pattern::Identifier(name) => {
                 out.insert(name.clone());
@@ -547,16 +543,13 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn collect_var_names_from_stmts(
-        stmts: &[Statement],
-        out: &mut std::collections::HashSet<String>,
-    ) {
+    pub(crate) fn collect_var_names_from_stmts(stmts: &[Statement], out: &mut HashSet<String>) {
         for stmt in stmts {
             Self::collect_var_names_from_stmt(stmt, out);
         }
     }
 
-    fn collect_var_names_from_stmt(stmt: &Statement, out: &mut std::collections::HashSet<String>) {
+    fn collect_var_names_from_stmt(stmt: &Statement, out: &mut HashSet<String>) {
         match stmt {
             Statement::Variable(decl) if decl.kind == VarKind::Var => {
                 for d in &decl.declarations {
@@ -654,7 +647,11 @@ impl Interpreter {
                     // Check function declarations in this block
                     // Only regular functions (not generators or async) per Annex B.3.3
                     for s in inner {
-                        if let Statement::FunctionDeclaration(f) = s
+                        let mut stmt = s;
+                        while let Statement::Labeled(_, inner_s) = stmt {
+                            stmt = inner_s;
+                        }
+                        if let Statement::FunctionDeclaration(f) = stmt
                             && !f.is_generator
                             && !f.is_async
                             && !names.contains(&f.name)
@@ -668,7 +665,11 @@ impl Interpreter {
                     let prev_len = blocked.len();
                     blocked.extend(block_lexicals);
                     for s in inner {
-                        if let Statement::FunctionDeclaration(f) = s
+                        let mut stmt = s;
+                        while let Statement::Labeled(_, inner_s) = stmt {
+                            stmt = inner_s;
+                        }
+                        if let Statement::FunctionDeclaration(f) = stmt
                             && !blocked.contains(&f.name)
                         {
                             blocked.push(f.name.clone());
@@ -760,6 +761,13 @@ impl Interpreter {
                         blocked,
                     );
                 }
+                Statement::With(_, inner) => {
+                    Self::collect_annexb_function_names(
+                        std::slice::from_ref(&**inner),
+                        names,
+                        blocked,
+                    );
+                }
                 Statement::Switch(s) => {
                     // Switch creates a single scope for all cases
                     let mut switch_lexicals = Vec::new();
@@ -785,7 +793,11 @@ impl Interpreter {
                     }
                     for case in &s.cases {
                         for cs in &case.consequent {
-                            if let Statement::FunctionDeclaration(f) = cs
+                            let mut stmt = cs;
+                            while let Statement::Labeled(_, inner_s) = stmt {
+                                stmt = inner_s;
+                            }
+                            if let Statement::FunctionDeclaration(f) = stmt
                                 && !f.is_generator
                                 && !f.is_async
                                 && !names.contains(&f.name)
@@ -929,7 +941,7 @@ impl Interpreter {
                 if let JsValue::Object(obj_ref) = &obj_val {
                     if let Some(obj_data) = self.get_object(obj_ref.id) {
                         let with_env = Rc::new(RefCell::new(Environment {
-                            bindings: HashMap::new(),
+                            bindings: HashMap::default(),
                             parent: Some(env.clone()),
                             strict: env.borrow().strict,
                             is_function_scope: false,
@@ -951,7 +963,10 @@ impl Interpreter {
                             indirect_bindings: None,
                             module_path: None,
                         }));
+                        self.with_scope_depth += 1;
+                        self.has_ever_entered_with = true;
                         let c = self.exec_statement(body, &with_env);
+                        self.with_scope_depth -= 1;
                         // UpdateEmpty(C, undefined) per §14.11.2 step 9
                         match c {
                             Completion::Empty => Completion::Normal(JsValue::Undefined),
@@ -1055,7 +1070,8 @@ impl Interpreter {
             // §13.3.2.4 step 2: ResolveBinding BEFORE evaluating Initializer
             // Pre-resolve with-scope binding so the reference is captured before
             // side effects in the initializer can change it.
-            let pre_resolved_with = if decl.kind == VarKind::Var
+            let pre_resolved_with = if (self.with_scope_depth > 0 || self.has_ever_entered_with)
+                && decl.kind == VarKind::Var
                 && d.init.is_some()
                 && let Pattern::Identifier(ref name) = d.pattern
             {
@@ -1157,13 +1173,17 @@ impl Interpreter {
                         var_scope.borrow_mut().declare(name, kind);
                     }
                     // For var initializers inside with-scopes, write through with-object
-                    match self.resolve_with_has_binding(name, env) {
-                        Ok(Some(obj_id)) => {
-                            let strict = env.borrow().strict;
-                            self.with_set_mutable_binding(obj_id, name, val, strict)
+                    if self.with_scope_depth > 0 || self.has_ever_entered_with {
+                        match self.resolve_with_has_binding(name, env) {
+                            Ok(Some(obj_id)) => {
+                                let strict = env.borrow().strict;
+                                self.with_set_mutable_binding(obj_id, name, val, strict)
+                            }
+                            Ok(None) => env.borrow_mut().set(name, val),
+                            Err(e) => Err(e),
                         }
-                        Ok(None) => env.borrow_mut().set(name, val),
-                        Err(e) => Err(e),
+                    } else {
+                        env.borrow_mut().set(name, val)
                     }
                 } else {
                     env.borrow_mut().declare(name, kind);
@@ -1405,7 +1425,12 @@ impl Interpreter {
                                 if !already {
                                     var_scope.borrow_mut().declare(binding_name, kind);
                                 }
-                                let resolved = self.resolve_with_has_binding(binding_name, env)?;
+                                let resolved =
+                                    if self.with_scope_depth > 0 || self.has_ever_entered_with {
+                                        self.resolve_with_has_binding(binding_name, env)?
+                                    } else {
+                                        None
+                                    };
 
                                 // Step 3: v = GetV(value, propertyName)
                                 let mut v = if let JsValue::Object(o) = &obj_val {
@@ -1481,6 +1506,7 @@ impl Interpreter {
     fn exec_while(&mut self, w: &WhileStatement, env: &EnvRef) -> Completion {
         let mut v = JsValue::Undefined;
         loop {
+            self.gc_safepoint();
             let test = match self.eval_expr(&w.test, env) {
                 Completion::Normal(v) => v,
                 other => return other,
@@ -1513,6 +1539,7 @@ impl Interpreter {
     fn exec_do_while(&mut self, dw: &DoWhileStatement, env: &EnvRef) -> Completion {
         let mut v = JsValue::Undefined;
         loop {
+            self.gc_safepoint();
             match self.exec_statement(&dw.body, env) {
                 Completion::Normal(val) => {
                     v = val;
@@ -1547,6 +1574,7 @@ impl Interpreter {
             Statement::While(w) => {
                 let mut v = JsValue::Undefined;
                 loop {
+                    self.gc_safepoint();
                     let test = match self.eval_expr(&w.test, env) {
                         Completion::Normal(v) => v,
                         other => return other,
@@ -1583,6 +1611,7 @@ impl Interpreter {
             Statement::DoWhile(dw) => {
                 let mut v = JsValue::Undefined;
                 loop {
+                    self.gc_safepoint();
                     match self.exec_statement(&dw.body, env) {
                         Completion::Normal(val) => {
                             v = val;
@@ -1680,6 +1709,7 @@ impl Interpreter {
         let mut v = JsValue::Undefined;
         let result = 'for_loop: {
             loop {
+                self.gc_safepoint();
                 if let Some(test) = &f.test {
                     let val = match self.eval_expr(test, &iter_env) {
                         Completion::Normal(v) => v,
@@ -1755,6 +1785,7 @@ impl Interpreter {
                 other => return other,
             };
             if let Pattern::Identifier(name) = &d.pattern {
+                self.set_function_name(&init_val, name);
                 let _ = env.borrow_mut().set(name, init_val);
             }
         }
@@ -1808,13 +1839,14 @@ impl Interpreter {
                         Ok(k) => k,
                         Err(e) => return Completion::Throw(e),
                     }
-                } else if let Some(obj) = self.get_object(obj_id) {
-                    obj.borrow().enumerable_keys_with_proto()
+                } else if self.get_object(obj_id).is_some() {
+                    self.enumerable_keys_with_proto_on_id(obj_id)
                 } else {
                     return Completion::Normal(JsValue::Undefined);
                 }
             };
             for key in keys {
+                self.gc_safepoint();
                 // Skip keys that have been deleted during iteration (proxy-aware)
                 let still_exists = match self.proxy_has_property(obj_id, &key) {
                     Ok(b) => b,
@@ -2021,6 +2053,7 @@ impl Interpreter {
     ) -> Completion {
         let mut v = JsValue::Undefined;
         loop {
+            self.gc_safepoint();
             let step_result = match self.iterator_next(iterator) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
@@ -2219,7 +2252,8 @@ impl Interpreter {
         // (only regular functions, not generators/async — those stay block-scoped)
         for case in &s.cases {
             for stmt in &case.consequent {
-                if let Statement::FunctionDeclaration(f) = stmt
+                let unwrapped = Self::unwrap_labeled_function(stmt);
+                if let Some(f) = unwrapped
                     && !f.is_generator
                     && !f.is_async
                 {
@@ -2227,8 +2261,8 @@ impl Interpreter {
                     let enclosing_strict = switch_env.borrow().strict;
                     let func = JsFunction::User {
                         name: Some(f.name.clone()),
-                        params: f.params.clone(),
-                        body: f.body.clone(),
+                        params: Rc::new(f.params.clone()),
+                        body: Rc::new(f.body.clone()),
                         closure: switch_env.clone(),
                         is_arrow: false,
                         is_strict: f.body_is_strict || enclosing_strict,
@@ -2263,14 +2297,16 @@ impl Interpreter {
             if found {
                 // Fall through from match in A through rest of A, then default + B
                 if let Some(r) = self.exec_switch_cases(&s.cases[i..a_end], &switch_env, &mut v) {
+                    let r = self.dispose_resources(&switch_env, r);
                     return r;
                 }
                 if let Some(di) = default_idx
                     && let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env, &mut v)
                 {
+                    let r = self.dispose_resources(&switch_env, r);
                     return r;
                 }
-                return Completion::Normal(v);
+                return self.dispose_resources(&switch_env, Completion::Normal(v));
             }
         }
 
@@ -2290,19 +2326,21 @@ impl Interpreter {
                     if let Some(r) =
                         self.exec_switch_cases(&s.cases[b_start + i..], &switch_env, &mut v)
                     {
+                        let r = self.dispose_resources(&switch_env, r);
                         return r;
                     }
-                    return Completion::Normal(v);
+                    return self.dispose_resources(&switch_env, Completion::Normal(v));
                 }
             }
 
             // Phase 3: No match anywhere — execute default, then fall through B
             if let Some(r) = self.exec_switch_cases(&s.cases[di..], &switch_env, &mut v) {
+                let r = self.dispose_resources(&switch_env, r);
                 return r;
             }
         }
 
-        Completion::Normal(v)
+        self.dispose_resources(&switch_env, Completion::Normal(v))
     }
 
     fn exec_switch_cases(
@@ -2440,15 +2478,13 @@ impl Interpreter {
                 self.call_function(&resource.dispose_method, &resource.value, &[])
             };
             match result {
-                Completion::Normal(v) => {
-                    if resource.hint == DisposeHint::Async {
-                        match self.await_value(&v) {
-                            Completion::Normal(_) => {}
-                            Completion::Throw(e) => {
-                                current_error = Some(self.wrap_suppressed_error(e, current_error));
-                            }
-                            _ => {}
+                Completion::Normal(v) if resource.hint == DisposeHint::Async => {
+                    match self.await_value(&v) {
+                        Completion::Normal(_) => {}
+                        Completion::Throw(e) => {
+                            current_error = Some(self.wrap_suppressed_error(e, current_error));
                         }
+                        _ => {}
                     }
                 }
                 Completion::Throw(e) => {
@@ -2495,10 +2531,8 @@ impl Interpreter {
                 && let Some(func_obj) = self.get_object(o.id)
             {
                 let proto = func_obj.borrow().get_property_value("prototype");
-                if let Some(JsValue::Object(proto_obj)) = proto
-                    && let Some(proto_rc) = self.get_object(proto_obj.id)
-                {
-                    new_obj.borrow_mut().prototype = Some(proto_rc);
+                if let Some(JsValue::Object(proto_obj)) = proto {
+                    new_obj.borrow_mut().prototype_id = Some(proto_obj.id);
                 }
             }
             let new_obj_id = new_obj.borrow().id.unwrap();

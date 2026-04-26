@@ -2,8 +2,8 @@ name: Nightly test262 Coverage
 
 on:
   schedule:
-    # Run every night at 02:00 UTC
-    - cron: "0 2 * * *"
+    # Run every 5 days at 02:00 UTC (1st, 6th, 11th, 16th, 21st, 26th, 31st)
+    - cron: "0 2 */5 * *"
   workflow_dispatch: # Allow manual triggers
 
 env:
@@ -39,7 +39,7 @@ jobs:
           cargo llvm-cov report --release --lcov --output-path lcov.info
 
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v6
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
           slug: pmatos/jsse

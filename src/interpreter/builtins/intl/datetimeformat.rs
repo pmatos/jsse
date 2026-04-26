@@ -899,6 +899,35 @@ fn canonicalize_timezone(tz: &str) -> String {
     tz.to_string()
 }
 
+fn default_numbering_system_for_locale(locale: &str) -> &'static str {
+    let lang = locale
+        .split('-')
+        .next()
+        .unwrap_or(locale)
+        .split('_')
+        .next()
+        .unwrap_or(locale);
+    match lang {
+        "ar" => "arab",
+        "fa" => "arabext",
+        "bn" => "beng",
+        "hi" | "mr" | "ne" | "sa" => "deva",
+        "gu" => "gujr",
+        "pa" => "guru",
+        "kn" => "knda",
+        "ml" => "mlym",
+        "or" => "orya",
+        "ta" => "tamldec",
+        "te" => "telu",
+        "th" => "thai",
+        "my" => "mymr",
+        "km" => "khmr",
+        "lo" => "laoo",
+        "bo" => "tibt",
+        _ => "latn",
+    }
+}
+
 fn is_supported_numbering_system(ns: &str) -> bool {
     matches!(
         ns,
@@ -915,9 +944,11 @@ fn is_supported_numbering_system(ns: &str) -> bool {
             | "deva"
             | "diak"
             | "fullwide"
+            | "gara"
             | "gong"
             | "gonm"
             | "gujr"
+            | "gukh"
             | "guru"
             | "hanidec"
             | "hmng"
@@ -927,6 +958,7 @@ fn is_supported_numbering_system(ns: &str) -> bool {
             | "kawi"
             | "khmr"
             | "knda"
+            | "krai"
             | "lana"
             | "lanatham"
             | "laoo"
@@ -944,13 +976,17 @@ fn is_supported_numbering_system(ns: &str) -> bool {
             | "mroo"
             | "mtei"
             | "mymr"
+            | "mymrepka"
+            | "mymrpao"
             | "mymrshan"
             | "mymrtlng"
             | "nagm"
             | "newa"
             | "nkoo"
             | "olck"
+            | "onao"
             | "orya"
+            | "outlined"
             | "osma"
             | "rohg"
             | "saur"
@@ -960,6 +996,7 @@ fn is_supported_numbering_system(ns: &str) -> bool {
             | "sinh"
             | "sora"
             | "sund"
+            | "sunu"
             | "takr"
             | "talu"
             | "tamldec"
@@ -968,6 +1005,7 @@ fn is_supported_numbering_system(ns: &str) -> bool {
             | "tibt"
             | "tirh"
             | "tnsa"
+            | "tols"
             | "vaii"
             | "wara"
             | "wcho"
@@ -984,6 +1022,14 @@ struct DateComponents {
     second: u32,
     millisecond: u32,
     cal_month_name: Option<String>, // non-Gregorian month name override
+    is_cyclic_calendar: bool,
+    related_year: Option<i32>,
+    cyclic_year: Option<u8>,
+    era_code: Option<String>,
+    era_year: Option<i32>,
+    calendar_id: String,
+    month_code: Option<String>,
+    is_leap_month: bool,
 }
 
 fn timestamp_to_components(ms: f64) -> DateComponents {
@@ -1005,6 +1051,139 @@ fn timestamp_to_components(ms: f64) -> DateComponents {
         second,
         millisecond,
         cal_month_name: None,
+        is_cyclic_calendar: false,
+        related_year: None,
+        cyclic_year: None,
+        era_code: None,
+        era_year: None,
+        calendar_id: "gregory".to_string(),
+        month_code: None,
+        is_leap_month: false,
+    }
+}
+
+fn month_code_number(month_code: &str) -> Option<u32> {
+    let num_str: String = month_code.chars().filter(|c| c.is_ascii_digit()).collect();
+    num_str.parse().ok()
+}
+
+fn apply_calendar_conversion(c: &mut DateComponents, calendar: &str) {
+    if calendar == "gregory" || calendar == "iso8601" {
+        c.calendar_id = calendar.to_string();
+        return;
+    }
+    c.calendar_id = calendar.to_string();
+    if let Some(cf) = crate::interpreter::builtins::temporal::iso_to_calendar_fields(
+        c.year,
+        c.month as u8,
+        c.day as u8,
+        calendar,
+    ) {
+        c.year = cf.year;
+        c.month = month_code_number(&cf.month_code).unwrap_or(cf.month_ordinal as u32);
+        c.day = cf.day as u32;
+        c.era_code = cf.era.clone();
+        c.era_year = cf.era_year;
+        c.month_code = Some(cf.month_code.clone());
+        c.is_leap_month = cf.month_code.ends_with('L');
+        c.cal_month_name = Some(calendar_month_name_en(calendar, &cf.month_code));
+        if cf.cyclic_year.is_some() {
+            c.is_cyclic_calendar = true;
+            c.cyclic_year = cf.cyclic_year;
+            c.related_year = cf.related_iso;
+        }
+    }
+}
+
+fn cyclic_year_name(cycle_pos: u8) -> String {
+    const STEMS: [&str; 10] = [
+        "\u{7532}", "\u{4E59}", "\u{4E19}", "\u{4E01}", "\u{620A}", "\u{5DF1}", "\u{5E9A}",
+        "\u{8F9B}", "\u{58EC}", "\u{7678}",
+    ];
+    const BRANCHES: [&str; 12] = [
+        "\u{5B50}", "\u{4E11}", "\u{5BC5}", "\u{536F}", "\u{8FB0}", "\u{5DF3}", "\u{5348}",
+        "\u{672A}", "\u{7533}", "\u{9149}", "\u{620C}", "\u{4EA5}",
+    ];
+    let idx = (cycle_pos - 1) as usize;
+    format!("{}{}", STEMS[idx % 10], BRANCHES[idx % 12])
+}
+
+fn format_era(calendar: &str, era_code: &str, style: &str) -> String {
+    match calendar {
+        "gregory" | "iso8601" => match (era_code, style) {
+            ("ce" | "ad", "long") => "Anno Domini".to_string(),
+            ("ce" | "ad", "short") => "AD".to_string(),
+            ("ce" | "ad", _) => "A".to_string(),
+            ("bce" | "bc", "long") => "Before Christ".to_string(),
+            ("bce" | "bc", "short") => "BC".to_string(),
+            ("bce" | "bc", _) => "B".to_string(),
+            _ => era_code.to_string(),
+        },
+        "japanese" => match era_code {
+            "meiji" => match style {
+                "long" => "Meiji".to_string(),
+                "short" => "Meiji".to_string(),
+                _ => "M".to_string(),
+            },
+            "taisho" => match style {
+                "long" => "Taish\u{14D}".to_string(),
+                "short" => "Taish\u{14D}".to_string(),
+                _ => "T".to_string(),
+            },
+            "showa" => match style {
+                "long" => "Sh\u{14D}wa".to_string(),
+                "short" => "Sh\u{14D}wa".to_string(),
+                _ => "S".to_string(),
+            },
+            "heisei" => match style {
+                "long" => "Heisei".to_string(),
+                "short" => "Heisei".to_string(),
+                _ => "H".to_string(),
+            },
+            "reiwa" => match style {
+                "long" => "Reiwa".to_string(),
+                "short" => "Reiwa".to_string(),
+                _ => "R".to_string(),
+            },
+            _ => format_era("gregory", era_code, style),
+        },
+        "roc" => match (era_code, style) {
+            ("roc", "long") => "Minguo".to_string(),
+            ("roc", "short") => "Minguo".to_string(),
+            ("roc", _) => "Minguo".to_string(),
+            ("broc", "long") => "Before R.O.C.".to_string(),
+            ("broc", "short") => "Before R.O.C.".to_string(),
+            ("broc", _) => "Before R.O.C.".to_string(),
+            _ => era_code.to_string(),
+        },
+        "buddhist" => match style {
+            "long" => "Buddhist Era".to_string(),
+            _ => "BE".to_string(),
+        },
+        "hebrew" => "AM".to_string(),
+        "indian" => match style {
+            "long" => "Saka".to_string(),
+            _ => "Saka".to_string(),
+        },
+        "persian" => match style {
+            "long" => "Anno Persico".to_string(),
+            _ => "AP".to_string(),
+        },
+        "coptic" => match (era_code, style) {
+            ("coptic", "long") | ("coptic", "short") => "Coptic".to_string(),
+            ("coptic-inverse", "long") | ("coptic-inverse", "short") => "Before Coptic".to_string(),
+            _ => era_code.to_string(),
+        },
+        "ethiopic" => match (era_code, style) {
+            ("ethiopic", _) => "Ethiopian".to_string(),
+            ("ethiopic-inverse", _) => "Before Ethiopian".to_string(),
+            _ => era_code.to_string(),
+        },
+        "ethioaa" => match style {
+            "long" => "Ethiopian Amete Alem".to_string(),
+            _ => "ERA0".to_string(),
+        },
+        _ => era_code.to_string(),
     }
 }
 
@@ -1162,22 +1341,6 @@ fn weekday_name_narrow(d: u32) -> &'static str {
     }
 }
 
-fn era_long(year: i32) -> &'static str {
-    if year > 0 {
-        "Anno Domini"
-    } else {
-        "Before Christ"
-    }
-}
-
-fn era_short(year: i32) -> &'static str {
-    if year > 0 { "AD" } else { "BC" }
-}
-
-fn era_narrow(year: i32) -> &'static str {
-    if year > 0 { "A" } else { "B" }
-}
-
 fn day_period_text(hour: u32, style: &str) -> &'static str {
     match style {
         "narrow" => match hour {
@@ -1240,6 +1403,24 @@ fn locale_default_hour_cycle(locale: &str) -> &'static str {
         | "pl" | "cs" | "hu" | "ro" | "tr" | "uk" | "hr" | "sk" | "sl" | "bg" | "el" | "he"
         | "th" | "vi" | "id" | "ms" => "h23",
         _ => "h12",
+    }
+}
+
+/// Returns (order, separator) for numeric date formatting.
+/// order is a 3-char slice like "dmy" or "mdy" indicating D.M.Y vs M/D/Y etc.
+fn locale_date_order(locale: &str) -> ([char; 3], &'static str) {
+    let lang = locale.split('-').next().unwrap_or("en");
+    match lang {
+        // Day.Month.Year locales
+        "de" | "fr" | "it" | "pt" | "nl" | "ru" | "tr" | "pl" | "cs" | "sk" | "hu" | "ro"
+        | "bg" | "hr" | "sr" | "sl" | "uk" | "el" | "fi" | "da" | "nb" | "sv" | "is" | "he"
+        | "vi" | "id" | "ms" | "th" => (['d', 'm', 'y'], "."),
+        // Day/Month/Year locales (use /)
+        "es" | "ar" | "hi" | "bn" => (['d', 'm', 'y'], "/"),
+        // Year/Month/Day locales
+        "ja" | "zh" | "ko" => (['y', 'm', 'd'], "/"),
+        // Month/Day/Year (US English default)
+        _ => (['m', 'd', 'y'], "/"),
     }
 }
 
@@ -1310,29 +1491,75 @@ fn format_2digit(n: u32) -> String {
     }
 }
 
-fn format_date_style(c: &DateComponents, style: &str, _tz: &str) -> String {
+fn format_date_style(c: &DateComponents, style: &str, _tz: &str, locale: &str) -> String {
     let ml = c
         .cal_month_name
         .as_deref()
         .unwrap_or(month_name_long(c.month));
-    let ms = if c.cal_month_name.is_some() {
-        // For non-Gregorian calendars, use numeric abbreviation in short style
-        month_name_short(c.month)
-    } else {
-        month_name_short(c.month)
-    };
+    let ms = month_name_short(c.month);
+    let (order, sep) = locale_date_order(locale);
     match style {
-        "full" => format!(
-            "{}, {} {}, {}",
-            weekday_name_long(c.weekday),
-            ml,
-            c.day,
-            c.year
-        ),
-        "long" => format!("{} {}, {}", ml, c.day, c.year),
-        "medium" => format!("{} {}, {}", ms, c.day, c.year),
-        "short" => format!("{}/{}/{}", c.month, c.day, c.year % 100),
-        _ => format!("{}/{}/{}", c.month, c.day, c.year),
+        "full" | "long" | "medium" => {
+            let month_text = if style == "medium" { ms } else { ml };
+            match order[0] {
+                'd' => {
+                    if style == "full" {
+                        format!(
+                            "{}, {} {} {}",
+                            weekday_name_long(c.weekday),
+                            c.day,
+                            month_text,
+                            c.year
+                        )
+                    } else {
+                        format!("{} {} {}", c.day, month_text, c.year)
+                    }
+                }
+                'y' => {
+                    if style == "full" {
+                        format!(
+                            "{}{}{}{}{}{}{}",
+                            c.year,
+                            sep,
+                            month_text,
+                            sep,
+                            c.day,
+                            sep,
+                            weekday_name_long(c.weekday)
+                        )
+                    } else {
+                        format!("{}{}{}{}{}", c.year, sep, month_text, sep, c.day)
+                    }
+                }
+                _ => {
+                    // MDY
+                    if style == "full" {
+                        format!(
+                            "{}, {} {}, {}",
+                            weekday_name_long(c.weekday),
+                            month_text,
+                            c.day,
+                            c.year
+                        )
+                    } else {
+                        format!("{} {}, {}", month_text, c.day, c.year)
+                    }
+                }
+            }
+        }
+        "short" => {
+            let yr = c.year % 100;
+            match order[0] {
+                'd' => format!("{}{}{}{}{}", c.day, sep, c.month, sep, yr),
+                'y' => format!("{}{}{}{}{}", yr, sep, c.month, sep, c.day),
+                _ => format!("{}{}{}{}{}", c.month, sep, c.day, sep, yr),
+            }
+        }
+        _ => match order[0] {
+            'd' => format!("{}{}{}{}{}", c.day, sep, c.month, sep, c.year),
+            'y' => format!("{}{}{}{}{}", c.year, sep, c.month, sep, c.day),
+            _ => format!("{}{}{}{}{}", c.month, sep, c.day, sep, c.year),
+        },
     }
 }
 
@@ -1342,27 +1569,42 @@ fn format_reduced_date_style(
     has_year: bool,
     has_month: bool,
     has_day: bool,
+    locale: &str,
 ) -> String {
     let ml = c
         .cal_month_name
         .as_deref()
         .unwrap_or(month_name_long(c.month));
+    let (order, sep) = locale_date_order(locale);
     if has_year && has_month && !has_day {
         match style {
             "full" | "long" => format!("{} {}", ml, c.year),
             "medium" => format!("{} {}", month_name_short(c.month), c.year),
-            "short" => format!("{}/{}", c.month, c.year % 100),
-            _ => format!("{}/{}", c.month, c.year),
+            "short" => {
+                let yr = c.year % 100;
+                match order[0] {
+                    'd' => format!("{}{}{}", c.month, sep, yr),
+                    'y' => format!("{}{}{}", yr, sep, c.month),
+                    _ => format!("{}{}{}", c.month, sep, yr),
+                }
+            }
+            _ => match order[0] {
+                'd' => format!("{}{}{}", c.month, sep, c.year),
+                'y' => format!("{}{}{}", c.year, sep, c.month),
+                _ => format!("{}{}{}", c.month, sep, c.year),
+            },
         }
     } else if !has_year && has_month && has_day {
         match style {
             "full" | "long" => format!("{} {}", ml, c.day),
             "medium" => format!("{} {}", month_name_short(c.month), c.day),
-            "short" => format!("{}/{}", c.month, c.day),
-            _ => format!("{}/{}", c.month, c.day),
+            _ => match order[0] {
+                'd' => format!("{}{}{}{}", c.day, sep, c.month, sep),
+                _ => format!("{}{}{}", c.month, sep, c.day),
+            },
         }
     } else {
-        format_date_style(c, style, "")
+        format_date_style(c, style, "", locale)
     }
 }
 
@@ -1485,26 +1727,23 @@ fn format_with_options(ms: f64, opts: &DtfOptions) -> String {
 }
 
 fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
-    let adjusted_ms = ms + tz_offset_ms(&opts.time_zone, ms);
+    let is_plain = matches!(
+        opts.temporal_type,
+        Some(TemporalType::PlainDate)
+            | Some(TemporalType::PlainTime)
+            | Some(TemporalType::PlainDateTime)
+            | Some(TemporalType::PlainYearMonth)
+            | Some(TemporalType::PlainMonthDay)
+    );
+    let adjusted_ms = if is_plain {
+        ms
+    } else {
+        ms + tz_offset_ms(&opts.time_zone, ms)
+    };
     let mut c = timestamp_to_components(adjusted_ms);
     let hc = resolve_hour_cycle(opts);
 
-    // For non-Gregorian calendars with dateStyle, convert to calendar fields
-    if opts.date_style.is_some()
-        && opts.calendar != "gregory"
-        && opts.calendar != "iso8601"
-        && let Some(cf) = crate::interpreter::builtins::temporal::iso_to_calendar_fields(
-            c.year,
-            c.month as u8,
-            c.day as u8,
-            &opts.calendar,
-        )
-    {
-        c.year = cf.year;
-        c.month = cf.month_ordinal as u32;
-        c.day = cf.day as u32;
-        c.cal_month_name = Some(calendar_month_name_en(&opts.calendar, &cf.month_code));
-    }
+    apply_calendar_conversion(&mut c, &opts.calendar);
 
     // dateStyle/timeStyle shorthand
     if opts.date_style.is_some() || opts.time_style.is_some() {
@@ -1520,7 +1759,7 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
         } else {
             opts.date_style
                 .as_ref()
-                .map(|ds| format_date_style(&c, ds, &opts.time_zone))
+                .map(|ds| format_date_style(&c, ds, &opts.time_zone, &opts.locale))
         };
 
         let effective_time_style = opts.time_style.as_ref().map(|ts| {
@@ -1546,8 +1785,14 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
         if need_reduced_date {
             let ds = opts.date_style.as_deref().unwrap_or("short");
             let is_ym = matches!(opts.temporal_type, Some(TemporalType::PlainYearMonth));
-            let reduced =
-                format_reduced_date_style(&c, ds, is_ym || opts.year.is_some(), true, !is_ym);
+            let reduced = format_reduced_date_style(
+                &c,
+                ds,
+                is_ym || opts.year.is_some(),
+                true,
+                !is_ym,
+                &opts.locale,
+            );
             return match time_part {
                 Some(t) => format!("{}, {}", reduced, t),
                 None => reduced,
@@ -1577,24 +1822,64 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
         date_parts.push(s);
     }
 
-    // Year - for proleptic Gregorian, display absolute year when era is present
-    let display_year = if opts.era.is_some() && c.year <= 0 {
-        1 - c.year // year 0 -> 1 BC, year -1 -> 2 BC
+    // Year - for non-Gregorian era calendars, always use era_year
+    let use_era_year = c.era_year.is_some()
+        && (!matches!(c.calendar_id.as_str(), "gregory" | "iso8601") || opts.era.is_some());
+    let display_year = if use_era_year {
+        c.era_year.unwrap()
+    } else if opts.era.is_some() && c.year <= 0 {
+        1 - c.year
     } else {
         c.year
     };
-    let year_str = opts.year.as_ref().map(|y| match y.as_str() {
-        "2-digit" => format_2digit(display_year.unsigned_abs() % 100),
-        _ => display_year.to_string(),
-    });
+    let year_str = if c.is_cyclic_calendar {
+        opts.year.as_ref().map(|_| {
+            let lang = opts.locale.split('-').next().unwrap_or("en");
+            let year_name = c.cyclic_year.map(cyclic_year_name).unwrap_or_default();
+            let related = c.related_year.unwrap_or(c.year);
+            if lang == "zh" {
+                format!("{}{}\u{5E74}", related, year_name)
+            } else {
+                format!("{}({})", related, year_name)
+            }
+        })
+    } else {
+        opts.year.as_ref().map(|y| match y.as_str() {
+            "2-digit" => format_2digit(display_year.unsigned_abs() % 100),
+            _ => display_year.to_string(),
+        })
+    };
 
     // Month
+    let leap_suffix = c.is_leap_month && matches!(c.calendar_id.as_str(), "chinese" | "dangi");
     let month_str = opts.month.as_ref().map(|m| match m.as_str() {
-        "2-digit" => format_2digit(c.month),
-        "long" => month_name_long(c.month).to_string(),
-        "short" => month_name_short(c.month).to_string(),
-        "narrow" => month_name_narrow(c.month).to_string(),
-        _ => c.month.to_string(), // "numeric"
+        "2-digit" => {
+            let base = format_2digit(c.month);
+            if leap_suffix {
+                format!("{}bis", base)
+            } else {
+                base
+            }
+        }
+        "long" | "short" | "narrow" => {
+            if let Some(ref name) = c.cal_month_name {
+                name.clone()
+            } else {
+                match m.as_str() {
+                    "long" => month_name_long(c.month).to_string(),
+                    "short" => month_name_short(c.month).to_string(),
+                    _ => month_name_narrow(c.month).to_string(),
+                }
+            }
+        }
+        _ => {
+            let base = c.month.to_string();
+            if leap_suffix {
+                format!("{}bis", base)
+            } else {
+                base
+            }
+        }
     });
 
     // Day
@@ -1607,60 +1892,99 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
     let has_date = opts.year.is_some() || opts.month.is_some() || opts.day.is_some();
 
     if has_date {
-        let month_is_text = opts
-            .month
-            .as_ref()
-            .is_some_and(|m| matches!(m.as_str(), "long" | "short" | "narrow"));
+        let hebrew_numeric = c.calendar_id == "hebrew"
+            && opts
+                .month
+                .as_ref()
+                .is_some_and(|m| matches!(m.as_str(), "numeric" | "2-digit"));
+        let month_is_text = hebrew_numeric
+            || opts
+                .month
+                .as_ref()
+                .is_some_and(|m| matches!(m.as_str(), "long" | "short" | "narrow"));
 
         if month_is_text {
-            // Use text-style formatting: "January 15, 2024" or "Jan 15, 2024"
-            if let Some(ref m) = month_str {
-                date_parts.push(m.clone());
-            }
-            if let Some(ref d) = day_str {
-                if year_str.is_some() {
-                    date_parts.push(format!("{},", d));
-                } else {
+            if hebrew_numeric {
+                // Hebrew D Month Y layout
+                if let Some(ref d) = day_str {
                     date_parts.push(d.clone());
                 }
+                let month_name = c.cal_month_name.as_deref().unwrap_or("").to_string();
+                date_parts.push(month_name);
+                if let Some(ref y) = year_str {
+                    date_parts.push(y.clone());
+                }
+            } else {
+                // Use text-style formatting: "January 15, 2024" or "Jan 15, 2024"
+                if let Some(ref m) = month_str {
+                    date_parts.push(m.clone());
+                }
+                if let Some(ref d) = day_str {
+                    if year_str.is_some() {
+                        date_parts.push(format!("{},", d));
+                    } else {
+                        date_parts.push(d.clone());
+                    }
+                }
+                if let Some(ref y) = year_str {
+                    date_parts.push(y.clone());
+                }
             }
-            if let Some(ref y) = year_str {
-                date_parts.push(y.clone());
-            }
-            // Era after year
-            if let Some(ref e) = opts.era {
-                let s = match e.as_str() {
-                    "long" => era_long(c.year).to_string(),
-                    "short" => era_short(c.year).to_string(),
-                    "narrow" => era_narrow(c.year).to_string(),
-                    _ => era_short(c.year).to_string(),
-                };
-                date_parts.push(s);
+            // Era after year (skip for cyclic calendars like Chinese/Dangi)
+            if let Some(ref e) = opts.era
+                && !c.is_cyclic_calendar
+            {
+                let era_code =
+                    c.era_code
+                        .as_deref()
+                        .unwrap_or(if c.year > 0 { "ce" } else { "bce" });
+                date_parts.push(format_era(&c.calendar_id, era_code, e));
             }
         } else {
-            // Use numeric-style formatting: "1/15/2024"
+            // Use numeric-style formatting with locale-aware ordering
+            let (order, sep) = locale_date_order(&opts.locale);
             let mut numeric_parts: Vec<String> = Vec::new();
-            if let Some(ref m) = month_str {
-                numeric_parts.push(m.clone());
-            }
-            if let Some(ref d) = day_str {
-                numeric_parts.push(d.clone());
-            }
-            if let Some(ref y) = year_str {
-                numeric_parts.push(y.clone());
+            for component in order {
+                match component {
+                    'm' => {
+                        if let Some(ref m) = month_str {
+                            numeric_parts.push(m.clone());
+                        }
+                    }
+                    'd' => {
+                        if let Some(ref d) = day_str {
+                            numeric_parts.push(d.clone());
+                        }
+                    }
+                    'y' => {
+                        if let Some(ref y) = year_str {
+                            numeric_parts.push(y.clone());
+                        }
+                    }
+                    _ => {}
+                }
             }
             if !numeric_parts.is_empty() {
-                date_parts.push(numeric_parts.join("/"));
+                let mut formatted = numeric_parts.join(sep);
+                // DMY locales use trailing separator for month-day (no year)
+                if order[0] == 'd'
+                    && opts.year.is_none()
+                    && opts.month.is_some()
+                    && opts.day.is_some()
+                {
+                    formatted.push_str(sep);
+                }
+                date_parts.push(formatted);
             }
-            // Era after year for numeric
-            if let Some(ref e) = opts.era {
-                let s = match e.as_str() {
-                    "long" => era_long(c.year).to_string(),
-                    "short" => era_short(c.year).to_string(),
-                    "narrow" => era_narrow(c.year).to_string(),
-                    _ => era_short(c.year).to_string(),
-                };
-                date_parts.push(s);
+            // Era after year for numeric (skip for cyclic calendars)
+            if let Some(ref e) = opts.era
+                && !c.is_cyclic_calendar
+            {
+                let era_code =
+                    c.era_code
+                        .as_deref()
+                        .unwrap_or(if c.year > 0 { "ce" } else { "bce" });
+                date_parts.push(format_era(&c.calendar_id, era_code, e));
             }
         }
     }
@@ -1860,6 +2184,48 @@ fn format_with_options_raw(ms: f64, opts: &DtfOptions) -> String {
 
 const RANGE_SEP: &str = "\u{2009}\u{2013}\u{2009}";
 
+/// For DMY locales, formatRange zero-pads numeric months when both day and
+/// month are present (PlainDate, MonthDay) but not for time-containing or
+/// year-month-only formats.
+fn should_pad_range_month(opts: &DtfOptions) -> bool {
+    let is_numeric_month = opts.month.as_ref().is_some_and(|m| m == "numeric");
+    let has_day = opts.day.is_some();
+    let has_time = opts.hour.is_some() || opts.minute.is_some() || opts.second.is_some();
+    let (order, _) = locale_date_order(&opts.locale);
+    is_numeric_month && has_day && !has_time && order[0] == 'd'
+}
+
+fn pad_month_in_parts(parts: &mut [(String, String)]) {
+    for (typ, val) in parts.iter_mut() {
+        if typ == "month"
+            && let Ok(n) = val.parse::<u32>()
+            && n < 10
+        {
+            *val = format!("0{n}");
+        }
+    }
+}
+
+/// For DMY MonthDay ranges, strip trailing separator from the start range
+/// parts. The trailing separator appears only after the end range.
+fn is_dmy_month_day_range(opts: &DtfOptions) -> bool {
+    let has_day = opts.day.is_some();
+    let has_month = opts.month.is_some();
+    let has_year = opts.year.is_some();
+    let has_time = opts.hour.is_some() || opts.minute.is_some() || opts.second.is_some();
+    let (order, _) = locale_date_order(&opts.locale);
+    has_day && has_month && !has_year && !has_time && order[0] == 'd'
+}
+
+fn strip_trailing_separator(parts: &mut Vec<(String, String)>) {
+    if let Some(last) = parts.last()
+        && last.0 == "literal"
+        && last.1.len() <= 2
+    {
+        parts.pop();
+    }
+}
+
 fn format_range_with_options(start_ms: f64, end_ms: f64, opts: &DtfOptions) -> String {
     let start_str = format_with_options(start_ms, opts);
     let end_str = format_with_options(end_ms, opts);
@@ -1935,8 +2301,20 @@ fn format_range_with_options(start_ms: f64, end_ms: f64, opts: &DtfOptions) -> S
     }
 
     // Same-day collapsing: if date parts are the same, show "date, time1 – time2"
-    let start_parts = format_to_parts_with_options(start_ms, opts);
-    let end_parts = format_to_parts_with_options(end_ms, opts);
+    let mut start_parts = format_to_parts_with_options(start_ms, opts);
+    let mut end_parts = format_to_parts_with_options(end_ms, opts);
+
+    let pad_month = should_pad_range_month(opts);
+    if pad_month {
+        pad_month_in_parts(&mut start_parts);
+        pad_month_in_parts(&mut end_parts);
+    }
+
+    let md_range = is_dmy_month_day_range(opts);
+    if md_range {
+        strip_trailing_separator(&mut start_parts);
+    }
+
     let date_types = ["year", "month", "day", "weekday", "era", "relatedYear"];
     let time_types = ["hour", "minute", "second", "fractionalSecond", "dayPeriod"];
     let start_date: Vec<_> = start_parts
@@ -1984,6 +2362,18 @@ fn format_range_with_options(start_ms: f64, end_ms: f64, opts: &DtfOptions) -> S
         return result;
     }
 
+    if pad_month {
+        let mut s = String::new();
+        for (_, v) in &start_parts {
+            s.push_str(v);
+        }
+        s.push_str(RANGE_SEP);
+        for (_, v) in &end_parts {
+            s.push_str(v);
+        }
+        return s;
+    }
+
     format!("{}{}{}", start_str, RANGE_SEP, end_str)
 }
 
@@ -1992,8 +2382,25 @@ fn format_range_to_parts_with_options(
     end_ms: f64,
     opts: &DtfOptions,
 ) -> Vec<(String, String, String)> {
-    let start_parts = format_to_parts_with_options(start_ms, opts);
-    let end_parts = format_to_parts_with_options(end_ms, opts);
+    let mut start_parts = format_to_parts_with_options(start_ms, opts);
+    let mut end_parts = format_to_parts_with_options(end_ms, opts);
+
+    if should_pad_range_month(opts) {
+        pad_month_in_parts(&mut start_parts);
+        pad_month_in_parts(&mut end_parts);
+    }
+
+    let md_range = is_dmy_month_day_range(opts);
+    let mut trailing_sep: Option<(String, String)> = None;
+    if md_range {
+        strip_trailing_separator(&mut start_parts);
+        if let Some(last) = end_parts.last()
+            && last.0 == "literal"
+            && last.1.len() <= 2
+        {
+            trailing_sep = Some(end_parts.pop().unwrap());
+        }
+    }
 
     if start_parts == end_parts {
         return start_parts
@@ -2209,6 +2616,9 @@ fn format_range_to_parts_with_options(
     ));
     for (t, v) in &end_parts {
         all.push((t.clone(), v.clone(), "endRange".to_string()));
+    }
+    if let Some((t, v)) = trailing_sep {
+        all.push((t, v, "shared".to_string()));
     }
     all
 }
@@ -3091,48 +3501,118 @@ fn tz_abbr_to_long_name(abbr: &str, offset_secs: i32) -> String {
     }
 }
 
-fn format_date_style_to_parts(c: &DateComponents, style: &str) -> Vec<(String, String)> {
+fn format_date_style_to_parts(
+    c: &DateComponents,
+    style: &str,
+    locale: &str,
+) -> Vec<(String, String)> {
     let mut parts: Vec<(String, String)> = Vec::new();
+    let month_long = c
+        .cal_month_name
+        .as_deref()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| month_name_long(c.month).to_string());
+
+    let push_year = |parts: &mut Vec<(String, String)>| {
+        if c.is_cyclic_calendar {
+            if let Some(related) = c.related_year {
+                parts.push(("relatedYear".to_string(), related.to_string()));
+            }
+            if let Some(cy) = c.cyclic_year {
+                parts.push(("yearName".to_string(), cyclic_year_name(cy)));
+            }
+        } else {
+            parts.push(("year".to_string(), c.year.to_string()));
+        }
+    };
+
+    let (order, sep) = locale_date_order(locale);
+
     match style {
-        "full" => {
-            parts.push((
-                "weekday".to_string(),
-                weekday_name_long(c.weekday).to_string(),
-            ));
-            parts.push(("literal".to_string(), ", ".to_string()));
-            parts.push(("month".to_string(), month_name_long(c.month).to_string()));
-            parts.push(("literal".to_string(), " ".to_string()));
-            parts.push(("day".to_string(), c.day.to_string()));
-            parts.push(("literal".to_string(), ", ".to_string()));
-            parts.push(("year".to_string(), c.year.to_string()));
-        }
-        "long" => {
-            parts.push(("month".to_string(), month_name_long(c.month).to_string()));
-            parts.push(("literal".to_string(), " ".to_string()));
-            parts.push(("day".to_string(), c.day.to_string()));
-            parts.push(("literal".to_string(), ", ".to_string()));
-            parts.push(("year".to_string(), c.year.to_string()));
-        }
-        "medium" => {
-            parts.push(("month".to_string(), month_name_long(c.month).to_string()));
-            parts.push(("literal".to_string(), " ".to_string()));
-            parts.push(("day".to_string(), c.day.to_string()));
-            parts.push(("literal".to_string(), ", ".to_string()));
-            parts.push(("year".to_string(), c.year.to_string()));
-        }
-        "short" => {
-            parts.push(("month".to_string(), c.month.to_string()));
-            parts.push(("literal".to_string(), "/".to_string()));
-            parts.push(("day".to_string(), c.day.to_string()));
-            parts.push(("literal".to_string(), "/".to_string()));
-            parts.push(("year".to_string(), format!("{}", c.year % 100)));
+        "full" | "long" | "medium" => {
+            let month_text = if style == "medium" {
+                month_name_short(c.month).to_string()
+            } else {
+                month_long
+            };
+            match order[0] {
+                'd' => {
+                    if style == "full" {
+                        parts.push((
+                            "weekday".to_string(),
+                            weekday_name_long(c.weekday).to_string(),
+                        ));
+                        parts.push(("literal".to_string(), ", ".to_string()));
+                    }
+                    parts.push(("day".to_string(), c.day.to_string()));
+                    parts.push(("literal".to_string(), " ".to_string()));
+                    parts.push(("month".to_string(), month_text));
+                    parts.push(("literal".to_string(), " ".to_string()));
+                    push_year(&mut parts);
+                }
+                'y' => {
+                    push_year(&mut parts);
+                    parts.push(("literal".to_string(), sep.to_string()));
+                    parts.push(("month".to_string(), month_text));
+                    parts.push(("literal".to_string(), sep.to_string()));
+                    parts.push(("day".to_string(), c.day.to_string()));
+                    if style == "full" {
+                        parts.push(("literal".to_string(), " ".to_string()));
+                        parts.push((
+                            "weekday".to_string(),
+                            weekday_name_long(c.weekday).to_string(),
+                        ));
+                    }
+                }
+                _ => {
+                    if style == "full" {
+                        parts.push((
+                            "weekday".to_string(),
+                            weekday_name_long(c.weekday).to_string(),
+                        ));
+                        parts.push(("literal".to_string(), ", ".to_string()));
+                    }
+                    parts.push(("month".to_string(), month_text));
+                    parts.push(("literal".to_string(), " ".to_string()));
+                    parts.push(("day".to_string(), c.day.to_string()));
+                    parts.push(("literal".to_string(), ", ".to_string()));
+                    push_year(&mut parts);
+                }
+            }
         }
         _ => {
-            parts.push(("month".to_string(), c.month.to_string()));
-            parts.push(("literal".to_string(), "/".to_string()));
-            parts.push(("day".to_string(), c.day.to_string()));
-            parts.push(("literal".to_string(), "/".to_string()));
-            parts.push(("year".to_string(), c.year.to_string()));
+            // "short" and default: numeric with locale ordering
+            let push_short_year = |parts: &mut Vec<(String, String)>| {
+                let yr = if style == "short" {
+                    format!("{}", c.year % 100)
+                } else {
+                    c.year.to_string()
+                };
+                parts.push(("year".to_string(), yr));
+            };
+            match order[0] {
+                'd' => {
+                    parts.push(("day".to_string(), c.day.to_string()));
+                    parts.push(("literal".to_string(), sep.to_string()));
+                    parts.push(("month".to_string(), c.month.to_string()));
+                    parts.push(("literal".to_string(), sep.to_string()));
+                    push_short_year(&mut parts);
+                }
+                'y' => {
+                    push_short_year(&mut parts);
+                    parts.push(("literal".to_string(), sep.to_string()));
+                    parts.push(("month".to_string(), c.month.to_string()));
+                    parts.push(("literal".to_string(), sep.to_string()));
+                    parts.push(("day".to_string(), c.day.to_string()));
+                }
+                _ => {
+                    parts.push(("month".to_string(), c.month.to_string()));
+                    parts.push(("literal".to_string(), sep.to_string()));
+                    parts.push(("day".to_string(), c.day.to_string()));
+                    parts.push(("literal".to_string(), sep.to_string()));
+                    push_short_year(&mut parts);
+                }
+            }
         }
     }
     parts
@@ -3144,8 +3624,10 @@ fn format_reduced_date_style_to_parts(
     has_year: bool,
     has_month: bool,
     has_day: bool,
+    locale: &str,
 ) -> Vec<(String, String)> {
     let mut parts: Vec<(String, String)> = Vec::new();
+    let (order, sep) = locale_date_order(locale);
     if has_year && has_month && !has_day {
         // PlainYearMonth: month + year
         match style {
@@ -3160,28 +3642,52 @@ fn format_reduced_date_style_to_parts(
                 parts.push(("year".to_string(), c.year.to_string()));
             }
             _ => {
+                let yr = if style == "short" {
+                    format!("{}", c.year % 100)
+                } else {
+                    c.year.to_string()
+                };
                 parts.push(("month".to_string(), c.month.to_string()));
-                parts.push(("literal".to_string(), "/".to_string()));
-                parts.push(("year".to_string(), format!("{}", c.year % 100)));
+                parts.push(("literal".to_string(), sep.to_string()));
+                parts.push(("year".to_string(), yr));
             }
         }
     } else if !has_year && has_month && has_day {
         // PlainMonthDay: month + day
         match style {
             "full" | "long" => {
-                parts.push(("month".to_string(), month_name_long(c.month).to_string()));
-                parts.push(("literal".to_string(), " ".to_string()));
-                parts.push(("day".to_string(), c.day.to_string()));
+                if order[0] == 'd' {
+                    parts.push(("day".to_string(), c.day.to_string()));
+                    parts.push(("literal".to_string(), " ".to_string()));
+                    parts.push(("month".to_string(), month_name_long(c.month).to_string()));
+                } else {
+                    parts.push(("month".to_string(), month_name_long(c.month).to_string()));
+                    parts.push(("literal".to_string(), " ".to_string()));
+                    parts.push(("day".to_string(), c.day.to_string()));
+                }
             }
             "medium" => {
-                parts.push(("month".to_string(), month_name_short(c.month).to_string()));
-                parts.push(("literal".to_string(), " ".to_string()));
-                parts.push(("day".to_string(), c.day.to_string()));
+                if order[0] == 'd' {
+                    parts.push(("day".to_string(), c.day.to_string()));
+                    parts.push(("literal".to_string(), " ".to_string()));
+                    parts.push(("month".to_string(), month_name_short(c.month).to_string()));
+                } else {
+                    parts.push(("month".to_string(), month_name_short(c.month).to_string()));
+                    parts.push(("literal".to_string(), " ".to_string()));
+                    parts.push(("day".to_string(), c.day.to_string()));
+                }
             }
             _ => {
-                parts.push(("month".to_string(), c.month.to_string()));
-                parts.push(("literal".to_string(), "/".to_string()));
-                parts.push(("day".to_string(), c.day.to_string()));
+                if order[0] == 'd' {
+                    parts.push(("day".to_string(), c.day.to_string()));
+                    parts.push(("literal".to_string(), sep.to_string()));
+                    parts.push(("month".to_string(), c.month.to_string()));
+                    parts.push(("literal".to_string(), sep.to_string()));
+                } else {
+                    parts.push(("month".to_string(), c.month.to_string()));
+                    parts.push(("literal".to_string(), sep.to_string()));
+                    parts.push(("day".to_string(), c.day.to_string()));
+                }
             }
         }
     }
@@ -3270,7 +3776,12 @@ fn format_to_parts_with_options(ms: f64, opts: &DtfOptions) -> Vec<(String, Stri
     }
     raw.into_iter()
         .map(|(typ, val)| {
-            if typ == "literal" || typ == "timeZoneName" || typ == "era" || typ == "dayPeriod" {
+            if typ == "literal"
+                || typ == "timeZoneName"
+                || typ == "era"
+                || typ == "dayPeriod"
+                || typ == "yearName"
+            {
                 (typ, val)
             } else {
                 (typ, transliterate_digits(&val, &opts.numbering_system))
@@ -3280,8 +3791,21 @@ fn format_to_parts_with_options(ms: f64, opts: &DtfOptions) -> Vec<(String, Stri
 }
 
 fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, String)> {
-    let adjusted_ms = ms + tz_offset_ms(&opts.time_zone, ms);
-    let c = timestamp_to_components(adjusted_ms);
+    let is_plain = matches!(
+        opts.temporal_type,
+        Some(TemporalType::PlainDate)
+            | Some(TemporalType::PlainTime)
+            | Some(TemporalType::PlainDateTime)
+            | Some(TemporalType::PlainYearMonth)
+            | Some(TemporalType::PlainMonthDay)
+    );
+    let adjusted_ms = if is_plain {
+        ms
+    } else {
+        ms + tz_offset_ms(&opts.time_zone, ms)
+    };
+    let mut c = timestamp_to_components(adjusted_ms);
+    apply_calendar_conversion(&mut c, &opts.calendar);
     let hc = resolve_hour_cycle(opts);
     let mut parts: Vec<(String, String)> = Vec::new();
 
@@ -3300,10 +3824,11 @@ fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, 
                 is_ym || opts.year.is_some(),
                 true,
                 !is_ym,
+                &opts.locale,
             );
             parts.extend(rp);
         } else if let Some(ref ds) = opts.date_style {
-            let date_parts = format_date_style_to_parts(&c, ds);
+            let date_parts = format_date_style_to_parts(&c, ds, &opts.locale);
             parts.extend(date_parts);
         }
         let effective_ts = opts.time_style.as_ref().map(|ts| {
@@ -3351,91 +3876,168 @@ fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, 
 
     // Date components
     if has_date {
-        let month_is_text = opts
-            .month
-            .as_ref()
-            .is_some_and(|m| matches!(m.as_str(), "long" | "short" | "narrow"));
+        let hebrew_numeric = c.calendar_id == "hebrew"
+            && opts
+                .month
+                .as_ref()
+                .is_some_and(|m| matches!(m.as_str(), "numeric" | "2-digit"));
+        let month_is_text = hebrew_numeric
+            || opts
+                .month
+                .as_ref()
+                .is_some_and(|m| matches!(m.as_str(), "long" | "short" | "narrow"));
 
-        let display_year = if opts.era.is_some() && c.year <= 0 {
+        let use_era_year = c.era_year.is_some()
+            && (!matches!(c.calendar_id.as_str(), "gregory" | "iso8601") || opts.era.is_some());
+        let display_year = if use_era_year {
+            c.era_year.unwrap()
+        } else if opts.era.is_some() && c.year <= 0 {
             1 - c.year
         } else {
             c.year
         };
 
-        if month_is_text {
-            if let Some(ref m) = opts.month {
-                let s = match m.as_str() {
-                    "long" => month_name_long(c.month).to_string(),
-                    "short" => month_name_short(c.month).to_string(),
-                    "narrow" => month_name_narrow(c.month).to_string(),
-                    _ => c.month.to_string(),
-                };
-                parts.push(("month".to_string(), s));
-            }
-            if let Some(ref day_opt) = opts.day {
-                parts.push(("literal".to_string(), " ".to_string()));
-                let d = match day_opt.as_str() {
-                    "2-digit" => format_2digit(c.day),
-                    _ => c.day.to_string(),
-                };
-                parts.push(("day".to_string(), d));
-            }
-            if let Some(ref year_opt) = opts.year {
-                parts.push(("literal".to_string(), ", ".to_string()));
+        let lang = opts.locale.split('-').next().unwrap_or("en");
+        let emit_year_parts = |parts: &mut Vec<(String, String)>| {
+            if c.is_cyclic_calendar {
+                if let Some(related) = c.related_year {
+                    parts.push(("relatedYear".to_string(), related.to_string()));
+                }
+                if let Some(cy) = c.cyclic_year {
+                    if lang != "zh" {
+                        parts.push(("literal".to_string(), "(".to_string()));
+                    }
+                    parts.push(("yearName".to_string(), cyclic_year_name(cy)));
+                    if lang == "zh" {
+                        parts.push(("literal".to_string(), "\u{5E74}".to_string()));
+                    } else {
+                        parts.push(("literal".to_string(), ")".to_string()));
+                    }
+                }
+            } else if let Some(ref year_opt) = opts.year {
                 let y = match year_opt.as_str() {
                     "2-digit" => format_2digit(display_year.unsigned_abs() % 100),
                     _ => display_year.to_string(),
                 };
                 parts.push(("year".to_string(), y));
             }
-            if let Some(ref e) = opts.era {
+        };
+
+        let emit_era = |parts: &mut Vec<(String, String)>| {
+            if let Some(ref e) = opts.era
+                && !c.is_cyclic_calendar
+            {
                 parts.push(("literal".to_string(), " ".to_string()));
-                let s = match e.as_str() {
-                    "long" => era_long(c.year).to_string(),
-                    "short" => era_short(c.year).to_string(),
-                    "narrow" => era_narrow(c.year).to_string(),
-                    _ => era_short(c.year).to_string(),
-                };
-                parts.push(("era".to_string(), s));
+                let era_code =
+                    c.era_code
+                        .as_deref()
+                        .unwrap_or(if c.year > 0 { "ce" } else { "bce" });
+                parts.push(("era".to_string(), format_era(&c.calendar_id, era_code, e)));
+            }
+        };
+
+        if month_is_text {
+            if hebrew_numeric {
+                if let Some(ref day_opt) = opts.day {
+                    let d = match day_opt.as_str() {
+                        "2-digit" => format_2digit(c.day),
+                        _ => c.day.to_string(),
+                    };
+                    parts.push(("day".to_string(), d));
+                    parts.push(("literal".to_string(), " ".to_string()));
+                }
+                if opts.month.is_some() {
+                    let name = c.cal_month_name.as_deref().unwrap_or("").to_string();
+                    parts.push(("month".to_string(), name));
+                }
+                if opts.year.is_some() {
+                    parts.push(("literal".to_string(), " ".to_string()));
+                }
+                emit_year_parts(&mut parts);
+                emit_era(&mut parts);
+            } else {
+                if let Some(ref m) = opts.month {
+                    let s = if let Some(ref name) = c.cal_month_name {
+                        name.clone()
+                    } else {
+                        match m.as_str() {
+                            "long" => month_name_long(c.month).to_string(),
+                            "short" => month_name_short(c.month).to_string(),
+                            "narrow" => month_name_narrow(c.month).to_string(),
+                            _ => c.month.to_string(),
+                        }
+                    };
+                    parts.push(("month".to_string(), s));
+                }
+                if let Some(ref day_opt) = opts.day {
+                    parts.push(("literal".to_string(), " ".to_string()));
+                    let d = match day_opt.as_str() {
+                        "2-digit" => format_2digit(c.day),
+                        _ => c.day.to_string(),
+                    };
+                    parts.push(("day".to_string(), d));
+                }
+                if opts.year.is_some() {
+                    parts.push(("literal".to_string(), ", ".to_string()));
+                }
+                emit_year_parts(&mut parts);
+                emit_era(&mut parts);
             }
         } else {
-            // Numeric date: M/D/YYYY
-            if let Some(ref m) = opts.month {
-                let s = match m.as_str() {
+            // Numeric date: locale-aware ordering
+            let (order, sep) = locale_date_order(&opts.locale);
+            let month_str = opts.month.as_ref().map(|m| {
+                let base = match m.as_str() {
                     "2-digit" => format_2digit(c.month),
                     _ => c.month.to_string(),
                 };
-                parts.push(("month".to_string(), s));
+                if c.is_leap_month && matches!(c.calendar_id.as_str(), "chinese" | "dangi") {
+                    format!("{}bis", base)
+                } else {
+                    base
+                }
+            });
+            let day_str = opts.day.as_ref().map(|d| match d.as_str() {
+                "2-digit" => format_2digit(c.day),
+                _ => c.day.to_string(),
+            });
+
+            let mut first = true;
+            for component in order {
+                match component {
+                    'y' if opts.year.is_some() => {
+                        if !first {
+                            parts.push(("literal".to_string(), sep.to_string()));
+                        }
+                        emit_year_parts(&mut parts);
+                        emit_era(&mut parts);
+                        first = false;
+                    }
+                    'm' => {
+                        if let Some(ref s) = month_str {
+                            if !first {
+                                parts.push(("literal".to_string(), sep.to_string()));
+                            }
+                            parts.push(("month".to_string(), s.clone()));
+                            first = false;
+                        }
+                    }
+                    'd' => {
+                        if let Some(ref s) = day_str {
+                            if !first {
+                                parts.push(("literal".to_string(), sep.to_string()));
+                            }
+                            parts.push(("day".to_string(), s.clone()));
+                            first = false;
+                        }
+                    }
+                    _ => {}
+                }
             }
-            if opts.month.is_some() && opts.day.is_some() {
-                parts.push(("literal".to_string(), "/".to_string()));
-            }
-            if let Some(ref d) = opts.day {
-                let s = match d.as_str() {
-                    "2-digit" => format_2digit(c.day),
-                    _ => c.day.to_string(),
-                };
-                parts.push(("day".to_string(), s));
-            }
-            if (opts.month.is_some() || opts.day.is_some()) && opts.year.is_some() {
-                parts.push(("literal".to_string(), "/".to_string()));
-            }
-            if let Some(ref y) = opts.year {
-                let s = match y.as_str() {
-                    "2-digit" => format_2digit(display_year.unsigned_abs() % 100),
-                    _ => display_year.to_string(),
-                };
-                parts.push(("year".to_string(), s));
-            }
-            if let Some(ref e) = opts.era {
-                parts.push(("literal".to_string(), " ".to_string()));
-                let s = match e.as_str() {
-                    "long" => era_long(c.year).to_string(),
-                    "short" => era_short(c.year).to_string(),
-                    "narrow" => era_narrow(c.year).to_string(),
-                    _ => era_short(c.year).to_string(),
-                };
-                parts.push(("era".to_string(), s));
+            // DMY locales: trailing separator for month-day (no year)
+            if order[0] == 'd' && opts.year.is_none() && opts.month.is_some() && opts.day.is_some()
+            {
+                parts.push(("literal".to_string(), sep.to_string()));
             }
         }
     }
@@ -3689,6 +4291,23 @@ fn detect_temporal_type(interp: &Interpreter, val: &JsValue) -> Option<TemporalT
     None
 }
 
+fn detect_temporal_calendar(interp: &Interpreter, val: &JsValue) -> Option<String> {
+    if let JsValue::Object(o) = val
+        && let Some(obj) = interp.get_object(o.id)
+    {
+        let td = obj.borrow().temporal_data.clone();
+        return match td {
+            Some(TemporalData::PlainDate { calendar, .. }) => Some(calendar),
+            Some(TemporalData::PlainDateTime { calendar, .. }) => Some(calendar),
+            Some(TemporalData::PlainYearMonth { calendar, .. }) => Some(calendar),
+            Some(TemporalData::PlainMonthDay { calendar, .. }) => Some(calendar),
+            Some(TemporalData::ZonedDateTime { calendar, .. }) => Some(calendar),
+            _ => None,
+        };
+    }
+    None
+}
+
 fn has_explicit_date_time_opts(opts: &DtfOptions) -> bool {
     opts.has_explicit_components
 }
@@ -3794,7 +4413,7 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
                     adjusted.year = Some("numeric".to_string());
                     adjusted.month = Some("numeric".to_string());
                     adjusted.day = Some("numeric".to_string());
-                    adjusted.hour = Some("2-digit".to_string());
+                    adjusted.hour = Some("numeric".to_string());
                     adjusted.minute = Some("2-digit".to_string());
                     adjusted.second = Some("2-digit".to_string());
                 }
@@ -3814,7 +4433,7 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
             adjusted.year = Some("numeric".to_string());
             adjusted.month = Some("numeric".to_string());
             adjusted.day = Some("numeric".to_string());
-            adjusted.hour = Some("2-digit".to_string());
+            adjusted.hour = Some("numeric".to_string());
             adjusted.minute = Some("2-digit".to_string());
             adjusted.second = Some("2-digit".to_string());
         }
@@ -3822,7 +4441,7 @@ fn adjust_opts_for_temporal(opts: &DtfOptions, tt: TemporalType) -> DtfOptions {
             adjusted.year = Some("numeric".to_string());
             adjusted.month = Some("numeric".to_string());
             adjusted.day = Some("numeric".to_string());
-            adjusted.hour = Some("2-digit".to_string());
+            adjusted.hour = Some("numeric".to_string());
             adjusted.minute = Some("2-digit".to_string());
             adjusted.second = Some("2-digit".to_string());
             adjusted.time_zone_name = None;
@@ -3961,17 +4580,16 @@ fn check_temporal_overlap(opts: &DtfOptions, tt: TemporalType) -> bool {
     }
 }
 
-fn adjust_plain_temporal_ms(ms: f64, tz: &str, tt: TemporalType) -> f64 {
-    // Plain temporal types have no timezone — their ISO fields represent local date/time.
-    // The formatter applies tz_offset_ms(tz) to convert from UTC to local.
-    // We counteract that by subtracting the offset so the result is the original fields.
+fn adjust_plain_temporal_ms(ms: f64, _tz: &str, tt: TemporalType) -> f64 {
+    // Plain temporal types bypass timezone conversion in format_with_options_raw,
+    // so no adjustment is needed here. The ms value represents UTC-interpreted
+    // date/time fields that will be used directly.
     match tt {
         TemporalType::PlainDate
         | TemporalType::PlainTime
         | TemporalType::PlainDateTime
         | TemporalType::PlainYearMonth
-        | TemporalType::PlainMonthDay => ms - tz_offset_ms(tz, ms),
-        // Instant and ZonedDateTime already encode a real UTC instant
+        | TemporalType::PlainMonthDay => ms,
         TemporalType::Instant | TemporalType::ZonedDateTime => ms,
     }
 }
@@ -4094,8 +4712,9 @@ fn date_fields_to_epoch_ms(
 impl Interpreter {
     pub(crate) fn setup_intl_date_time_format(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
         let proto = self.create_object();
-        if let Some(ref op) = self.realm().object_prototype {
-            proto.borrow_mut().prototype = Some(op.clone());
+        if let Some(op_id) = self.realm().object_prototype {
+            proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(op_id).borrow().id.unwrap());
         }
         proto.borrow_mut().class_name = "Intl.DateTimeFormat".to_string();
 
@@ -4298,8 +4917,9 @@ impl Interpreter {
                     .into_iter()
                     .map(|(ptype, value)| {
                         let part_obj = interp.create_object();
-                        if let Some(ref op) = interp.realm().object_prototype {
-                            part_obj.borrow_mut().prototype = Some(op.clone());
+                        if let Some(op_id) = interp.realm().object_prototype {
+                            part_obj.borrow_mut().prototype_id =
+                                Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                         }
                         part_obj.borrow_mut().insert_property(
                             "type".to_string(),
@@ -4397,6 +5017,17 @@ impl Interpreter {
                         "Temporal object does not overlap with DateTimeFormat options",
                     ));
                 }
+                if start_tt.is_some() && end_tt.is_some() {
+                    let sc = detect_temporal_calendar(interp, &start_arg);
+                    let ec = detect_temporal_calendar(interp, &end_arg);
+                    if let (Some(s), Some(e)) = (&sc, &ec)
+                        && s != e
+                    {
+                        return Completion::Throw(interp.create_range_error(
+                            "formatRange arguments must use the same calendar",
+                        ));
+                    }
+                }
                 let start_ms = match resolve_date_value(interp, &start_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -4486,6 +5117,17 @@ impl Interpreter {
                             "Temporal object does not overlap with DateTimeFormat options",
                         ));
                     }
+                if start_tt.is_some() && end_tt.is_some() {
+                    let sc = detect_temporal_calendar(interp, &start_arg);
+                    let ec = detect_temporal_calendar(interp, &end_arg);
+                    if let (Some(s), Some(e)) = (&sc, &ec)
+                        && s != e
+                    {
+                        return Completion::Throw(interp.create_range_error(
+                            "formatRangeToParts arguments must use the same calendar",
+                        ));
+                    }
+                }
                 let start_ms = match resolve_date_value(interp, &start_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -4516,8 +5158,8 @@ impl Interpreter {
                     .into_iter()
                     .map(|(ptype, value, source)| {
                         let part_obj = interp.create_object();
-                        if let Some(ref op) = interp.realm().object_prototype {
-                            part_obj.borrow_mut().prototype = Some(op.clone());
+                        if let Some(op_id) = interp.realm().object_prototype {
+                            part_obj.borrow_mut().prototype_id = Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                         }
                         part_obj.borrow_mut().insert_property(
                             "type".to_string(),
@@ -4569,8 +5211,9 @@ impl Interpreter {
                 };
 
                 let result = interp.create_object();
-                if let Some(ref op) = interp.realm().object_prototype {
-                    result.borrow_mut().prototype = Some(op.clone());
+                if let Some(op_id) = interp.realm().object_prototype {
+                    result.borrow_mut().prototype_id =
+                        Some(interp.get_object_expect(op_id).borrow().id.unwrap());
                 }
 
                 // Properties in spec order
@@ -4654,12 +5297,12 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_date_time_format_prototype = Some(proto.clone());
+        self.realm_mut().intl_date_time_format_prototype = Some(proto.borrow().id.unwrap());
 
         // --- Constructor ---
         let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone = proto.clone();
+        let proto_clone_id = proto.borrow().id.unwrap();
 
         let dtf_ctor = self.create_function(JsFunction::constructor(
             "DateTimeFormat".to_string(),
@@ -4969,8 +5612,9 @@ impl Interpreter {
                 };
                 let calendar = calendar_raw;
 
-                // NumberingSystem: option > locale extension > default
+                // NumberingSystem: option > locale extension > locale default
                 let ns_opt_lower = ns_opt.map(|n| n.to_ascii_lowercase());
+                let locale_default_ns = default_numbering_system_for_locale(&resolved_locale);
                 let numbering_system = if let Some(ref no) = ns_opt_lower {
                     if is_supported_numbering_system(no) {
                         no.clone()
@@ -4978,19 +5622,19 @@ impl Interpreter {
                         if is_supported_numbering_system(ln) {
                             ln.clone()
                         } else {
-                            "latn".to_string()
+                            locale_default_ns.to_string()
                         }
                     } else {
-                        "latn".to_string()
+                        locale_default_ns.to_string()
                     }
                 } else if let Some(ref ln) = locale_nu {
                     if is_supported_numbering_system(ln) {
                         ln.clone()
                     } else {
-                        "latn".to_string()
+                        locale_default_ns.to_string()
                     }
                 } else {
-                    "latn".to_string()
+                    locale_default_ns.to_string()
                 };
 
                 // hourCycle resolution: option > locale extension > locale default
@@ -5032,13 +5676,13 @@ impl Interpreter {
 
                 let _has_era = era.is_some();
                 let proto = match interp.get_prototype_from_new_target_realm(|realm| {
-                    realm.intl_date_time_format_prototype.clone()
+                    realm.intl_date_time_format_prototype
                 }) {
-                    Ok(p) => p.unwrap_or_else(|| proto_clone.clone()),
+                    Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
                 let obj = interp.create_object();
-                obj.borrow_mut().prototype = Some(proto);
+                obj.borrow_mut().prototype_id = Some(proto);
                 obj.borrow_mut().class_name = "Intl.DateTimeFormat".to_string();
                 obj.borrow_mut().intl_data = Some(IntlData::DateTimeFormat {
                     locale,

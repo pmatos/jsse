@@ -148,6 +148,18 @@ impl<'a> Parser<'a> {
                     PropertyKey::Identifier(n) => n.clone(),
                     _ => return Err(self.error("Expected identifier for shorthand pattern")),
                 };
+                // `async` followed by something that looks like a method name/modifier
+                if name == "async"
+                    && !matches!(
+                        self.current,
+                        Token::Colon | Token::Assign | Token::Comma | Token::RightBrace
+                    )
+                {
+                    return Err(self.error("Invalid destructuring assignment target"));
+                }
+                if Self::is_reserved_identifier(&name, false) {
+                    return Err(self.error(format!("Unexpected token '{name}'")));
+                }
                 if self.in_static_block && name == "await" {
                     return Err(self.error(
                         "'await' is not allowed as a binding identifier in class static blocks",
@@ -270,6 +282,9 @@ impl<'a> Parser<'a> {
                     "'{name}' is not allowed as a function name in strict mode"
                 )));
             }
+            if Self::is_strict_reserved_word(&name) {
+                return Err(self.error(format!("Unexpected strict mode reserved word '{name}'")));
+            }
             self.check_strict_params(&params)?;
         }
         if body_strict
@@ -280,7 +295,7 @@ impl<'a> Parser<'a> {
         {
             self.check_duplicate_params_strict(&params)?;
         }
-        let source_text = Some(self.source_since(source_start));
+        let source_text = self.source_since(source_start);
         Ok(Statement::FunctionDeclaration(FunctionDecl {
             name,
             params,
@@ -399,7 +414,7 @@ impl<'a> Parser<'a> {
         if super_class.is_none() {
             Self::check_no_direct_super_in_constructor(&body)?;
         }
-        let source_text = Some(self.source_since(source_start));
+        let source_text = self.source_since(source_start);
         Ok(Statement::ClassDeclaration(ClassDecl {
             name,
             super_class,
@@ -419,10 +434,8 @@ impl<'a> Parser<'a> {
         let mut has_constructor = false;
         // Track private names: value is (getter_static, setter_static, has_other)
         // Option<bool> = None means no getter/setter, Some(is_static) means present with staticness
-        let mut private_names: std::collections::HashMap<
-            String,
-            (Option<bool>, Option<bool>, bool),
-        > = std::collections::HashMap::new();
+        let mut private_names: HashMap<String, (Option<bool>, Option<bool>, bool)> =
+            HashMap::default();
         while self.current != Token::RightBrace {
             if self.current == Token::Semicolon {
                 self.advance()?;
@@ -706,6 +719,13 @@ impl<'a> Parser<'a> {
                     None
                 }
             }
+            ClassElement::AutoAccessor(p) => {
+                if let PropertyKey::Private(name) = &p.key {
+                    Some((name.clone(), PrivateNameKind::Other, p.is_static))
+                } else {
+                    None
+                }
+            }
             ClassElement::StaticBlock(_) => None,
         }
     }
@@ -890,7 +910,6 @@ impl<'a> Parser<'a> {
                     Token::LeftParen | Token::Assign | Token::Semicolon | Token::RightBrace
                 );
             if next_is_field_name {
-                // auto-accessor field: parse as a normal field (discard accessor semantics)
                 let (key, computed) = self.parse_property_name()?;
                 let value = if self.current == Token::Assign {
                     self.advance()?;
@@ -905,7 +924,7 @@ impl<'a> Parser<'a> {
                     None
                 };
                 self.eat_semicolon()?;
-                return Ok(ClassElement::Property(ClassProperty {
+                return Ok(ClassElement::AutoAccessor(ClassProperty {
                     key,
                     value,
                     is_static,
@@ -1073,14 +1092,15 @@ impl<'a> Parser<'a> {
     fn parse_field_initializer_value(&mut self) -> Result<Expression, ParseError> {
         let prev_async = self.in_async;
         let prev_gen = self.in_generator;
-        let prev_class_field = self.in_class_field_initializer;
         self.in_async = false;
         self.in_generator = false;
-        self.in_class_field_initializer = true;
+        // Increment in_function to prevent module-level await from matching
+        // (class field initializers use [~Await] per spec)
+        self.in_function += 1;
         let result = self.parse_assignment_expression();
+        self.in_function -= 1;
         self.in_async = prev_async;
         self.in_generator = prev_gen;
-        self.in_class_field_initializer = prev_class_field;
         result
     }
 
@@ -1182,7 +1202,7 @@ impl<'a> Parser<'a> {
         {
             self.check_duplicate_params_strict(&params)?;
         }
-        let source_text = Some(self.source_since(method_source_start));
+        let source_text = self.source_since(method_source_start);
         Ok(FunctionExpr {
             name: None,
             params,
@@ -1236,7 +1256,7 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn set_function_param_names(&mut self, params: &[Pattern]) {
-        let mut names = std::collections::HashSet::new();
+        let mut names = HashSet::default();
         for p in params {
             let mut bound = Vec::new();
             Self::collect_bound_names(p, &mut bound);
@@ -1269,6 +1289,8 @@ impl<'a> Parser<'a> {
         self.in_function += 1;
         self.allow_super_property = super_property;
         self.allow_super_call = super_call;
+        let prev_formal = self.in_formal_parameters;
+        self.in_formal_parameters = false;
         let prev_block = self.in_block_or_function;
         let prev_sc = self.in_switch_case;
         let prev_static_block = self.in_static_block;
@@ -1346,18 +1368,14 @@ impl<'a> Parser<'a> {
         self.labels = prev_labels;
         self.allow_super_property = prev_super_property;
         self.allow_super_call = prev_super_call;
+        self.in_formal_parameters = prev_formal;
         self.in_block_or_function = prev_block;
         self.in_switch_case = prev_sc;
         self.in_static_block = prev_static_block;
-        self.function_param_names = saved_param_names;
+        self.function_param_names = None;
         self.eat(&Token::RightBrace)?;
         self.set_strict(prev_strict);
         Ok((stmts, was_strict))
-    }
-
-    #[allow(dead_code)]
-    fn parse_function_body(&mut self) -> Result<(Vec<Statement>, bool), ParseError> {
-        self.parse_function_body_with_context(false, false)
     }
 
     pub(super) fn parse_arrow_function_body(

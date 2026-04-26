@@ -108,6 +108,18 @@ const SURROGATE_START: u32 = 0xD800;
 const SURROGATE_END: u32 = 0xDFFF;
 const SURROGATE_PUA_BASE: u32 = 0xF0000;
 
+fn pua_aware_utf16_len(s: &str) -> usize {
+    s.chars()
+        .map(|c| {
+            if pua_to_surrogate(c).is_some() {
+                1
+            } else {
+                c.len_utf16()
+            }
+        })
+        .sum()
+}
+
 fn is_surrogate(cp: u32) -> bool {
     (SURROGATE_START..=SURROGATE_END).contains(&cp)
 }
@@ -210,33 +222,186 @@ pub(crate) fn pua_code_units_to_surrogates(code_units: &[u16]) -> Vec<u16> {
     result
 }
 
-/// Convert a JsValue to a String suitable for regex matching.
-/// For JsString values, uses PUA mapping for lone surrogates.
-/// For other types, falls back to normal ToString conversion.
-fn to_regex_input(interp: &mut Interpreter, val: &JsValue) -> Result<String, JsValue> {
-    match val {
-        JsValue::String(s) => Ok(js_string_to_regex_input(&s.code_units)),
-        _ => interp.to_string_value(val),
+/// Encode UTF-16 code units as WTF-8 bytes.
+/// Surrogate pairs → 4-byte UTF-8; lone surrogates → 3-byte WTF-8 (ED xx xx);
+/// BMP → standard 1-3 byte UTF-8.
+fn js_code_units_to_wtf8(code_units: &[u16]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(code_units.len() * 3);
+    let mut i = 0;
+    while i < code_units.len() {
+        let cu = code_units[i];
+        if (0xD800..=0xDBFF).contains(&cu)
+            && i + 1 < code_units.len()
+            && (0xDC00..=0xDFFF).contains(&code_units[i + 1])
+        {
+            let cp = ((cu as u32 - 0xD800) << 10) + (code_units[i + 1] as u32 - 0xDC00) + 0x10000;
+            bytes.push((0xF0 | (cp >> 18)) as u8);
+            bytes.push((0x80 | ((cp >> 12) & 0x3F)) as u8);
+            bytes.push((0x80 | ((cp >> 6) & 0x3F)) as u8);
+            bytes.push((0x80 | (cp & 0x3F)) as u8);
+            i += 2;
+        } else if (0xD800..=0xDFFF).contains(&cu) {
+            let cp = cu as u32;
+            bytes.push(0xED);
+            bytes.push(((cp >> 6) & 0x3F) as u8 | 0x80);
+            bytes.push((cp & 0x3F) as u8 | 0x80);
+            i += 1;
+        } else if cu < 0x80 {
+            bytes.push(cu as u8);
+            i += 1;
+        } else if cu < 0x800 {
+            bytes.push((0xC0 | (cu >> 6)) as u8);
+            bytes.push((0x80 | (cu & 0x3F)) as u8);
+            i += 1;
+        } else {
+            bytes.push((0xE0 | (cu >> 12)) as u8);
+            bytes.push((0x80 | ((cu >> 6) & 0x3F)) as u8);
+            bytes.push((0x80 | (cu & 0x3F)) as u8);
+            i += 1;
+        }
     }
+    bytes
 }
 
-#[allow(dead_code)]
-fn escape_regexp_pattern(source: &str) -> String {
-    if source.is_empty() {
-        return "(?:)".to_string();
+/// Convert a WTF-8 byte offset to a UTF-16 code unit offset.
+fn wtf8_byte_offset_to_utf16(bytes: &[u8], target_byte: usize) -> usize {
+    let mut utf16 = 0;
+    let mut i = 0;
+    while i < target_byte && i < bytes.len() {
+        let b = bytes[i];
+        if b < 0x80 {
+            utf16 += 1;
+            i += 1;
+        } else if b < 0xC0 {
+            i += 1;
+        } else if b < 0xE0 {
+            utf16 += 1;
+            i += 2;
+        } else if b < 0xF0 {
+            // 3-byte: BMP char or WTF-8 surrogate — both are 1 UTF-16 unit
+            utf16 += 1;
+            i += 3;
+        } else {
+            utf16 += 2;
+            i += 4;
+        }
     }
-    let mut result = String::with_capacity(source.len());
-    for c in source.chars() {
-        match c {
-            '/' => result.push_str("\\/"),
-            '\n' => result.push_str("\\n"),
-            '\r' => result.push_str("\\r"),
-            '\u{2028}' => result.push_str("\\u2028"),
-            '\u{2029}' => result.push_str("\\u2029"),
-            _ => result.push(c),
+    utf16
+}
+
+/// Convert a UTF-16 code unit offset to a WTF-8 byte offset.
+fn utf16_to_wtf8_byte_offset(bytes: &[u8], target_utf16: usize) -> usize {
+    let mut utf16 = 0;
+    let mut i = 0;
+    while i < bytes.len() && utf16 < target_utf16 {
+        let b = bytes[i];
+        if b < 0x80 {
+            utf16 += 1;
+            i += 1;
+        } else if b < 0xC0 {
+            i += 1;
+        } else if b < 0xE0 {
+            utf16 += 1;
+            i += 2;
+        } else if b < 0xF0 {
+            // 3-byte: BMP char or WTF-8 surrogate — both are 1 UTF-16 unit
+            utf16 += 1;
+            i += 3;
+        } else {
+            utf16 += 2;
+            i += 4;
+        }
+    }
+    i
+}
+
+/// Convert a WTF-8 byte slice to a PUA-encoded string.
+/// WTF-8 surrogates (ED [A0-BF] xx) become PUA chars; everything else stays as UTF-8.
+fn wtf8_slice_to_pua_string(bytes: &[u8]) -> String {
+    let mut result = String::new();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b < 0x80 {
+            result.push(b as char);
+            i += 1;
+        } else if b < 0xC0 {
+            i += 1;
+        } else if b < 0xE0 {
+            if i + 1 < bytes.len() {
+                let cp = ((b as u32 & 0x1F) << 6) | (bytes[i + 1] as u32 & 0x3F);
+                if let Some(c) = char::from_u32(cp) {
+                    result.push(c);
+                }
+            }
+            i += 2;
+        } else if b == 0xED && i + 2 < bytes.len() && bytes[i + 1] >= 0xA0 {
+            let cp = ((b as u32 & 0x0F) << 12)
+                | ((bytes[i + 1] as u32 & 0x3F) << 6)
+                | (bytes[i + 2] as u32 & 0x3F);
+            result.push(surrogate_to_pua(cp));
+            i += 3;
+        } else if b < 0xF0 {
+            if i + 2 < bytes.len() {
+                let cp = ((b as u32 & 0x0F) << 12)
+                    | ((bytes[i + 1] as u32 & 0x3F) << 6)
+                    | (bytes[i + 2] as u32 & 0x3F);
+                if let Some(c) = char::from_u32(cp) {
+                    result.push(c);
+                }
+            }
+            i += 3;
+        } else {
+            if i + 3 < bytes.len() {
+                let cp = ((b as u32 & 0x07) << 18)
+                    | ((bytes[i + 1] as u32 & 0x3F) << 12)
+                    | ((bytes[i + 2] as u32 & 0x3F) << 6)
+                    | (bytes[i + 3] as u32 & 0x3F);
+                if let Some(c) = char::from_u32(cp) {
+                    result.push(c);
+                }
+            }
+            i += 4;
         }
     }
     result
+}
+
+fn is_cs_property(content: &str) -> bool {
+    if let Some(eq_pos) = content.find('=') {
+        let prop = &content[..eq_pos];
+        let val = &content[eq_pos + 1..];
+        matches!(prop, "General_Category" | "gc") && matches!(val, "Cs" | "Surrogate")
+    } else {
+        matches!(content, "Cs" | "Surrogate")
+    }
+}
+
+fn is_co_property(content: &str) -> bool {
+    if let Some(eq_pos) = content.find('=') {
+        let prop = &content[..eq_pos];
+        let val = &content[eq_pos + 1..];
+        matches!(prop, "General_Category" | "gc") && matches!(val, "Co" | "Private_Use")
+    } else {
+        matches!(content, "Co" | "Private_Use")
+    }
+}
+
+fn to_regex_input_with_units(
+    interp: &mut Interpreter,
+    val: &JsValue,
+) -> Result<(String, Vec<u16>), JsValue> {
+    match val {
+        JsValue::String(s) => Ok((
+            js_string_to_regex_input(&s.code_units),
+            s.code_units.clone(),
+        )),
+        _ => {
+            let s = interp.to_string_value(val)?;
+            let js = JsString::from_str(&s);
+            Ok((js_string_to_regex_input(&js.code_units), js.code_units))
+        }
+    }
 }
 
 fn escape_regexp_pattern_code_units(code_units: &[u16]) -> JsString {
@@ -643,8 +808,7 @@ impl VClassSet {
             }
         }
         // Intersect strings: keep strings that appear in both
-        let b_strings: std::collections::HashSet<&str> =
-            b.strings.iter().map(|s| s.as_str()).collect();
+        let b_strings: HashSet<&str> = b.strings.iter().map(|s| s.as_str()).collect();
         for s in &a.strings {
             if b_strings.contains(s.as_str()) {
                 result.strings.push(s.clone());
@@ -676,8 +840,7 @@ impl VClassSet {
             }
         }
         // Subtract b's strings from a's strings
-        let b_strings: std::collections::HashSet<&str> =
-            b.strings.iter().map(|s| s.as_str()).collect();
+        let b_strings: HashSet<&str> = b.strings.iter().map(|s| s.as_str()).collect();
         let result_strings: Vec<String> = a
             .strings
             .iter()
@@ -691,7 +854,7 @@ impl VClassSet {
     }
 
     fn dedup_strings(&mut self) {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         self.strings.retain(|s| seen.insert(s.clone()));
     }
 
@@ -1211,8 +1374,9 @@ fn sanitize_group_name(name: &str) -> String {
 
 pub(super) struct TranslationResult {
     pub(super) pattern: String,
-    dup_group_map: std::collections::HashMap<String, Vec<(String, u32)>>,
+    dup_group_map: HashMap<String, Vec<(String, u32)>>,
     group_name_order: Vec<String>,
+    needs_bytes_mode: bool,
 }
 
 /// Parse a quantifier starting at `pos` in `chars` and return
@@ -1322,7 +1486,7 @@ fn find_matching_close_paren(chars: &[char], open: usize) -> Option<usize> {
 
 /// Check if `body` (JS pattern fragment) contains a `\k<name>` reference to any
 /// name in `names`. Used to decide if it's safe to strip named groups from a copy.
-fn body_has_named_backref_to(chars: &[char], names: &std::collections::HashSet<String>) -> bool {
+fn body_has_named_backref_to(chars: &[char], names: &HashSet<String>) -> bool {
     let len = chars.len();
     let mut i = 0;
     let mut in_cc = false;
@@ -1355,7 +1519,7 @@ fn body_has_named_backref_to(chars: &[char], names: &std::collections::HashSet<S
 }
 
 /// Check if `body` contains any named capturing group whose name is in `names`.
-fn body_has_dup_named_group(chars: &[char], names: &std::collections::HashSet<String>) -> bool {
+fn body_has_dup_named_group(chars: &[char], names: &HashSet<String>) -> bool {
     let len = chars.len();
     let mut i = 0;
     let mut in_cc = false;
@@ -1447,15 +1611,14 @@ fn anonymize_named_groups(chars: &[char]) -> String {
 /// Rename named groups and backreferences in a pattern body for a specific iteration.
 /// `(?<name>...)` → `(?<__jsse_qi{idx}__name>...)` and `\k<name>` → `\k<__jsse_qi{idx}__name>`
 /// for names in the duplicate set.
-fn rename_groups_and_backrefs(
-    chars: &[char],
-    dup_names: &std::collections::HashSet<String>,
-    idx: u32,
-) -> String {
+/// Also renames ALL other capturing groups (named and unnamed) with `__jsse_qi` prefix
+/// so they are properly stripped from the result.
+fn rename_groups_and_backrefs(chars: &[char], dup_names: &HashSet<String>, idx: u32) -> String {
     let len = chars.len();
     let mut result = String::new();
     let mut i = 0;
     let mut in_cc = false;
+    let mut unnamed_counter: u32 = 0;
     while i < len {
         match chars[i] {
             '[' if !in_cc => {
@@ -1497,23 +1660,24 @@ fn rename_groups_and_backrefs(
                 && chars[i + 3] != '='
                 && chars[i + 3] != '!' =>
             {
+                // Named group
                 let name_start = i + 3;
                 if let Some(end_off) = chars[name_start..].iter().position(|&c| c == '>') {
                     let name: String = chars[name_start..name_start + end_off].iter().collect();
-                    if dup_names.contains(&name) {
-                        result.push_str(&format!("(?<__jsse_qi{}__{}>", idx, name));
-                        i = name_start + end_off + 1;
-                        continue;
-                    } else {
-                        result.push_str("(?<");
-                        result.push_str(&name);
-                        result.push('>');
-                        i = name_start + end_off + 1;
-                        continue;
-                    }
+                    // Rename ALL named groups with __jsse_qi prefix (not just dup ones)
+                    result.push_str(&format!("(?<__jsse_qi{}__{}>", idx, name));
+                    i = name_start + end_off + 1;
+                    continue;
                 } else {
                     result.push(chars[i]);
                 }
+            }
+            '(' if !in_cc && (i + 1 >= len || chars[i + 1] != '?') => {
+                // Unnamed capturing group — rename to __jsse_qi named group for stripping
+                unnamed_counter += 1;
+                result.push_str(&format!("(?<__jsse_qi{}_u{}>", idx, unnamed_counter));
+                i += 1;
+                continue;
             }
             c => result.push(c),
         }
@@ -1526,10 +1690,7 @@ fn rename_groups_and_backrefs(
 /// duplicate-named groups. If BODY has no backreferences to duplicate names, expands to
 /// `(?:ANON_BODY){N-1}(?:BODY)`. If BODY has backreferences, uses renaming to keep
 /// groups and backrefs paired per iteration.
-fn expand_quantified_dup_groups(
-    source: &str,
-    dup_names: &std::collections::HashSet<String>,
-) -> String {
+fn expand_quantified_dup_groups(source: &str, dup_names: &HashSet<String>) -> String {
     if dup_names.is_empty() {
         return source.to_string();
     }
@@ -1696,12 +1857,12 @@ pub(super) fn translate_js_pattern_ex(
     let mut groups_seen: u32 = 0;
     let mut open_groups: Vec<u32> = Vec::new();
     let mut open_group_names: Vec<Option<String>> = Vec::new();
-    let mut group_num_to_name: std::collections::HashMap<u32, String> =
-        std::collections::HashMap::new();
+    let mut group_num_to_name: HashMap<u32, String> = HashMap::default();
     let mut group_is_capturing: Vec<bool> = Vec::new();
     let mut lookbehind_depth: u32 = 0;
     let mut is_lookbehind_group: Vec<bool> = Vec::new();
     let mut is_lookahead_group: Vec<bool> = Vec::new();
+    let mut needs_bytes_mode = false;
     // For capturing groups inside lookbehinds, track the position of '(' in result
     let mut group_result_start: Vec<Option<usize>> = Vec::new();
     let dot_all_base = flags.contains('s');
@@ -1766,18 +1927,23 @@ pub(super) fn translate_js_pattern_ex(
                 '\\' if j + 1 < len => {
                     j += 1;
                 }
-                '(' if !in_cc && j + 2 < len && chars[j + 1] == '?' && chars[j + 2] == '<' => {
-                    if j + 3 < len && chars[j + 3] != '=' && chars[j + 3] != '!' {
-                        // Named group — extract name
-                        let name_start = j + 3;
-                        let mut k = name_start;
-                        while k < len && chars[k] != '>' {
-                            k += 1;
-                        }
-                        if k < len {
-                            let name = decode_group_name_raw(&chars[name_start..k]);
-                            all_group_names.push(name);
-                        }
+                '(' if !in_cc
+                    && j + 2 < len
+                    && chars[j + 1] == '?'
+                    && chars[j + 2] == '<'
+                    && j + 3 < len
+                    && chars[j + 3] != '='
+                    && chars[j + 3] != '!' =>
+                {
+                    // Named group — extract name
+                    let name_start = j + 3;
+                    let mut k = name_start;
+                    while k < len && chars[k] != '>' {
+                        k += 1;
+                    }
+                    if k < len {
+                        let name = decode_group_name_raw(&chars[name_start..k]);
+                        all_group_names.push(name);
                     }
                 }
                 _ => {}
@@ -1785,11 +1951,11 @@ pub(super) fn translate_js_pattern_ex(
             j += 1;
         }
     }
-    let mut name_count: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut name_count: HashMap<String, usize> = HashMap::default();
     for name in &all_group_names {
         *name_count.entry(name.clone()).or_insert(0) += 1;
     }
-    let mut duplicated_names: std::collections::HashSet<String> = name_count
+    let mut duplicated_names: HashSet<String> = name_count
         .into_iter()
         .filter(|(_, count)| *count > 1)
         .map(|(name, _)| name)
@@ -1841,8 +2007,7 @@ pub(super) fn translate_js_pattern_ex(
             }
             // Re-compute duplicated_names from expanded source (renamed groups
             // like __jsse_qi0__x are also duplicates)
-            let mut new_name_count: std::collections::HashMap<String, usize> =
-                std::collections::HashMap::new();
+            let mut new_name_count: HashMap<String, usize> = HashMap::default();
             for name in &new_names {
                 *new_name_count.entry(name.clone()).or_insert(0) += 1;
             }
@@ -1864,12 +2029,10 @@ pub(super) fn translate_js_pattern_ex(
     // prefix so we can use named backreferences throughout.
     let has_named_groups = !all_group_names.is_empty();
     // Track how many times we've seen each duplicated name during translation
-    let mut dup_seen_count: std::collections::HashMap<String, u32> =
-        std::collections::HashMap::new();
-    let mut dup_group_map: std::collections::HashMap<String, Vec<(String, u32)>> =
-        std::collections::HashMap::new();
+    let mut dup_seen_count: HashMap<String, u32> = HashMap::default();
+    let mut dup_group_map: HashMap<String, Vec<(String, u32)>> = HashMap::default();
     let mut group_name_order: Vec<String> = Vec::new();
-    let mut group_name_seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut group_name_seen: HashSet<String> = HashSet::default();
 
     while i < len {
         let c = chars[i];
@@ -2065,7 +2228,7 @@ pub(super) fn translate_js_pattern_ex(
                 }
                 // \uHHHH or \u{HHHH+}
                 'u' => {
-                    if i + 2 < len && chars[i + 2] == '{' {
+                    if unicode && i + 2 < len && chars[i + 2] == '{' {
                         // \u{HHHH+}
                         let start = i + 3;
                         if let Some(end) = chars[start..].iter().position(|&c| c == '}') {
@@ -2201,29 +2364,50 @@ pub(super) fn translate_js_pattern_ex(
                         }
                     } else if next == 'w' {
                         // ES spec: \w = [A-Za-z0-9_] always
-                        if in_char_class {
+                        // Under unicode + ignoreCase (current modifier), include U+017F/U+212A
+                        if unicode && icase {
+                            if in_char_class {
+                                result.push_str("A-Za-z0-9_\\x{017F}\\x{212A}");
+                            } else {
+                                result.push_str("[A-Za-z0-9_\\x{017F}\\x{212A}]");
+                            }
+                        } else if in_char_class {
                             result.push_str("A-Za-z0-9_");
                         } else {
                             result.push_str("[A-Za-z0-9_]");
                         }
                     } else if next == 'W' {
-                        if in_char_class {
+                        if unicode && icase {
+                            if in_char_class {
+                                result.push_str("\\x{00}-\\x{2F}\\x{3A}-\\x{40}\\x{5B}-\\x{5E}\\x{60}\\x{7B}-\\x{017E}\\x{0180}-\\x{2129}\\x{212B}-\\x{10FFFF}");
+                            } else {
+                                result.push_str("[^A-Za-z0-9_\\x{017F}\\x{212A}]");
+                            }
+                        } else if in_char_class {
                             result.push_str("\\x{00}-\\x{2F}\\x{3A}-\\x{40}\\x{5B}-\\x{5E}\\x{60}\\x{7B}-\\x{10FFFF}");
                         } else {
                             result.push_str("[^A-Za-z0-9_]");
                         }
                     } else if next == 'b' {
-                        if unicode && icase_base && !icase {
-                            // Inside (?-i:...) with /ui flags: \b must use ASCII-only word chars
-                            result.push_str("(?:(?<=[A-Za-z0-9_])(?![A-Za-z0-9_])|(?<![A-Za-z0-9_])(?=[A-Za-z0-9_]))");
+                        if in_char_class {
+                            // \b inside character class means backspace (U+0008)
+                            result.push_str("\\x{08}");
+                        } else if unicode && icase {
+                            // Under unicode + ignoreCase (current modifier), include U+017F/U+212A
+                            result.push_str("(?:(?<=(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}]))(?!(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}]))|(?<!(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}]))(?=(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}])))");
                         } else {
-                            result.push_str("\\b");
+                            // JS \b always uses ASCII word chars [A-Za-z0-9_]
+                            // (Rust \b uses Unicode word boundaries which is wrong for JS)
+                            result.push_str("(?:(?<=(?-i:[A-Za-z0-9_]))(?!(?-i:[A-Za-z0-9_]))|(?<!(?-i:[A-Za-z0-9_]))(?=(?-i:[A-Za-z0-9_])))");
                         }
                     } else if next == 'B' {
-                        if unicode && icase_base && !icase {
-                            result.push_str("(?:(?<=[A-Za-z0-9_])(?=[A-Za-z0-9_])|(?<![A-Za-z0-9_])(?![A-Za-z0-9_]))");
+                        if in_char_class {
+                            // \B inside character class is literal B in non-unicode mode
+                            result.push('B');
+                        } else if unicode && icase {
+                            result.push_str("(?:(?<=(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}]))(?=(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}]))|(?<!(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}]))(?!(?-i:[A-Za-z0-9_\\x{017F}\\x{212A}])))");
                         } else {
-                            result.push_str("\\B");
+                            result.push_str("(?:(?<=(?-i:[A-Za-z0-9_]))(?=(?-i:[A-Za-z0-9_]))|(?<!(?-i:[A-Za-z0-9_]))(?!(?-i:[A-Za-z0-9_])))");
                         }
                     } else {
                         result.push('\\');
@@ -2381,12 +2565,54 @@ pub(super) fn translate_js_pattern_ex(
                             continue;
                         }
                         if let Some(ranges) = crate::unicode_tables::lookup_property(&content) {
-                            expand_property_to_char_class(
-                                &mut result,
-                                ranges,
-                                negated,
-                                in_char_class,
-                            );
+                            if is_cs_property(&content) {
+                                needs_bytes_mode = true;
+                                if negated {
+                                    // \P{Cs}: all valid Unicode (WTF-8 surrogates naturally excluded)
+                                    expand_property_to_char_class(
+                                        &mut result,
+                                        ranges,
+                                        true,
+                                        in_char_class,
+                                    );
+                                } else if !in_char_class {
+                                    // \p{Cs}: match WTF-8 surrogates
+                                    result.push_str("(?-u:\\xED[\\xA0-\\xBF][\\x80-\\xBF])");
+                                } else {
+                                    expand_property_to_char_class(
+                                        &mut result,
+                                        ranges,
+                                        false,
+                                        in_char_class,
+                                    );
+                                }
+                            } else if is_co_property(&content) {
+                                needs_bytes_mode = true;
+                                if negated && !in_char_class {
+                                    // \P{Co}: complement + WTF-8 surrogates
+                                    let comp = complement_ranges(ranges);
+                                    result.push_str("(?:[");
+                                    for &(lo, hi) in &comp {
+                                        append_unicode_range(&mut result, lo, hi);
+                                    }
+                                    result.push_str("]|(?-u:\\xED[\\xA0-\\xBF][\\x80-\\xBF]))");
+                                } else {
+                                    // \p{Co}: normal ranges (WTF-8 surrogates won't match)
+                                    expand_property_to_char_class(
+                                        &mut result,
+                                        ranges,
+                                        negated,
+                                        in_char_class,
+                                    );
+                                }
+                            } else {
+                                expand_property_to_char_class(
+                                    &mut result,
+                                    ranges,
+                                    negated,
+                                    in_char_class,
+                                );
+                            }
                         } else {
                             // Fallback to fancy_regex for unrecognized properties
                             result.push('\\');
@@ -2411,6 +2637,9 @@ pub(super) fn translate_js_pattern_ex(
                         && needs_case_fold_guard(next)
                     {
                         push_case_fold_guarded(&mut result, next, false);
+                    } else if in_char_class && next == '-' {
+                        // \- in char class: must escape dash to prevent range interpretation
+                        result.push_str("\\-");
                     } else {
                         // Identity escape: push the literal character
                         // (fancy_regex may interpret \< \> \A \Z etc. specially)
@@ -2732,7 +2961,7 @@ pub(super) fn translate_js_pattern_ex(
             continue;
         }
 
-        if !unicode && c as u32 >= 0x10000 {
+        if !unicode && c as u32 >= 0x10000 && pua_to_surrogate(c).is_none() {
             let cp = c as u32;
             let hi = ((cp - 0x10000) >> 10) + 0xD800;
             let lo = ((cp - 0x10000) & 0x3FF) + 0xDC00;
@@ -2753,6 +2982,7 @@ pub(super) fn translate_js_pattern_ex(
         pattern: result,
         dup_group_map,
         group_name_order,
+        needs_bytes_mode,
     })
 }
 
@@ -2977,7 +3207,6 @@ fn validate_modifier_group(chars: &[char], start: usize, source: &str) -> Result
     let len = chars.len();
     let mut j = start;
     let mut add_flags: Vec<char> = Vec::new();
-    let mut has_dash = false;
     let mut remove_flags: Vec<char> = Vec::new();
 
     // Parse add flags
@@ -3001,7 +3230,6 @@ fn validate_modifier_group(chars: &[char], start: usize, source: &str) -> Result
     }
 
     if j < len && chars[j] == '-' {
-        has_dash = true;
         j += 1;
         // Parse remove flags
         while j < len && chars[j] != ':' && chars[j] != ')' {
@@ -3048,14 +3276,6 @@ fn validate_modifier_group(chars: &[char], start: usize, source: &str) -> Result
                 source
             ));
         }
-    }
-
-    // If has dash but both sections can't be empty (already checked above for no dash case)
-    if has_dash && add_flags.is_empty() && remove_flags.is_empty() {
-        return Err(format!(
-            "Invalid regular expression: /{}/ : Invalid flags in modifier group",
-            source
-        ));
     }
 
     Ok(())
@@ -3490,16 +3710,16 @@ fn validate_v_flag_class_inner(
     err("Unterminated character class")
 }
 
-pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), String> {
-    let _unicode = _flags.contains('u') || _flags.contains('v');
-    let v_flag = _flags.contains('v');
+pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), String> {
+    let unicode = flags.contains('u') || flags.contains('v');
+    let v_flag = flags.contains('v');
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
     let mut i = 0;
     let mut has_atom = false;
 
     // Pre-count capturing groups for backreference validation in unicode mode
-    let total_capturing_groups = if _unicode {
+    let total_capturing_groups = if unicode {
         let mut count = 0u32;
         let mut j = 0;
         let mut in_class = false;
@@ -3572,7 +3792,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     let save_pos = i;
                     i += 1; // skip '<'
                     if i < len && chars[i] != '>' {
-                        match parse_regexp_group_name(&chars, i, source, _unicode) {
+                        match parse_regexp_group_name(&chars, i, source, unicode) {
                             Ok((name, new_i)) => {
                                 backref_names.push(name);
                                 i = new_i;
@@ -3602,24 +3822,24 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     i += 1;
                     if i < len && chars[i].is_ascii_hexdigit() {
                         i += 1;
-                    } else if _unicode {
+                    } else if unicode {
                         return Err(format!(
                             "Invalid regular expression: /{}/ : Invalid escape",
                             source
                         ));
                     }
-                } else if _unicode {
+                } else if unicode {
                     return Err(format!(
                         "Invalid regular expression: /{}/ : Invalid escape",
                         source
                     ));
                 }
             } else if after_escape == 'u' {
-                if i < len && chars[i] == '{' {
+                if unicode && i < len && chars[i] == '{' {
                     i += 1;
                     let hex_start = i;
                     while i < len && chars[i] != '}' {
-                        if _unicode && !chars[i].is_ascii_hexdigit() {
+                        if unicode && !chars[i].is_ascii_hexdigit() {
                             return Err(format!(
                                 "Invalid regular expression: /{}/ : Invalid Unicode escape",
                                 source
@@ -3628,14 +3848,14 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                         i += 1;
                     }
                     if i >= len {
-                        if _unicode {
+                        if unicode {
                             return Err(format!(
                                 "Invalid regular expression: /{}/ : Invalid Unicode escape",
                                 source
                             ));
                         }
                     } else {
-                        if _unicode {
+                        if unicode {
                             let hex_str: String = chars[hex_start..i].iter().collect();
                             if hex_str.is_empty() {
                                 return Err(format!(
@@ -3665,7 +3885,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                         i += 1;
                         count += 1;
                     }
-                    if _unicode && count < 4 {
+                    if unicode && count < 4 {
                         return Err(format!(
                             "Invalid regular expression: /{}/ : Invalid Unicode escape",
                             source
@@ -3675,7 +3895,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
             } else if after_escape == 'c' {
                 if i < len && chars[i].is_ascii_alphabetic() {
                     i += 1;
-                } else if _unicode {
+                } else if unicode {
                     return Err(format!(
                         "Invalid regular expression: /{}/ : Invalid escape",
                         source
@@ -3688,7 +3908,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     end += 1;
                 }
                 if end < len {
-                    if _unicode {
+                    if unicode {
                         let content: String = chars[start..end].iter().collect();
                         validate_unicode_property_escape(&content).map_err(|_| {
                             format!(
@@ -3725,7 +3945,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                 } else {
                     i = end;
                 }
-            } else if _unicode {
+            } else if unicode {
                 // In unicode mode, only specific escape sequences are valid.
                 // Backreferences \1-\9 are only valid if the referenced group exists.
                 if ('1'..='9').contains(&after_escape) {
@@ -3809,7 +4029,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                 let mut expecting_range_end = false;
 
                 while i < len && chars[i] != ']' {
-                    if _unicode && chars[i] == '\\' && i + 1 < len {
+                    if unicode && chars[i] == '\\' && i + 1 < len {
                         let esc_char = chars[i + 1];
                         if esc_char == 'x' {
                             if !(i + 3 < len
@@ -3936,7 +4156,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                             && i + 1 < len
                             && chars[i + 1] != ']'
                         {
-                            if _unicode && prev_is_class_escape {
+                            if unicode && prev_is_class_escape {
                                 return Err(format!(
                                     "Invalid regular expression: /{}/ : Invalid class escape in range",
                                     source
@@ -3965,22 +4185,29 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
 
                     if expecting_range_end {
                         expecting_range_end = false;
-                        if _unicode && is_class_esc {
+                        if unicode && is_class_esc {
                             return Err(format!(
                                 "Invalid regular expression: /{}/ : Invalid class escape in range",
                                 source
                             ));
                         }
-                        if let (Some(start_val), Some(end_val)) = (prev_value, val)
-                            && start_val > end_val
-                        {
-                            return Err(format!(
-                                "Invalid regular expression: /{}/ : Range out of order in character class",
-                                source
-                            ));
+                        if let (Some(start_val), Some(end_val)) = (prev_value, val) {
+                            if start_val > end_val {
+                                return Err(format!(
+                                    "Invalid regular expression: /{}/ : Range out of order in character class",
+                                    source
+                                ));
+                            }
+                            // Valid range: both endpoints are consumed, neither
+                            // is available as the start of a new range.
+                            prev_value = None;
+                            prev_is_class_escape = false;
+                        } else {
+                            // Degenerate range (class escape endpoint in non-unicode Annex B):
+                            // the end atom remains a standalone literal.
+                            prev_value = val;
+                            prev_is_class_escape = is_class_esc;
                         }
-                        prev_value = val;
-                        prev_is_class_escape = is_class_esc;
                         continue;
                     }
 
@@ -3993,7 +4220,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
 
                 if i < len {
                     i += 1; // skip ']'
-                } else if _unicode {
+                } else if unicode {
                     return Err(format!(
                         "Invalid regular expression: /{}/ : Unterminated character class",
                         source
@@ -4025,7 +4252,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                         '<' if i + 1 < len && chars[i + 1] != '=' && chars[i + 1] != '!' => {
                             i += 1; // skip '<'
                             let (name, new_i) =
-                                parse_regexp_group_name(&chars, i, source, _unicode)?;
+                                parse_regexp_group_name(&chars, i, source, unicode)?;
                             has_any_named_group = true;
                             let current_alt = if group_depth < alt_ids.len() {
                                 alt_ids[group_depth]
@@ -4058,7 +4285,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
         }
 
         if c == ')' {
-            if group_kind_stack.is_empty() && _unicode {
+            if group_kind_stack.is_empty() && unicode {
                 return Err(format!(
                     "Invalid regular expression: /{}/ : Unmatched ')'",
                     source
@@ -4071,7 +4298,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                 // Assertion group: check if next is a quantifier
                 // Lookbehinds (kind=2): always reject quantifiers
                 // Lookaheads (kind=1): reject in unicode mode only (Annex B allows in non-unicode)
-                let reject = kind == 2 || _unicode;
+                let reject = kind == 2 || unicode;
                 if reject {
                     if i < len {
                         let qc = chars[i];
@@ -4140,7 +4367,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                         j += 1;
                     }
                     if !is_quant {
-                        if _unicode {
+                        if unicode {
                             return Err(format!(
                                 "Invalid regular expression: /{}/ : Lone quantifier brackets",
                                 source
@@ -4174,7 +4401,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     j += 1;
                 }
                 if !found_close {
-                    if _unicode {
+                    if unicode {
                         return Err(format!(
                             "Invalid regular expression: /{}/ : Lone quantifier brackets",
                             source
@@ -4208,7 +4435,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
                     _ => false,
                 };
                 if !valid {
-                    if _unicode {
+                    if unicode {
                         return Err(format!(
                             "Invalid regular expression: /{}/ : Lone quantifier brackets",
                             source
@@ -4272,7 +4499,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
             continue;
         }
 
-        if _unicode && (c == '}' || c == ']') {
+        if unicode && (c == '}' || c == ']') {
             return Err(format!(
                 "Invalid regular expression: /{}/ : Lone quantifier brackets",
                 source
@@ -4304,7 +4531,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
     }
 
     // \k without < is an error if the pattern has named groups or is in unicode mode
-    if has_bare_k_escape && (_unicode || has_any_named_group) {
+    if has_bare_k_escape && (unicode || has_any_named_group) {
         return Err(format!(
             "Invalid regular expression: /{}/ : Invalid escape",
             source
@@ -4312,7 +4539,7 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
     }
 
     // \k<name without closing > is an error if pattern has named groups or in unicode mode
-    if has_incomplete_backref && (_unicode || has_any_named_group) {
+    if has_incomplete_backref && (unicode || has_any_named_group) {
         return Err(format!(
             "Invalid regular expression: /{}/ : Invalid named reference",
             source
@@ -4321,10 +4548,10 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
 
     // Check for dangling \k<name> backreferences
     if !backref_names.is_empty() {
-        let defined_names: std::collections::HashSet<&str> =
+        let defined_names: HashSet<&str> =
             named_groups.iter().map(|(n, _, _)| n.as_str()).collect();
         for bref in &backref_names {
-            if !defined_names.contains(bref.as_str()) && (_unicode || has_any_named_group) {
+            if !defined_names.contains(bref.as_str()) && (unicode || has_any_named_group) {
                 return Err(format!(
                     "Invalid regular expression: /{}/ : Invalid named reference",
                     source
@@ -4342,22 +4569,17 @@ pub(crate) fn validate_js_pattern(source: &str, _flags: &str) -> Result<(), Stri
     }
 
     // Validate property escapes by running translate_js_pattern
-    if _unicode {
-        translate_js_pattern(source, _flags)?;
+    if unicode {
+        translate_js_pattern(source, flags)?;
     }
 
     Ok(())
 }
 
-#[allow(dead_code)]
-fn build_fancy_regex(source: &str, flags: &str) -> Result<fancy_regex::Regex, String> {
-    let pattern = translate_js_pattern(source, flags)?;
-    fancy_regex::Regex::new(&pattern).map_err(|e| e.to_string())
-}
-
 enum CompiledRegex {
     Fancy(fancy_regex::Regex),
     Standard(regex::Regex),
+    Bytes(regex::bytes::Regex),
     FancyWithCustomLookbehind {
         outer_regex: fancy_regex::Regex,
         lookbehinds: Vec<super::regexp_lookbehind::LookbehindInfo>,
@@ -4391,7 +4613,7 @@ impl RegexCaptures {
     }
 }
 
-type DupGroupMap = std::collections::HashMap<String, Vec<(String, u32)>>;
+type DupGroupMap = HashMap<String, Vec<(String, u32)>>;
 
 fn clear_stale_dup_captures(caps: &mut RegexCaptures, dup_map: &DupGroupMap) {
     if dup_map.is_empty() {
@@ -4480,13 +4702,12 @@ fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
         let mut best_max_end: usize = 0;
         for (bi, branch) in branches.iter().enumerate() {
             for &ci in branch {
-                if ci < caps.groups.len() {
-                    if let Some(ref m) = caps.groups[ci] {
-                        if m.end > best_max_end {
-                            best_max_end = m.end;
-                            best_branch_idx = Some(bi);
-                        }
-                    }
+                if ci < caps.groups.len()
+                    && let Some(ref m) = caps.groups[ci]
+                    && m.end > best_max_end
+                {
+                    best_max_end = m.end;
+                    best_branch_idx = Some(bi);
                 }
             }
         }
@@ -4518,12 +4739,11 @@ fn reset_quantifier_inner_captures(caps: &mut RegexCaptures, source: &str) {
     // should be undefined. The regex crate reports these as Some("") matches
     // but ES spec requires undefined.
     for cap_idx in &self_quantified_min_zero {
-        if *cap_idx < caps.groups.len() {
-            if let Some(ref m) = caps.groups[*cap_idx] {
-                if m.start == m.end {
-                    caps.groups[*cap_idx] = None;
-                }
-            }
+        if *cap_idx < caps.groups.len()
+            && let Some(ref m) = caps.groups[*cap_idx]
+            && m.start == m.end
+        {
+            caps.groups[*cap_idx] = None;
         }
     }
 }
@@ -4769,26 +4989,20 @@ fn build_quantified_parent_map(
         let children = groups_info[group_idx].children.clone();
         for &child_idx in &children {
             if let Some(cap_idx) = groups_info[child_idx].capture_index {
-                let mut found_capturing_ancestor = false;
-                // Find nearest quantified ancestor with a capture index
                 for &anc in ancestor_stack.iter().rev() {
                     if groups_info[anc].is_quantified {
                         if let Some(anc_cap) = groups_info[anc].capture_index {
                             result.push((cap_idx, anc_cap));
-                            found_capturing_ancestor = true;
                             break;
                         }
-                        // Non-capturing quantified ancestor with min=0 and zero-width content
                         if groups_info[anc].quantifier_min_zero
                             && is_group_zero_width_only(chars, &groups_info[anc])
                         {
                             zero_width_clears.push(cap_idx);
-                            found_capturing_ancestor = true;
                             break;
                         }
                     }
                 }
-                let _ = found_capturing_ancestor;
             }
             ancestor_stack.push(child_idx);
             collect_pairs(
@@ -4826,10 +5040,11 @@ fn build_quantified_parent_map(
     // Collect self-quantified capturing groups with min=0.
     // e.g., (x)? or (x)* — the capturing group itself is quantified.
     for g in &groups_info {
-        if let Some(cap_idx) = g.capture_index {
-            if g.is_quantified && g.quantifier_min_zero {
-                self_quantified_min_zero.push(cap_idx);
-            }
+        if let Some(cap_idx) = g.capture_index
+            && g.is_quantified
+            && g.quantifier_min_zero
+        {
+            self_quantified_min_zero.push(cap_idx);
         }
     }
 
@@ -5307,7 +5522,7 @@ fn fix_assertion_only_quantified_groups(pattern: &str) -> String {
     }
 
     // For each non-capturing group followed by a quantifier, check if it's assertion-only
-    let mut insert_positions: std::collections::HashSet<usize> = std::collections::HashSet::new();
+    let mut insert_positions: HashSet<usize> = HashSet::default();
     for g in &groups {
         if !g.is_non_capturing {
             continue;
@@ -5353,7 +5568,7 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
                 let c2 = chars[i + 2];
                 if c2 == '=' || c2 == '!' {
                     // Lookahead (?= or (?! — find matching close
-                    if let Some(close) = find_matching_close(&chars[..len], i) {
+                    if let Some(close) = find_matching_close_paren(&chars[..len], i) {
                         i = close + 1;
                         continue;
                     }
@@ -5361,7 +5576,7 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
                 }
                 if c2 == '<' && i + 3 < len && (chars[i + 3] == '=' || chars[i + 3] == '!') {
                     // Lookbehind (?<= or (?<! — find matching close
-                    if let Some(close) = find_matching_close(&chars[..len], i) {
+                    if let Some(close) = find_matching_close_paren(&chars[..len], i) {
                         i = close + 1;
                         continue;
                     }
@@ -5369,7 +5584,7 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
                 }
                 // Non-capturing group (?:...) — check recursively
                 if c2 == ':'
-                    && let Some(close) = find_matching_close(&chars[..len], i)
+                    && let Some(close) = find_matching_close_paren(&chars[..len], i)
                 {
                     if !is_assertion_only_content(chars, i + 3, close) {
                         return false;
@@ -5400,31 +5615,6 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
         }
     }
     true
-}
-
-/// Find the closing ')' matching '(' at position `open`.
-fn find_matching_close(chars: &[char], open: usize) -> Option<usize> {
-    let mut depth = 0;
-    let mut i = open;
-    let len = chars.len();
-    while i < len {
-        match chars[i] {
-            '\\' if i + 1 < len => {
-                i += 2;
-                continue;
-            }
-            '(' => depth += 1,
-            ')' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some(i);
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    None
 }
 
 /// Per spec §22.2.2.6.1 step 2.b: when a nullable group body (one that can
@@ -5671,6 +5861,13 @@ fn build_regex_ex(
     let tr = translate_js_pattern_ex(&source, flags)?;
     let dup_map = tr.dup_group_map;
     let name_order = tr.group_name_order;
+
+    if tr.needs_bytes_mode {
+        return regex::bytes::Regex::new(&tr.pattern)
+            .map(|r| (CompiledRegex::Bytes(r), dup_map, name_order))
+            .map_err(|e| e.to_string());
+    }
+
     // Check if lookbehind needs custom RTL handling (has backrefs inside lookbehind)
     if lookbehind_needs_custom_rtl(&source)
         && let Some(result) =
@@ -5789,23 +5986,26 @@ fn extract_named_groups_from_content(content: &str) -> Vec<(usize, String)> {
     result
 }
 
+macro_rules! build_captures {
+    ($caps:expr, $names_iter:expr) => {{
+        let names: Vec<Option<String>> = $names_iter.map(|n| n.map(|s| s.to_string())).collect();
+        let mut groups = Vec::new();
+        for i in 0..$caps.len() {
+            groups.push($caps.get(i).map(|m| RegexMatch {
+                start: m.start(),
+                end: m.end(),
+                text: m.as_str().to_string(),
+            }));
+        }
+        Some(RegexCaptures { groups, names })
+    }};
+}
+
 fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<RegexCaptures> {
     match re {
         CompiledRegex::Fancy(r) => {
             let caps = r.captures_from_pos(text, pos).ok()??;
-            let names: Vec<Option<String>> = r
-                .capture_names()
-                .map(|n| n.map(|s| s.to_string()))
-                .collect();
-            let mut groups = Vec::new();
-            for i in 0..caps.len() {
-                groups.push(caps.get(i).map(|m| RegexMatch {
-                    start: m.start(),
-                    end: m.end(),
-                    text: m.as_str().to_string(),
-                }));
-            }
-            Some(RegexCaptures { groups, names })
+            build_captures!(caps, r.capture_names())
         }
         CompiledRegex::Standard(r) => {
             let caps = if pos == 0 {
@@ -5813,19 +6013,7 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
             } else {
                 r.captures_at(text, pos)?
             };
-            let names: Vec<Option<String>> = r
-                .capture_names()
-                .map(|n| n.map(|s| s.to_string()))
-                .collect();
-            let mut groups = Vec::new();
-            for i in 0..caps.len() {
-                groups.push(caps.get(i).map(|m| RegexMatch {
-                    start: m.start(),
-                    end: m.end(),
-                    text: m.as_str().to_string(),
-                }));
-            }
-            Some(RegexCaptures { groups, names })
+            build_captures!(caps, r.capture_names())
         }
         CompiledRegex::FancyWithCustomLookbehind {
             outer_regex,
@@ -5880,7 +6068,7 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
                     while names.len() <= global_idx {
                         names.push(None);
                     }
-                    names[global_idx] = Some(name);
+                    names[global_idx] = Some(sanitize_group_name(&name));
                 }
             }
 
@@ -5904,32 +6092,35 @@ fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<Regex
 
             Some(RegexCaptures { groups, names })
         }
+        CompiledRegex::Bytes(_) => {
+            unreachable!("Bytes regex should use bytes_regex_captures_at")
+        }
     }
 }
 
-#[allow(dead_code)]
-fn regex_is_match(re: &CompiledRegex, text: &str) -> bool {
-    match re {
-        CompiledRegex::Fancy(r) => r.is_match(text).unwrap_or(false),
-        CompiledRegex::Standard(r) => r.is_match(text),
-        CompiledRegex::FancyWithCustomLookbehind { .. } => regex_captures_at(re, text, 0).is_some(),
+fn bytes_regex_captures_at(
+    re: &regex::bytes::Regex,
+    input: &[u8],
+    pos: usize,
+) -> Option<RegexCaptures> {
+    let caps = if pos == 0 {
+        re.captures(input)?
+    } else {
+        re.captures_at(input, pos)?
+    };
+    let names: Vec<Option<String>> = re
+        .capture_names()
+        .map(|n| n.map(|s| s.to_string()))
+        .collect();
+    let mut groups = Vec::new();
+    for i in 0..caps.len() {
+        groups.push(caps.get(i).map(|m| RegexMatch {
+            start: m.start(),
+            end: m.end(),
+            text: wtf8_slice_to_pua_string(&input[m.start()..m.end()]),
+        }));
     }
-}
-
-#[allow(dead_code)]
-fn build_rust_regex(source: &str, flags: &str) -> Result<regex::Regex, String> {
-    let mut pattern = String::new();
-    if flags.contains('i') {
-        pattern.push_str("(?i)");
-    }
-    if flags.contains('s') {
-        pattern.push_str("(?s)");
-    }
-    if flags.contains('m') {
-        pattern.push_str("(?m)");
-    }
-    pattern.push_str(source);
-    regex::Regex::new(&pattern).map_err(|e| e.to_string())
+    Some(RegexCaptures { groups, names })
 }
 
 fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(String, String, u64)> {
@@ -5938,7 +6129,7 @@ fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(Str
     {
         let b = obj.borrow();
         let source = if let Some(ref s) = b.regexp_original_source {
-            s.to_rust_string()
+            js_string_to_regex_input(&s.code_units)
         } else {
             return None;
         };
@@ -5951,23 +6142,6 @@ fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(Str
         Some((source, flags, o.id))
     } else {
         None
-    }
-}
-
-#[allow(dead_code)]
-fn get_last_index(interp: &Interpreter, obj_id: u64) -> f64 {
-    if let Some(obj) = interp.get_object(obj_id) {
-        to_number(&obj.borrow().get_property("lastIndex"))
-    } else {
-        0.0
-    }
-}
-
-#[allow(dead_code)]
-fn set_last_index(interp: &Interpreter, obj_id: u64, val: f64) {
-    if let Some(obj) = interp.get_object(obj_id) {
-        obj.borrow_mut()
-            .insert_builtin("lastIndex".to_string(), JsValue::Number(val));
     }
 }
 
@@ -5997,7 +6171,7 @@ fn spec_set(
             }
         }
         // Check for setter accessor
-        let desc = obj.borrow().get_property_descriptor(key);
+        let desc = interp.get_property_descriptor_on_id(obj_id, key);
         if let Some(ref d) = desc
             && let Some(ref setter) = d.set
             && !matches!(setter, JsValue::Undefined)
@@ -6035,7 +6209,12 @@ fn set_last_index_strict(interp: &mut Interpreter, obj_id: u64, val: f64) -> Res
     spec_set(interp, obj_id, "lastIndex", JsValue::Number(val), true)
 }
 
-fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, s: &str) -> Completion {
+fn regexp_exec_abstract(
+    interp: &mut Interpreter,
+    rx_id: u64,
+    s: &str,
+    code_units: &[u16],
+) -> Completion {
     let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
     let exec_val = match interp.get_object_property(rx_id, "exec", &rx_val) {
         Completion::Normal(v) => v,
@@ -6045,7 +6224,9 @@ fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, s: &str) -> Comple
         let result = interp.call_function(
             &exec_val,
             &rx_val,
-            &[JsValue::String(regex_output_to_js_string(s))],
+            &[JsValue::String(JsString {
+                code_units: code_units.to_vec(),
+            })],
         );
         match result {
             Completion::Normal(ref v) => {
@@ -6074,7 +6255,7 @@ fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, s: &str) -> Comple
         let (source, flags) = if let Some(obj) = interp.get_object(rx_id) {
             let b = obj.borrow();
             let src = if let Some(ref s) = b.regexp_original_source {
-                s.to_rust_string()
+                js_string_to_regex_input(&s.code_units)
             } else {
                 String::new()
             };
@@ -6088,7 +6269,7 @@ fn regexp_exec_abstract(interp: &mut Interpreter, rx_id: u64, s: &str) -> Comple
         } else {
             return Completion::Normal(JsValue::Null);
         };
-        regexp_exec_raw(interp, rx_id, &source, &flags, s)
+        regexp_exec_raw(interp, rx_id, &source, &flags, s, code_units)
     }
 }
 
@@ -6099,18 +6280,18 @@ fn advance_string_index(s: &str, index: usize, unicode: bool) -> usize {
     if !unicode {
         return index + 1;
     }
-    let utf16_len: usize = s.chars().map(|c| c.len_utf16()).sum();
+    let utf16_len = pua_aware_utf16_len(s);
     if index + 1 >= utf16_len {
         return index + 1;
     }
-    // Find the character at the given UTF-16 index
     let byte_offset = utf16_to_byte_offset(s, index);
     if byte_offset >= s.len() {
         return index + 1;
     }
     let c = s[byte_offset..].chars().next().unwrap_or('\0');
-    // If the code point takes 2 UTF-16 code units (surrogate pair), advance by 2
-    if c.len_utf16() == 2 {
+    if pua_to_surrogate(c).is_some() {
+        index + 1
+    } else if c.len_utf16() == 2 {
         index + 2
     } else {
         index + 1
@@ -6122,11 +6303,12 @@ fn get_substitution(
     matched: &str,
     s: &str,
     position: usize,
+    tail_pos: usize,
     captures: &[JsValue],
     named_captures: &JsValue,
     replacement: &str,
 ) -> Result<String, JsValue> {
-    let tail_pos = position + matched.len();
+    let tail_pos = tail_pos.min(s.len());
     let mut result = String::new();
     let rchars: Vec<char> = replacement.chars().collect();
     let len = rchars.len();
@@ -6144,14 +6326,14 @@ fn get_substitution(
                     i += 2;
                 }
                 '`' => {
-                    if position > 0 && position <= s.len() {
-                        result.push_str(&s[..position]);
+                    if let Some(prefix) = s.get(..position) {
+                        result.push_str(prefix);
                     }
                     i += 2;
                 }
                 '\'' => {
-                    if tail_pos < s.len() {
-                        result.push_str(&s[tail_pos..]);
+                    if let Some(suffix) = s.get(tail_pos..) {
+                        result.push_str(suffix);
                     }
                     i += 2;
                 }
@@ -6254,27 +6436,55 @@ fn split_surrogates_for_non_unicode(input: &str) -> String {
     result
 }
 
+fn resolve_named_group_matches<'a>(
+    caps: &'a RegexCaptures,
+    dup_map: &DupGroupMap,
+    name_order: &[String],
+) -> Vec<(String, Option<&'a RegexMatch>)> {
+    name_order
+        .iter()
+        .map(|orig_name| {
+            let found = if let Some(variants) = dup_map.get(orig_name) {
+                variants.iter().find_map(|(internal_name, _)| {
+                    let sanitized = sanitize_group_name(internal_name);
+                    caps.names.iter().enumerate().find_map(|(i, name_opt)| {
+                        if name_opt.as_deref() == Some(&sanitized) {
+                            caps.get(i)
+                        } else {
+                            None
+                        }
+                    })
+                })
+            } else {
+                let sanitized = sanitize_group_name(orig_name);
+                caps.names
+                    .iter()
+                    .enumerate()
+                    .find_map(|(i, name_opt)| {
+                        if name_opt.as_deref() == Some(&sanitized) {
+                            Some(caps.get(i))
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten()
+            };
+            (orig_name.clone(), found)
+        })
+        .collect()
+}
+
 fn regexp_exec_raw(
     interp: &mut Interpreter,
     this_id: u64,
     source: &str,
     flags: &str,
     input: &str,
+    input_code_units: &[u16],
 ) -> Completion {
-    let global = flags.contains('g');
-    let sticky = flags.contains('y');
-    let has_indices = flags.contains('d');
-    let unicode = flags.contains('u') || flags.contains('v');
-
-    let non_unicode_input;
-    let input = if !unicode {
-        non_unicode_input = split_surrogates_for_non_unicode(input);
-        &non_unicode_input
-    } else {
-        input
-    };
-
     // Spec: Let lastIndex be ? ToLength(? Get(R, "lastIndex")).
+    // ToLength may trigger valueOf side effects that recompile the regexp,
+    // so we re-read source/flags from internal slots afterward.
     let this_val = JsValue::Object(crate::types::JsObject { id: this_id });
     let li_val = match interp.get_object_property(this_id, "lastIndex", &this_val) {
         Completion::Normal(v) => v,
@@ -6290,8 +6500,43 @@ fn regexp_exec_raw(
         li_num.min(9007199254740991.0).floor()
     };
 
+    // Re-read source/flags from internal slots (may have changed via compile() side effect)
+    let (source_owned, flags_owned) = {
+        if let Some(obj) = interp.get_object(this_id) {
+            let b = obj.borrow();
+            let src = b
+                .regexp_original_source
+                .as_ref()
+                .map(|s| js_string_to_regex_input(&s.code_units))
+                .unwrap_or_else(|| source.to_string());
+            let fl = b
+                .regexp_original_flags
+                .as_ref()
+                .map(|s| s.to_rust_string())
+                .unwrap_or_else(|| flags.to_string());
+            (src, fl)
+        } else {
+            (source.to_string(), flags.to_string())
+        }
+    };
+    let source = &source_owned;
+    let flags = &flags_owned;
+
+    let global = flags.contains('g');
+    let sticky = flags.contains('y');
+    let has_indices = flags.contains('d');
+    let unicode = flags.contains('u') || flags.contains('v');
+
+    let non_unicode_input;
+    let input = if !unicode {
+        non_unicode_input = split_surrogates_for_non_unicode(input);
+        &non_unicode_input
+    } else {
+        input
+    };
+
     // lastIndex is in UTF-16 code units; convert to byte offset for string slicing
-    let input_utf16_len: usize = input.chars().map(|c| c.len_utf16()).sum();
+    let input_utf16_len = pua_aware_utf16_len(input);
     let last_index_utf16 = if global || sticky {
         let li_int = li_length as i64;
         if li_int < 0 || li_int as usize > input_utf16_len {
@@ -6304,22 +6549,50 @@ fn regexp_exec_raw(
     } else {
         0
     };
-    let last_index_byte = utf16_to_byte_offset(input, last_index_utf16);
-
     let (re, dup_map, name_order) = match build_regex_ex(source, flags) {
         Ok(r) => r,
         Err(_) => return Completion::Normal(JsValue::Null),
     };
 
-    let mut caps = match regex_captures_at(&re, input, last_index_byte) {
-        Some(c) => c,
-        None => {
-            if (global || sticky)
-                && let Err(e) = set_last_index_strict(interp, this_id, 0.0)
-            {
-                return Completion::Throw(e);
+    let is_bytes_mode = matches!(re, CompiledRegex::Bytes(_));
+    let wtf8_bytes = if is_bytes_mode {
+        js_code_units_to_wtf8(input_code_units)
+    } else {
+        Vec::new()
+    };
+    let last_index_byte = if is_bytes_mode {
+        utf16_to_wtf8_byte_offset(&wtf8_bytes, last_index_utf16)
+    } else {
+        utf16_to_byte_offset(input, last_index_utf16)
+    };
+
+    let mut caps = if is_bytes_mode {
+        if let CompiledRegex::Bytes(ref bytes_re) = re {
+            match bytes_regex_captures_at(bytes_re, &wtf8_bytes, last_index_byte) {
+                Some(c) => c,
+                None => {
+                    if (global || sticky)
+                        && let Err(e) = set_last_index_strict(interp, this_id, 0.0)
+                    {
+                        return Completion::Throw(e);
+                    }
+                    return Completion::Normal(JsValue::Null);
+                }
             }
-            return Completion::Normal(JsValue::Null);
+        } else {
+            unreachable!()
+        }
+    } else {
+        match regex_captures_at(&re, input, last_index_byte) {
+            Some(c) => c,
+            None => {
+                if (global || sticky)
+                    && let Err(e) = set_last_index_strict(interp, this_id, 0.0)
+                {
+                    return Completion::Throw(e);
+                }
+                return Completion::Normal(JsValue::Null);
+            }
         }
     };
 
@@ -6329,8 +6602,16 @@ fn regexp_exec_raw(
 
     let full_match = caps.get(0).unwrap();
     // Convert absolute byte offsets to UTF-16 code unit offsets
-    let match_start_utf16 = byte_offset_to_utf16(input, full_match.start);
-    let match_end_utf16 = byte_offset_to_utf16(input, full_match.end);
+    let match_start_utf16 = if is_bytes_mode {
+        wtf8_byte_offset_to_utf16(&wtf8_bytes, full_match.start)
+    } else {
+        byte_offset_to_utf16(input, full_match.start)
+    };
+    let match_end_utf16 = if is_bytes_mode {
+        wtf8_byte_offset_to_utf16(&wtf8_bytes, full_match.end)
+    } else {
+        byte_offset_to_utf16(input, full_match.end)
+    };
 
     if sticky && full_match.start != last_index_byte {
         if let Err(e) = set_last_index_strict(interp, this_id, 0.0) {
@@ -6349,8 +6630,16 @@ fn regexp_exec_raw(
     {
         interp.regexp_legacy_input = input.to_string();
         interp.regexp_legacy_last_match = full_match.text.clone();
-        interp.regexp_legacy_left_context = input[..full_match.start].to_string();
-        interp.regexp_legacy_right_context = input[full_match.end..].to_string();
+        interp.regexp_legacy_left_context = if is_bytes_mode {
+            wtf8_slice_to_pua_string(&wtf8_bytes[..full_match.start])
+        } else {
+            input[..full_match.start].to_string()
+        };
+        interp.regexp_legacy_right_context = if is_bytes_mode {
+            wtf8_slice_to_pua_string(&wtf8_bytes[full_match.end..])
+        } else {
+            input[full_match.end..].to_string()
+        };
         let mut last_paren = String::new();
         for idx in (1..caps.len()).rev() {
             if let Some(m) = caps.get(idx) {
@@ -6375,49 +6664,20 @@ fn regexp_exec_raw(
     }
 
     let has_named = caps.names.iter().any(|n| n.is_some());
-    let groups_val = if has_named {
+    let resolved_named = if has_named {
+        Some(resolve_named_group_matches(&caps, &dup_map, &name_order))
+    } else {
+        None
+    };
+    let groups_val = if let Some(ref resolved) = resolved_named {
         let groups_obj = interp.create_object();
-        groups_obj.borrow_mut().prototype = None;
-        // Insert properties in source order using name_order
-        for orig_name in &name_order {
-            if let Some(variants) = dup_map.get(orig_name) {
-                // Duplicate named group: find which variant matched
-                let mut matched_val = JsValue::Undefined;
-                for (internal_name, _) in variants {
-                    let sanitized = sanitize_group_name(internal_name);
-                    for (i, name_opt) in caps.names.iter().enumerate() {
-                        if let Some(n) = name_opt
-                            && *n == sanitized
-                            && let Some(m) = caps.get(i)
-                        {
-                            matched_val = JsValue::String(regex_output_to_js_string(&m.text));
-                            break;
-                        }
-                    }
-                    if !matches!(matched_val, JsValue::Undefined) {
-                        break;
-                    }
-                }
-                groups_obj
-                    .borrow_mut()
-                    .insert_value(orig_name.clone(), matched_val);
-            } else {
-                // Non-duplicate: find by sanitized name match in caps.names
-                let sanitized = sanitize_group_name(orig_name);
-                let mut val = JsValue::Undefined;
-                for (i, name_opt) in caps.names.iter().enumerate() {
-                    if let Some(n) = name_opt
-                        && *n == sanitized
-                    {
-                        val = match caps.get(i) {
-                            Some(m) => JsValue::String(regex_output_to_js_string(&m.text)),
-                            None => JsValue::Undefined,
-                        };
-                        break;
-                    }
-                }
-                groups_obj.borrow_mut().insert_value(orig_name.clone(), val);
-            }
+        groups_obj.borrow_mut().prototype_id = None;
+        for (name, m) in resolved {
+            let val = match m {
+                Some(m) => JsValue::String(regex_output_to_js_string(&m.text)),
+                None => JsValue::Undefined,
+            };
+            groups_obj.borrow_mut().insert_value(name.clone(), val);
         }
         let id = groups_obj.borrow().id.unwrap();
         JsValue::Object(crate::types::JsObject { id })
@@ -6441,12 +6701,19 @@ fn regexp_exec_raw(
             .insert_value("groups".to_string(), groups_val.clone());
 
         if has_indices {
+            let cap_byte_to_utf16 = |offset: usize| -> usize {
+                if is_bytes_mode {
+                    wtf8_byte_offset_to_utf16(&wtf8_bytes, offset)
+                } else {
+                    byte_offset_to_utf16(input, offset)
+                }
+            };
             let mut index_pairs: Vec<JsValue> = Vec::new();
             for i in 0..caps.len() {
                 match caps.get(i) {
                     Some(m) => {
-                        let cap_start = byte_offset_to_utf16(input, m.start);
-                        let cap_end = byte_offset_to_utf16(input, m.end);
+                        let cap_start = cap_byte_to_utf16(m.start);
+                        let cap_end = cap_byte_to_utf16(m.end);
                         let pair = interp.create_array(vec![
                             JsValue::Number(cap_start as f64),
                             JsValue::Number(cap_end as f64),
@@ -6457,58 +6724,22 @@ fn regexp_exec_raw(
                 }
             }
             let indices_arr = interp.create_array(index_pairs);
-            if has_named {
+            if let Some(ref resolved) = resolved_named {
                 let idx_groups = interp.create_object();
-                idx_groups.borrow_mut().prototype = None;
-                for orig_name in &name_order {
-                    if let Some(variants) = dup_map.get(orig_name) {
-                        let mut matched_val = JsValue::Undefined;
-                        for (internal_name, _) in variants {
-                            let sanitized = sanitize_group_name(internal_name);
-                            for (i, name_opt) in caps.names.iter().enumerate() {
-                                if let Some(n) = name_opt
-                                    && *n == sanitized
-                                    && let Some(m) = caps.get(i)
-                                {
-                                    let cap_start = byte_offset_to_utf16(input, m.start);
-                                    let cap_end = byte_offset_to_utf16(input, m.end);
-                                    matched_val = interp.create_array(vec![
-                                        JsValue::Number(cap_start as f64),
-                                        JsValue::Number(cap_end as f64),
-                                    ]);
-                                    break;
-                                }
-                            }
-                            if !matches!(matched_val, JsValue::Undefined) {
-                                break;
-                            }
+                idx_groups.borrow_mut().prototype_id = None;
+                for (name, m) in resolved {
+                    let val = match m {
+                        Some(m) => {
+                            let cap_start = cap_byte_to_utf16(m.start);
+                            let cap_end = cap_byte_to_utf16(m.end);
+                            interp.create_array(vec![
+                                JsValue::Number(cap_start as f64),
+                                JsValue::Number(cap_end as f64),
+                            ])
                         }
-                        idx_groups
-                            .borrow_mut()
-                            .insert_value(orig_name.clone(), matched_val);
-                    } else {
-                        let sanitized = sanitize_group_name(orig_name);
-                        let mut val = JsValue::Undefined;
-                        for (i, name_opt) in caps.names.iter().enumerate() {
-                            if let Some(n) = name_opt
-                                && *n == sanitized
-                            {
-                                val = match caps.get(i) {
-                                    Some(m) => {
-                                        let cap_start = byte_offset_to_utf16(input, m.start);
-                                        let cap_end = byte_offset_to_utf16(input, m.end);
-                                        interp.create_array(vec![
-                                            JsValue::Number(cap_start as f64),
-                                            JsValue::Number(cap_end as f64),
-                                        ])
-                                    }
-                                    None => JsValue::Undefined,
-                                };
-                                break;
-                            }
-                        }
-                        idx_groups.borrow_mut().insert_value(orig_name.clone(), val);
-                    }
+                        None => JsValue::Undefined,
+                    };
+                    idx_groups.borrow_mut().insert_value(name.clone(), val);
                 }
                 let idx_groups_id = idx_groups.borrow().id.unwrap();
                 if let JsValue::Object(ref io) = indices_arr
@@ -6540,10 +6771,7 @@ fn get_symbol_key(interp: &Interpreter, name: &str) -> Option<String> {
         .get("Symbol")
         .and_then(|sv| {
             if let JsValue::Object(so) = sv {
-                interp.get_object(so.id).map(|sobj| {
-                    let val = sobj.borrow().get_property(name);
-                    to_js_string(&val)
-                })
+                Some(to_js_string(&interp.get_property_on_id(so.id, name)))
             } else {
                 None
             }
@@ -6575,12 +6803,12 @@ impl Interpreter {
                     ));
                 }
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let input = match to_regex_input(interp, &arg) {
-                    Ok(s) => s,
+                let (input, code_units) = match to_regex_input_with_units(interp, &arg) {
+                    Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
                 if let Some((source, flags, obj_id)) = extract_source_flags(interp, this_val) {
-                    return regexp_exec_raw(interp, obj_id, &source, &flags, &input);
+                    return regexp_exec_raw(interp, obj_id, &source, &flags, &input, &code_units);
                 }
                 Completion::Normal(JsValue::Null)
             },
@@ -6603,11 +6831,11 @@ impl Interpreter {
                     }
                 };
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let input = match to_regex_input(interp, &arg) {
-                    Ok(s) => s,
+                let (input, input_cu) = match to_regex_input_with_units(interp, &arg) {
+                    Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
-                let result = regexp_exec_abstract(interp, obj_id, &input);
+                let result = regexp_exec_abstract(interp, obj_id, &input, &input_cu);
                 match result {
                     Completion::Normal(v) => {
                         Completion::Normal(JsValue::Boolean(!matches!(v, JsValue::Null)))
@@ -6684,12 +6912,7 @@ impl Interpreter {
                         ));
                     }
                     // B.2.5.1 step 3: throw TypeError for subclass instances
-                    let proto_matches = obj
-                        .borrow()
-                        .prototype
-                        .as_ref()
-                        .map(|p| p.borrow().id == Some(compile_proto_id))
-                        .unwrap_or(false);
+                    let proto_matches = obj.borrow().prototype_id == Some(compile_proto_id);
                     if !proto_matches {
                         return Completion::Throw(interp.create_type_error(
                             "RegExp.prototype.compile cannot be used on RegExp subclass instances",
@@ -6705,6 +6928,7 @@ impl Interpreter {
                 let flags_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
                 let (pattern_str, flags_str);
+                let pattern_js: Option<JsString>;
 
                 // 3. If pattern is a RegExp object
                 let pattern_is_regexp = if let JsValue::Object(po) = &pattern_arg {
@@ -6733,10 +6957,11 @@ impl Interpreter {
                     if let Some(pobj) = interp.get_object(po_id) {
                         let b = pobj.borrow();
                         pattern_str = if let Some(ref s) = b.regexp_original_source {
-                            s.to_rust_string()
+                            js_string_to_regex_input(&s.code_units)
                         } else {
                             "(?:)".to_string()
                         };
+                        pattern_js = b.regexp_original_source.clone();
                         flags_str = if let Some(ref s) = b.regexp_original_flags {
                             s.to_rust_string()
                         } else {
@@ -6744,18 +6969,21 @@ impl Interpreter {
                         };
                     } else {
                         pattern_str = "(?:)".to_string();
+                        pattern_js = None;
                         flags_str = String::new();
                     }
                 } else {
                     // 4. Let P be pattern, let F be flags.
-                    pattern_str = if matches!(pattern_arg, JsValue::Undefined) {
-                        String::new()
+                    let p_js = if matches!(pattern_arg, JsValue::Undefined) {
+                        JsString::from_str("")
                     } else {
-                        match interp.to_string_value(&pattern_arg) {
+                        match interp.to_js_string(&pattern_arg) {
                             Ok(s) => s,
                             Err(e) => return Completion::Throw(e),
                         }
                     };
+                    pattern_str = js_string_to_regex_input(&p_js.code_units);
+                    pattern_js = Some(p_js);
                     flags_str = if matches!(flags_arg, JsValue::Undefined) {
                         String::new()
                     } else {
@@ -6768,7 +6996,7 @@ impl Interpreter {
 
                 // Validate flags: no invalid chars and no duplicates
                 {
-                    let mut seen = std::collections::HashSet::new();
+                    let mut seen = HashSet::default();
                     for c in flags_str.chars() {
                         if !matches!(c, 'g' | 'i' | 'm' | 's' | 'u' | 'v' | 'y' | 'd') {
                             return Completion::Throw(interp.create_error(
@@ -6795,16 +7023,15 @@ impl Interpreter {
                     return Completion::Throw(interp.create_error("SyntaxError", &msg));
                 }
 
-                let source_str = if pattern_str.is_empty() {
-                    "(?:)".to_string()
-                } else {
-                    pattern_str
+                let source_js = match pattern_js {
+                    Some(js) if !js.code_units.is_empty() => js,
+                    _ => JsString::from_str("(?:)"),
                 };
 
                 // 5. Return ? RegExpInitialize(O, P, F).
                 if let Some(obj) = interp.get_object(obj_id) {
                     let mut b = obj.borrow_mut();
-                    b.regexp_original_source = Some(JsString::from_str(&source_str));
+                    b.regexp_original_source = Some(source_js);
                     b.regexp_original_flags = Some(JsString::from_str(&flags_str));
                 }
                 // Set lastIndex to 0 with strict mode (throws TypeError if non-writable)
@@ -6833,8 +7060,8 @@ impl Interpreter {
                     }
                 };
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let s = match to_regex_input(interp, &arg) {
-                    Ok(s) => s,
+                let (s, s_cu) = match to_regex_input_with_units(interp, &arg) {
+                    Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
 
@@ -6852,7 +7079,7 @@ impl Interpreter {
                 // 5. If flags does not contain "g", then
                 if !flags_str.contains('g') {
                     // a. Return ? RegExpExec(rx, S).
-                    return regexp_exec_abstract(interp, rx_id, &s);
+                    return regexp_exec_abstract(interp, rx_id, &s, &s_cu);
                 }
 
                 // 6. Let fullUnicode be flags contains "u" or "v".
@@ -6865,7 +7092,7 @@ impl Interpreter {
 
                 let mut results: Vec<JsValue> = Vec::new();
                 loop {
-                    let result = regexp_exec_abstract(interp, rx_id, &s);
+                    let result = regexp_exec_abstract(interp, rx_id, &s, &s_cu);
                     match result {
                         Completion::Normal(JsValue::Null) => break,
                         Completion::Normal(ref result_val)
@@ -6946,8 +7173,8 @@ impl Interpreter {
                     }
                 };
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let s = match to_regex_input(interp, &arg) {
-                    Ok(s) => s,
+                let (s, s_cu) = match to_regex_input_with_units(interp, &arg) {
+                    Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
                 let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
@@ -6968,7 +7195,7 @@ impl Interpreter {
                 }
 
                 // 6. Let result be ? RegExpExec(rx, S).
-                let result = regexp_exec_abstract(interp, rx_id, &s);
+                let result = regexp_exec_abstract(interp, rx_id, &s, &s_cu);
                 let result_val = match result {
                     Completion::Normal(v) => v,
                     other => return other,
@@ -7030,8 +7257,8 @@ impl Interpreter {
 
                 // 3. Let S be ? ToString(string).
                 let string_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let s = match to_regex_input(interp, &string_arg) {
-                    Ok(s) => s,
+                let (s, s_cu) = match to_regex_input_with_units(interp, &string_arg) {
+                    Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
                 // Non-unicode version for string slicing (surrogates kept as
@@ -7041,6 +7268,7 @@ impl Interpreter {
                     _ => s.clone(),
                 };
                 let length_s = s_slice.len();
+                let s_utf16_len = pua_aware_utf16_len(&s_slice);
 
                 // 5. Let functionalReplace be IsCallable(replaceValue).
                 let replace_value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -7087,7 +7315,7 @@ impl Interpreter {
                 let gc_root_start = interp.gc_temp_roots.len();
                 loop {
                     // 11a. Let result be ? RegExpExec(rx, S).
-                    let result = regexp_exec_abstract(interp, rx_id, &s);
+                    let result = regexp_exec_abstract(interp, rx_id, &s, &s_cu);
                     match result {
                         Completion::Normal(JsValue::Null) => break,
                         Completion::Normal(ref result_val)
@@ -7221,12 +7449,10 @@ impl Interpreter {
                             return Completion::Throw(e);
                         }
                     };
-                    // Get match_length in byte offsets within the non-unicode PUA-mapped string
-                    let match_length = match &matched_val {
-                        JsValue::String(js) => {
-                            js_string_to_regex_input_non_unicode(&js.code_units).len()
-                        }
-                        _ => matched.len(),
+                    // Compute matchLength in UTF-16 code units for tail_pos calculation
+                    let match_length_utf16 = match &matched_val {
+                        JsValue::String(js) => js.code_units.len(),
+                        _ => matched.encode_utf16().count(),
                     };
 
                     // e. Let position be ? ToIntegerOrInfinity(? Get(result, "index")).
@@ -7339,11 +7565,16 @@ impl Interpreter {
                         } else {
                             JsValue::Undefined
                         };
+                        let tail_pos = utf16_to_byte_offset(
+                            &s_slice,
+                            (position_utf16 + match_length_utf16).min(s_utf16_len),
+                        );
                         match get_substitution(
                             interp,
                             &matched,
                             &s_slice,
                             position,
+                            tail_pos,
                             &captures,
                             &named_captures_obj,
                             template,
@@ -7357,10 +7588,14 @@ impl Interpreter {
                     };
 
                     // p. If position >= nextSourcePosition, then
+                    let tail_pos_final = utf16_to_byte_offset(
+                        &s_slice,
+                        (position_utf16 + match_length_utf16).min(s_utf16_len),
+                    );
                     if position >= next_source_position {
                         accumulated_result.push_str(&s_slice[next_source_position..position]);
                         accumulated_result.push_str(&replacement);
-                        next_source_position = position + match_length;
+                        next_source_position = tail_pos_final;
                     }
                 }
 
@@ -7397,8 +7632,8 @@ impl Interpreter {
                 };
                 // 2. Let S be ? ToString(string).
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let s = match to_regex_input(interp, &arg) {
-                    Ok(s) => s,
+                let (s, s_cu) = match to_regex_input_with_units(interp, &arg) {
+                    Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
 
@@ -7476,16 +7711,15 @@ impl Interpreter {
                     return Completion::Normal(interp.create_array(a));
                 }
 
-                // Use UTF-16 code unit length for spec positions
-                let size: usize = s.chars().map(|c| c.len_utf16()).sum();
+                let size = pua_aware_utf16_len(&s);
 
                 // 12. If size = 0, then
                 if size == 0 {
                     // a. Let z be ? RegExpExec(splitter, S).
-                    let z = regexp_exec_abstract(interp, splitter_id, &s);
+                    let z = regexp_exec_abstract(interp, splitter_id, &s, &s_cu);
                     match z {
                         Completion::Normal(ref v) if matches!(v, JsValue::Null) => {
-                            a.push(JsValue::String(JsString::from_str(&s)));
+                            a.push(JsValue::String(regex_output_to_js_string(&s)));
                         }
                         Completion::Normal(_) => {}
                         other => return other,
@@ -7512,7 +7746,7 @@ impl Interpreter {
                     }
 
                     // b. Let z be ? RegExpExec(splitter, S).
-                    let z = regexp_exec_abstract(interp, splitter_id, &s);
+                    let z = regexp_exec_abstract(interp, splitter_id, &s, &s_cu);
                     let z_val = match z {
                         Completion::Normal(v) => v,
                         other => return other,
@@ -7611,7 +7845,7 @@ impl Interpreter {
                 // 16. Push remaining substring
                 let p_byte = utf16_to_byte_offset(&s, p);
                 let t = &s[p_byte..];
-                a.push(JsValue::String(JsString::from_str(t)));
+                a.push(JsValue::String(regex_output_to_js_string(t)));
                 Completion::Normal(interp.create_array(a))
             },
         ));
@@ -7637,8 +7871,8 @@ impl Interpreter {
                 };
                 // 2. Let S be ? ToString(string).
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let s = match to_regex_input(interp, &arg) {
-                    Ok(s) => s,
+                let (s, _s_cu) = match to_regex_input_with_units(interp, &arg) {
+                    Ok(r) => r,
                     Err(e) => return Completion::Throw(e),
                 };
 
@@ -7726,8 +7960,9 @@ impl Interpreter {
                 // Create iterator with %RegExpStringIteratorPrototype%
                 let iter_obj = interp.create_object();
                 iter_obj.borrow_mut().class_name = "RegExp String Iterator".to_string();
-                if let Some(ref rsi_proto) = interp.realm().regexp_string_iterator_prototype {
-                    iter_obj.borrow_mut().prototype = Some(rsi_proto.clone());
+                if let Some(rsi_proto_id) = interp.realm().regexp_string_iterator_prototype {
+                    iter_obj.borrow_mut().prototype_id =
+                        Some(interp.get_object_expect(rsi_proto_id).borrow().id.unwrap());
                 }
 
                 // Store matcher ID for spec-compliant RegExpExec
@@ -7763,8 +7998,9 @@ impl Interpreter {
         // Setup %RegExpStringIteratorPrototype% (§22.2.9.2)
         let rsi_proto = self.create_object();
         rsi_proto.borrow_mut().class_name = "RegExp String Iterator".to_string();
-        if let Some(ref ip) = self.realm().iterator_prototype {
-            rsi_proto.borrow_mut().prototype = Some(ip.clone());
+        if let Some(ip_id) = self.realm().iterator_prototype {
+            rsi_proto.borrow_mut().prototype_id =
+                Some(self.get_object_expect(ip_id).borrow().id.unwrap());
         }
 
         // %RegExpStringIteratorPrototype%.next
@@ -7789,8 +8025,8 @@ impl Interpreter {
                     }
                 };
                 let state = obj.borrow().iterator_state.clone();
-                let matcher_id_val = obj.borrow().get_property("__matcher__");
-                let full_unicode_val = obj.borrow().get_property("__full_unicode__");
+                let matcher_id_val = interp.get_property_on_id(o.id, "__matcher__");
+                let full_unicode_val = interp.get_property_on_id(o.id, "__full_unicode__");
                 let full_unicode = matches!(full_unicode_val, JsValue::Boolean(true));
 
                 let (source, flags, string, global, last_index, done) =
@@ -7826,7 +8062,8 @@ impl Interpreter {
                 // If we have a matcher object, use RegExpExec
                 if let JsValue::Number(mid) = matcher_id_val {
                     let mid = mid as u64;
-                    let result = regexp_exec_abstract(interp, mid, &string);
+                    let string_cu = regex_output_to_js_string(&string).code_units;
+                    let result = regexp_exec_abstract(interp, mid, &string, &string_cu);
                     let result_val = match result {
                         Completion::Normal(v) => v,
                         other => return other,
@@ -8041,7 +8278,7 @@ impl Interpreter {
             );
         }
 
-        self.realm_mut().regexp_string_iterator_prototype = Some(rsi_proto);
+        self.realm_mut().regexp_string_iterator_prototype = Some(rsi_proto.borrow().id.unwrap());
 
         // RegExp.prototype.flags getter (§22.2.5.3)
         let flags_getter = self.create_function(JsFunction::native(
@@ -8218,7 +8455,7 @@ impl Interpreter {
             },
         );
 
-        let regexp_proto_rc = regexp_proto.clone();
+        let regexp_proto_rc_id = regexp_proto.borrow().id.unwrap();
 
         // RegExp constructor
         let regexp_ctor = self.create_function(JsFunction::constructor(
@@ -8280,8 +8517,9 @@ impl Interpreter {
                     }
                 }
 
-                // Handle RegExp/RegExp-like argument: extract source/flags
-                // §22.2.3.1 step 3a: If pattern has [[RegExpMatcher]], use internal slots
+                // §22.2.3.1 steps 3-4: Extract P and F from arguments.
+                // Source is extracted fully (freezing it before prototype lookup),
+                // but flags ToString is deferred until after RegExpAlloc (step 5).
                 let has_regexp_matcher = if let JsValue::Object(ref o) = pattern_arg {
                     interp
                         .get_object(o.id)
@@ -8289,80 +8527,90 @@ impl Interpreter {
                 } else {
                     false
                 };
-                let (pattern_str, flags_str) =
+
+                // Phase 1: Extract source and raw flags value
+                enum RawFlags {
+                    Resolved(String),
+                    NeedsToString(JsValue),
+                }
+                let (pattern_js, pattern_str, raw_flags) =
                     if has_regexp_matcher && let JsValue::Object(ref o) = pattern_arg {
-                        // Use [[OriginalSource]] and [[OriginalFlags]] directly
-                        let src = interp
+                        let src_js = interp
                             .get_object(o.id)
-                            .and_then(|obj| {
-                                obj.borrow()
-                                    .regexp_original_source
-                                    .as_ref()
-                                    .map(|s| s.to_string())
-                            })
-                            .unwrap_or_default();
+                            .and_then(|obj| obj.borrow().regexp_original_source.clone())
+                            .unwrap_or_else(|| JsString::from_str(""));
+                        let src = js_string_to_regex_input(&src_js.code_units);
                         let flg = if matches!(flags_arg, JsValue::Undefined) {
-                            interp
-                                .get_object(o.id)
-                                .and_then(|obj| {
-                                    obj.borrow()
-                                        .regexp_original_flags
-                                        .as_ref()
-                                        .map(|s| s.to_string())
-                                })
-                                .unwrap_or_default()
+                            RawFlags::Resolved(
+                                interp
+                                    .get_object(o.id)
+                                    .and_then(|obj| {
+                                        obj.borrow()
+                                            .regexp_original_flags
+                                            .as_ref()
+                                            .map(|s| s.to_string())
+                                    })
+                                    .unwrap_or_default(),
+                            )
                         } else {
-                            match interp.to_string_value(&flags_arg) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            }
+                            RawFlags::NeedsToString(flags_arg.clone())
                         };
-                        (src, flg)
+                        (src_js, src, flg)
                     } else if is_regexp_obj && let JsValue::Object(ref o) = pattern_arg {
-                        // RegExp-like (no [[RegExpMatcher]]): use Get()
                         let src = match interp.get_object_property(o.id, "source", &pattern_arg) {
-                            Completion::Normal(v) => match interp.to_string_value(&v) {
+                            Completion::Normal(v) => match interp.to_js_string(&v) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             },
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => String::new(),
+                            _ => JsString::from_str(""),
                         };
+                        let src_str = js_string_to_regex_input(&src.code_units);
                         let flg = if matches!(flags_arg, JsValue::Undefined) {
-                            match interp.get_object_property(o.id, "flags", &pattern_arg) {
-                                Completion::Normal(v) => match interp.to_string_value(&v) {
-                                    Ok(s) => s,
-                                    Err(e) => return Completion::Throw(e),
-                                },
+                            let f = match interp.get_object_property(o.id, "flags", &pattern_arg) {
+                                Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
-                                _ => String::new(),
-                            }
+                                _ => JsValue::Undefined,
+                            };
+                            RawFlags::NeedsToString(f)
                         } else {
-                            match interp.to_string_value(&flags_arg) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            }
+                            RawFlags::NeedsToString(flags_arg.clone())
                         };
-                        (src, flg)
+                        (src, src_str, flg)
                     } else {
-                        let p = if matches!(pattern_arg, JsValue::Undefined) {
-                            String::new()
+                        let p_js = if matches!(pattern_arg, JsValue::Undefined) {
+                            JsString::from_str("")
                         } else {
-                            match interp.to_string_value(&pattern_arg) {
+                            match interp.to_js_string(&pattern_arg) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             }
                         };
-                        let f = if matches!(flags_arg, JsValue::Undefined) {
-                            String::new()
+                        let p_str = js_string_to_regex_input(&p_js.code_units);
+                        let flg = if matches!(flags_arg, JsValue::Undefined) {
+                            RawFlags::Resolved(String::new())
                         } else {
-                            match interp.to_string_value(&flags_arg) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            }
+                            RawFlags::NeedsToString(flags_arg.clone())
                         };
-                        (p, f)
+                        (p_js, p_str, flg)
                     };
+
+                // §22.2.3.1 step 5: RegExpAlloc — get prototype from new target
+                let proto = match interp
+                    .get_prototype_from_new_target_realm(|realm| realm.regexp_prototype)
+                {
+                    Ok(p) => p,
+                    Err(e) => return Completion::Throw(e),
+                };
+
+                // Phase 2: Now ToString flags (after prototype lookup)
+                let flags_str = match raw_flags {
+                    RawFlags::Resolved(s) => s,
+                    RawFlags::NeedsToString(v) => match interp.to_string_value(&v) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    },
+                };
 
                 // Validate flags: only dgimsuy allowed, no duplicates
                 let valid_flags = "dgimsuyv";
@@ -8374,7 +8622,7 @@ impl Interpreter {
                         ));
                     }
                 }
-                let mut seen = std::collections::HashSet::new();
+                let mut seen = HashSet::default();
                 for c in flags_str.chars() {
                     if !seen.insert(c) {
                         return Completion::Throw(interp.create_error(
@@ -8398,30 +8646,23 @@ impl Interpreter {
                 }
 
                 // Empty source → "(?:)" per spec
-                let source_str = if pattern_str.is_empty() {
-                    "(?:)".to_string()
+                let source_js = if pattern_js.code_units.is_empty() {
+                    JsString::from_str("(?:)")
                 } else {
-                    pattern_str.clone()
+                    pattern_js
                 };
 
-                let proto = match interp
-                    .get_prototype_from_new_target_realm(|realm| realm.regexp_prototype.clone())
-                {
-                    Ok(p) => p,
-                    Err(e) => return Completion::Throw(e),
-                };
                 let mut obj = JsObjectData::new();
-                obj.prototype = proto.or(Some(regexp_proto_rc.clone()));
+                obj.prototype_id = proto.or(Some(regexp_proto_rc_id));
                 obj.class_name = "RegExp".to_string();
                 // Store internal slots as non-enumerable hidden properties
-                obj.regexp_original_source = Some(JsString::from_str(&source_str));
+                obj.regexp_original_source = Some(source_js);
                 obj.regexp_original_flags = Some(JsString::from_str(&flags_str));
                 obj.insert_property(
                     "lastIndex".to_string(),
                     PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
                 );
-                let rc = Rc::new(RefCell::new(obj));
-                let id = interp.allocate_object_slot(rc);
+                let id = interp.alloc_object(obj);
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             },
         ));
@@ -8490,6 +8731,7 @@ impl Interpreter {
         if let JsValue::Object(ref o) = regexp_ctor
             && let Some(obj) = self.get_object(o.id)
         {
+            obj.borrow_mut().deferred_construct = true;
             obj.borrow_mut().insert_builtin(
                 "prototype".to_string(),
                 JsValue::Object(crate::types::JsObject {
@@ -8747,7 +8989,7 @@ impl Interpreter {
             .borrow_mut()
             .set("RegExp", regexp_ctor);
 
-        self.realm_mut().regexp_prototype = Some(regexp_proto);
+        self.realm_mut().regexp_prototype = Some(regexp_proto.borrow().id.unwrap());
     }
 
     pub(crate) fn get_symbol_key(&self, name: &str) -> Option<String> {

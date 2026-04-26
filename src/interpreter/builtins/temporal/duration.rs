@@ -546,19 +546,53 @@ fn duration_total_ns_relative(
     let base_epoch = iso_date_to_epoch_days(base_year, base_month, base_day);
     let result_epoch = iso_date_to_epoch_days(ry, rm, rd);
     let total_days = (result_epoch - base_epoch) as i128;
-    let time_ns = h as i128 * 3_600_000_000_000
-        + mi as i128 * 60_000_000_000
-        + s as i128 * 1_000_000_000
-        + ms as i128 * 1_000_000
-        + us as i128 * 1_000
-        + ns as i128;
-    let total = total_days * 86_400_000_000_000 + time_ns;
+    let time_ns = duration_time_to_ns_checked(h, mi, s, ms, us, ns)?;
+    let total = total_days
+        .checked_mul(86_400_000_000_000)
+        .and_then(|v| v.checked_add(time_ns))
+        .ok_or(())?;
     // Add24HourDaysToNormalizedTimeDuration range check
     let limit = (1i128 << 53) * 1_000_000_000;
     if total.abs() > limit {
         return Err(());
     }
     Ok(total)
+}
+
+fn duration_time_to_ns_checked(
+    h: f64,
+    mi: f64,
+    s: f64,
+    ms: f64,
+    us: f64,
+    ns: f64,
+) -> Result<i128, ()> {
+    (h as i128)
+        .checked_mul(3_600_000_000_000)
+        .and_then(|v| v.checked_add((mi as i128).checked_mul(60_000_000_000)?))
+        .and_then(|v| v.checked_add((s as i128).checked_mul(1_000_000_000)?))
+        .and_then(|v| v.checked_add((ms as i128).checked_mul(1_000_000)?))
+        .and_then(|v| v.checked_add((us as i128).checked_mul(1_000)?))
+        .and_then(|v| v.checked_add(ns as i128))
+        .ok_or(())
+}
+
+fn duration_week_day_time_to_ns_checked(
+    w: f64,
+    d: f64,
+    h: f64,
+    mi: f64,
+    s: f64,
+    ms: f64,
+    us: f64,
+    ns: f64,
+) -> Result<i128, ()> {
+    let time_ns = duration_time_to_ns_checked(h, mi, s, ms, us, ns)?;
+    (w as i128)
+        .checked_mul(604_800_000_000_000)
+        .and_then(|v| v.checked_add((d as i128).checked_mul(86_400_000_000_000)?))
+        .and_then(|v| v.checked_add(time_ns))
+        .ok_or(())
 }
 
 /// TotalRelativeDuration per spec (simplified for ISO 8601 calendar).
@@ -1288,10 +1322,10 @@ fn round_relative_duration(
 
                     // Round using actual day length as the increment unit
                     let inc_ns = increment as i128 * day_length_ns;
-                    let _total_ns_in_day = total_days_i as i128 * day_length_ns + remaining_ns;
+                    let total_ns = total_days_i as i128 * day_length_ns + remaining_ns;
                     let rounded_ns =
-                        super::round_i128_to_increment(remaining_ns, inc_ns, rounding_mode);
-                    let rounded_days = total_days_i + (rounded_ns / day_length_ns) as i32;
+                        super::round_i128_to_increment(total_ns, inc_ns, rounding_mode);
+                    let rounded_days = (rounded_ns / day_length_ns) as i32;
 
                     if y != 0.0 || mo != 0.0 || w != 0.0 {
                         (y as i32, mo as i32, w as i32, rounded_days)
@@ -2023,7 +2057,7 @@ impl Interpreter {
 
                         // AdjustRoundedDurationDays for ZDT
                         if let Some((base_ens, tz)) = &zdt_info {
-                            let time_ns: i128 = rh as i128 * 3_600_000_000_000
+                            let mut time_ns: i128 = rh as i128 * 3_600_000_000_000
                                 + rmi as i128 * 60_000_000_000
                                 + rs as i128 * 1_000_000_000
                                 + rms as i128 * 1_000_000
@@ -2037,33 +2071,37 @@ impl Interpreter {
                                 0
                             };
                             if direction != 0 {
-                                let day_start = add_duration_to_zdt_epoch_ns(
-                                    y, mo, w, rd, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, by, bm, bd,
-                                    *base_ens, tz,
-                                )
-                                .unwrap_or(*base_ens);
-                                let day_end = add_duration_to_zdt_epoch_ns(
-                                    y,
-                                    mo,
-                                    w,
-                                    rd + direction as f64,
-                                    0.0,
-                                    0.0,
-                                    0.0,
-                                    0.0,
-                                    0.0,
-                                    0.0,
-                                    by,
-                                    bm,
-                                    bd,
-                                    *base_ens,
-                                    tz,
-                                )
-                                .unwrap_or(*base_ens);
-                                let day_length_ns = day_end - day_start;
-                                if day_length_ns > 0 {
-                                    let one_day_less = time_ns - day_length_ns;
-                                    // Adjust if time >= one day (direction>0: time_ns >= day_length, direction<0: time_ns <= -day_length)
+                                loop {
+                                    let day_start = add_duration_to_zdt_epoch_ns(
+                                        y, mo, w, rd, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, by, bm, bd,
+                                        *base_ens, tz,
+                                    )
+                                    .unwrap_or(*base_ens);
+                                    let day_end = add_duration_to_zdt_epoch_ns(
+                                        y,
+                                        mo,
+                                        w,
+                                        rd + direction as f64,
+                                        0.0,
+                                        0.0,
+                                        0.0,
+                                        0.0,
+                                        0.0,
+                                        0.0,
+                                        by,
+                                        bm,
+                                        bd,
+                                        *base_ens,
+                                        tz,
+                                    )
+                                    .unwrap_or(*base_ens);
+                                    let day_length_ns = (day_end - day_start).abs();
+                                    if day_length_ns == 0 {
+                                        // Skipped day (e.g., Samoa 2011-12-30): advance past it
+                                        rd += direction as f64;
+                                        continue;
+                                    }
+                                    let one_day_less = time_ns - direction * day_length_ns;
                                     let less_sign = if one_day_less > 0 {
                                         1i128
                                     } else if one_day_less < 0 {
@@ -2072,15 +2110,17 @@ impl Interpreter {
                                         0
                                     };
                                     if less_sign != -direction {
-                                        // Time exceeds one day: carry
                                         rd += direction as f64;
                                         let r = unbalance_time_ns_i128(one_day_less, "hour");
+                                        time_ns = one_day_less;
                                         rh = r.1 as f64;
                                         rmi = r.2 as f64;
                                         rs = r.3 as f64;
                                         rms = r.4 as f64;
                                         rus = r.5 as f64;
                                         rns = r.6 as f64;
+                                    } else {
+                                        break;
                                     }
                                 }
                             }
@@ -2471,7 +2511,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("valueOf".to_string(), value_of_fn);
 
-        self.realm_mut().temporal_duration_prototype = Some(proto.clone());
+        self.realm_mut().temporal_duration_prototype = Some(proto.borrow().id.unwrap());
 
         // Constructor
         let constructor = self.create_function(JsFunction::constructor(
@@ -2569,20 +2609,14 @@ impl Interpreter {
                     nanoseconds,
                 );
                 if let Completion::Normal(JsValue::Object(ref o)) = result {
-                    let dp = interp
-                        .realm()
-                        .temporal_duration_prototype
-                        .as_ref()
-                        .and_then(|p| p.borrow().id);
-                    interp.apply_new_target_prototype(o.id, dp, |r| {
-                        r.temporal_duration_prototype.clone()
-                    });
+                    let dp = interp.realm().temporal_duration_prototype;
+                    interp.apply_new_target_prototype(o.id, dp, |r| r.temporal_duration_prototype);
                 }
                 result
             },
         ));
 
-        // Constructor.prototype
+        // Constructor.prototype_id
         if let JsValue::Object(ref o) = constructor
             && let Some(obj) = self.get_object(o.id)
         {
@@ -2737,22 +2771,26 @@ impl Interpreter {
                     };
                     (n1, n2)
                 } else {
-                    let n1 = one.2 as i128 * 604_800_000_000_000
-                        + one.3 as i128 * 86_400_000_000_000
-                        + one.4 as i128 * 3_600_000_000_000
-                        + one.5 as i128 * 60_000_000_000
-                        + one.6 as i128 * 1_000_000_000
-                        + one.7 as i128 * 1_000_000
-                        + one.8 as i128 * 1_000
-                        + one.9 as i128;
-                    let n2 = two.2 as i128 * 604_800_000_000_000
-                        + two.3 as i128 * 86_400_000_000_000
-                        + two.4 as i128 * 3_600_000_000_000
-                        + two.5 as i128 * 60_000_000_000
-                        + two.6 as i128 * 1_000_000_000
-                        + two.7 as i128 * 1_000_000
-                        + two.8 as i128 * 1_000
-                        + two.9 as i128;
+                    let n1 = match duration_week_day_time_to_ns_checked(
+                        one.2, one.3, one.4, one.5, one.6, one.7, one.8, one.9,
+                    ) {
+                        Ok(v) => v,
+                        Err(()) => {
+                            return Completion::Throw(
+                                interp.create_range_error("duration out of range when compared"),
+                            );
+                        }
+                    };
+                    let n2 = match duration_week_day_time_to_ns_checked(
+                        two.2, two.3, two.4, two.5, two.6, two.7, two.8, two.9,
+                    ) {
+                        Ok(v) => v,
+                        Err(()) => {
+                            return Completion::Throw(
+                                interp.create_range_error("duration out of range when compared"),
+                            );
+                        }
+                    };
                     (n1, n2)
                 };
                 let result = if ns1 < ns2 {
@@ -2872,8 +2910,9 @@ pub(crate) fn create_duration_result(
     }
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.Duration".to_string();
-    if let Some(ref proto) = interp.realm().temporal_duration_prototype {
-        obj.borrow_mut().prototype = Some(proto.clone());
+    if let Some(proto_id) = interp.realm().temporal_duration_prototype {
+        obj.borrow_mut().prototype_id =
+            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::Duration {
         years,
@@ -3689,23 +3728,6 @@ fn format_number(v: f64) -> String {
     }
 }
 
-#[allow(dead_code)]
-pub(super) fn unbalance_time_ns(
-    total_ns: f64,
-    largest_unit: &str,
-) -> (f64, f64, f64, f64, f64, f64, f64) {
-    let result = unbalance_time_ns_i128(total_ns as i128, largest_unit);
-    (
-        result.0 as f64,
-        result.1 as f64,
-        result.2 as f64,
-        result.3 as f64,
-        result.4 as f64,
-        result.5 as f64,
-        result.6 as f64,
-    )
-}
-
 fn unbalance_time_ns_i128(
     total_ns: i128,
     largest_unit: &str,
@@ -3773,83 +3795,4 @@ fn unbalance_time_ns_i128(
         }
         _ => (0, 0, 0, 0, 0, 0, total_ns),
     }
-}
-
-// Balance time portion of a duration after add/subtract.
-// Per spec: AddDurations converts day+time to total nanoseconds,
-// then re-balances up to the largest unit present in either operand.
-#[allow(dead_code)]
-pub(crate) fn balance_duration_relative(
-    years: f64,
-    months: f64,
-    weeks: f64,
-    days: f64,
-    hours: f64,
-    minutes: f64,
-    seconds: f64,
-    milliseconds: f64,
-    microseconds: f64,
-    nanoseconds: f64,
-) -> (f64, f64, f64, f64, f64, f64, f64, f64, f64, f64) {
-    // Determine largest unit present
-    let largest = default_largest_unit_for_duration(
-        years,
-        months,
-        weeks,
-        days,
-        hours,
-        minutes,
-        seconds,
-        milliseconds,
-        microseconds,
-        nanoseconds,
-    );
-
-    // For calendar units without relativeTo, just return as-is (validation elsewhere)
-    if matches!(largest, "year" | "month" | "week") {
-        return (
-            years,
-            months,
-            weeks,
-            days,
-            hours,
-            minutes,
-            seconds,
-            milliseconds,
-            microseconds,
-            nanoseconds,
-        );
-    }
-
-    // Convert day+time to total nanoseconds using i128 and re-balance
-    let total_ns = nanoseconds as i128
-        + microseconds as i128 * 1_000
-        + milliseconds as i128 * 1_000_000
-        + seconds as i128 * 1_000_000_000
-        + minutes as i128 * 60_000_000_000
-        + hours as i128 * 3_600_000_000_000
-        + days as i128 * 86_400_000_000_000;
-
-    let sign: i128 = if total_ns < 0 {
-        -1
-    } else if total_ns > 0 {
-        1
-    } else {
-        0
-    };
-    let abs_ns = total_ns.abs();
-    let (rd, rh, rmi, rs, rms, rus, rns) = unbalance_time_ns_i128(abs_ns, largest);
-
-    (
-        years,
-        months,
-        weeks,
-        (rd * sign) as f64,
-        (rh * sign) as f64,
-        (rmi * sign) as f64,
-        (rs * sign) as f64,
-        (rms * sign) as f64,
-        (rus * sign) as f64,
-        (rns * sign) as f64,
-    )
 }

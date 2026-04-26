@@ -122,75 +122,6 @@ pub(crate) fn is_string(val: &JsValue) -> bool {
     matches!(val, JsValue::String(_))
 }
 
-#[allow(dead_code)]
-pub(crate) fn get_set_record(
-    interp: &mut Interpreter,
-    obj: &JsValue,
-) -> Result<SetRecord, JsValue> {
-    if !matches!(obj, JsValue::Object(_)) {
-        return Err(interp.create_type_error("GetSetRecord requires an object"));
-    }
-    let o = if let JsValue::Object(o) = obj {
-        o
-    } else {
-        unreachable!()
-    };
-    let obj_rc = interp
-        .get_object(o.id)
-        .ok_or_else(|| interp.create_type_error("invalid object"))?;
-
-    // Get size via getter - read the property descriptor
-    let size_val = {
-        let borrowed = obj_rc.borrow();
-        let desc = borrowed.get_property_descriptor("size");
-        match desc {
-            Some(ref d) if d.get.is_some() => {
-                let getter = d.get.clone().unwrap();
-                drop(borrowed);
-                match interp.call_function(&getter, obj, &[]) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
-                }
-            }
-            _ => borrowed.get_property("size"),
-        }
-    };
-    let size = interp.to_number_coerce(&size_val);
-    if size.is_nan() {
-        return Err(interp.create_type_error("Set-like size is not a number"));
-    }
-    if size < 0.0 {
-        return Err(interp.create_type_error("Set-like size is negative"));
-    }
-
-    let has = obj_rc.borrow().get_property("has");
-    if !matches!(&has, JsValue::Object(ho) if interp.get_object(ho.id).is_some_and(|o| o.borrow().callable.is_some()))
-    {
-        return Err(interp.create_type_error("Set-like object must have a callable has method"));
-    }
-
-    let keys = obj_rc.borrow().get_property("keys");
-    if !matches!(&keys, JsValue::Object(ko) if interp.get_object(ko.id).is_some_and(|o| o.borrow().callable.is_some()))
-    {
-        return Err(interp.create_type_error("Set-like object must have a callable keys method"));
-    }
-
-    Ok(SetRecord { has, keys, size })
-}
-
-pub(crate) fn extract_iter_result(interp: &Interpreter, result: &JsValue) -> (bool, JsValue) {
-    if let JsValue::Object(ro) = result
-        && let Some(result_obj) = interp.get_object(ro.id)
-    {
-        let borrowed = result_obj.borrow();
-        let done = matches!(borrowed.get_property("done"), JsValue::Boolean(true));
-        let value = borrowed.get_property("value");
-        return (done, value);
-    }
-    (true, JsValue::Undefined)
-}
-
 pub(crate) fn same_value(left: &JsValue, right: &JsValue) -> bool {
     match (left, right) {
         (JsValue::Number(a), JsValue::Number(b)) => {
@@ -233,183 +164,6 @@ pub(crate) fn strict_equality(left: &JsValue, right: &JsValue) -> bool {
     }
 }
 
-fn string_to_bigint(s: &str) -> Option<num_bigint::BigInt> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        return Some(num_bigint::BigInt::from(0));
-    }
-    if let Some(hex) = trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-    {
-        return num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16);
-    }
-    if let Some(oct) = trimmed
-        .strip_prefix("0o")
-        .or_else(|| trimmed.strip_prefix("0O"))
-    {
-        return num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8);
-    }
-    if let Some(bin) = trimmed
-        .strip_prefix("0b")
-        .or_else(|| trimmed.strip_prefix("0B"))
-    {
-        return num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2);
-    }
-    trimmed.parse::<num_bigint::BigInt>().ok()
-}
-
-fn bigint_equal_number(b: &num_bigint::BigInt, n: f64) -> bool {
-    if n.is_nan() || n.is_infinite() {
-        return false;
-    }
-    if n.fract() != 0.0 {
-        return false;
-    }
-    let n_i128 = n as i128;
-    if n_i128 as f64 != n {
-        return false;
-    }
-    let n_bigint = num_bigint::BigInt::from(n_i128);
-    b == &n_bigint
-}
-
-fn bigint_to_f64(b: &num_bigint::BigInt) -> Option<f64> {
-    let s = b.to_str_radix(10);
-    s.parse::<f64>().ok()
-}
-
-fn bigint_less_than_number(b: &num_bigint::BigInt, n: f64) -> Option<bool> {
-    if n.is_nan() {
-        return None;
-    }
-    if n == f64::INFINITY {
-        return Some(true);
-    }
-    if n == f64::NEG_INFINITY {
-        return Some(false);
-    }
-    if let Some(bf) = bigint_to_f64(b) {
-        Some(bf < n)
-    } else {
-        Some(b.sign() == num_bigint::Sign::Minus)
-    }
-}
-
-fn number_less_than_bigint(n: f64, b: &num_bigint::BigInt) -> Option<bool> {
-    if n.is_nan() {
-        return None;
-    }
-    if n == f64::INFINITY {
-        return Some(false);
-    }
-    if n == f64::NEG_INFINITY {
-        return Some(true);
-    }
-    if let Some(bf) = bigint_to_f64(b) {
-        Some(n < bf)
-    } else {
-        Some(b.sign() != num_bigint::Sign::Minus)
-    }
-}
-
-#[allow(dead_code)]
-pub(crate) fn abstract_equality(left: &JsValue, right: &JsValue) -> bool {
-    // Same type
-    if std::mem::discriminant(left) == std::mem::discriminant(right) {
-        return strict_equality(left, right);
-    }
-    // null == undefined
-    if (left.is_null() && right.is_undefined()) || (left.is_undefined() && right.is_null()) {
-        return true;
-    }
-    // Number vs String
-    if left.is_number() && right.is_string() {
-        return abstract_equality(left, &JsValue::Number(to_number(right)));
-    }
-    if left.is_string() && right.is_number() {
-        return abstract_equality(&JsValue::Number(to_number(left)), right);
-    }
-    // BigInt vs String
-    if let JsValue::BigInt(b) = left
-        && let JsValue::String(s) = right
-    {
-        return string_to_bigint(&s.to_rust_string()).is_some_and(|parsed| parsed == b.value);
-    }
-    if let JsValue::String(s) = left
-        && let JsValue::BigInt(b) = right
-    {
-        return string_to_bigint(&s.to_rust_string()).is_some_and(|parsed| parsed == b.value);
-    }
-    // BigInt vs Number
-    if let JsValue::BigInt(b) = left
-        && let JsValue::Number(n) = right
-    {
-        return bigint_equal_number(&b.value, *n);
-    }
-    if let JsValue::Number(n) = left
-        && let JsValue::BigInt(b) = right
-    {
-        return bigint_equal_number(&b.value, *n);
-    }
-    // Boolean coercion
-    if left.is_boolean() {
-        return abstract_equality(&JsValue::Number(to_number(left)), right);
-    }
-    if right.is_boolean() {
-        return abstract_equality(left, &JsValue::Number(to_number(right)));
-    }
-    false
-}
-
-#[allow(dead_code)]
-pub(crate) fn abstract_relational(left: &JsValue, right: &JsValue) -> Option<bool> {
-    if is_string(left) && is_string(right) {
-        let ls = to_js_string(left);
-        let rs = to_js_string(right);
-        return Some(ls < rs);
-    }
-    // BigInt vs BigInt
-    if let JsValue::BigInt(a) = left
-        && let JsValue::BigInt(b) = right
-    {
-        return bigint_ops::less_than(&a.value, &b.value);
-    }
-    // BigInt vs Number
-    if let JsValue::BigInt(b) = left
-        && let JsValue::Number(n) = right
-    {
-        return bigint_less_than_number(&b.value, *n);
-    }
-    // Number vs BigInt
-    if let JsValue::Number(n) = left
-        && let JsValue::BigInt(b) = right
-    {
-        return number_less_than_bigint(*n, &b.value);
-    }
-    // BigInt vs String
-    if let JsValue::BigInt(b) = left
-        && let JsValue::String(s) = right
-    {
-        if let Some(parsed) = string_to_bigint(&s.to_rust_string()) {
-            return bigint_ops::less_than(&b.value, &parsed);
-        }
-        return None;
-    }
-    // String vs BigInt
-    if let JsValue::String(s) = left
-        && let JsValue::BigInt(b) = right
-    {
-        if let Some(parsed) = string_to_bigint(&s.to_rust_string()) {
-            return bigint_ops::less_than(&parsed, &b.value);
-        }
-        return None;
-    }
-    let ln = to_number(left);
-    let rn = to_number(right);
-    number_ops::less_than(ln, rn)
-}
-
 pub(crate) fn typeof_val<'a>(
     val: &JsValue,
     objects: &[Option<Rc<RefCell<JsObjectData>>>],
@@ -436,7 +190,7 @@ pub(crate) fn typeof_val<'a>(
     }
 }
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 fn json_quote(s: &str) -> String {
     json_quote_units(&s.encode_utf16().collect::<Vec<u16>>())
@@ -554,15 +308,13 @@ pub(crate) fn enumerable_own_keys(
                 Ok(Some(v)) => {
                     interp.validate_ownkeys_invariant(&v, &target_val)?;
                     let mut keys = Vec::new();
-                    if let JsValue::Object(arr) = &v
-                        && let Some(arr_obj) = interp.get_object(arr.id)
-                    {
-                        let len = match arr_obj.borrow().get_property("length") {
+                    if let JsValue::Object(arr) = &v {
+                        let len = match interp.get_property_on_id(arr.id, "length") {
                             JsValue::Number(n) => n as usize,
                             _ => 0,
                         };
                         for i in 0..len {
-                            let k = arr_obj.borrow().get_property(&i.to_string());
+                            let k = interp.get_property_on_id(arr.id, &i.to_string());
                             if let JsValue::String(s) = k {
                                 let key_str = s.to_rust_string();
                                 let key_val = JsValue::String(s);
@@ -572,11 +324,9 @@ pub(crate) fn enumerable_own_keys(
                                     vec![target_val.clone(), key_val],
                                 ) {
                                     Ok(Some(desc_val)) => {
-                                        if let JsValue::Object(dobj) = &desc_val
-                                            && let Some(desc_obj) = interp.get_object(dobj.id)
-                                        {
+                                        if let JsValue::Object(dobj) = &desc_val {
                                             let enum_val =
-                                                desc_obj.borrow().get_property("enumerable");
+                                                interp.get_property_on_id(dobj.id, "enumerable");
                                             if interp.to_boolean_val(&enum_val) {
                                                 keys.push(key_str);
                                             }
@@ -648,18 +398,6 @@ pub(crate) fn enumerable_own_keys(
         return Ok(sort_own_keys(keys));
     }
     Ok(Vec::new())
-}
-
-#[allow(dead_code)]
-pub(crate) fn json_stringify_value(interp: &mut Interpreter, val: &JsValue) -> Option<String> {
-    let mut stack = Vec::new();
-    let wrapper = interp.create_object();
-    wrapper
-        .borrow_mut()
-        .insert_value("".to_string(), val.clone());
-    let holder_id = wrapper.borrow().id.unwrap();
-    json_stringify_internal(interp, holder_id, "", val, &mut stack, &None, &None, "", "")
-        .unwrap_or_default()
 }
 
 pub(crate) fn json_stringify_full(
@@ -1029,7 +767,7 @@ pub(crate) fn json_parse_value_with_source(
     interp: &mut Interpreter,
     s: &str,
 ) -> (Completion, SourceTextMap) {
-    let mut source_map = SourceTextMap::new();
+    let mut source_map = SourceTextMap::default();
     let result = json_parse_value_inner(interp, s, Some(&mut source_map));
     (result, source_map)
 }
@@ -1058,10 +796,10 @@ fn json_parse_value_inner(
         let unescaped = json_unescape_string(inner);
         return Completion::Normal(JsValue::String(JsString::from_str(&unescaped)));
     }
-    if json_is_valid_number(s) {
-        if let Ok(n) = s.parse::<f64>() {
-            return Completion::Normal(JsValue::Number(n));
-        }
+    if json_is_valid_number(s)
+        && let Ok(n) = s.parse::<f64>()
+    {
+        return Completion::Normal(JsValue::Number(n));
     }
     if s.starts_with('[') && s.ends_with(']') {
         let inner = &s[1..s.len() - 1];
@@ -1308,10 +1046,10 @@ fn json_internalize_apply(
             // Also clear dense array storage so get_property doesn't find stale values
             if let Ok(idx) = key.parse::<usize>() {
                 let mut b = obj.borrow_mut();
-                if let Some(ref mut elems) = b.array_elements {
-                    if idx < elems.len() {
-                        elems[idx] = JsValue::Undefined;
-                    }
+                if let Some(ref mut elems) = b.array_elements
+                    && idx < elems.len()
+                {
+                    elems[idx] = JsValue::Undefined;
                 }
             }
         } else {
@@ -1405,15 +1143,12 @@ pub(crate) fn json_internalize(
                 JsValue::Number(n) => src
                     .parse::<f64>()
                     .is_ok_and(|parsed| (parsed.is_nan() && n.is_nan()) || parsed == *n),
-                JsValue::String(s) => {
+                JsValue::String(s)
                     // Source includes quotes, parse it to compare
-                    if src.starts_with('"') && src.ends_with('"') {
+                    if src.starts_with('"') && src.ends_with('"') => {
                         let inner = &src[1..src.len() - 1];
                         json_unescape_string(inner) == s.to_rust_string()
-                    } else {
-                        false
                     }
-                }
                 _ => false,
             };
             if source_matches {
@@ -1948,6 +1683,11 @@ pub(crate) fn parse_date_string(s: &str) -> f64 {
         return t;
     }
 
+    // Try space-separated relaxed format: "1997-3-8 1:1:1"
+    if let Some(t) = parse_space_separated_date(s) {
+        return t;
+    }
+
     // Try toUTCString() format: "Thu, 01 Jan 1970 00:00:00 GMT"
     if let Some(t) = parse_utcstring_format(s) {
         return t;
@@ -2065,6 +1805,123 @@ fn parse_iso_date(s: &str) -> Option<f64> {
         } else if pos + 1 < len && bytes[pos].is_ascii_digit() {
             s.get(pos..pos + 2)?.parse().ok()?
         } else {
+            return None;
+        };
+        let offset = sign * (tz_hour * 60.0 + tz_min) * 60_000.0;
+        return Some(time_clip(dt - offset));
+    }
+
+    None
+}
+
+fn parse_space_separated_date(s: &str) -> Option<f64> {
+    let bytes = s.as_bytes();
+    let len = bytes.len();
+
+    let (year, pos) = parse_iso_year(s)?;
+
+    if pos >= len || bytes[pos] != b'-' {
+        return None;
+    }
+    let pos = pos + 1;
+
+    // Month: 1 or 2 digits
+    let (month, pos) = parse_one_or_two_digits(bytes, pos)?;
+    if !(1..=12).contains(&month) {
+        return None;
+    }
+
+    if pos >= len || bytes[pos] != b'-' {
+        return None;
+    }
+    let pos = pos + 1;
+
+    // Day: 1 or 2 digits
+    let (day_val, pos) = parse_one_or_two_digits(bytes, pos)?;
+    if !(1..=31).contains(&day_val) {
+        return None;
+    }
+
+    // Must have space separator (not T)
+    if pos >= len || bytes[pos] != b' ' {
+        return None;
+    }
+    let pos = pos + 1;
+
+    // Must not be just trailing space
+    if pos >= len {
+        return None;
+    }
+
+    // Hour: 1 or 2 digits
+    let (hour, pos) = parse_one_or_two_digits(bytes, pos)?;
+
+    // Must have colon after hour (hour-only is NaN)
+    if pos >= len || bytes[pos] != b':' {
+        return None;
+    }
+    let pos = pos + 1;
+
+    // Minute: 1 or 2 digits
+    let (minute, pos) = parse_one_or_two_digits(bytes, pos)?;
+
+    let (second, ms_val, pos) = if pos < len && bytes[pos] == b':' {
+        let pos = pos + 1;
+        let (sec, pos) = parse_one_or_two_digits(bytes, pos)?;
+        if pos < len && bytes[pos] == b'.' {
+            let pos = pos + 1;
+            let frac_start = pos;
+            let mut frac_end = pos;
+            while frac_end < len && bytes[frac_end].is_ascii_digit() {
+                frac_end += 1;
+            }
+            let frac_str = s.get(frac_start..frac_end)?;
+            let ms = match frac_str.len() {
+                1 => frac_str.parse::<i32>().ok()? * 100,
+                2 => frac_str.parse::<i32>().ok()? * 10,
+                3 => frac_str.parse::<i32>().ok()?,
+                n if n > 3 => frac_str[..3].parse::<i32>().ok()?,
+                _ => 0,
+            };
+            (sec, ms, frac_end)
+        } else {
+            (sec, 0, pos)
+        }
+    } else {
+        (0, 0, pos)
+    };
+
+    let d = make_day(year as f64, (month - 1) as f64, day_val as f64);
+    let time = make_time(hour as f64, minute as f64, second as f64, ms_val as f64);
+    let dt = make_date(d, time);
+
+    // Timezone
+    if pos >= len {
+        // No timezone = local time
+        return Some(time_clip(utc_time(dt)));
+    }
+
+    let ch = bytes[pos];
+    if ch == b'Z' || ch == b'z' {
+        if pos + 1 == len {
+            return Some(time_clip(dt));
+        }
+        return None;
+    }
+
+    if ch == b'+' || ch == b'-' {
+        let sign: f64 = if ch == b'+' { 1.0 } else { -1.0 };
+        let pos = pos + 1;
+        if pos + 2 > len {
+            return None;
+        }
+        let tz_hour: f64 = s.get(pos..pos + 2)?.parse().ok()?;
+        let pos = pos + 2;
+        let tz_min: f64 = if pos < len && bytes[pos] == b':' {
+            s.get(pos + 1..pos + 3)?.parse().ok()?
+        } else if pos + 1 < len && bytes[pos].is_ascii_digit() {
+            s.get(pos..pos + 2)?.parse().ok()?
+        } else {
             0.0
         };
         let offset = sign * (tz_hour * 60.0 + tz_min) * 60_000.0;
@@ -2072,6 +1929,19 @@ fn parse_iso_date(s: &str) -> Option<f64> {
     }
 
     None
+}
+
+fn parse_one_or_two_digits(bytes: &[u8], pos: usize) -> Option<(i32, usize)> {
+    if pos >= bytes.len() || !bytes[pos].is_ascii_digit() {
+        return None;
+    }
+    if pos + 1 < bytes.len() && bytes[pos + 1].is_ascii_digit() {
+        let val = (bytes[pos] - b'0') as i32 * 10 + (bytes[pos + 1] - b'0') as i32;
+        Some((val, pos + 2))
+    } else {
+        let val = (bytes[pos] - b'0') as i32;
+        Some((val, pos + 1))
+    }
 }
 
 fn parse_iso_year(s: &str) -> Option<(i64, usize)> {
@@ -2308,7 +2178,7 @@ pub(crate) fn decode_uri_string(
         i += 3;
 
         if first_byte <= 0x7F {
-            let c = first_byte as u8 as char;
+            let c = first_byte as char;
             if preserve_reserved && is_uri_reserved(c) {
                 result.push(0x25); // '%'
                 result.push(code_units[i - 2]);
@@ -2329,7 +2199,7 @@ pub(crate) fn decode_uri_string(
             return Err("URI malformed".to_string());
         };
 
-        let mut utf8_bytes = vec![first_byte as u8];
+        let mut utf8_bytes = vec![first_byte];
         let start_i = i - 3;
         for _ in 1..expected_len {
             if i >= len || code_units[i] != 0x25 || i + 2 >= len {
@@ -2341,7 +2211,7 @@ pub(crate) fn decode_uri_string(
             if cont & 0xC0 != 0x80 {
                 return Err("URI malformed".to_string());
             }
-            utf8_bytes.push(cont as u8);
+            utf8_bytes.push(cont);
             i += 3;
         }
 
@@ -2387,13 +2257,6 @@ fn cu16_to_hex_val(cu: u16) -> Result<u8, String> {
         return Err("URI malformed".to_string());
     }
     hex_val(cu as u8)
-}
-
-#[allow(dead_code)]
-fn parse_hex_byte(h: u8, l: u8) -> Result<u8, String> {
-    let hi = hex_val(h)?;
-    let lo = hex_val(l)?;
-    Ok((hi << 4) | lo)
 }
 
 fn hex_val(b: u8) -> Result<u8, String> {
