@@ -557,8 +557,17 @@ pub(crate) fn enumerable_own_keys(
                     if let JsValue::Object(arr) = &v
                         && let Some(arr_obj) = interp.get_object(arr.id)
                     {
+                        const MAX_PROXY_OWNKEYS_RESULT_LEN: usize = 1_000_000;
                         let len = match arr_obj.borrow().get_property("length") {
-                            JsValue::Number(n) => n as usize,
+                            JsValue::Number(n) if n.is_finite() && n > 0.0 => {
+                                let len = n.floor() as usize;
+                                if len > MAX_PROXY_OWNKEYS_RESULT_LEN {
+                                    return Err(interp.create_type_error(
+                                        "'ownKeys' on proxy: trap result length exceeds supported limit",
+                                    ));
+                                }
+                                len
+                            }
                             _ => 0,
                         };
                         for i in 0..len {
