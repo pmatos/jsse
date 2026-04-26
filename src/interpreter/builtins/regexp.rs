@@ -1710,7 +1710,10 @@ fn rename_groups_and_backrefs(chars: &[char], dup_names: &HashSet<String>, idx: 
 /// duplicate-named groups. If BODY has no backreferences to duplicate names, expands to
 /// `(?:ANON_BODY){N-1}(?:BODY)`. If BODY has backreferences, uses renaming to keep
 /// groups and backrefs paired per iteration.
-fn expand_quantified_dup_groups(source: &str, dup_names: &HashSet<String>) -> String {
+fn expand_quantified_dup_groups(
+    source: &str,
+    dup_names: &HashSet<String>,
+) -> Result<String, String> {
     const MAX_PREPROCESS_RECURSION_DEPTH: usize = 256;
     expand_quantified_dup_groups_with_depth(source, dup_names, 0, MAX_PREPROCESS_RECURSION_DEPTH)
 }
@@ -1720,13 +1723,15 @@ fn expand_quantified_dup_groups_with_depth(
     dup_names: &HashSet<String>,
     depth: usize,
     max_depth: usize,
-) -> String {
+) -> Result<String, String> {
     if depth >= max_depth {
-        return source.to_string();
+        return Err(
+            "regular expression nesting too deep for duplicate-group preprocessing".to_string(),
+        );
     }
 
     if dup_names.is_empty() {
-        return source.to_string();
+        return Ok(source.to_string());
     }
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
@@ -1786,7 +1791,7 @@ fn expand_quantified_dup_groups_with_depth(
                                         dup_names,
                                         depth + 1,
                                         max_depth,
-                                    );
+                                    )?;
                                     let expanded_body_chars: Vec<char> =
                                         expanded_body.chars().collect();
 
@@ -1827,7 +1832,7 @@ fn expand_quantified_dup_groups_with_depth(
                         dup_names,
                         depth + 1,
                         max_depth,
-                    );
+                    )?;
                     result.push_str("(?:");
                     result.push_str(&expanded_body);
                     result.push(')');
@@ -1877,7 +1882,7 @@ fn expand_quantified_dup_groups_with_depth(
             }
         }
     }
-    result
+    Ok(result)
 }
 
 pub(super) fn translate_js_pattern_ex(
@@ -2009,7 +2014,7 @@ pub(super) fn translate_js_pattern_ex(
     // later iterations (PCRE retains captures across quantifier iterations, but
     // ECMAScript resets them).
     let (chars, len, all_group_names) = if !duplicated_names.is_empty() {
-        let preprocessed = expand_quantified_dup_groups(source, &duplicated_names);
+        let preprocessed = expand_quantified_dup_groups(source, &duplicated_names)?;
         if preprocessed != source {
             let new_chars: Vec<char> = preprocessed.chars().collect();
             let new_len = new_chars.len();
