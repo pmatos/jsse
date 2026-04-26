@@ -6802,6 +6802,16 @@ impl Interpreter {
                     match self.iterator_complete(&step_result) {
                         Ok(true) => {
                             self.gc_unroot_value(&iterator);
+                            if let JsValue::Object(o) = &iterator {
+                                let id = o.id;
+                                self.pending_iter_close.retain(|v| {
+                                    if let JsValue::Object(ov) = v {
+                                        ov.id != id
+                                    } else {
+                                        true
+                                    }
+                                });
+                            }
                             current_id = *after_state;
                         }
                         Ok(false) => {
@@ -6921,7 +6931,21 @@ impl Interpreter {
                                 }
                             }
                             // Add iterator to pending_iter_close so generator.return() can close it
-                            self.pending_iter_close.push(iterator);
+                            let already_pending = if let JsValue::Object(o) = &iterator {
+                                let id = o.id;
+                                self.pending_iter_close.iter().any(|v| {
+                                    if let JsValue::Object(ov) = v {
+                                        ov.id == id
+                                    } else {
+                                        false
+                                    }
+                                })
+                            } else {
+                                false
+                            };
+                            if !already_pending {
+                                self.pending_iter_close.push(iterator);
+                            }
                             current_id = *body_state;
                         }
                         Err(e) => {
@@ -10628,6 +10652,16 @@ impl Interpreter {
                     match self.iterator_complete(&step_result) {
                         Ok(true) => {
                             self.gc_unroot_value(&iterator);
+                            if let JsValue::Object(o) = &iterator {
+                                let id = o.id;
+                                self.pending_iter_close.retain(|v| {
+                                    if let JsValue::Object(ov) = v {
+                                        ov.id != id
+                                    } else {
+                                        true
+                                    }
+                                });
+                            }
                             current_id = *after_state;
                         }
                         Ok(false) => {
@@ -10762,7 +10796,21 @@ impl Interpreter {
                                 }
                                 ForInOfLeft::Expression(_) => {}
                             }
-                            self.pending_iter_close.push(iterator);
+                            let already_pending = if let JsValue::Object(o) = &iterator {
+                                let id = o.id;
+                                self.pending_iter_close.iter().any(|v| {
+                                    if let JsValue::Object(ov) = v {
+                                        ov.id == id
+                                    } else {
+                                        false
+                                    }
+                                })
+                            } else {
+                                false
+                            };
+                            if !already_pending {
+                                self.pending_iter_close.push(iterator);
+                            }
                             current_id = *body_state;
                         }
                         Err(e) => {
