@@ -1,2 +1,11 @@
 /target
 .claude/worktrees/
+.claude/scheduled_tasks.lock
+.boa_history
+.chief/
+.codex
+.ultraplan/
+jetstream-baseline.json
+jetstream-results.json
+scripts/.unicode_cache/
+__pycache__/
