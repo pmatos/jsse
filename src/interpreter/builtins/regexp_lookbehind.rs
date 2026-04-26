@@ -1759,7 +1759,7 @@ pub fn match_with_lookbehind_no_backtrack(
             let mut lb_caps = vec![None; cap_size];
 
             let found = match_rtl(
-                &atoms,
+                atoms,
                 &text_chars[..pos_char],
                 pos_char,
                 &mut lb_caps,
