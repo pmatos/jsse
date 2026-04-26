@@ -4,7 +4,6 @@ use icu::segmenter::{GraphemeClusterSegmenter, SentenceSegmenter, WordSegmenter}
 struct SegmentInfo {
     segment: Vec<u16>,
     index: usize, // UTF-16 code unit index
-    input: Vec<u16>,
     is_word_like: Option<bool>,
 }
 
@@ -24,7 +23,6 @@ fn compute_segments(input: &[u16], granularity: &str) -> Vec<SegmentInfo> {
                 segments.push(SegmentInfo {
                     segment: input[prev..pos].to_vec(),
                     index: prev,
-                    input: input.to_vec(),
                     is_word_like: Some(is_word_like),
                 });
                 prev = pos;
@@ -37,7 +35,6 @@ fn compute_segments(input: &[u16], granularity: &str) -> Vec<SegmentInfo> {
                 segments.push(SegmentInfo {
                     segment: input[w[0]..w[1]].to_vec(),
                     index: w[0],
-                    input: input.to_vec(),
                     is_word_like: None,
                 });
             }
@@ -49,7 +46,6 @@ fn compute_segments(input: &[u16], granularity: &str) -> Vec<SegmentInfo> {
                 segments.push(SegmentInfo {
                     segment: input[w[0]..w[1]].to_vec(),
                     index: w[0],
-                    input: input.to_vec(),
                     is_word_like: None,
                 });
             }
@@ -374,9 +370,9 @@ impl Interpreter {
                     0,
                     move |interp, _this, _args| {
                         let segs = compute_segments(&input_clone, &granularity_clone);
-                        let seg_data: Vec<(Vec<u16>, usize, Vec<u16>, bool)> = segs
+                        let seg_data: Vec<(Vec<u16>, usize, bool)> = segs
                             .into_iter()
-                            .map(|s| (s.segment, s.index, s.input, s.is_word_like.unwrap_or(false)))
+                            .map(|s| (s.segment, s.index, s.is_word_like.unwrap_or(false)))
                             .collect();
 
                         let iter_obj = interp.create_object();
@@ -390,6 +386,7 @@ impl Interpreter {
                         iter_obj.borrow_mut().iterator_state =
                             Some(IteratorState::SegmentIterator {
                                 segments: seg_data,
+                                input: std::rc::Rc::new(input_clone.clone()),
                                 position: 0,
                                 done: false,
                             });
@@ -411,30 +408,24 @@ impl Interpreter {
                                 if let JsValue::Object(o) = this
                                     && let Some(obj) = interp.get_object(o.id)
                                 {
-                                    let (state, has_word_like) = {
+                                    let has_word_like = {
                                         let b = obj.borrow();
-                                        let hwl = b
-                                            .properties
+                                        b.properties
                                             .get("[[HasWordLike]]")
                                             .and_then(|pd| pd.value.as_ref())
                                             .map(|v| matches!(v, JsValue::Boolean(true)))
-                                            .unwrap_or(false);
-                                        (b.iterator_state.clone(), hwl)
+                                            .unwrap_or(false)
                                     };
 
                                     if let Some(IteratorState::SegmentIterator {
-                                        ref segments,
-                                        position,
-                                        done,
-                                    }) = state
+                                        ref mut segments,
+                                        ref input,
+                                        ref mut position,
+                                        ref mut done,
+                                    }) = obj.borrow_mut().iterator_state
                                     {
-                                        if done || position >= segments.len() {
-                                            obj.borrow_mut().iterator_state =
-                                                Some(IteratorState::SegmentIterator {
-                                                    segments: segments.clone(),
-                                                    position,
-                                                    done: true,
-                                                });
+                                        if *done || *position >= segments.len() {
+                                            *done = true;
                                             return Completion::Normal(
                                                 interp.create_iter_result_object(
                                                     JsValue::Undefined,
@@ -443,23 +434,18 @@ impl Interpreter {
                                             );
                                         }
 
-                                        let (ref seg, idx, ref inp, wl) = segments[position];
+                                        let (seg, idx, wl) = segments[*position].clone();
+                                        *position += 1;
+
                                         let is_word_like =
                                             if has_word_like { Some(wl) } else { None };
                                         let seg_obj = create_segment_object(
                                             interp,
-                                            seg,
+                                            &seg,
                                             idx,
-                                            inp,
+                                            input,
                                             is_word_like,
                                         );
-
-                                        obj.borrow_mut().iterator_state =
-                                            Some(IteratorState::SegmentIterator {
-                                                segments: segments.clone(),
-                                                position: position + 1,
-                                                done: false,
-                                            });
 
                                         return Completion::Normal(
                                             interp.create_iter_result_object(seg_obj, false),

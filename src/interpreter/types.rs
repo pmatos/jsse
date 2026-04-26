@@ -1267,7 +1267,8 @@ pub enum IteratorState {
         done: bool,
     },
     SegmentIterator {
-        segments: Vec<(Vec<u16>, usize, Vec<u16>, bool)>, // (segment, index, input, isWordLike)
+        segments: Vec<(Vec<u16>, usize, bool)>, // (segment, index, isWordLike)
+        input: Rc<Vec<u16>>,
         position: usize,
         done: bool,
     },
