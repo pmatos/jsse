@@ -44,7 +44,7 @@ impl Interpreter {
                 return Ok(val);
             }
             if let Some(mp) = module_path
-                && let Some(module) = self.module_registry.get(mp)
+                && let Some(module) = self.module_registry_get(mp)
                 && let Some(val) = module.borrow().exports.get(original_key)
             {
                 return Ok(val.clone());
@@ -193,7 +193,7 @@ impl Interpreter {
             None => return Ok(()),
         };
 
-        let module = match self.module_registry.get(&module_path).cloned() {
+        let module = match self.module_registry_get(&module_path) {
             Some(m) => m,
             None => return Ok(()),
         };
@@ -238,7 +238,7 @@ impl Interpreter {
             Err(ref e) => {
                 // Per spec §16.2.1.5.3 step 9: mark all modules on stack as evaluated with error
                 for m_path in &stack {
-                    if let Some(m) = self.module_registry.get(m_path) {
+                    if let Some(m) = self.module_registry_get(m_path) {
                         let mut mb = m.borrow_mut();
                         mb.evaluated = true;
                         mb.is_evaluating = false;
@@ -404,7 +404,7 @@ impl Interpreter {
                 }
                 // Fallback: check module's exports directly
                 if let Some(ref module_path) = ns_data.module_path
-                    && let Some(module) = self.module_registry.get(module_path)
+                    && let Some(module) = self.module_registry_get(module_path)
                     && let Some(val) = module.borrow().exports.get(key)
                 {
                     return Completion::Normal(val.clone());
@@ -684,7 +684,7 @@ impl Interpreter {
             let mut stack = vec![];
             if let Err(ref e) = self.inner_module_evaluation(&resolved_canon, &mut stack, 0) {
                 for m_path in &stack {
-                    if let Some(m) = self.module_registry.get(m_path) {
+                    if let Some(m) = self.module_registry_get(m_path) {
                         let mut mb = m.borrow_mut();
                         mb.evaluated = true;
                         mb.is_evaluating = false;
@@ -721,7 +721,7 @@ impl Interpreter {
                             interp.inner_module_evaluation(&resolved_canon, &mut stack, 0)
                         {
                             for m_path in &stack {
-                                if let Some(m) = interp.module_registry.get(m_path) {
+                                if let Some(m) = interp.module_registry_get(m_path) {
                                     let mut mb = m.borrow_mut();
                                     mb.evaluated = true;
                                     mb.is_evaluating = false;
@@ -810,9 +810,7 @@ impl Interpreter {
                 .unwrap_or_else(|| m.path.canonicalize().unwrap_or_else(|_| m.path.clone()))
         };
         let root_module = self
-            .module_registry
-            .get(&root_path)
-            .cloned()
+            .module_registry_get(&root_path)
             .unwrap_or_else(|| module.clone());
 
         {
