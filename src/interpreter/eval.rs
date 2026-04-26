@@ -13959,8 +13959,8 @@ impl Interpreter {
         if let Some(obj) = self.get_object(obj_id) {
             let b = obj.borrow();
             if b.is_proxy() || b.proxy_revoked {
-                let target_id = b.proxy_target.as_ref().and_then(|t| t.borrow().id);
-                let handler_id = b.proxy_handler.as_ref().and_then(|h| h.borrow().id);
+                let target_id = b.proxy_target_id;
+                let handler_id = b.proxy_handler_id;
                 return Some((b.proxy_revoked, target_id, handler_id));
             }
         }
@@ -14010,13 +14010,10 @@ impl Interpreter {
     }
 
     pub(crate) fn get_proxy_target_val(&self, proxy_id: u64) -> JsValue {
-        if let Some(obj) = self.get_object(proxy_id) {
-            let b = obj.borrow();
-            if let Some(ref target) = b.proxy_target
-                && let Some(tid) = target.borrow().id
-            {
-                return JsValue::Object(crate::types::JsObject { id: tid });
-            }
+        if let Some(obj) = self.get_object(proxy_id)
+            && let Some(tid) = obj.borrow().proxy_target_id
+        {
+            return JsValue::Object(crate::types::JsObject { id: tid });
         }
         JsValue::Undefined
     }

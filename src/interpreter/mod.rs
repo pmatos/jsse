@@ -757,8 +757,7 @@ impl Interpreter {
                 drop(obj_ref);
                 return Err(self.create_type_error("Cannot perform operation on a revoked proxy"));
             }
-            if let Some(ref target) = obj_ref.proxy_target {
-                let target_id = target.borrow().id.unwrap();
+            if let Some(target_id) = obj_ref.proxy_target_id {
                 drop(obj_ref);
                 return self.get_function_realm(&JsValue::Object(crate::types::JsObject {
                     id: target_id,
