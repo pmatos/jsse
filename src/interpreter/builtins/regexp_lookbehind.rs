@@ -1851,8 +1851,11 @@ pub fn match_with_lookbehind_no_backtrack(
         }
 
         if !regex_cache.contains_key(&subst) {
+            // Cap unique compilations to bound DoS exposure, but keep scanning:
+            // skipping this position preserves matches at later positions whose
+            // substitutions either hit the existing cache or never compile.
             if compile_count >= MAX_NO_BACKTRACK_COMPILES {
-                return None;
+                continue;
             }
 
             // Translate and compile substituted pattern anchored at this position
@@ -1868,7 +1871,10 @@ pub fn match_with_lookbehind_no_backtrack(
             compile_count += 1;
             regex_cache.insert(subst.clone(), re);
         }
-        let re = regex_cache.get(&subst)?;
+        let re = match regex_cache.get(&subst) {
+            Some(r) => r,
+            None => continue,
+        };
 
         // Match against text from this position
         let text_from_pos = &text[pos_byte..];
