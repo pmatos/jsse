@@ -1711,6 +1711,20 @@ fn rename_groups_and_backrefs(chars: &[char], dup_names: &HashSet<String>, idx: 
 /// `(?:ANON_BODY){N-1}(?:BODY)`. If BODY has backreferences, uses renaming to keep
 /// groups and backrefs paired per iteration.
 fn expand_quantified_dup_groups(source: &str, dup_names: &HashSet<String>) -> String {
+    const MAX_PREPROCESS_RECURSION_DEPTH: usize = 256;
+    expand_quantified_dup_groups_with_depth(source, dup_names, 0, MAX_PREPROCESS_RECURSION_DEPTH)
+}
+
+fn expand_quantified_dup_groups_with_depth(
+    source: &str,
+    dup_names: &HashSet<String>,
+    depth: usize,
+    max_depth: usize,
+) -> String {
+    if depth >= max_depth {
+        return source.to_string();
+    }
+
     if dup_names.is_empty() {
         return source.to_string();
     }
@@ -1767,8 +1781,12 @@ fn expand_quantified_dup_groups(source: &str, dup_names: &HashSet<String>) -> St
                                     let has_backrefs = body_has_named_backref_to(body, dup_names);
                                     // Recursively expand the body first
                                     let body_str: String = body.iter().collect();
-                                    let expanded_body =
-                                        expand_quantified_dup_groups(&body_str, dup_names);
+                                    let expanded_body = expand_quantified_dup_groups_with_depth(
+                                        &body_str,
+                                        dup_names,
+                                        depth + 1,
+                                        max_depth,
+                                    );
                                     let expanded_body_chars: Vec<char> =
                                         expanded_body.chars().collect();
 
@@ -1804,7 +1822,12 @@ fn expand_quantified_dup_groups(source: &str, dup_names: &HashSet<String>) -> St
                     }
                     // Not a candidate for expansion — recurse into body
                     let body_str: String = body.iter().collect();
-                    let expanded_body = expand_quantified_dup_groups(&body_str, dup_names);
+                    let expanded_body = expand_quantified_dup_groups_with_depth(
+                        &body_str,
+                        dup_names,
+                        depth + 1,
+                        max_depth,
+                    );
                     result.push_str("(?:");
                     result.push_str(&expanded_body);
                     result.push(')');
