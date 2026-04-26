@@ -360,8 +360,7 @@ fn transitive_module_import_link_error_aborts_parent_before_evaluation() {
 
     let broken_canon = broken_path.canonicalize().unwrap_or(broken_path.clone());
     let cached = interp
-        .module_registry
-        .get(&broken_canon)
+        .module_registry_get(&broken_canon)
         .expect("broken module registry entry")
         .borrow()
         .error
@@ -522,10 +521,8 @@ fn gc_keeps_module_exports_alive_until_registry_entry_is_removed() {
     let mut interp = run_module_with_path(&fs::read_to_string(&main_path).unwrap(), &main_path);
     let canon = main_path.canonicalize().unwrap_or(main_path.clone());
     let module = interp
-        .module_registry
-        .get(&canon)
-        .expect("module registry entry")
-        .clone();
+        .module_registry_get(&canon)
+        .expect("module registry entry");
     let export_val = module
         .borrow()
         .exports
@@ -540,7 +537,9 @@ fn gc_keeps_module_exports_alive_until_registry_entry_is_removed() {
     interp.gc_safepoint();
     assert!(interp.get_object(obj_ref.id).is_some());
 
-    interp.module_registry.remove(&canon);
+    interp
+        .module_registry
+        .remove(&(interp.current_realm_id, canon));
     interp.gc_requested = true;
     interp.gc_safepoint();
     assert!(interp.get_object(obj_ref.id).is_none());
