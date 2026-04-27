@@ -251,7 +251,7 @@ pub(crate) fn is_array_value(interp: &mut Interpreter, obj_id: u64) -> Result<bo
         let (is_revoked, is_proxy, target_id, class) = {
             let b = obj.borrow();
             let tid = if b.is_proxy() {
-                b.proxy_target.as_ref().and_then(|t| t.borrow().id)
+                b.proxy_target_id
             } else {
                 None
             };

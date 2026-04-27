@@ -5,8 +5,8 @@ fn is_array_check(interp: &mut Interpreter, obj_id: u64) -> Result<bool, JsValue
     if let Some(obj) = interp.get_object(obj_id) {
         let (is_revoked, is_proxy, target_id, class) = {
             let b = obj.borrow();
-            let tid = b.proxy_target.as_ref().and_then(|t| t.borrow().id);
-            // is_proxy() checks proxy_target.is_some(), but revoked proxies have proxy_target=None
+            let tid = b.proxy_target_id;
+            // is_proxy() checks proxy_target_id.is_some(), but revoked proxies have proxy_target_id=None
             // Use proxy_revoked flag to also detect revoked proxies
             (
                 b.proxy_revoked,
