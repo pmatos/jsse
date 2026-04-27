@@ -1506,7 +1506,9 @@ impl Interpreter {
     fn exec_while(&mut self, w: &WhileStatement, env: &EnvRef) -> Completion {
         let mut v = JsValue::Undefined;
         loop {
+            self.gc_root_value(&v);
             self.gc_safepoint();
+            self.gc_unroot_value(&v);
             let test = match self.eval_expr(&w.test, env) {
                 Completion::Normal(v) => v,
                 other => return other,
@@ -1539,7 +1541,9 @@ impl Interpreter {
     fn exec_do_while(&mut self, dw: &DoWhileStatement, env: &EnvRef) -> Completion {
         let mut v = JsValue::Undefined;
         loop {
+            self.gc_root_value(&v);
             self.gc_safepoint();
+            self.gc_unroot_value(&v);
             match self.exec_statement(&dw.body, env) {
                 Completion::Normal(val) => {
                     v = val;
@@ -1574,7 +1578,9 @@ impl Interpreter {
             Statement::While(w) => {
                 let mut v = JsValue::Undefined;
                 loop {
+                    self.gc_root_value(&v);
                     self.gc_safepoint();
+                    self.gc_unroot_value(&v);
                     let test = match self.eval_expr(&w.test, env) {
                         Completion::Normal(v) => v,
                         other => return other,
@@ -1611,7 +1617,9 @@ impl Interpreter {
             Statement::DoWhile(dw) => {
                 let mut v = JsValue::Undefined;
                 loop {
+                    self.gc_root_value(&v);
                     self.gc_safepoint();
+                    self.gc_unroot_value(&v);
                     match self.exec_statement(&dw.body, env) {
                         Completion::Normal(val) => {
                             v = val;
@@ -1709,7 +1717,9 @@ impl Interpreter {
         let mut v = JsValue::Undefined;
         let result = 'for_loop: {
             loop {
+                self.gc_root_value(&v);
                 self.gc_safepoint();
+                self.gc_unroot_value(&v);
                 if let Some(test) = &f.test {
                     let val = match self.eval_expr(test, &iter_env) {
                         Completion::Normal(v) => v,
@@ -1846,7 +1856,9 @@ impl Interpreter {
                 }
             };
             for key in keys {
+                self.gc_root_value(&v);
                 self.gc_safepoint();
+                self.gc_unroot_value(&v);
                 // Skip keys that have been deleted during iteration (proxy-aware)
                 let still_exists = match self.proxy_has_property(obj_id, &key) {
                     Ok(b) => b,
@@ -2053,7 +2065,9 @@ impl Interpreter {
     ) -> Completion {
         let mut v = JsValue::Undefined;
         loop {
+            self.gc_root_value(&v);
             self.gc_safepoint();
+            self.gc_unroot_value(&v);
             let step_result = match self.iterator_next(iterator) {
                 Ok(v) => v,
                 Err(e) => return Completion::Throw(e),
