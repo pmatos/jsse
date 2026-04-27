@@ -2258,7 +2258,7 @@ impl Interpreter {
                             ]
                             .iter()
                             .any(|k| {
-                                b.properties.get(*k).is_some_and(|pd| {
+                                b.properties.get(k).is_some_and(|pd| {
                                     !matches!(pd.value, Some(JsValue::Undefined) | None)
                                 })
                             })

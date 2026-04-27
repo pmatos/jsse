@@ -14108,7 +14108,7 @@ impl Interpreter {
                     .iter()
                     .filter(|k| {
                         b.properties
-                            .get(*k)
+                            .get(k)
                             .is_some_and(|d| d.configurable == Some(false))
                     })
                     .cloned()
@@ -14118,7 +14118,7 @@ impl Interpreter {
                     .iter()
                     .filter(|k| {
                         b.properties
-                            .get(*k)
+                            .get(k)
                             .is_some_and(|d| d.configurable != Some(false))
                     })
                     .cloned()

@@ -395,7 +395,7 @@ pub(crate) fn enumerable_own_keys(
                 }
                 !k.starts_with("Symbol(")
                     && b.properties
-                        .get(*k)
+                        .get(k)
                         .is_some_and(|d| d.enumerable != Some(false))
             })
             .cloned()

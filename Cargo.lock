@@ -717,6 +717,7 @@ dependencies = [
  "regex",
  "rustc-hash",
  "ryu-js",
+ "smallvec",
  "tinystr",
  "unicode-ident",
 ]
