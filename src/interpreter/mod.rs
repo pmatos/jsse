@@ -25,6 +25,8 @@ mod exec;
 mod gc;
 pub(crate) mod generator_analysis;
 pub(crate) mod generator_transform;
+mod property_map;
+pub(crate) use property_map::PropertyMap;
 #[cfg(test)]
 mod tests;
 

@@ -1,4 +1,5 @@
 use crate::ast::*;
+use crate::interpreter::PropertyMap;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
 use crate::interpreter::helpers::same_value;
 use crate::types::{JsString, JsValue};
@@ -1652,7 +1653,7 @@ pub(crate) enum TemporalData {
 
 pub struct JsObjectData {
     pub id: Option<u64>,
-    pub properties: HashMap<String, PropertyDescriptor>,
+    pub properties: PropertyMap,
     pub property_order: Vec<String>,
     pub prototype_id: Option<u64>,
     pub callable: Option<JsFunction>,
@@ -1725,7 +1726,7 @@ impl JsObjectData {
     pub(crate) fn new() -> Self {
         Self {
             id: None,
-            properties: HashMap::new(),
+            properties: PropertyMap::new(),
             property_order: Vec::new(),
             prototype_id: None,
             callable: None,

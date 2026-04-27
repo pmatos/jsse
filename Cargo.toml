@@ -19,3 +19,4 @@ fixed_decimal = { version = "0.7", features = ["ryu"] }
 tinystr = "0.8"
 icu_normalizer = "2.1.1"
 rustc-hash = "2"
+smallvec = "1"
