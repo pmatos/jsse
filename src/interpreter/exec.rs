@@ -109,8 +109,10 @@ impl Interpreter {
         self.call_stack_envs.push(env.clone());
         let mut result = Completion::Empty;
         for stmt in stmts {
+            self.gc_root_completion(&result);
             self.gc_safepoint();
             let comp = self.exec_statement(stmt, env);
+            self.gc_unroot_completion(&result);
             match comp {
                 Completion::Normal(val) => result = Completion::Normal(val),
                 Completion::Empty => {} // keep previous result (UpdateEmpty semantics)
@@ -1834,135 +1836,149 @@ impl Interpreter {
             _ => return Completion::Normal(JsValue::Undefined),
         };
         let mut v = JsValue::Undefined;
-        if let JsValue::Object(ref o) = obj_val {
-            let obj_id = o.id;
-            let keys = {
-                let needs_proxy_path = self
-                    .get_object(obj_id)
-                    .map(|obj| {
-                        let b = obj.borrow();
-                        b.is_proxy() || b.module_namespace.is_some()
-                    })
-                    .unwrap_or(false);
-                if needs_proxy_path {
-                    match self.proxy_enumerable_keys_with_proto(obj_id) {
-                        Ok(k) => k,
-                        Err(e) => return Completion::Throw(e),
+        // Root the iterable wrapper across the entire for-in body. Primitive
+        // iterables (e.g. `for (k in Object("abc"))`) get a fresh String wrapper
+        // from `to_object` that is held only by this Rust local; without rooting,
+        // a GC fired by an inner safepoint inside the body would free the wrapper
+        // and leave `obj_id` dangling. The labeled block lets every early exit
+        // funnel through a single `gc_unroot_value` call.
+        self.gc_root_value(&obj_val);
+        let loop_result: Completion = 'unroot: {
+            if let JsValue::Object(ref o) = obj_val {
+                let obj_id = o.id;
+                let keys = {
+                    let needs_proxy_path = self
+                        .get_object(obj_id)
+                        .map(|obj| {
+                            let b = obj.borrow();
+                            b.is_proxy() || b.module_namespace.is_some()
+                        })
+                        .unwrap_or(false);
+                    if needs_proxy_path {
+                        match self.proxy_enumerable_keys_with_proto(obj_id) {
+                            Ok(k) => k,
+                            Err(e) => break 'unroot Completion::Throw(e),
+                        }
+                    } else if self.get_object(obj_id).is_some() {
+                        self.enumerable_keys_with_proto_on_id(obj_id)
+                    } else {
+                        break 'unroot Completion::Normal(JsValue::Undefined);
                     }
-                } else if self.get_object(obj_id).is_some() {
-                    self.enumerable_keys_with_proto_on_id(obj_id)
-                } else {
-                    return Completion::Normal(JsValue::Undefined);
-                }
-            };
-            for key in keys {
-                self.gc_root_value(&v);
-                self.gc_safepoint();
-                self.gc_unroot_value(&v);
-                // Skip keys that have been deleted during iteration (proxy-aware)
-                let still_exists = match self.proxy_has_property(obj_id, &key) {
-                    Ok(b) => b,
-                    Err(e) => return Completion::Throw(e),
                 };
-                if !still_exists {
-                    continue;
-                }
-                let key_val = JsValue::String(JsString::from_str(&key));
-                let for_env = Environment::new(Some(env.clone()));
-                match &fi.left {
-                    ForInOfLeft::Variable(decl) => {
-                        let kind = match decl.kind {
-                            VarKind::Var => BindingKind::Var,
-                            VarKind::Let => BindingKind::Let,
-                            VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
-                                BindingKind::Const
-                            }
-                        };
-                        let bind_env = if decl.kind == VarKind::Var {
-                            env
-                        } else {
-                            &for_env
-                        };
-                        if let Some(d) = decl.declarations.first()
-                            && let Err(e) = self.bind_pattern(&d.pattern, key_val, kind, bind_env)
-                        {
-                            return Completion::Throw(e);
-                        }
+                for key in keys {
+                    self.gc_root_value(&v);
+                    self.gc_safepoint();
+                    self.gc_unroot_value(&v);
+                    // Skip keys that have been deleted during iteration (proxy-aware)
+                    let still_exists = match self.proxy_has_property(obj_id, &key) {
+                        Ok(b) => b,
+                        Err(e) => break 'unroot Completion::Throw(e),
+                    };
+                    if !still_exists {
+                        continue;
                     }
-                    ForInOfLeft::Pattern(pat) => match pat {
-                        Pattern::Identifier(name) => {
-                            if !env.borrow().has(name) && env.borrow().strict {
-                                return Completion::Throw(
-                                    self.create_reference_error(&format!("{name} is not defined")),
-                                );
-                            }
-                            let _ = env.borrow_mut().set(name, key_val);
-                        }
-                        Pattern::MemberExpression(expr) => {
-                            if let Err(e) = self.assign_to_expr(expr, key_val, env) {
-                                return Completion::Throw(e);
-                            }
-                        }
-                        _ => {
-                            if let Err(e) =
-                                self.bind_pattern(pat, key_val, BindingKind::Let, &for_env)
-                            {
-                                return Completion::Throw(e);
-                            }
-                        }
-                    },
-                    ForInOfLeft::Expression(expr) => {
-                        match expr {
-                            Expression::Identifier(_) => {
-                                if let Err(e) = self.assign_to_expr(expr, key_val, env) {
-                                    return Completion::Throw(e);
+                    let key_val = JsValue::String(JsString::from_str(&key));
+                    let for_env = Environment::new(Some(env.clone()));
+                    match &fi.left {
+                        ForInOfLeft::Variable(decl) => {
+                            let kind = match decl.kind {
+                                VarKind::Var => BindingKind::Var,
+                                VarKind::Let => BindingKind::Let,
+                                VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
+                                    BindingKind::Const
                                 }
+                            };
+                            let bind_env = if decl.kind == VarKind::Var {
+                                env
+                            } else {
+                                &for_env
+                            };
+                            if let Some(d) = decl.declarations.first()
+                                && let Err(e) =
+                                    self.bind_pattern(&d.pattern, key_val, kind, bind_env)
+                            {
+                                break 'unroot Completion::Throw(e);
                             }
-                            Expression::Member(..) => {
+                        }
+                        ForInOfLeft::Pattern(pat) => match pat {
+                            Pattern::Identifier(name) => {
+                                if !env.borrow().has(name) && env.borrow().strict {
+                                    break 'unroot Completion::Throw(self.create_reference_error(
+                                        &format!("{name} is not defined"),
+                                    ));
+                                }
+                                let _ = env.borrow_mut().set(name, key_val);
+                            }
+                            Pattern::MemberExpression(expr) => {
                                 if let Err(e) = self.assign_to_expr(expr, key_val, env) {
-                                    return Completion::Throw(e);
+                                    break 'unroot Completion::Throw(e);
                                 }
                             }
                             _ => {
-                                // Evaluate for side effects, then throw ReferenceError
-                                match self.eval_expr(expr, env) {
-                                    Completion::Normal(_) => {}
-                                    other => return other,
+                                if let Err(e) =
+                                    self.bind_pattern(pat, key_val, BindingKind::Let, &for_env)
+                                {
+                                    break 'unroot Completion::Throw(e);
                                 }
-                                return Completion::Throw(self.create_reference_error(
-                                    "Invalid left-hand side in for-in loop",
-                                ));
+                            }
+                        },
+                        ForInOfLeft::Expression(expr) => {
+                            match expr {
+                                Expression::Identifier(_) => {
+                                    if let Err(e) = self.assign_to_expr(expr, key_val, env) {
+                                        break 'unroot Completion::Throw(e);
+                                    }
+                                }
+                                Expression::Member(..) => {
+                                    if let Err(e) = self.assign_to_expr(expr, key_val, env) {
+                                        break 'unroot Completion::Throw(e);
+                                    }
+                                }
+                                _ => {
+                                    // Evaluate for side effects, then throw ReferenceError
+                                    match self.eval_expr(expr, env) {
+                                        Completion::Normal(_) => {}
+                                        other => break 'unroot other,
+                                    }
+                                    break 'unroot Completion::Throw(self.create_reference_error(
+                                        "Invalid left-hand side in for-in loop",
+                                    ));
+                                }
                             }
                         }
                     }
-                }
-                let result = self.exec_statement(&fi.body, &for_env);
-                match result {
-                    Completion::Normal(val) => {
-                        v = val;
-                    }
-                    Completion::Empty => {}
-                    Completion::Continue(None, cont_val) => {
-                        if let Some(val) = cont_val {
+                    let result = self.exec_statement(&fi.body, &for_env);
+                    match result {
+                        Completion::Normal(val) => {
                             v = val;
                         }
-                    }
-                    Completion::Continue(Some(ref l), cont_val) if label == Some(l.as_str()) => {
-                        if let Some(val) = cont_val {
-                            v = val;
+                        Completion::Empty => {}
+                        Completion::Continue(None, cont_val) => {
+                            if let Some(val) = cont_val {
+                                v = val;
+                            }
                         }
-                    }
-                    Completion::Break(None, break_val) => {
-                        if let Some(val) = break_val {
-                            v = val;
+                        Completion::Continue(Some(ref l), cont_val)
+                            if label == Some(l.as_str()) =>
+                        {
+                            if let Some(val) = cont_val {
+                                v = val;
+                            }
                         }
-                        return Completion::Normal(v);
+                        Completion::Break(None, break_val) => {
+                            if let Some(val) = break_val {
+                                v = val;
+                            }
+                            break 'unroot Completion::Normal(v);
+                        }
+                        other => break 'unroot other,
                     }
-                    other => return other,
                 }
             }
-        }
-        Completion::Normal(v)
+            Completion::Normal(v)
+        };
+        self.gc_unroot_value(&obj_val);
+        loop_result
     }
 
     fn collect_for_decl_bound_names(left: &ForInOfLeft) -> Vec<String> {
