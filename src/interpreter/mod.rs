@@ -732,6 +732,18 @@ impl Interpreter {
         }
     }
 
+    pub(crate) fn gc_root_completion(&mut self, c: &Completion) {
+        if let Completion::Normal(v) = c {
+            self.gc_root_value(v);
+        }
+    }
+
+    pub(crate) fn gc_unroot_completion(&mut self, c: &Completion) {
+        if let Completion::Normal(v) = c {
+            self.gc_unroot_value(v);
+        }
+    }
+
     pub(crate) fn can_be_held_weakly(&self, val: &JsValue) -> bool {
         match val {
             JsValue::Object(_) => true,
