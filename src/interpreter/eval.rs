@@ -12208,8 +12208,13 @@ impl Interpreter {
                                     },
                                 );
                             }
-                            if uses_arguments {
-                                let env_strict = func_env.borrow().strict;
+                            let env_strict = func_env.borrow().strict;
+                            // Sloppy non-arrow functions need a real arguments object even
+                            // when the body doesn't reference it, because Annex B
+                            // `Function.prototype.arguments` (§B.3.7) observes the active
+                            // call frame's arguments_obj.
+                            let needs_args = uses_arguments || (!is_strict && !env_strict);
+                            if needs_args {
                                 let use_mapped = is_simple && !is_strict && !env_strict;
                                 let param_names: Vec<String> = if use_mapped {
                                     params

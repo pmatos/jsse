@@ -552,8 +552,16 @@ fn stmt_uses_arguments(stmt: &Statement) -> bool {
                 || f.update.as_ref().is_some_and(expr_uses_arguments)
                 || stmt_uses_arguments(&f.body)
         }
-        Statement::ForIn(f) => expr_uses_arguments(&f.right) || stmt_uses_arguments(&f.body),
-        Statement::ForOf(f) => expr_uses_arguments(&f.right) || stmt_uses_arguments(&f.body),
+        Statement::ForIn(f) => {
+            for_in_of_left_uses_arguments(&f.left)
+                || expr_uses_arguments(&f.right)
+                || stmt_uses_arguments(&f.body)
+        }
+        Statement::ForOf(f) => {
+            for_in_of_left_uses_arguments(&f.left)
+                || expr_uses_arguments(&f.right)
+                || stmt_uses_arguments(&f.body)
+        }
         Statement::Return(e) => e.as_ref().is_some_and(expr_uses_arguments),
         Statement::Throw(e) => expr_uses_arguments(e),
         Statement::Try(t) => {
@@ -572,8 +580,13 @@ fn stmt_uses_arguments(stmt: &Statement) -> bool {
         }
         Statement::Labeled(_, s) => stmt_uses_arguments(s),
         Statement::With(e, s) => expr_uses_arguments(e) || stmt_uses_arguments(s),
-        // Don't recurse into nested function declarations (they have their own arguments)
-        Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
+        // Nested function declarations have their own `arguments`; classes have
+        // their own scope for method bodies, but `extends` and computed element
+        // keys evaluate in the enclosing scope and may reference `arguments`.
+        Statement::FunctionDeclaration(_) => false,
+        Statement::ClassDeclaration(c) => {
+            class_extends_or_computed_keys_use_arguments(c.super_class.as_deref(), &c.body)
+        }
         Statement::Empty | Statement::Break(_) | Statement::Continue(_) | Statement::Debugger => {
             false
         }
@@ -589,8 +602,13 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
         | Expression::ImportMeta
         | Expression::NewTarget
         | Expression::PrivateIdentifier(_) => false,
-        // Don't recurse into regular functions or classes (they have own arguments)
-        Expression::Function(_) | Expression::Class(_) => false,
+        // Regular functions have their own `arguments`. Classes have their own
+        // scope for method bodies, but `extends` and computed class element keys
+        // evaluate in the enclosing scope and may reference `arguments`.
+        Expression::Function(_) => false,
+        Expression::Class(c) => {
+            class_extends_or_computed_keys_use_arguments(c.super_class.as_deref(), &c.body)
+        }
         // DO recurse into arrow functions (they inherit arguments)
         Expression::ArrowFunction(a) => match &a.body {
             ArrowBody::Expression(e) => expr_uses_arguments(e),
@@ -659,13 +677,44 @@ fn pattern_uses_arguments(pat: &Pattern) -> bool {
             })
         }),
         Pattern::Object(props) => props.iter().any(|p| match p {
-            ObjectPatternProperty::KeyValue(_, pat) | ObjectPatternProperty::Rest(pat) => {
-                pattern_uses_arguments(pat)
+            ObjectPatternProperty::KeyValue(key, pat) => {
+                matches!(key, PropertyKey::Computed(e) if expr_uses_arguments(e))
+                    || pattern_uses_arguments(pat)
             }
+            ObjectPatternProperty::Rest(pat) => pattern_uses_arguments(pat),
             ObjectPatternProperty::Shorthand(name) => name == "arguments",
         }),
         Pattern::Assign(pat, expr) => pattern_uses_arguments(pat) || expr_uses_arguments(expr),
         Pattern::Rest(pat) => pattern_uses_arguments(pat),
         Pattern::MemberExpression(e) => expr_uses_arguments(e),
     }
+}
+
+fn for_in_of_left_uses_arguments(left: &ForInOfLeft) -> bool {
+    match left {
+        ForInOfLeft::Variable(d) => d.declarations.iter().any(|d| {
+            pattern_uses_arguments(&d.pattern) || d.init.as_ref().is_some_and(expr_uses_arguments)
+        }),
+        ForInOfLeft::Pattern(p) => pattern_uses_arguments(p),
+        ForInOfLeft::Expression(e) => expr_uses_arguments(e),
+    }
+}
+
+fn class_extends_or_computed_keys_use_arguments(
+    super_class: Option<&Expression>,
+    body: &[ClassElement],
+) -> bool {
+    if super_class.is_some_and(expr_uses_arguments) {
+        return true;
+    }
+    body.iter().any(|el| match el {
+        ClassElement::Method(m) => {
+            matches!(&m.key, PropertyKey::Computed(e) if expr_uses_arguments(e))
+        }
+        ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
+            matches!(&p.key, PropertyKey::Computed(e) if expr_uses_arguments(e))
+        }
+        // Static blocks have their own scope per spec §15.7.13 — do not recurse.
+        ClassElement::StaticBlock(_) => false,
+    })
 }
