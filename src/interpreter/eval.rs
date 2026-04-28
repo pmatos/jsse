@@ -4918,7 +4918,10 @@ impl Interpreter {
             let gc_frame = self.gc_root_frame();
             let arg_vals = match self.eval_spread_args(args, env) {
                 Ok(v) => v,
-                Err(e) => return Completion::Throw(e),
+                Err(e) => {
+                    self.gc_unroot_frame(gc_frame);
+                    return Completion::Throw(e);
+                }
             };
             let this_in_tdz = Self::this_is_in_tdz(env);
             if this_in_tdz {
@@ -5175,7 +5178,10 @@ impl Interpreter {
             let gc_frame = self.gc_root_frame();
             let evaluated_args = match self.eval_spread_args(args, env) {
                 Ok(args) => args,
-                Err(e) => return Completion::Throw(e),
+                Err(e) => {
+                    self.gc_unroot_frame(gc_frame);
+                    return Completion::Throw(e);
+                }
             };
             let caller_strict = env.borrow().strict;
             let result = self.perform_eval(&evaluated_args, caller_strict, true, env);
