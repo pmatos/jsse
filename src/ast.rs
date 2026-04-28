@@ -566,9 +566,10 @@ fn stmt_uses_arguments(stmt: &Statement) -> bool {
         Statement::Throw(e) => expr_uses_arguments(e),
         Statement::Try(t) => {
             stmts_use_arguments(&t.block)
-                || t.handler
-                    .as_ref()
-                    .is_some_and(|h| stmts_use_arguments(&h.body))
+                || t.handler.as_ref().is_some_and(|h| {
+                    h.param.as_ref().is_some_and(pattern_uses_arguments)
+                        || stmts_use_arguments(&h.body)
+                })
                 || t.finalizer.as_ref().is_some_and(|f| stmts_use_arguments(f))
         }
         Statement::Switch(s) => {

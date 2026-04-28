@@ -11749,7 +11749,6 @@ impl Interpreter {
                         if let Some(&fn_realm) = self.function_realm_map.get(&o.id) {
                             self.current_realm_id = fn_realm;
                         }
-                        let gc_frame = self.gc_root_frame();
                         self.gc_root_value(_this_val);
                         for a in args.iter() {
                             self.gc_root_value(a);
@@ -11758,7 +11757,15 @@ impl Interpreter {
                         let result = f(self, _this_val, args);
                         self.last_call_this_value = saved_this;
                         self.last_call_had_explicit_return = true;
-                        self.gc_unroot_frame(gc_frame);
+                        // Unroot only what we pushed. A bulk truncate would also
+                        // drop persistent roots pushed by the builtin itself
+                        // (e.g. Atomics.waitAsync / $262.agent.getReportAsync
+                        // root resolve_fn for an async completion that runs
+                        // after this call returns).
+                        for a in args.iter().rev() {
+                            self.gc_unroot_value(a);
+                        }
+                        self.gc_unroot_value(_this_val);
                         self.current_realm_id = caller_realm;
                         result
                     }
