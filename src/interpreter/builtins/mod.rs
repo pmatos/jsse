@@ -2525,6 +2525,7 @@ impl Interpreter {
                             is_method: false,
                             source_text: Some(fn_source_text.into()),
                             captured_new_target: None,
+                            uses_arguments: true, // conservative for dynamic Function()
                         };
                         // Create function in the Function constructor's realm
                         let old_realm = interp.current_realm_id;
@@ -3109,6 +3110,7 @@ impl Interpreter {
                             is_method: false,
                             source_text: Some(fn_source_text.into()),
                             captured_new_target: None,
+                            uses_arguments: true, // conservative for dynamic AsyncFunction()
                         };
                         let fn_val = interp.create_function(js_func);
                         // Apply GetPrototypeFromConstructor(newTarget, "%AsyncFunction.prototype%")
@@ -3268,6 +3270,7 @@ impl Interpreter {
                             is_method: false,
                             source_text: Some(fn_source_text.into()),
                             captured_new_target: None,
+                            uses_arguments: true, // conservative for dynamic GeneratorFunction()
                         };
                         let fn_val = interp.create_function(js_func);
                         // Apply GetPrototypeFromConstructor(newTarget, "%GeneratorFunction.prototype%")
@@ -3429,6 +3432,7 @@ impl Interpreter {
                             is_method: false,
                             source_text: Some(fn_source_text.into()),
                             captured_new_target: None,
+                            uses_arguments: true, // conservative for dynamic AsyncGeneratorFunction()
                         };
                         let fn_val = interp.create_function(js_func);
                         // Apply GetPrototypeFromConstructor(newTarget, "%AsyncGeneratorFunction.prototype%")
@@ -6598,20 +6602,21 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
+                    let gc_frame = interp.gc_root_frame();
                     interp.gc_root_value(&iterator);
                     loop {
                         let step = match interp.iterator_step(&iterator) {
                             Ok(Some(result)) => result,
                             Ok(None) => break,
                             Err(e) => {
-                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_frame(gc_frame);
                                 return Completion::Throw(e);
                             }
                         };
                         let next_item = match interp.iterator_value(&step) {
                             Ok(v) => v,
                             Err(e) => {
-                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_frame(gc_frame);
                                 return Completion::Throw(e);
                             }
                         };
@@ -6619,7 +6624,7 @@ impl Interpreter {
                         let item_id = if let JsValue::Object(ref vo) = next_item {
                             vo.id
                         } else {
-                            interp.gc_unroot_value(&iterator);
+                            interp.gc_unroot_frame(gc_frame);
                             let err = interp.create_type_error("Iterator value is not an object");
                             interp.iterator_close(&iterator, err.clone());
                             return Completion::Throw(err);
@@ -6628,7 +6633,7 @@ impl Interpreter {
                         let key_raw = match interp.get_object_property(item_id, "0", &next_item) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
-                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_frame(gc_frame);
                                 interp.iterator_close(&iterator, e.clone());
                                 return Completion::Throw(e);
                             }
@@ -6638,7 +6643,7 @@ impl Interpreter {
                         let value = match interp.get_object_property(item_id, "1", &next_item) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
-                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_frame(gc_frame);
                                 interp.iterator_close(&iterator, e.clone());
                                 return Completion::Throw(e);
                             }
@@ -6648,7 +6653,7 @@ impl Interpreter {
                         let key = match interp.to_property_key(&key_raw) {
                             Ok(k) => k,
                             Err(e) => {
-                                interp.gc_unroot_value(&iterator);
+                                interp.gc_unroot_frame(gc_frame);
                                 interp.iterator_close(&iterator, e.clone());
                                 return Completion::Throw(e);
                             }
@@ -6657,7 +6662,7 @@ impl Interpreter {
                             obj_data.borrow_mut().insert_value(key, value);
                         }
                     }
-                    interp.gc_unroot_value(&iterator);
+                    interp.gc_unroot_frame(gc_frame);
                     Completion::Normal(obj_val)
                 },
             ));
