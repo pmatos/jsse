@@ -104,7 +104,7 @@ pub(crate) fn to_js_string(val: &JsValue) -> String {
 /// Convert a JsValue to UTF-16 code units, preserving lone surrogates for strings.
 pub(crate) fn js_value_to_code_units(val: &JsValue) -> Vec<u16> {
     match val {
-        JsValue::String(s) => s.code_units.clone(),
+        JsValue::String(s) => s.code_units.to_vec(),
         _ => to_js_string(val).encode_utf16().collect(),
     }
 }

@@ -1799,9 +1799,9 @@ impl JsObjectData {
             if let Ok(idx) = key.parse::<usize>()
                 && idx < units.len()
             {
-                return Some(JsValue::String(crate::types::JsString {
-                    code_units: vec![units[idx]],
-                }));
+                return Some(JsValue::String(crate::types::JsString::from_vec(vec![
+                    units[idx],
+                ])));
             }
         }
         None
@@ -1872,9 +1872,9 @@ impl JsObjectData {
                 && idx < units.len()
             {
                 return Some(PropertyDescriptor {
-                    value: Some(JsValue::String(crate::types::JsString {
-                        code_units: vec![units[idx]],
-                    })),
+                    value: Some(JsValue::String(crate::types::JsString::from_vec(vec![
+                        units[idx],
+                    ]))),
                     writable: Some(false),
                     enumerable: Some(true),
                     configurable: Some(false),
@@ -1966,9 +1966,7 @@ impl JsObjectData {
                 && idx < s.code_units.len()
             {
                 return Some(PropertyDescriptor::data(
-                    JsValue::String(JsString {
-                        code_units: vec![s.code_units[idx]],
-                    }),
+                    JsValue::String(JsString::from_vec(vec![s.code_units[idx]])),
                     false,
                     true,
                     false,
@@ -2034,9 +2032,8 @@ impl JsObjectData {
                 return false;
             }
             if let Some(ref v) = desc.value {
-                let char_val = JsValue::String(crate::types::JsString {
-                    code_units: vec![s.code_units[idx]],
-                });
+                let char_val =
+                    JsValue::String(crate::types::JsString::from_vec(vec![s.code_units[idx]]));
                 if !same_value(v, &char_val) {
                     return false;
                 }
@@ -2645,9 +2642,9 @@ impl JsObjectData {
                 && idx < units.len()
             {
                 return Some(PropertyDescriptor {
-                    value: Some(JsValue::String(crate::types::JsString {
-                        code_units: vec![units[idx]],
-                    })),
+                    value: Some(JsValue::String(crate::types::JsString::from_vec(vec![
+                        units[idx],
+                    ]))),
                     writable: Some(false),
                     enumerable: Some(true),
                     configurable: Some(false),
