@@ -6908,18 +6908,13 @@ fn regexp_exec_raw(
 }
 
 fn get_symbol_key(interp: &Interpreter, name: &str) -> Option<String> {
-    interp
-        .realm()
-        .global_env
-        .borrow()
-        .get("Symbol")
-        .and_then(|sv| {
-            if let JsValue::Object(so) = sv {
-                Some(to_js_string(&interp.get_property_on_id(so.id, name)))
-            } else {
-                None
-            }
-        })
+    interp.get_global_var_ref("Symbol").and_then(|sv| {
+        if let JsValue::Object(so) = sv {
+            Some(to_js_string(&interp.get_property_on_id(so.id, name)))
+        } else {
+            None
+        }
+    })
 }
 
 impl Interpreter {

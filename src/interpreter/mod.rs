@@ -20,6 +20,7 @@ mod helpers;
 pub(crate) use helpers::*;
 mod builtins;
 pub(crate) use builtins::regexp::validate_js_pattern;
+mod env_helpers;
 mod eval;
 mod exec;
 mod gc;
@@ -359,9 +360,7 @@ impl Interpreter {
 
         // $262.global — reference to the realm's global object
         let global_env = self.realms[realm_id].global_env.clone();
-        let global_obj = global_env.borrow().global_object.clone();
-        if let Some(ref go) = global_obj {
-            let go_id = go.borrow().id.unwrap();
+        if let Some(go_id) = global_env.borrow().global_object_id {
             dollar_262.borrow_mut().insert_builtin(
                 "global".to_string(),
                 JsValue::Object(crate::types::JsObject { id: go_id }),
@@ -837,7 +836,7 @@ impl Interpreter {
         let val = self.create_function(func);
         let global_env = self.realm().global_env.clone();
         global_env.borrow_mut().declare(name, kind);
-        let _ = global_env.borrow_mut().set(name, val);
+        let _ = self.env_set(&global_env, name, val);
     }
 
     #[allow(clippy::wrong_self_convention)]
@@ -1415,13 +1414,13 @@ impl Interpreter {
 
     /// Convert a symbol property key string (e.g. "Symbol(Symbol.toStringTag)" or "Symbol(desc)#42")
     /// back to a JsValue::Symbol.
-    pub(crate) fn symbol_key_to_jsvalue(&self, key: &str) -> JsValue {
+    pub(crate) fn symbol_key_to_jsvalue(&mut self, key: &str) -> JsValue {
         // Well-known symbols: "Symbol(Symbol.xyz)" — look up from Symbol constructor
         if key.starts_with("Symbol(Symbol.") && key.ends_with(')') && !key.contains('#') {
             // Extract the well-known name (e.g. "toStringTag" from "Symbol(Symbol.toStringTag)")
             let inner = &key[7..key.len() - 1]; // "Symbol.toStringTag"
             let name = &inner[7..]; // "toStringTag"
-            if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
+            if let Some(sym_val) = self.get_global_var("Symbol")
                 && let JsValue::Object(so) = sym_val
             {
                 let val = self.get_property_on_id(so.id, name);

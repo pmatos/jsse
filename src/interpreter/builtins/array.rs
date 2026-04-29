@@ -828,7 +828,13 @@ fn array_species_create(
             Err(e) => return Err(Completion::Throw(e)),
         };
         if c_realm != interp.current_realm_id {
-            let realm_array = interp.realms[c_realm].global_env.borrow().get("Array");
+            // Look up "Array" from the c_realm's global object (its env.bindings
+            // had "Array" stripped at setup_globals; the binding now lives only
+            // on the global object).
+            let realm_array = interp.realms[c_realm]
+                .global_object
+                .and_then(|gid| interp.get_object(gid))
+                .and_then(|go| go.borrow().own_property_lookup("Array"));
             if let Some(ref ra) = realm_array
                 && same_value(&c, ra)
             {
@@ -3811,7 +3817,7 @@ impl Interpreter {
         ));
 
         // Set Array statics on the Array constructor
-        let array_val = self.realm().global_env.borrow().get("Array");
+        let array_val = self.get_global_var("Array");
         if let Some(array_val) = array_val
             && let JsValue::Object(o) = &array_val
             && let Some(obj) = self.get_object(o.id)

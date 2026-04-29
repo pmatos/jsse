@@ -1255,7 +1255,7 @@ impl Interpreter {
                 Completion::Throw(e)
             },
         ));
-        if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
+        if let Some(sym_val) = self.get_global_var("Symbol")
             && let JsValue::Object(sym_obj) = &sym_val
         {
             let tp_key = to_js_string(&self.get_property_on_id(sym_obj.id, "toPrimitive"));
@@ -1587,8 +1587,8 @@ impl Interpreter {
     }
 
     pub(crate) fn create_error(&mut self, name: &str, msg: &str) -> JsValue {
-        let env = self.realm().global_env.borrow();
-        let error_proto_id: Option<u64> = env.get(name).and_then(|v| {
+        let ctor = self.get_global_var(name);
+        let error_proto_id: Option<u64> = ctor.and_then(|v| {
             if let JsValue::Object(o) = &v {
                 let pv = self.get_property_on_id(o.id, "prototype");
                 if let JsValue::Object(p) = &pv {
@@ -1600,7 +1600,6 @@ impl Interpreter {
                 None
             }
         });
-        drop(env);
         let obj = self.create_object();
         {
             let mut o = obj.borrow_mut();

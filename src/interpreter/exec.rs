@@ -4,7 +4,7 @@ impl Interpreter {
     pub(crate) fn exec_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
         // Hoist var and function declarations
         let var_scope = Environment::find_var_scope(env);
-        let is_global = var_scope.borrow().global_object.is_some();
+        let is_global = var_scope.borrow().global_object_id.is_some();
         let is_block_scope = !Rc::ptr_eq(env, &var_scope);
 
         // §16.1.7 GlobalDeclarationInstantiation: pre-check CanDeclareGlobalFunction
@@ -93,7 +93,7 @@ impl Interpreter {
                     }
                     if !env.borrow().bindings.contains_key(&name) {
                         if is_global {
-                            env.borrow_mut().declare_global_var(&name);
+                            self.env_declare_global_var(env, &name);
                         } else {
                             env.borrow_mut().declare(&name, BindingKind::Var);
                         }
@@ -212,8 +212,8 @@ impl Interpreter {
         stmts: &[Statement],
         env: &EnvRef,
     ) -> Option<Completion> {
-        let global_obj = env.borrow().global_object.clone();
-        let global_obj = global_obj?;
+        let gid = env.borrow().global_object_id?;
+        let global_obj = self.get_object(gid)?;
 
         // §16.1.7 step 3: Check lexical names
         let lex_names = Self::collect_lex_names(stmts);
@@ -313,8 +313,7 @@ impl Interpreter {
         let val = self.create_function(func);
         if is_global {
             // §16.1.7 step 17c: CreateGlobalFunctionBinding(fn, fo, false)
-            env.borrow_mut()
-                .declare_global_function_binding(&f.name, val, false);
+            self.env_declare_global_function_binding(env, &f.name, val, false);
         } else {
             env.borrow_mut().declare(&f.name, BindingKind::Var);
             let _ = env.borrow_mut().set(&f.name, val);
@@ -381,12 +380,12 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn hoist_pattern(&self, pat: &Pattern, env: &EnvRef, is_global: bool) {
+    pub(crate) fn hoist_pattern(&mut self, pat: &Pattern, env: &EnvRef, is_global: bool) {
         match pat {
             Pattern::Identifier(name) => {
                 if !env.borrow().bindings.contains_key(name) {
                     if is_global {
-                        env.borrow_mut().declare_global_var(name);
+                        self.env_declare_global_var(env, name);
                     } else {
                         env.borrow_mut().declare(name, BindingKind::Var);
                     }
@@ -410,7 +409,7 @@ impl Interpreter {
                         ObjectPatternProperty::Shorthand(name) => {
                             if !env.borrow().bindings.contains_key(name) {
                                 if is_global {
-                                    env.borrow_mut().declare_global_var(name);
+                                    self.env_declare_global_var(env, name);
                                 } else {
                                     env.borrow_mut().declare(name, BindingKind::Var);
                                 }
@@ -427,7 +426,7 @@ impl Interpreter {
     }
 
     pub(crate) fn hoist_vars_from_stmt(
-        &self,
+        &mut self,
         stmt: &Statement,
         var_scope: &EnvRef,
         is_global: bool,
@@ -942,19 +941,17 @@ impl Interpreter {
                     other => return other,
                 };
                 if let JsValue::Object(obj_ref) = &obj_val {
-                    if let Some(obj_data) = self.get_object(obj_ref.id) {
+                    if self.get_object(obj_ref.id).is_some() {
                         let with_env = Rc::new(RefCell::new(Environment {
                             bindings: HashMap::new(),
                             parent: Some(env.clone()),
                             strict: env.borrow().strict,
                             is_function_scope: false,
                             is_arrow_scope: false,
-                            with_object: Some(WithObject {
-                                _object: obj_data,
-                                obj_id: obj_ref.id,
-                            }),
+                            with_object: Some(WithObject { obj_id: obj_ref.id }),
                             dispose_stack: None,
-                            global_object: None,
+                            global_object_id: None,
+                            global_object_rc: None,
                             annexb_function_names: None,
                             class_private_names: None,
                             is_field_initializer: false,
@@ -994,7 +991,7 @@ impl Interpreter {
                 // Only for regular functions (not generators or async)
                 if !f.is_generator && !f.is_async && !env.borrow().strict {
                     let is_block =
-                        !env.borrow().is_function_scope && env.borrow().global_object.is_none();
+                        !env.borrow().is_function_scope && env.borrow().global_object_id.is_none();
                     if is_block {
                         let var_scope = Environment::find_var_scope(env);
                         let is_registered = var_scope
@@ -1165,11 +1162,11 @@ impl Interpreter {
                 if kind == BindingKind::Var {
                     let var_scope = Environment::find_var_scope(env);
                     let already_declared = {
+                        let gid = var_scope.borrow().global_object_id;
                         let vs = var_scope.borrow();
                         vs.bindings.contains_key(name)
-                            || vs
-                                .global_object
-                                .as_ref()
+                            || gid
+                                .and_then(|id| self.get_object(id))
                                 .is_some_and(|g| g.borrow().properties.contains_key(name))
                     };
                     if !already_declared {
@@ -1182,11 +1179,11 @@ impl Interpreter {
                                 let strict = env.borrow().strict;
                                 self.with_set_mutable_binding(obj_id, name, val, strict)
                             }
-                            Ok(None) => env.borrow_mut().set(name, val),
+                            Ok(None) => self.env_set(env, name, val),
                             Err(e) => Err(e),
                         }
                     } else {
-                        env.borrow_mut().set(name, val)
+                        self.env_set(env, name, val)
                     }
                 } else {
                     env.borrow_mut().declare(name, kind);
@@ -1419,9 +1416,10 @@ impl Interpreter {
                                 // Step 2: ResolveBinding(bindingId, environment)
                                 let var_scope = Environment::find_var_scope(env);
                                 let already = {
+                                    let gid = var_scope.borrow().global_object_id;
                                     let vs = var_scope.borrow();
                                     vs.bindings.contains_key(binding_name)
-                                        || vs.global_object.as_ref().is_some_and(|g| {
+                                        || gid.and_then(|id| self.get_object(id)).is_some_and(|g| {
                                             g.borrow().properties.contains_key(binding_name)
                                         })
                                 };
@@ -1903,12 +1901,12 @@ impl Interpreter {
                         }
                         ForInOfLeft::Pattern(pat) => match pat {
                             Pattern::Identifier(name) => {
-                                if !env.borrow().has(name) && env.borrow().strict {
+                                if !self.env_has(env, name) && env.borrow().strict {
                                     break 'unroot Completion::Throw(self.create_reference_error(
                                         &format!("{name} is not defined"),
                                     ));
                                 }
-                                let _ = env.borrow_mut().set(name, key_val);
+                                let _ = self.env_set(env, name, key_val);
                             }
                             Pattern::MemberExpression(expr) => {
                                 if let Err(e) = self.assign_to_expr(expr, key_val, env) {

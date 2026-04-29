@@ -424,7 +424,8 @@ impl Interpreter {
                         is_arrow_scope: false,
                         with_object: None,
                         dispose_stack: None,
-                        global_object: None,
+                        global_object_id: None,
+                        global_object_rc: None,
                         annexb_function_names: None,
                         class_private_names: None,
                         is_field_initializer: false,
@@ -775,8 +776,10 @@ impl Interpreter {
                     }
 
                     // At global level — check global object property descriptor
-                    let global_obj = self.realm().global_env.borrow().global_object.clone();
-                    if let Some(ref global) = global_obj {
+                    let global_id = self.realm().global_env.borrow().global_object_id;
+                    if let Some(gid) = global_id
+                        && let Some(global) = self.get_object(gid)
+                    {
                         let gb = global.borrow();
                         if let Some(desc) = gb.properties.get(name) {
                             if desc.configurable == Some(false) {
@@ -11459,12 +11462,7 @@ impl Interpreter {
         // For Promise values, check if PromiseResolve would throw (e.g. broken .constructor)
         // Skip for non-promise values to avoid spurious "then" getter access
         if self.is_promise(&value) {
-            let promise_ctor = self
-                .realm()
-                .global_env
-                .borrow()
-                .get("Promise")
-                .unwrap_or(JsValue::Undefined);
+            let promise_ctor = self.get_global_var("Promise").unwrap_or(JsValue::Undefined);
             if let Err(e) = self.promise_resolve_with_constructor(&promise_ctor, &value) {
                 obj_rc.borrow_mut().iterator_state =
                     Some(IteratorState::StateMachineAsyncGenerator {
@@ -12706,11 +12704,8 @@ impl Interpreter {
             let mut found_derived_constructor = false;
             let mut function_boundary_count: u32 = 0;
             let mut env_walk = Some(caller_env.clone());
-            loop {
-                let e = match env_walk {
-                    Some(ref e) => e.clone(),
-                    None => break,
-                };
+            while let Some(ref e) = env_walk {
+                let e = e.clone();
                 let borrowed = e.borrow();
                 if borrowed.is_field_initializer {
                     in_field_initializer = true;
@@ -12959,7 +12954,7 @@ impl Interpreter {
         direct: bool,
         caller_env: &EnvRef,
     ) -> Result<(), JsValue> {
-        let is_global = var_env.borrow().global_object.is_some();
+        let is_global = var_env.borrow().global_object_id.is_some();
 
         // Collect function declarations to initialize
         let functions_to_init = Self::collect_eval_function_decls(body);
@@ -13023,8 +13018,9 @@ impl Interpreter {
                     .chain(declared_var_names.iter())
                     .cloned()
                     .collect();
+                let global_id = var_env.borrow().global_object_id;
+                let global_obj = global_id.and_then(|id| self.get_object(id));
                 let env_b = var_env.borrow();
-                let global_obj = env_b.global_object.clone();
                 for name in &all_names {
                     if let Some(binding) = env_b.bindings.get(name)
                         && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
@@ -13096,7 +13092,8 @@ impl Interpreter {
 
         // Check CanDeclareGlobalFunction / CanDeclareGlobalVar for global context
         if is_global {
-            let global_obj = var_env.borrow().global_object.clone();
+            let global_id = var_env.borrow().global_object_id;
+            let global_obj = global_id.and_then(|id| self.get_object(id));
             if let Some(ref gobj) = global_obj {
                 let gb = gobj.borrow();
                 let extensible = gb.extensible;
@@ -13150,16 +13147,14 @@ impl Interpreter {
             };
             let val = self.create_function(func);
             if is_global {
-                var_env
-                    .borrow_mut()
-                    .declare_global_function_binding(&f.name, val, true);
+                self.env_declare_global_function_binding(var_env, &f.name, val, true);
             } else {
                 if !var_env.borrow().bindings.contains_key(&f.name) {
                     var_env
                         .borrow_mut()
                         .declare_deletable(&f.name, BindingKind::Var);
                 }
-                let _ = var_env.borrow_mut().set(&f.name, val);
+                let _ = self.env_set(var_env, &f.name, val);
             }
         }
 
@@ -13208,7 +13203,7 @@ impl Interpreter {
         for name in &declared_var_names {
             if !var_env.borrow().bindings.contains_key(name) {
                 if is_global {
-                    var_env.borrow_mut().declare_global_var_configurable(name);
+                    self.env_declare_global_var_configurable(var_env, name);
                 } else {
                     var_env
                         .borrow_mut()
@@ -13275,7 +13270,7 @@ impl Interpreter {
 
                         if is_global {
                             if !var_env.borrow().bindings.contains_key(&name) {
-                                var_env.borrow_mut().declare_global_var_configurable(&name);
+                                self.env_declare_global_var_configurable(var_env, &name);
                             }
                         } else if !var_env.borrow().bindings.contains_key(&name) {
                             var_env
@@ -14326,10 +14321,11 @@ impl Interpreter {
                 let in_bindings = e.bindings.contains_key(name) || e.is_indirect_binding(name);
                 if in_bindings {
                     (true, None)
-                } else if let Some(ref global_obj) = e.global_object {
-                    let own = global_obj.borrow().properties.contains_key(name);
-                    let gid = global_obj.borrow().id;
-                    (own, if !own { gid } else { None })
+                } else if let Some(gid) = e.global_object_id {
+                    let own = self
+                        .get_object(gid)
+                        .is_some_and(|g| g.borrow().properties.contains_key(name));
+                    (own, if !own { Some(gid) } else { None })
                 } else {
                     (false, None)
                 }
@@ -14360,7 +14356,7 @@ impl Interpreter {
                 .borrow_mut()
                 .declare_deletable(name, BindingKind::Var);
         }
-        match global_env.borrow_mut().set(name, value.clone()) {
+        match self.env_set(&global_env, name, value.clone()) {
             Ok(()) => Completion::Normal(value),
             Err(_) => Completion::Throw(self.create_type_error("Assignment to constant variable.")),
         }
@@ -14416,11 +14412,7 @@ impl Interpreter {
                     }
                     SetBindingCheck::Unresolvable => {
                         let strict = env.borrow().strict || specific_env.borrow().strict;
-                        let global_obj_id = specific_env
-                            .borrow()
-                            .global_object
-                            .as_ref()
-                            .and_then(|obj| obj.borrow().id);
+                        let global_obj_id = specific_env.borrow().global_object_id;
                         if let Some(gid) = global_obj_id {
                             // §9.1.1.2.5 SetMutableBinding: check HasProperty
                             let still_exists = self.proxy_has_property(gid, name);
@@ -14451,11 +14443,7 @@ impl Interpreter {
                         // has_property (prototype chain), use [[Set]] to respect setters/proxies
                         let in_bindings = specific_env.borrow().bindings.contains_key(name);
                         if !in_bindings {
-                            let global_obj_id = specific_env
-                                .borrow()
-                                .global_object
-                                .as_ref()
-                                .and_then(|obj| obj.borrow().id);
+                            let global_obj_id = specific_env.borrow().global_object_id;
                             if let Some(gid) = global_obj_id {
                                 // §9.1.1.2.5 SetMutableBinding: check HasProperty again
                                 let still_exists = self.proxy_has_property(gid, name);
@@ -14482,7 +14470,7 @@ impl Interpreter {
                                 }
                             }
                         }
-                        match specific_env.borrow_mut().set(name, value.clone()) {
+                        match self.env_set(specific_env, name, value.clone()) {
                             Ok(()) => Completion::Normal(value),
                             Err(_) => Completion::Throw(
                                 self.create_type_error("Assignment to constant variable."),
@@ -14561,11 +14549,9 @@ impl Interpreter {
             }
 
             // 4. Check global object (at the bottom of the scope chain)
-            if let Some(ref global_obj) = env_borrow.global_object {
-                let global_obj_clone = global_obj.clone();
-                let global_id = global_obj_clone.borrow().id;
+            if let Some(gid) = env_borrow.global_object_id {
                 drop(env_borrow);
-                if let Some(gid) = global_id {
+                {
                     // Check own property first
                     let own_prop = self
                         .get_object(gid)
@@ -14616,33 +14602,32 @@ impl Interpreter {
             if env_borrow.bindings.contains_key(name) {
                 return None;
             }
-            if let Some(ref global_obj) = env_borrow.global_object {
-                let global_obj_clone = global_obj.clone();
-                let global_id = global_obj_clone.borrow().id;
+            if let Some(gid) = env_borrow.global_object_id {
                 drop(env_borrow);
-                if let Some(gid) = global_id {
-                    // Check own property first (fast path)
-                    let own_prop = self
-                        .get_object(gid)
-                        .and_then(|o| o.borrow().get_own_property(name));
-                    if let Some(ref desc) = own_prop {
-                        if desc.get.is_some() {
-                            let this_val = JsValue::Object(crate::types::JsObject { id: gid });
-                            return Some(self.get_object_property(gid, name, &this_val));
-                        }
-                        return None;
+                // Check own property first (fast path)
+                let own_prop = self
+                    .get_object(gid)
+                    .and_then(|o| o.borrow().get_own_property(name));
+                if let Some(ref desc) = own_prop {
+                    if desc.get.is_some() {
+                        let this_val = JsValue::Object(crate::types::JsObject { id: gid });
+                        return Some(self.get_object_property(gid, name, &this_val));
                     }
-                    // Not own — check prototype chain (handles Proxy has/get traps)
-                    match self.proxy_has_property(gid, name) {
-                        Ok(true) => {
-                            let this_val = JsValue::Object(crate::types::JsObject { id: gid });
-                            return Some(self.get_object_property(gid, name, &this_val));
-                        }
-                        Ok(false) => return None,
-                        Err(e) => return Some(Completion::Throw(e)),
-                    }
+                    // Data property — slim Environment::get no longer falls
+                    // through to the global object, so return the value here.
+                    return Some(Completion::Normal(
+                        desc.value.clone().unwrap_or(JsValue::Undefined),
+                    ));
                 }
-                return None;
+                // Not own — check prototype chain (handles Proxy has/get traps)
+                match self.proxy_has_property(gid, name) {
+                    Ok(true) => {
+                        let this_val = JsValue::Object(crate::types::JsObject { id: gid });
+                        return Some(self.get_object_property(gid, name, &this_val));
+                    }
+                    Ok(false) => return None,
+                    Err(e) => return Some(Completion::Throw(e)),
+                }
             }
             current = env_borrow.parent.clone();
         }
