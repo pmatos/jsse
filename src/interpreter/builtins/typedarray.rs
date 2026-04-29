@@ -4333,7 +4333,7 @@ impl Interpreter {
 
     fn setup_uint8array_base64_hex(&mut self) {
         // Get Uint8Array constructor from global env
-        let uint8_ctor = self.realm().global_env.borrow().get("Uint8Array").unwrap();
+        let uint8_ctor = self.get_global_var("Uint8Array").unwrap();
         let uint8_proto = self.get_object_expect(self.realm().uint8array_prototype.unwrap());
 
         // --- Static methods on Uint8Array constructor ---

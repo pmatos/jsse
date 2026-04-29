@@ -1080,7 +1080,7 @@ impl Interpreter {
                 // the active function (Object), return OrdinaryCreateFromConstructor(NewTarget, "%Object.prototype%")
                 if let Some(ref nt) = interp.new_target.clone() {
                     // Check if new_target is different from the Object constructor itself
-                    let object_fn = interp.realm().global_env.borrow().get("Object").unwrap_or(JsValue::Undefined);
+                    let object_fn = interp.get_global_var("Object").unwrap_or(JsValue::Undefined);
                     let nt_is_object = matches!((&object_fn, nt), (JsValue::Object(a), JsValue::Object(b)) if a.id == b.id);
                     if !nt_is_object {
                         // OrdinaryCreateFromConstructor(NewTarget, "%Object.prototype%")
@@ -1494,7 +1494,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::Boolean(result))
                 },
             ));
-            if let Some(num_val) = self.realm().global_env.borrow().get("Number")
+            if let Some(num_val) = self.get_global_var("Number")
                 && let JsValue::Object(o) = &num_val
                 && let Some(num_obj) = self.get_object(o.id)
             {
@@ -1732,9 +1732,9 @@ impl Interpreter {
 
         // Attach parseInt/parseFloat to Number constructor (must be after global registration)
         {
-            let parse_int = self.realm().global_env.borrow().get("parseInt");
-            let parse_float = self.realm().global_env.borrow().get("parseFloat");
-            if let Some(num_val) = self.realm().global_env.borrow().get("Number")
+            let parse_int = self.get_global_var("parseInt");
+            let parse_float = self.get_global_var("parseFloat");
+            if let Some(num_val) = self.get_global_var("Number")
                 && let JsValue::Object(o) = &num_val
                 && let Some(num_obj) = self.get_object(o.id)
             {
@@ -2593,7 +2593,7 @@ impl Interpreter {
                     );
                 }
             } else {
-                let func_val = self.realm().global_env.borrow().get("Function");
+                let func_val = self.get_global_var("Function");
                 if let Some(JsValue::Object(fo)) = func_val {
                     let pv = self.get_property_on_id(fo.id, "prototype");
                     if let JsValue::Object(pr) = pv
@@ -2624,7 +2624,7 @@ impl Interpreter {
 
         // Store Function.prototype for use as [[Prototype]] of all function objects
         {
-            let func_val = self.realm().global_env.borrow().get("Function");
+            let func_val = self.get_global_var("Function");
             if let Some(JsValue::Object(fo)) = func_val
                 && let Some(func_data) = self.get_object(fo.id)
             {
@@ -2971,7 +2971,7 @@ impl Interpreter {
                     "SuppressedError",
                     "AggregateError",
                 ] {
-                    let ctor_val = self.realm().global_env.borrow().get(name);
+                    let ctor_val = self.get_global_var(name);
                     if let Some(JsValue::Object(o)) = ctor_val
                         && let Some(ctor_obj) = self.get_object(o.id)
                     {
@@ -2988,7 +2988,7 @@ impl Interpreter {
             af_proto.borrow_mut().class_name = "AsyncFunction".to_string();
 
             // [[Prototype]] = Function.prototype_id
-            if let Some(func_val) = self.realm().global_env.borrow().get("Function")
+            if let Some(func_val) = self.get_global_var("Function")
                 && let JsValue::Object(func_obj) = func_val
                 && let JsValue::Object(func_proto_obj) =
                     self.get_property_on_id(func_obj.id, "prototype")
@@ -3713,7 +3713,7 @@ impl Interpreter {
 
         // String.fromCharCode
         {
-            let string_ctor = self.realm().global_env.borrow().get("String");
+            let string_ctor = self.get_global_var("String");
             if let Some(JsValue::Object(ref o)) = string_ctor {
                 let from_char_code = self.create_function(JsFunction::native(
                     "fromCharCode".to_string(),
@@ -3984,8 +3984,13 @@ impl Interpreter {
         // Per spec §9.1.1.4, the Global Environment Record has an Object Environment
         // Record whose binding object is the global object. Variable lookups in global
         // scope should check global object properties.
-        self.realm().global_env.borrow_mut().global_object = Some(global_obj.clone());
-        self.realm_mut().global_object = Some(global_obj.borrow().id.unwrap());
+        let gid = global_obj.borrow().id.unwrap();
+        {
+            let mut env = self.realm().global_env.borrow_mut();
+            env.global_object_id = Some(gid);
+            env.global_object_rc = Some(global_obj.clone());
+        }
+        self.realm_mut().global_object = Some(gid);
 
         // Per §9.1.1.4, built-in global names live on the global object (Object
         // Environment Record), not as declarative bindings. Remove the bootstrapping
@@ -6673,17 +6678,13 @@ impl Interpreter {
     }
 
     pub(crate) fn get_symbol_iterator_key(&self) -> Option<String> {
-        self.realm()
-            .global_env
-            .borrow()
-            .get("Symbol")
-            .and_then(|sv| {
-                if let JsValue::Object(so) = sv {
-                    Some(to_js_string(&self.get_property_on_id(so.id, "iterator")))
-                } else {
-                    None
-                }
-            })
+        self.get_global_var_ref("Symbol").and_then(|sv| {
+            if let JsValue::Object(so) = sv {
+                Some(to_js_string(&self.get_property_on_id(so.id, "iterator")))
+            } else {
+                None
+            }
+        })
     }
 
     pub(crate) fn create_iter_result_object(&mut self, value: JsValue, done: bool) -> JsValue {
@@ -7013,12 +7014,7 @@ impl Interpreter {
         let done_bool = matches!(done, JsValue::Boolean(true));
 
         // Step 5: valueWrapper = PromiseResolve(%Promise%, value)
-        let promise_ctor = self
-            .realm()
-            .global_env
-            .borrow()
-            .get("Promise")
-            .unwrap_or(JsValue::Undefined);
+        let promise_ctor = self.get_global_var("Promise").unwrap_or(JsValue::Undefined);
         let value_wrapper = match self.promise_resolve_with_constructor(&promise_ctor, &value) {
             Ok(w) => w,
             Err(e) => {

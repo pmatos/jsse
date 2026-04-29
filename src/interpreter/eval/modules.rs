@@ -577,7 +577,7 @@ impl Interpreter {
             if env_borrow.bindings.contains_key(name) {
                 return Ok(None);
             }
-            if env_borrow.global_object.is_some() {
+            if env_borrow.global_object_id.is_some() {
                 return Ok(None);
             }
             current = env_borrow.parent.clone();

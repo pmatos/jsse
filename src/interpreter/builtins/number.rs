@@ -361,7 +361,7 @@ impl Interpreter {
             false,
         ));
         // Get the @@toPrimitive well-known symbol key
-        if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
+        if let Some(sym_val) = self.get_global_var("Symbol")
             && let JsValue::Object(sym_obj) = &sym_val
         {
             let to_prim_sym = self.get_property_on_id(sym_obj.id, "toPrimitive");
@@ -381,7 +381,7 @@ impl Interpreter {
         }
 
         // [Symbol.toStringTag] = "Symbol"
-        if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
+        if let Some(sym_val) = self.get_global_var("Symbol")
             && let JsValue::Object(sym_obj) = &sym_val
         {
             let tag_sym = self.get_property_on_id(sym_obj.id, "toStringTag");
@@ -406,7 +406,7 @@ impl Interpreter {
         }
 
         // Set Symbol.prototype on the Symbol constructor
-        if let Some(sym_val) = self.realm().global_env.borrow().get("Symbol")
+        if let Some(sym_val) = self.get_global_var("Symbol")
             && let JsValue::Object(o) = &sym_val
             && let Some(sym_obj) = self.get_object(o.id)
         {
@@ -669,7 +669,7 @@ impl Interpreter {
         }
 
         // Set Number.prototype on the Number constructor
-        if let Some(num_val) = self.realm().global_env.borrow().get("Number")
+        if let Some(num_val) = self.get_global_var("Number")
             && let JsValue::Object(o) = &num_val
             && let Some(num_obj) = self.get_object(o.id)
         {
@@ -752,7 +752,7 @@ impl Interpreter {
         }
 
         // Set Boolean.prototype on the Boolean constructor
-        if let Some(bool_val) = self.realm().global_env.borrow().get("Boolean")
+        if let Some(bool_val) = self.get_global_var("Boolean")
             && let JsValue::Object(o) = &bool_val
             && let Some(bool_obj) = self.get_object(o.id)
         {

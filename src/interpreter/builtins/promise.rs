@@ -27,7 +27,7 @@ impl Interpreter {
         }
 
         // Check if C is the built-in Promise constructor - fast path
-        let promise_ctor = self.realm().global_env.borrow().get("Promise");
+        let promise_ctor = self.get_global_var("Promise");
         if let Some(ref ctor_val) = promise_ctor
             && same_value(constructor, ctor_val)
         {
@@ -252,10 +252,7 @@ impl Interpreter {
 
                 // Step 3: Let C = ? SpeciesConstructor(promise, %Promise%).
                 let promise_ctor = interp
-                    .realm()
-                    .global_env
-                    .borrow()
-                    .get("Promise")
+                    .get_global_var("Promise")
                     .unwrap_or(JsValue::Undefined);
                 let c = match interp.species_constructor(this, &promise_ctor) {
                     Ok(c) => c,
@@ -1118,12 +1115,7 @@ impl Interpreter {
         };
 
         // SpeciesConstructor(promise, %Promise%)
-        let promise_ctor = self
-            .realm()
-            .global_env
-            .borrow()
-            .get("Promise")
-            .unwrap_or(JsValue::Undefined);
+        let promise_ctor = self.get_global_var("Promise").unwrap_or(JsValue::Undefined);
         let c = match self.species_constructor(promise_val, &promise_ctor) {
             Ok(c) => c,
             Err(e) => return Completion::Throw(e),
@@ -1209,7 +1201,7 @@ impl Interpreter {
         {
             match self.get_object_property(o.id, "constructor", value) {
                 Completion::Normal(ctor) => {
-                    let promise_ctor = self.realm().global_env.borrow().get("Promise");
+                    let promise_ctor = self.get_global_var("Promise");
                     if let Some(ref pc) = promise_ctor
                         && strict_equality(&ctor, pc)
                     {

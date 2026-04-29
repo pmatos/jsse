@@ -1,26 +1,22 @@
 use super::*;
 
 impl Interpreter {
-    /// Allocate a fresh object slot for `data` and return its id.
-    /// Centralises the `Rc::new(RefCell::new(..))` + `allocate_object_slot`
-    /// pattern used at every object creation site.
-    pub(crate) fn alloc_object(&mut self, data: JsObjectData) -> u64 {
-        let rc = Rc::new(RefCell::new(data));
-        self.allocate_object_slot(rc)
-    }
-
-    pub(crate) fn allocate_object_slot(&mut self, obj: Rc<RefCell<JsObjectData>>) -> u64 {
+    /// Allocate a fresh object slot for `data` and return its id. The id is
+    /// written to `data.id` *before* wrapping in `Rc<RefCell<>>`, so the field
+    /// is set exactly once at allocation and never reassigned.
+    pub(crate) fn alloc_object(&mut self, mut data: JsObjectData) -> u64 {
         self.gc_alloc_count += 1;
         let is_reuse = !self.free_list.is_empty();
         let id = if let Some(idx) = self.free_list.pop() {
-            self.objects[idx] = Some(obj.clone());
+            data.id = Some(idx as u64);
+            self.objects[idx] = Some(Rc::new(RefCell::new(data)));
             idx as u64
         } else {
             let idx = self.objects.len();
-            self.objects.push(Some(obj.clone()));
+            data.id = Some(idx as u64);
+            self.objects.push(Some(Rc::new(RefCell::new(data))));
             idx as u64
         };
-        obj.borrow_mut().id = Some(id);
         let cost = if is_reuse {
             GC_OBJECT_OVERHEAD / 2
         } else {
@@ -483,6 +479,12 @@ impl Interpreter {
             let borrowed = e.borrow();
             for binding in borrowed.bindings.values() {
                 Self::collect_value_roots(&binding.value, worklist);
+            }
+            // The with-target is interned (id-only) — root it explicitly so
+            // identifier resolution inside `with(o) { ... }` keeps `o` alive
+            // across GC.
+            if let Some(ref w) = borrowed.with_object {
+                worklist.push(w.obj_id);
             }
             current = borrowed.parent.clone();
         }

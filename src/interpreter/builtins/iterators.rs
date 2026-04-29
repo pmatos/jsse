@@ -700,12 +700,17 @@ impl Interpreter {
                 }
                 // If new_target is the Iterator constructor itself, throw TypeError
                 // (abstract class cannot be instantiated directly)
-                if let Some(JsValue::Object(nt)) = &interp.new_target {
+                let nt_id = if let Some(JsValue::Object(nt)) = &interp.new_target {
+                    Some(nt.id)
+                } else {
+                    None
+                };
+                if let Some(nt_id) = nt_id {
                     // Check if new.target is the Iterator constructor by checking if
                     // looking up "Iterator" from global gives the same object
-                    let global_iter = interp.realm().global_env.borrow().get("Iterator");
+                    let global_iter = interp.get_global_var("Iterator");
                     if let Some(JsValue::Object(gi)) = global_iter
-                        && gi.id == nt.id
+                        && gi.id == nt_id
                     {
                         let err = interp.create_type_error(
                             "Abstract class Iterator not directly constructable",
@@ -3718,7 +3723,7 @@ impl Interpreter {
 
         // [[Prototype]] = Function.prototype_id
         // Get Function.prototype from global Function
-        if let Some(func_val) = self.realm().global_env.borrow().get("Function")
+        if let Some(func_val) = self.get_global_var("Function")
             && let JsValue::Object(func_obj) = func_val
             && let JsValue::Object(func_proto_obj) =
                 self.get_property_on_id(func_obj.id, "prototype")

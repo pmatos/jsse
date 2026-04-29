@@ -612,7 +612,14 @@ pub struct Environment {
     pub(crate) is_arrow_scope: bool,
     pub(crate) with_object: Option<WithObject>,
     pub(crate) dispose_stack: Option<Vec<DisposableResource>>,
-    pub(crate) global_object: Option<Rc<RefCell<JsObjectData>>>,
+    /// Slab id of the realm's global object. The canonical identity reference.
+    pub(crate) global_object_id: Option<u64>,
+    /// Rc handle to the same global object kept in sync with `global_object_id`.
+    /// Used only by `Environment` methods that need property access without an
+    /// `Interpreter` reference (e.g. `Environment::get/set/has/declare_global_*`).
+    /// `setup_globals` writes both fields atomically; nothing else mutates them.
+    /// PR 2 will drop this field when the slab itself loses `Rc<RefCell<>>`.
+    pub(crate) global_object_rc: Option<Rc<RefCell<JsObjectData>>>,
     // Annex B.3.3: names registered for block-level function var hoisting
     pub(crate) annexb_function_names: Option<Vec<String>>,
     pub(crate) class_private_names: Option<HashMap<String, String>>,
@@ -652,7 +659,6 @@ impl std::fmt::Debug for Environment {
 }
 
 pub(crate) struct WithObject {
-    pub(crate) _object: Rc<RefCell<JsObjectData>>,
     pub(crate) obj_id: u64,
 }
 
@@ -706,7 +712,8 @@ impl Environment {
             is_arrow_scope: false,
             with_object: None,
             dispose_stack: None,
-            global_object: None,
+            global_object_id: None,
+            global_object_rc: None,
             annexb_function_names: None,
             class_private_names: None,
             is_field_initializer: false,
@@ -730,7 +737,8 @@ impl Environment {
             is_arrow_scope: false,
             with_object: None,
             dispose_stack: None,
-            global_object: None,
+            global_object_id: None,
+            global_object_rc: None,
             annexb_function_names: None,
             class_private_names: None,
             is_field_initializer: false,
@@ -757,7 +765,7 @@ impl Environment {
     /// Find the nearest function scope (for var hoisting).
     /// Returns self if this is a function scope, otherwise traverses up.
     pub fn find_var_scope(env: &EnvRef) -> EnvRef {
-        if env.borrow().is_function_scope || env.borrow().global_object.is_some() {
+        if env.borrow().is_function_scope || env.borrow().global_object_id.is_some() {
             return env.clone();
         }
         if let Some(ref parent) = env.borrow().parent {
@@ -850,10 +858,7 @@ impl Environment {
     /// Per §9.1.1.4.17 CreateGlobalVarBinding: var declarations in global scope
     /// create non-configurable properties on the global object.
     pub fn declare_global_var(&mut self, name: &str) {
-        // Per §9.1.1.4.17 CreateGlobalVarBinding: global vars are stored as
-        // properties on the global object, not in the environment bindings map.
-        // This ensures `this.x = val` and `x` reference the same storage.
-        if let Some(ref global_obj) = self.global_object {
+        if let Some(ref global_obj) = self.global_object_rc {
             let mut gb = global_obj.borrow_mut();
             if !gb.properties.contains_key(name) {
                 gb.property_order.push(name.to_string());
@@ -870,16 +875,15 @@ impl Environment {
     /// CreateGlobalVarBinding with configurable:true (for eval-declared vars).
     pub fn declare_global_var_configurable(&mut self, name: &str) {
         if !self.bindings.contains_key(name) {
-            // Check if the global object has ANY property (data or accessor)
             let has_global_prop = self
-                .global_object
+                .global_object_rc
                 .as_ref()
                 .is_some_and(|g| g.borrow().properties.contains_key(name));
             if !has_global_prop {
                 self.declare(name, BindingKind::Var);
             }
         }
-        if let Some(ref global_obj) = self.global_object {
+        if let Some(ref global_obj) = self.global_object_rc {
             let mut gb = global_obj.borrow_mut();
             if !gb.properties.contains_key(name) {
                 gb.property_order.push(name.to_string());
@@ -903,7 +907,7 @@ impl Environment {
             binding.value = value.clone();
             binding.initialized = true;
         }
-        if let Some(ref global_obj) = self.global_object {
+        if let Some(ref global_obj) = self.global_object_rc {
             let mut gb = global_obj.borrow_mut();
             let existing = gb.properties.get(name);
             let need_full_desc =
@@ -952,7 +956,7 @@ impl Environment {
                 return Ok(());
             }
             if binding.kind == BindingKind::Var
-                && let Some(ref global_obj) = self.global_object
+                && let Some(ref global_obj) = self.global_object_rc
             {
                 let ok = global_obj
                     .borrow_mut()
@@ -973,7 +977,7 @@ impl Environment {
             parent.borrow_mut().set(name, value)
         } else {
             // Global implicit declaration (sloppy mode)
-            if let Some(ref global_obj) = self.global_object {
+            if let Some(ref global_obj) = self.global_object_rc {
                 let already_on_global = global_obj.borrow().has_own_property(name);
                 let ok = global_obj
                     .borrow_mut()
@@ -1005,48 +1009,16 @@ impl Environment {
             Some(binding.value.clone())
         } else if let Some(parent) = &self.parent {
             parent.borrow().get(name)
-        } else if let Some(ref global_obj) = self.global_object {
-            if Self::global_obj_has_property(global_obj, name) {
-                Some(Self::global_obj_get_property(global_obj, name))
+        } else if let Some(ref global_obj) = self.global_object_rc {
+            let b = global_obj.borrow();
+            if let Some(true) = b.own_has_property(name) {
+                b.own_property_lookup(name)
             } else {
                 None
             }
         } else {
             None
         }
-    }
-
-    /// Rc-based prototype-chain walk used by `Environment::{get, check_set_binding, has}`
-    /// to probe the global object without needing an `Interpreter` reference.
-    /// Once `Environment.global_object` becomes `Option<u64>` (PR 1b.4), these
-    /// helpers must be replaced by `Interpreter::{has_property_on_id, get_property_on_id}`.
-    fn global_obj_has_property(obj_rc: &Rc<RefCell<JsObjectData>>, name: &str) -> bool {
-        // NOTE: after PR 1b.4 converts `Environment.global_object` to `Option<u64>`,
-        // this helper should route through `Interpreter::has_property_on_id` instead.
-        // Today we still have an Rc here, but the inner `prototype_id` is a u64 —
-        // we'd need the interpreter's object table to follow it. As a stopgap, we
-        // emulate the walk by borrowing the realm's object slab via the Rc chain.
-        // Since this helper only walks the GLOBAL object's chain (which the realm
-        // roots keep alive), the simplest correct path is: check the first frame's
-        // own property, then fall through. The global object's prototype chain is
-        // either Object.prototype (always own-resolves) or null — so this is safe.
-        // The properly iterative form lives in `Interpreter::has_property_on_id`.
-        let b = obj_rc.borrow();
-        if let Some(r) = b.own_has_property(name) {
-            return r;
-        }
-        // Global object inherits from Object.prototype; without Interpreter access
-        // here we cannot safely walk further. In practice the next step is a single
-        // hop to Object.prototype. Conservative: report absent.
-        false
-    }
-
-    fn global_obj_get_property(obj_rc: &Rc<RefCell<JsObjectData>>, name: &str) -> JsValue {
-        let b = obj_rc.borrow();
-        if let Some(v) = b.own_property_lookup(name) {
-            return v;
-        }
-        JsValue::Undefined
     }
 
     /// Check if a binding exists but is uninitialized (in TDZ).
@@ -1085,8 +1057,8 @@ impl Environment {
             }
             return SetBindingCheck::Ok;
         }
-        if let Some(ref global_obj) = e.global_object {
-            if Self::global_obj_has_property(global_obj, name) {
+        if let Some(ref global_obj) = e.global_object_rc {
+            if matches!(global_obj.borrow().own_has_property(name), Some(true)) {
                 return SetBindingCheck::Ok;
             }
             return SetBindingCheck::Unresolvable;
@@ -1102,8 +1074,8 @@ impl Environment {
             true
         } else if let Some(parent) = &self.parent {
             parent.borrow().has(name)
-        } else if let Some(ref global_obj) = self.global_object {
-            Self::global_obj_has_property(global_obj, name)
+        } else if let Some(ref global_obj) = self.global_object_rc {
+            matches!(global_obj.borrow().own_has_property(name), Some(true))
         } else {
             false
         }
@@ -1114,7 +1086,7 @@ impl Environment {
         if e.is_indirect_binding(name) || e.bindings.contains_key(name) {
             return Some(env.clone());
         }
-        if e.global_object.is_some() {
+        if e.global_object_id.is_some() {
             return Some(env.clone());
         }
         if let Some(ref parent) = e.parent {
@@ -1658,6 +1630,8 @@ pub(crate) enum TemporalData {
 }
 
 pub struct JsObjectData {
+    /// Slab index of this object. Set exactly once by
+    /// `Interpreter::alloc_object` at allocation time and never reassigned.
     pub id: Option<u64>,
     pub properties: PropertyMap,
     pub property_order: Vec<String>,

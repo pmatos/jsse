@@ -208,7 +208,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
                         let args = [prim];
-                        let bigint_fn = interp.realm().global_env.borrow().get("BigInt");
+                        let bigint_fn = interp.get_global_var("BigInt");
                         if let Some(bigint_fn) = bigint_fn {
                             return interp.call_function(&bigint_fn, &JsValue::Undefined, &args);
                         }
@@ -302,7 +302,7 @@ impl Interpreter {
             },
         ));
 
-        if let Some(bigint_val) = self.realm().global_env.borrow().get("BigInt")
+        if let Some(bigint_val) = self.get_global_var("BigInt")
             && let JsValue::Object(o) = &bigint_val
             && let Some(bigint_obj) = self.get_object(o.id)
         {
@@ -322,7 +322,7 @@ impl Interpreter {
         }
 
         // Set constructor property on prototype
-        if let Some(bigint_val) = self.realm().global_env.borrow().get("BigInt") {
+        if let Some(bigint_val) = self.get_global_var("BigInt") {
             proto.borrow_mut().insert_property(
                 "constructor".to_string(),
                 PropertyDescriptor::data(bigint_val, true, false, true),
