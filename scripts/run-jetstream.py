@@ -219,10 +219,7 @@ def build_preload_code(preloads, jetstream_dir):
     for var_name, file_path in preloads.items():
         full_path = os.path.join(jetstream_dir, file_path)
         if not os.path.exists(full_path):
-            # Try with .z extension removed (decompressed)
-            alt_path = full_path.replace('.js', '.js')
-            if not os.path.exists(alt_path):
-                return None  # Can't preload
+            return None  # Can't preload
         content = Path(full_path).read_text(encoding='utf-8', errors='replace')
         # Escape for embedding in a JS string
         escaped = content.replace('\\', '\\\\').replace('`', '\\`').replace('${', '\\${')
@@ -359,6 +356,8 @@ def run_benchmark(name, btype, files, preloads, iterations, det_random, worst_ca
 
         data = json.loads(json_line)
         scores = compute_scores(data["results"], data.get("worstCaseCount", worst_case))
+        if scores is None:
+            return {"name": name, "status": "error", "reason": "no benchmark iterations"}
 
         return {
             "name": name,
