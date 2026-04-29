@@ -106,3 +106,13 @@ uv run python scripts/run-test262.py --engine boa --binary /path/to/boa
 ```
 
 Per-test timing data is written to `/tmp/timing-{engine}.json` after each run.
+
+## Running JetStream 3
+
+```bash
+gh repo clone WebKit/JetStream /tmp/JetStream -- --depth 1
+cargo build --release
+uv run python scripts/run-jetstream.py --test OfflineAssembler --iterations 1 --timeout 120
+```
+
+The runner covers pure-JS JetStream 3 workloads and skips Wasm/Worker-dependent tests.
