@@ -305,8 +305,7 @@ impl Interpreter {
                     let new_obj = interp.create_object();
                     {
                         // Get DisposableStack prototype
-                        let env = interp.realm().global_env.borrow();
-                        if let Some(ctor_val) = env.get("DisposableStack")
+                        if let Some(ctor_val) = interp.get_global_var("DisposableStack")
                             && let JsValue::Object(ctor) = &ctor_val
                         {
                             let proto_val = interp.get_property_on_id(ctor.id, "prototype");
@@ -375,17 +374,13 @@ impl Interpreter {
         );
 
         // Wire up constructor and prototype
-        {
-            let env = self.realm().global_env.borrow();
-            if let Some(ctor_val) = env.get("DisposableStack") {
-                ds_proto
-                    .borrow_mut()
-                    .insert_builtin("constructor".to_string(), ctor_val);
-            }
+        if let Some(ctor_val) = self.get_global_var("DisposableStack") {
+            ds_proto
+                .borrow_mut()
+                .insert_builtin("constructor".to_string(), ctor_val);
         }
         {
-            let env = self.realm().global_env.borrow();
-            if let Some(ctor_val) = env.get("DisposableStack")
+            if let Some(ctor_val) = self.get_global_var("DisposableStack")
                 && let JsValue::Object(o) = &ctor_val
                 && let Some(ctor_obj) = self.get_object(o.id)
             {
@@ -842,17 +837,13 @@ impl Interpreter {
         );
 
         // Wire up
-        {
-            let env = self.realm().global_env.borrow();
-            if let Some(ctor_val) = env.get("AsyncDisposableStack") {
-                ads_proto
-                    .borrow_mut()
-                    .insert_builtin("constructor".to_string(), ctor_val);
-            }
+        if let Some(ctor_val) = self.get_global_var("AsyncDisposableStack") {
+            ads_proto
+                .borrow_mut()
+                .insert_builtin("constructor".to_string(), ctor_val);
         }
         {
-            let env = self.realm().global_env.borrow();
-            if let Some(ctor_val) = env.get("AsyncDisposableStack")
+            if let Some(ctor_val) = self.get_global_var("AsyncDisposableStack")
                 && let JsValue::Object(o) = &ctor_val
                 && let Some(ctor_obj) = self.get_object(o.id)
             {

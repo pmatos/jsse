@@ -4137,7 +4137,7 @@ impl Interpreter {
                     uses_arguments: func_uses_arguments(&f.params, &f.body),
                 };
                 let val = self.create_function(func);
-                let _ = env.borrow_mut().set(&f.name, val);
+                let _ = self.env_set(env, &f.name, val);
             }
             Statement::ClassDeclaration(c) => {
                 if !c.name.is_empty() {

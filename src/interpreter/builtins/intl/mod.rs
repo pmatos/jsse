@@ -318,7 +318,8 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Intl", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("Intl", intl_val);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "Intl", intl_val);
     }
 
     pub(crate) fn is_structurally_valid_language_tag(tag: &str) -> bool {

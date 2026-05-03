@@ -1507,7 +1507,8 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Date", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("Date", date_ctor);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "Date", date_ctor);
 
         // Annex B: getYear()
         let get_year_fn = self.create_function(JsFunction::Native(

@@ -304,10 +304,7 @@ impl Interpreter {
 
                         // SpeciesConstructor(O, %ArrayBuffer%)
                         let ab_ctor = interp
-                            .realm()
-                            .global_env
-                            .borrow()
-                            .get("ArrayBuffer")
+                            .get_global_var("ArrayBuffer")
                             .unwrap_or(JsValue::Undefined);
                         let ctor = match interp.species_constructor(this_val, &ab_ctor) {
                             Ok(c) => c,
@@ -911,11 +908,8 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("ArrayBuffer", BindingKind::Var);
-        let _ = self
-            .realm()
-            .global_env
-            .borrow_mut()
-            .set("ArrayBuffer", ctor);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "ArrayBuffer", ctor);
     }
 
     pub(crate) fn create_arraybuffer(&mut self, data: Vec<u8>) -> Rc<RefCell<JsObjectData>> {
@@ -1198,10 +1192,7 @@ impl Interpreter {
 
                     // SpeciesConstructor(O, %SharedArrayBuffer%)
                     let sab_ctor = interp
-                        .realm()
-                        .global_env
-                        .borrow()
-                        .get("SharedArrayBuffer")
+                        .get_global_var("SharedArrayBuffer")
                         .unwrap_or(JsValue::Undefined);
                     let ctor = match interp.species_constructor(this_val, &sab_ctor) {
                         Ok(c) => c,
@@ -1415,11 +1406,8 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("SharedArrayBuffer", BindingKind::Var);
-        let _ = self
-            .realm()
-            .global_env
-            .borrow_mut()
-            .set("SharedArrayBuffer", ctor);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "SharedArrayBuffer", ctor);
     }
 
     fn setup_typed_array_base_prototype(&mut self) {
@@ -4327,7 +4315,8 @@ impl Interpreter {
                 .global_env
                 .borrow_mut()
                 .declare(&name, BindingKind::Var);
-            let _ = self.realm().global_env.borrow_mut().set(&name, ctor);
+            let env = self.realm().global_env.clone();
+            let _ = self.env_set(&env, &name, ctor);
         }
     }
 
@@ -4564,10 +4553,7 @@ impl Interpreter {
 
         let default_ctor_name = kind.name();
         let default_ctor = self
-            .realm()
-            .global_env
-            .borrow()
-            .get(default_ctor_name)
+            .get_global_var(default_ctor_name)
             .unwrap_or(JsValue::Undefined);
 
         let ctor = self.species_constructor(exemplar, &default_ctor)?;
@@ -5783,7 +5769,8 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("DataView", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("DataView", ctor);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "DataView", ctor);
     }
 }
 

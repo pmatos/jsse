@@ -625,13 +625,9 @@ pub struct Environment {
     pub(crate) with_object: Option<WithObject>,
     pub(crate) dispose_stack: Option<Vec<DisposableResource>>,
     /// Slab id of the realm's global object. The canonical identity reference.
+    /// External callers reach the global object via `Interpreter::env_*`
+    /// wrappers in `env_helpers.rs`, never by holding a borrow here.
     pub(crate) global_object_id: Option<u64>,
-    /// Rc handle to the same global object kept in sync with `global_object_id`.
-    /// Used only by `Environment` methods that need property access without an
-    /// `Interpreter` reference (e.g. `Environment::get/set/has/declare_global_*`).
-    /// `setup_globals` writes both fields atomically; nothing else mutates them.
-    /// PR 2 will drop this field when the slab itself loses `Rc<RefCell<>>`.
-    pub(crate) global_object_rc: Option<Rc<RefCell<JsObjectData>>>,
     // Annex B.3.3: names registered for block-level function var hoisting
     pub(crate) annexb_function_names: Option<Vec<String>>,
     pub(crate) class_private_names: Option<HashMap<String, String>>,
@@ -725,7 +721,6 @@ impl Environment {
             with_object: None,
             dispose_stack: None,
             global_object_id: None,
-            global_object_rc: None,
             annexb_function_names: None,
             class_private_names: None,
             is_field_initializer: false,
@@ -750,7 +745,6 @@ impl Environment {
             with_object: None,
             dispose_stack: None,
             global_object_id: None,
-            global_object_rc: None,
             annexb_function_names: None,
             class_private_names: None,
             is_field_initializer: false,
@@ -866,76 +860,41 @@ impl Environment {
         );
     }
 
-    /// Like declare, but also creates a non-configurable property on the global object.
-    /// Per §9.1.1.4.17 CreateGlobalVarBinding: var declarations in global scope
-    /// create non-configurable properties on the global object.
+    /// Bindings-only fallback for `Interpreter::env_declare_global_var` (used
+    /// when the env has no `global_object_id`). The wrapper handles the
+    /// global-object property side via the slab.
     pub fn declare_global_var(&mut self, name: &str) {
-        if let Some(ref global_obj) = self.global_object_rc {
-            let mut gb = global_obj.borrow_mut();
-            if !gb.properties.contains_key(name) {
-                gb.property_order.push(name.to_string());
-                gb.properties.insert(
-                    name.to_string(),
-                    PropertyDescriptor::data(JsValue::Undefined, true, true, false),
-                );
-            }
-        } else if !self.bindings.contains_key(name) {
+        if !self.bindings.contains_key(name) {
             self.declare(name, BindingKind::Var);
         }
     }
 
-    /// CreateGlobalVarBinding with configurable:true (for eval-declared vars).
+    /// Bindings-only fallback for
+    /// `Interpreter::env_declare_global_var_configurable`.
     pub fn declare_global_var_configurable(&mut self, name: &str) {
         if !self.bindings.contains_key(name) {
-            let has_global_prop = self
-                .global_object_rc
-                .as_ref()
-                .is_some_and(|g| g.borrow().properties.contains_key(name));
-            if !has_global_prop {
-                self.declare(name, BindingKind::Var);
-            }
-        }
-        if let Some(ref global_obj) = self.global_object_rc {
-            let mut gb = global_obj.borrow_mut();
-            if !gb.properties.contains_key(name) {
-                gb.property_order.push(name.to_string());
-                gb.properties.insert(
-                    name.to_string(),
-                    PropertyDescriptor::data(JsValue::Undefined, true, true, true),
-                );
-            }
+            self.declare(name, BindingKind::Var);
         }
     }
 
-    /// CreateGlobalFunctionBinding(fn, fo, configurable) for eval-declared functions.
+    /// Bindings-only fallback for
+    /// `Interpreter::env_declare_global_function_binding`. The wrapper sets the
+    /// value mirror on the global object via the slab.
     pub fn declare_global_function_binding(
         &mut self,
         name: &str,
         value: JsValue,
-        configurable: bool,
+        _configurable: bool,
     ) {
         self.declare(name, BindingKind::Var);
         if let Some(binding) = self.bindings.get_mut(name) {
-            binding.value = value.clone();
+            binding.value = value;
             binding.initialized = true;
-        }
-        if let Some(ref global_obj) = self.global_object_rc {
-            let mut gb = global_obj.borrow_mut();
-            let existing = gb.properties.get(name);
-            let need_full_desc =
-                existing.is_none() || existing.is_some_and(|d| d.configurable == Some(true));
-            if need_full_desc {
-                let desc = PropertyDescriptor::data(value, true, true, configurable);
-                if !gb.properties.contains_key(name) {
-                    gb.property_order.push(name.to_string());
-                }
-                gb.properties.insert(name.to_string(), desc);
-            } else {
-                gb.set_property_value(name, value);
-            }
         }
     }
 
+    /// Bindings-only set. Mirroring to the realm's global object lives in
+    /// `Interpreter::env_set`. External callers should always use that wrapper.
     pub fn set(&mut self, name: &str, value: JsValue) -> Result<(), JsValue> {
         // Indirect bindings (module imports) are immutable
         if self.is_indirect_binding(name) {
@@ -967,40 +926,12 @@ impl Environment {
                 }
                 return Ok(());
             }
-            if binding.kind == BindingKind::Var
-                && let Some(ref global_obj) = self.global_object_rc
-            {
-                let ok = global_obj
-                    .borrow_mut()
-                    .set_property_value(name, value.clone());
-                if !ok {
-                    if self.strict {
-                        return Err(JsValue::String(JsString::from_str(&format!(
-                            "Cannot assign to read only property '{name}' of object '#<Object>'"
-                        ))));
-                    }
-                    return Ok(());
-                }
-            }
             binding.value = value;
             binding.initialized = true;
             Ok(())
         } else if let Some(parent) = &self.parent {
             parent.borrow_mut().set(name, value)
         } else {
-            // Global implicit declaration (sloppy mode)
-            if let Some(ref global_obj) = self.global_object_rc {
-                let already_on_global = global_obj.borrow().has_own_property(name);
-                let ok = global_obj
-                    .borrow_mut()
-                    .set_property_value(name, value.clone());
-                if !ok {
-                    return Ok(());
-                }
-                if already_on_global {
-                    return Ok(());
-                }
-            }
             self.bindings.insert(
                 name.to_string(),
                 Binding::new(value, BindingKind::Var, true),
@@ -1009,6 +940,9 @@ impl Environment {
         }
     }
 
+    /// Bindings-only get. Falls through to `None` at the chain root; the
+    /// global-object fall-through lives in `Interpreter::env_get` /
+    /// `env_get_ref`.
     pub fn get(&self, name: &str) -> Option<JsValue> {
         // Check indirect bindings first (module imports)
         if let Some(resolved) = self.resolve_indirect_binding(name) {
@@ -1021,13 +955,6 @@ impl Environment {
             Some(binding.value.clone())
         } else if let Some(parent) = &self.parent {
             parent.borrow().get(name)
-        } else if let Some(ref global_obj) = self.global_object_rc {
-            let b = global_obj.borrow();
-            if let Some(true) = b.own_has_property(name) {
-                b.own_property_lookup(name)
-            } else {
-                None
-            }
         } else {
             None
         }
@@ -1047,47 +974,13 @@ impl Environment {
         }
     }
 
-    /// Walk the scope chain and check what error (if any) setting a binding would produce.
-    pub fn check_set_binding(env: &EnvRef, name: &str) -> SetBindingCheck {
-        let e = env.borrow();
-        // Indirect bindings (module imports) are immutable
-        if e.is_indirect_binding(name) {
-            return SetBindingCheck::ConstAssign;
-        }
-        if let Some(binding) = e.bindings.get(name) {
-            if !binding.initialized && binding.kind != BindingKind::Var {
-                return SetBindingCheck::TdzError;
-            }
-            if binding.kind == BindingKind::Const && binding.initialized {
-                return SetBindingCheck::ConstAssign;
-            }
-            if (binding.kind == BindingKind::FunctionName
-                || binding.kind == BindingKind::ImmutableValue)
-                && binding.initialized
-            {
-                return SetBindingCheck::FunctionNameAssign;
-            }
-            return SetBindingCheck::Ok;
-        }
-        if let Some(ref global_obj) = e.global_object_rc {
-            if matches!(global_obj.borrow().own_has_property(name), Some(true)) {
-                return SetBindingCheck::Ok;
-            }
-            return SetBindingCheck::Unresolvable;
-        }
-        if let Some(ref parent) = e.parent {
-            return Self::check_set_binding(parent, name);
-        }
-        SetBindingCheck::Unresolvable
-    }
-
+    /// Bindings-only `has`. Global-object fall-through lives in
+    /// `Interpreter::env_has`.
     pub fn has(&self, name: &str) -> bool {
         if self.is_indirect_binding(name) || self.bindings.contains_key(name) {
             true
         } else if let Some(parent) = &self.parent {
             parent.borrow().has(name)
-        } else if let Some(ref global_obj) = self.global_object_rc {
-            matches!(global_obj.borrow().own_has_property(name), Some(true))
         } else {
             false
         }

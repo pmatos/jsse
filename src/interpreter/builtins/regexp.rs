@@ -8101,10 +8101,7 @@ impl Interpreter {
                 // 3. Let C be ? SpeciesConstructor(rx, %RegExp%).
                 let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
                 let regexp_ctor = interp
-                    .realm()
-                    .global_env
-                    .borrow()
-                    .get("RegExp")
+                    .get_global_var("RegExp")
                     .unwrap_or(JsValue::Undefined);
                 let c = match interp.species_constructor(&rx_val, &regexp_ctor) {
                     Ok(v) => v,
@@ -8344,10 +8341,7 @@ impl Interpreter {
                 // 3. Let C be ? SpeciesConstructor(R, %RegExp%).
                 let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
                 let regexp_ctor = interp
-                    .realm()
-                    .global_env
-                    .borrow()
-                    .get("RegExp")
+                    .get_global_var("RegExp")
                     .unwrap_or(JsValue::Undefined);
                 let c = match interp.species_constructor(&rx_val, &regexp_ctor) {
                     Ok(v) => v,
@@ -8976,10 +8970,7 @@ impl Interpreter {
                     };
                     // Get the active function object (RegExp constructor)
                     let regexp_fn = interp
-                        .realm()
-                        .global_env
-                        .borrow()
-                        .get("RegExp")
+                        .get_global_var("RegExp")
                         .unwrap_or(JsValue::Undefined);
                     if same_value(&regexp_fn, &ctor) {
                         return Completion::Normal(pattern_arg.clone());
@@ -9450,11 +9441,8 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("RegExp", BindingKind::Var);
-        let _ = self
-            .realm()
-            .global_env
-            .borrow_mut()
-            .set("RegExp", regexp_ctor);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "RegExp", regexp_ctor);
 
         self.realm_mut().regexp_prototype = Some(regexp_proto.borrow().id.unwrap());
     }

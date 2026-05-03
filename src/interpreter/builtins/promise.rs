@@ -741,7 +741,8 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Promise", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("Promise", ctor);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "Promise", ctor);
     }
 
     pub(crate) fn create_promise_object(&mut self) -> JsValue {

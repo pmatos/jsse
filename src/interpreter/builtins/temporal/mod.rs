@@ -1647,11 +1647,8 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Temporal", BindingKind::Var);
-        let _ = self
-            .realm()
-            .global_env
-            .borrow_mut()
-            .set("Temporal", temporal_val);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "Temporal", temporal_val);
     }
 }
 

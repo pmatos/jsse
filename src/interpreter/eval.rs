@@ -429,7 +429,6 @@ impl Interpreter {
                         with_object: None,
                         dispose_stack: None,
                         global_object_id: None,
-                        global_object_rc: None,
                         annexb_function_names: None,
                         class_private_names: None,
                         is_field_initializer: false,
@@ -466,7 +465,7 @@ impl Interpreter {
                 };
                 let func_val = self.create_function(func);
                 if let Some(name) = &f.name {
-                    let _ = closure_env.borrow_mut().set(name, func_val.clone());
+                    let _ = self.env_set(&closure_env, name, func_val.clone());
                 }
                 Completion::Normal(func_val)
             }
@@ -530,14 +529,14 @@ impl Interpreter {
                             other => other,
                         };
                     }
-                    match env.borrow().get(name) {
+                    match self.env_get(env, name) {
                         Some(val) => {
                             return Completion::Normal(JsValue::String(JsString::from_str(
                                 typeof_val(&val, &self.objects),
                             )));
                         }
                         None => {
-                            if env.borrow().has(name) {
+                            if self.env_has(env, name) {
                                 return Completion::Throw(self.create_reference_error(&format!(
                                     "Cannot access '{name}' before initialization"
                                 )));
@@ -2362,7 +2361,7 @@ impl Interpreter {
                     };
                     let new_val = JsValue::Number(new_num);
                     drop(env_borrow);
-                    if let Err(e) = env.borrow_mut().set(name, new_val) {
+                    if let Err(e) = self.env_set(env, name, new_val) {
                         return Completion::Throw(e);
                     }
                     return Completion::Normal(JsValue::Number(if prefix {
@@ -2397,7 +2396,7 @@ impl Interpreter {
                             other => return other,
                         }
                     } else {
-                        match env.borrow().get(name) {
+                        match self.env_get(env, name) {
                             Some(v) => v,
                             None => {
                                 let err =
@@ -2831,7 +2830,7 @@ impl Interpreter {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
-                            match env.borrow_mut().set(name, rval.clone()) {
+                            match self.env_set(env, name, rval.clone()) {
                                 Ok(()) => return Completion::Normal(rval),
                                 Err(e) => return Completion::Throw(e),
                             }
@@ -2879,7 +2878,7 @@ impl Interpreter {
                             })
                     };
                     if has_mutable_local {
-                        let lval = match env.borrow().get(name) {
+                        let lval = match self.env_get(env, name) {
                             Some(v) => v,
                             None => {
                                 return Completion::Throw(
@@ -2895,7 +2894,7 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        match env.borrow_mut().set(name, final_val.clone()) {
+                        match self.env_set(env, name, final_val.clone()) {
                             Ok(()) => return Completion::Normal(final_val),
                             Err(e) => return Completion::Throw(e),
                         }
@@ -2926,7 +2925,7 @@ impl Interpreter {
                                 other => return other,
                             }
                         } else {
-                            match env.borrow().get(name) {
+                            match self.env_get(env, name) {
                                 Some(v) => v,
                                 None => {
                                     return Completion::Throw(self.create_reference_error(
@@ -3574,7 +3573,7 @@ impl Interpreter {
                                 other => return other,
                             }
                         } else {
-                            match env.borrow().get(name) {
+                            match self.env_get(env, name) {
                                 Some(v) => v,
                                 None => {
                                     return Completion::Throw(self.create_reference_error(
@@ -3949,7 +3948,7 @@ impl Interpreter {
                                     other => return other,
                                 }
                             } else {
-                                match env.borrow().get(name) {
+                                match self.env_get(env, name) {
                                     Some(v) => v,
                                     None => {
                                         return Completion::Throw(self.create_reference_error(
@@ -6478,7 +6477,7 @@ impl Interpreter {
                             if let Some(binding) = sent_value_binding {
                                 match &binding.kind {
                                     SentValueBindingKind::Variable(name) => {
-                                        func_env.borrow_mut().set(name, value.clone()).ok();
+                                        self.env_set(&func_env, name, value.clone()).ok();
                                     }
                                     SentValueBindingKind::Pattern(pattern) => {
                                         let _ = self.bind_pattern(
@@ -7592,7 +7591,7 @@ impl Interpreter {
                             if let Some(ref bind) = binding {
                                 match &bind.kind {
                                     SentValueBindingKind::Variable(name) => {
-                                        func_env.borrow_mut().set(name, result_value.clone()).ok();
+                                        self.env_set(&func_env, name, result_value.clone()).ok();
                                     }
                                     SentValueBindingKind::Pattern(pattern) => {
                                         let _ = self.bind_pattern(
@@ -8084,7 +8083,7 @@ impl Interpreter {
             if let Some(ref binding) = pending_binding {
                 match &binding.kind {
                     SentValueBindingKind::Variable(name) => {
-                        func_env.borrow_mut().set(name, value.clone()).ok();
+                        self.env_set(&func_env, name, value.clone()).ok();
                     }
                     SentValueBindingKind::Pattern(pattern) => {
                         let _ =
@@ -8936,7 +8935,7 @@ impl Interpreter {
                                 use crate::interpreter::generator_transform::SentValueBindingKind;
                                 match &bind.kind {
                                     SentValueBindingKind::Variable(name) => {
-                                        func_env.borrow_mut().set(name, value.clone()).ok();
+                                        self.env_set(&func_env, name, value.clone()).ok();
                                     }
                                     SentValueBindingKind::Pattern(pattern) => {
                                         let _ = self.bind_pattern(
@@ -11196,7 +11195,7 @@ impl Interpreter {
         use crate::interpreter::generator_transform::SentValueBindingKind;
         match &binding.kind {
             SentValueBindingKind::Variable(name) => {
-                env.borrow_mut().set(name, value.clone()).ok();
+                self.env_set(env, name, value.clone()).ok();
             }
             SentValueBindingKind::Pattern(pattern) => {
                 let _ = self.bind_pattern(pattern, value.clone(), BindingKind::Var, env);
@@ -12081,7 +12080,7 @@ impl Interpreter {
                                     &param_names_ag,
                                 );
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                                let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+                                let _ = self.env_set(&func_env, "arguments", arguments_obj);
                                 if is_strict || !is_simple_ag {
                                     func_env.borrow_mut().arguments_immutable = true;
                                 }
@@ -12155,7 +12154,7 @@ impl Interpreter {
                                             .borrow()
                                             .get(name)
                                             .unwrap_or(JsValue::Undefined);
-                                        let _ = body_env.borrow_mut().set(name, val);
+                                        let _ = self.env_set(&body_env, name, val);
                                     }
                                 }
                                 body_env
@@ -12273,7 +12272,7 @@ impl Interpreter {
                                     &param_names_g,
                                 );
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                                let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+                                let _ = self.env_set(&func_env, "arguments", arguments_obj);
                                 if is_strict || !is_simple_g {
                                     func_env.borrow_mut().arguments_immutable = true;
                                 }
@@ -12347,7 +12346,7 @@ impl Interpreter {
                                             .borrow()
                                             .get(name)
                                             .unwrap_or(JsValue::Undefined);
-                                        let _ = body_env.borrow_mut().set(name, val);
+                                        let _ = self.env_set(&body_env, name, val);
                                     }
                                 }
                                 body_env
@@ -12485,7 +12484,7 @@ impl Interpreter {
                                 );
                                 call_frame_args = arguments_obj.clone();
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                                let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+                                let _ = self.env_set(&func_env, "arguments", arguments_obj);
                                 if is_strict || !is_simple {
                                     func_env.borrow_mut().arguments_immutable = true;
                                 }
@@ -12541,8 +12540,8 @@ impl Interpreter {
                                 body_env.borrow_mut().declare(name, BindingKind::Var);
                                 if param_names.contains(name) || name == "arguments" {
                                     let val =
-                                        func_env.borrow().get(name).unwrap_or(JsValue::Undefined);
-                                    let _ = body_env.borrow_mut().set(name, val);
+                                        self.env_get(&func_env, name).unwrap_or(JsValue::Undefined);
+                                    let _ = self.env_set(&body_env, name, val);
                                 }
                             }
                             body_env
@@ -14553,15 +14552,13 @@ impl Interpreter {
     /// Sync a property set on an object to the corresponding global env binding,
     /// if the object is a realm's global object.
     fn sync_global_object_binding(&mut self, obj_id: u64, key: &str, value: &JsValue) {
-        for realm in &self.realms {
-            let is_global = realm.global_object == Some(obj_id);
-            if is_global {
-                let env = realm.global_env.clone();
-                if env.borrow().bindings.contains_key(key) {
-                    let _ = env.borrow_mut().set(key, value.clone());
-                }
-                return;
-            }
+        let env = self.realms.iter().find_map(|realm| {
+            (realm.global_object == Some(obj_id)).then(|| realm.global_env.clone())
+        });
+        if let Some(env) = env
+            && env.borrow().bindings.contains_key(key)
+        {
+            let _ = self.env_set(&env, key, value.clone());
         }
     }
 
@@ -14582,7 +14579,7 @@ impl Interpreter {
                 }
             }
             IdentifierRef::SpecificEnv(specific_env) => {
-                match Environment::check_set_binding(specific_env, name) {
+                match self.env_check_set_binding(specific_env, name) {
                     SetBindingCheck::TdzError => Completion::Throw(self.create_reference_error(
                         &format!("Cannot access '{}' before initialization", name),
                     )),
@@ -16254,7 +16251,7 @@ impl Interpreter {
                     &param_names,
                 );
                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
-                let _ = func_env.borrow_mut().set("arguments", arguments_obj);
+                let _ = self.env_set(&func_env, "arguments", arguments_obj);
                 if is_strict || !is_simple {
                     func_env.borrow_mut().arguments_immutable = true;
                 }
@@ -16972,7 +16969,7 @@ impl Interpreter {
                     };
                     self.gc_root_value(&iterator);
                     self.pending_iter_close.push(iterator.clone());
-                    func_env.borrow_mut().set(iter_var, iterator).ok();
+                    self.env_set(&func_env, iter_var, iterator).ok();
                     for_of_stack.push((iter_var.clone(), head_state, forinit_after));
                     current_id = head_state;
                 }

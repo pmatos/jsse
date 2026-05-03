@@ -834,11 +834,8 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Iterator", BindingKind::Var);
-        let _ = self
-            .realm()
-            .global_env
-            .borrow_mut()
-            .set("Iterator", iterator_ctor.clone());
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "Iterator", iterator_ctor.clone());
 
         // Setup consuming and lazy helper methods on %IteratorPrototype%
         self.setup_iterator_helper_methods(&iter_proto);
@@ -3795,10 +3792,7 @@ impl Interpreter {
                 // 1. Let O be the this value.
                 // 2. Let promiseCapability be ! NewPromiseCapability(%Promise%).
                 let promise_ctor = interp
-                    .realm()
-                    .global_env
-                    .borrow()
-                    .get("Promise")
+                    .get_global_var("Promise")
                     .unwrap_or(JsValue::Undefined);
                 let cap = match interp.new_promise_capability(&promise_ctor) {
                     Ok(c) => c,

@@ -316,7 +316,7 @@ impl Interpreter {
             self.env_declare_global_function_binding(env, &f.name, val, false);
         } else {
             env.borrow_mut().declare(&f.name, BindingKind::Var);
-            let _ = env.borrow_mut().set(&f.name, val);
+            let _ = self.env_set(env, &f.name, val);
         }
     }
 
@@ -951,7 +951,6 @@ impl Interpreter {
                             with_object: Some(WithObject { obj_id: obj_ref.id }),
                             dispose_stack: None,
                             global_object_id: None,
-                            global_object_rc: None,
                             annexb_function_names: None,
                             class_private_names: None,
                             is_field_initializer: false,
@@ -1020,8 +1019,8 @@ impl Interpreter {
                                 cursor = cur_b.parent.clone();
                             }
                             if !blocked_by_intermediate {
-                                let val = env.borrow().get(&f.name).unwrap_or(JsValue::Undefined);
-                                let _ = var_scope.borrow_mut().set(&f.name, val);
+                                let val = self.env_get(env, &f.name).unwrap_or(JsValue::Undefined);
+                                let _ = self.env_set(&var_scope, &f.name, val);
                             }
                         }
                     }
@@ -1369,7 +1368,7 @@ impl Interpreter {
                                 if !var_scope.borrow().bindings.contains_key(name) {
                                     var_scope.borrow_mut().declare(name, kind);
                                 }
-                                env.borrow_mut().set(name, v)?;
+                                self.env_set(env, name, v)?;
                             } else {
                                 env.borrow_mut().declare(name, kind);
                                 env.borrow_mut().initialize_binding(name, v);
@@ -1467,7 +1466,7 @@ impl Interpreter {
                                         v,
                                         strict,
                                     )?,
-                                    None => env.borrow_mut().set(binding_name, v)?,
+                                    None => self.env_set(env, binding_name, v)?,
                                 }
                             } else {
                                 let v = if let JsValue::Object(o) = &obj_val {
@@ -1706,7 +1705,7 @@ impl Interpreter {
         let mut iter_env = if !per_iteration_bindings.is_empty() {
             let new_env = Environment::new(Some(env.clone()));
             for (name, kind) in &per_iteration_bindings {
-                let val = for_env.borrow().get(name).unwrap_or(JsValue::Undefined);
+                let val = self.env_get(&for_env, name).unwrap_or(JsValue::Undefined);
                 new_env.borrow_mut().declare(name, *kind);
                 new_env.borrow_mut().initialize_binding(name, val);
             }
@@ -1757,7 +1756,7 @@ impl Interpreter {
                 if !per_iteration_bindings.is_empty() {
                     let new_env = Environment::new(Some(env.clone()));
                     for (name, kind) in &per_iteration_bindings {
-                        let val = iter_env.borrow().get(name).unwrap_or(JsValue::Undefined);
+                        let val = self.env_get(&iter_env, name).unwrap_or(JsValue::Undefined);
                         new_env.borrow_mut().declare(name, *kind);
                         new_env.borrow_mut().initialize_binding(name, val);
                     }
@@ -1797,7 +1796,7 @@ impl Interpreter {
             };
             if let Pattern::Identifier(name) = &d.pattern {
                 self.set_function_name(&init_val, name);
-                let _ = env.borrow_mut().set(name, init_val);
+                let _ = self.env_set(env, name, init_val);
             }
         }
 
@@ -2304,7 +2303,7 @@ impl Interpreter {
                         uses_arguments: func_uses_arguments(&f.params, &f.body),
                     };
                     let val = self.create_function(func);
-                    let _ = switch_env.borrow_mut().set(&f.name, val);
+                    let _ = self.env_set(&switch_env, &f.name, val);
                 }
             }
         }
@@ -2555,7 +2554,7 @@ impl Interpreter {
         args: &[JsValue],
         env: &EnvRef,
     ) -> Completion {
-        let ctor = env.borrow().get(name);
+        let ctor = self.env_get(env, name);
         if let Some(ctor_val) = ctor {
             let new_obj = self.create_object();
             if let JsValue::Object(ref o) = ctor_val

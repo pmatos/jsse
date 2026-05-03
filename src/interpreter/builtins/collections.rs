@@ -845,7 +845,8 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Map", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("Map", map_ctor);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "Map", map_ctor);
 
         self.realm_mut().map_prototype = Some(proto.borrow().id.unwrap());
     }
@@ -1966,7 +1967,8 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Set", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("Set", set_ctor);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "Set", set_ctor);
 
         self.realm_mut().set_prototype = Some(proto.borrow().id.unwrap());
     }

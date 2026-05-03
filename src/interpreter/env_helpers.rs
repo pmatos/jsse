@@ -254,6 +254,50 @@ impl Interpreter {
         }
     }
 
+    /// Walk the scope chain and check what error (if any) setting a binding
+    /// would produce. Mirrors the static `Environment::check_set_binding` but
+    /// reads the global object via the slab.
+    pub(crate) fn env_check_set_binding(&self, env: &EnvRef, name: &str) -> SetBindingCheck {
+        let mut current = env.clone();
+        loop {
+            let next = {
+                let e = current.borrow();
+                if e.is_indirect_binding(name) {
+                    return SetBindingCheck::ConstAssign;
+                }
+                if let Some(binding) = e.bindings.get(name) {
+                    if !binding.initialized && binding.kind != BindingKind::Var {
+                        return SetBindingCheck::TdzError;
+                    }
+                    if binding.kind == BindingKind::Const && binding.initialized {
+                        return SetBindingCheck::ConstAssign;
+                    }
+                    if (binding.kind == BindingKind::FunctionName
+                        || binding.kind == BindingKind::ImmutableValue)
+                        && binding.initialized
+                    {
+                        return SetBindingCheck::FunctionNameAssign;
+                    }
+                    return SetBindingCheck::Ok;
+                }
+                if let Some(gid) = e.global_object_id {
+                    drop(e);
+                    if let Some(go) = self.get_object(gid)
+                        && matches!(go.borrow().own_has_property(name), Some(true))
+                    {
+                        return SetBindingCheck::Ok;
+                    }
+                    return SetBindingCheck::Unresolvable;
+                }
+                e.parent.clone()
+            };
+            match next {
+                Some(parent) => current = parent,
+                None => return SetBindingCheck::Unresolvable,
+            }
+        }
+    }
+
     /// CreateGlobalFunctionBinding (eval-declared functions).
     pub(crate) fn env_declare_global_function_binding(
         &mut self,
