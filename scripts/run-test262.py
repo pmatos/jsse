@@ -106,9 +106,15 @@ class EngineAdapter(ABC):
 
 
 class JsseAdapter(EngineAdapter):
+    def __init__(self, binary: str, bytecode: bool = False):
+        super().__init__(binary)
+        self.bytecode = bytecode
+
     def build_command(self, test_file, tmp_path, harness_files, is_module, flags=None):
         if is_module:
             cmd = [self.binary]
+            if self.bytecode:
+                cmd.append("--bytecode")
             for hf in harness_files:
                 cmd.extend(["--prelude", str(hf)])
             if flags and "CanBlockIsTrue" in flags:
@@ -117,6 +123,8 @@ class JsseAdapter(EngineAdapter):
             cmd.append(str(test_file))
             return cmd
         cmd = [self.binary]
+        if self.bytecode:
+            cmd.append("--bytecode")
         if flags and "CanBlockIsTrue" in flags:
             cmd.append("--can-block")
         cmd.append(tmp_path)
@@ -212,12 +220,16 @@ _DEFAULT_BINARIES = {
 }
 
 
-def make_adapter(engine_name: str, binary: str | None = None) -> EngineAdapter:
+def make_adapter(
+    engine_name: str, binary: str | None = None, bytecode: bool = False
+) -> EngineAdapter:
     cls = _ADAPTER_CLASSES.get(engine_name)
     if cls is None:
         raise ValueError(f"Unknown engine: {engine_name}")
     if binary is None:
         binary = _DEFAULT_BINARIES[engine_name]
+    if engine_name == "jsse":
+        return cls(binary, bytecode=bytecode)
     return cls(binary)
 
 
@@ -396,14 +408,23 @@ def run_single_test(
     """Run a single test scenario.
 
     Args tuple: (scenario_id, test_file_str, mode, timeout, test262_dir_str,
-                  engine_name, engine_binary)
+                  engine_name, engine_binary, bytecode)
     Returns: (scenario_id, passed, skip_reason, duration_secs)
     """
-    scenario_id, test_file_str, mode, timeout, test262_dir_str, engine_name, engine_binary = args
+    (
+        scenario_id,
+        test_file_str,
+        mode,
+        timeout,
+        test262_dir_str,
+        engine_name,
+        engine_binary,
+        bytecode,
+    ) = args
     test_file = Path(test_file_str)
     test262_dir = Path(test262_dir_str)
 
-    adapter = make_adapter(engine_name, engine_binary)
+    adapter = make_adapter(engine_name, engine_binary, bytecode=bytecode)
 
     try:
         with open(test_file, encoding="utf-8", errors="replace", newline="") as f:
@@ -584,6 +605,11 @@ examples:
         help="Random seed for --sample (default: non-deterministic)",
     )
     parser.add_argument(
+        "--bytecode",
+        action="store_true",
+        help="Pass --bytecode to jsse so eligible functions run through the bytecode VM (jsse only).",
+    )
+    parser.add_argument(
         "paths",
         nargs="*",
         help="Specific test files or directories to run (default: all tests)",
@@ -737,6 +763,7 @@ def main():
             resolved_test262,
             engine_name,
             resolved_binary,
+            args.bytecode,
         )
         for scenario_id, mode in scenarios
     ]

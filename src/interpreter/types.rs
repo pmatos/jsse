@@ -1705,6 +1705,7 @@ pub struct JsObjectData {
     /// global counter starts at `1`, so an IC slot can never legitimately
     /// hold `obj_shape_id == 0`. See issue #71.
     pub shape_id: u64,
+    pub(crate) bytecode_cache: super::bytecode::BytecodeCacheState,
 }
 
 #[derive(Clone)]
@@ -1779,6 +1780,7 @@ impl JsObjectData {
             helper_return_closure: None,
             helper_gen_state: None,
             shape_id: 0,
+            bytecode_cache: super::bytecode::BytecodeCacheState::Untried,
         }
     }
 

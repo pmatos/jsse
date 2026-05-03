@@ -1909,7 +1909,52 @@ impl Interpreter {
         Ok(None)
     }
 
-    fn eval_binary(&mut self, op: BinaryOp, left: &JsValue, right: &JsValue) -> Completion {
+    pub(super) fn dispatch_body(
+        &mut self,
+        func_obj_id: u64,
+        body: &Rc<Vec<Statement>>,
+        exec_env: &EnvRef,
+        this_val: &JsValue,
+    ) -> Completion {
+        if self.bytecode_enabled {
+            use crate::interpreter::bytecode::{BytecodeCacheState, compiler, vm};
+            let cache_state = self
+                .get_object(func_obj_id)
+                .map(|o| o.borrow().bytecode_cache.clone())
+                .unwrap_or(BytecodeCacheState::Untried);
+            let chunk = match cache_state {
+                BytecodeCacheState::Compiled(c) => Some(c),
+                BytecodeCacheState::Ineligible => None,
+                BytecodeCacheState::Untried => match compiler::compile_body(body) {
+                    Ok(c) => {
+                        let rc = Rc::new(c);
+                        if let Some(o) = self.get_object(func_obj_id) {
+                            o.borrow_mut().bytecode_cache =
+                                BytecodeCacheState::Compiled(rc.clone());
+                        }
+                        Some(rc)
+                    }
+                    Err(_) => {
+                        if let Some(o) = self.get_object(func_obj_id) {
+                            o.borrow_mut().bytecode_cache = BytecodeCacheState::Ineligible;
+                        }
+                        None
+                    }
+                },
+            };
+            if let Some(chunk) = chunk {
+                return vm::run_chunk(self, &chunk, exec_env, this_val.clone());
+            }
+        }
+        self.exec_statements(body, exec_env)
+    }
+
+    pub(super) fn eval_binary(
+        &mut self,
+        op: BinaryOp,
+        left: &JsValue,
+        right: &JsValue,
+    ) -> Completion {
         // Fast path: both operands are Number — skip ToPrimitive/ToNumeric/BigInt checks
         if let (JsValue::Number(ln), JsValue::Number(rn)) = (left, right) {
             return match op {
@@ -12512,7 +12557,7 @@ impl Interpreter {
                         });
                         self.call_stack_envs.push(exec_env.clone());
                         self.in_tail_position = false;
-                        let result = self.exec_statements(&body, &exec_env);
+                        let result = self.dispatch_body(o.id, &body, &exec_env, _this_val);
                         self.call_stack_envs.pop();
                         self.call_stack_frames.pop();
                         let result = self.dispose_resources(&exec_env, result);
