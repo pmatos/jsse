@@ -5357,6 +5357,7 @@ impl Interpreter {
             if !probe_hit && matches!(result, Completion::Normal(_)) {
                 let new_slot = self.classify_for_call_ic(o.id);
                 let next = match (slot, new_slot) {
+                    (CallIcSlot::Megamorphic, _) => CallIcSlot::Megamorphic,
                     (_, None) => CallIcSlot::Empty,
                     (CallIcSlot::Empty, Some(s)) => s,
                     (
@@ -5371,7 +5372,6 @@ impl Interpreter {
                         ),
                     ) if prev == new => s,
                     (CallIcSlot::Mono { .. }, Some(_)) => CallIcSlot::Megamorphic,
-                    (CallIcSlot::Megamorphic, _) => CallIcSlot::Megamorphic,
                 };
                 cell.set(next);
             }

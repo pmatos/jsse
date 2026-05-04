@@ -801,6 +801,7 @@ impl Interpreter {
                         // Apply the state-machine transition (plan Step 10):
                         // Empty → Mono(new); Mono(A)→same-obj refresh; Mono(A)→different-obj Megamorphic.
                         let next = match (slot, new_slot) {
+                            (PropIcSlot::Megamorphic, _) => PropIcSlot::Megamorphic,
                             (_, None) => PropIcSlot::Empty, // not IC-able; leave Empty
                             (PropIcSlot::Empty, Some(s)) => s,
                             (
@@ -810,7 +811,6 @@ impl Interpreter {
                                 Some(s @ PropIcSlot::Mono { obj_id: new_id, .. }),
                             ) if prev_id == new_id => s,
                             (PropIcSlot::Mono { .. }, Some(_)) => PropIcSlot::Megamorphic,
-                            (PropIcSlot::Megamorphic, _) => PropIcSlot::Megamorphic,
                         };
                         cell.set(next);
                     }
