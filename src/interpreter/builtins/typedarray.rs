@@ -3626,7 +3626,7 @@ impl Interpreter {
         ];
 
         // %TypedArray% constructor (not directly constructible, but holds from/of)
-        let ta_proto = self.get_object_expect(self.realm().typed_array_prototype.unwrap());
+        let ta_proto_id = self.realm().typed_array_prototype.unwrap();
         let ta_ctor = self.create_function(JsFunction::constructor(
             "TypedArray".to_string(),
             0,
@@ -3922,11 +3922,10 @@ impl Interpreter {
         if let JsValue::Object(o) = &ta_ctor
             && let Some(obj) = self.get_object(o.id)
         {
-            let proto_id = ta_proto.borrow().id.unwrap();
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(
-                    JsValue::Object(JsObject { id: proto_id }),
+                    JsValue::Object(JsObject { id: ta_proto_id }),
                     false,
                     false,
                     false,
@@ -3935,10 +3934,12 @@ impl Interpreter {
         }
 
         // Set %TypedArray.prototype%.constructor → %TypedArray%
-        ta_proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(ta_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(ta_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(ta_ctor.clone(), true, false, true),
+            );
 
         // Add @@species getter on %TypedArray%
         let species_getter = self.create_function(JsFunction::native(
@@ -3967,7 +3968,7 @@ impl Interpreter {
         for kind in kinds {
             let name = kind.name().to_string();
             let bpe = kind.bytes_per_element();
-            let ta_proto_clone_id = ta_proto.borrow().id.unwrap();
+            let ta_proto_clone_id = ta_proto_id;
             let ta_ctor_clone = ta_ctor.clone();
 
             // Create per-type prototype
@@ -4322,7 +4323,7 @@ impl Interpreter {
     fn setup_uint8array_base64_hex(&mut self) {
         // Get Uint8Array constructor from global env
         let uint8_ctor = self.get_global_var("Uint8Array").unwrap();
-        let uint8_proto = self.get_object_expect(self.realm().uint8array_prototype.unwrap());
+        let uint8_proto_id = self.realm().uint8array_prototype.unwrap();
 
         // --- Static methods on Uint8Array constructor ---
 
@@ -4405,7 +4406,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
-        uint8_proto
+        self.get_object_cell_expect(uint8_proto_id)
             .borrow_mut()
             .insert_builtin("toHex".to_string(), to_hex_fn);
 
@@ -4437,7 +4438,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
-        uint8_proto
+        self.get_object_cell_expect(uint8_proto_id)
             .borrow_mut()
             .insert_builtin("toBase64".to_string(), to_base64_fn);
 
@@ -4476,7 +4477,7 @@ impl Interpreter {
                 make_read_written_result(interp, result.read, written)
             },
         ));
-        uint8_proto
+        self.get_object_cell_expect(uint8_proto_id)
             .borrow_mut()
             .insert_builtin("setFromHex".to_string(), set_from_hex_fn);
 
@@ -4525,7 +4526,7 @@ impl Interpreter {
                 make_read_written_result(interp, result.read, written)
             },
         ));
-        uint8_proto
+        self.get_object_cell_expect(uint8_proto_id)
             .borrow_mut()
             .insert_builtin("setFromBase64".to_string(), set_from_base64_fn);
     }
