@@ -595,7 +595,7 @@ fn to_duration_record(
     };
 
     // Check for Temporal.Duration
-    if let Some(obj_data) = interp.get_object(obj_id) {
+    if let Some(obj_data) = interp.get_object_cell(obj_id) {
         let b = obj_data.borrow();
         if let Some(TemporalData::Duration {
             years,
@@ -895,7 +895,7 @@ fn extract_duration_format_data(
     this: &JsValue,
 ) -> Result<DurationFormatData, JsValue> {
     if let JsValue::Object(o) = this
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(obj) = interp.get_object_cell(o.id)
     {
         let b = obj.borrow();
         if let Some(IntlData::DurationFormat {
@@ -1749,12 +1749,15 @@ impl Interpreter {
 
         // Set DurationFormat.prototype on constructor
         if let JsValue::Object(ctor_ref) = &duration_format_ctor
-            && let Some(obj) = self.get_object(ctor_ref.id)
+            && self.get_object_cell(ctor_ref.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), false, false, false),
-            );
+            let ctor_id = ctor_ref.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
+                );
 
             // supportedLocalesOf static method
             let slof = self.create_function(JsFunction::native(
@@ -1773,7 +1776,8 @@ impl Interpreter {
                     }
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
                 .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 

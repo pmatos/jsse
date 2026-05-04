@@ -2935,26 +2935,40 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        let cached = {
-                            let b = obj.borrow();
+                    enum Probe {
+                        NotNf,
+                        Cached(JsValue),
+                        Uncached,
+                    }
+                    let probe = interp
+                        .get_object_cell(o.id)
+                        .map(|cell| {
+                            let b = cell.borrow();
                             if !matches!(b.intl_data, Some(IntlData::NumberFormat { .. })) {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Intl.NumberFormat.prototype.format called on incompatible receiver",
-                                ));
-                            }
-                            b.properties
+                                Probe::NotNf
+                            } else if let Some(func) = b
+                                .properties
                                 .get("[[BoundFormat]]")
                                 .and_then(|pd| pd.value.clone())
-                        };
-
-                        if let Some(func) = cached {
-                            return Completion::Normal(func);
+                            {
+                                Probe::Cached(func)
+                            } else {
+                                Probe::Uncached
+                            }
+                        })
+                        .unwrap_or(Probe::Uncached);
+                    match probe {
+                        Probe::NotNf => {
+                            return Completion::Throw(interp.create_type_error(
+                                "Intl.NumberFormat.prototype.format called on incompatible receiver",
+                            ));
                         }
+                        Probe::Cached(func) => return Completion::Normal(func),
+                        Probe::Uncached => {}
                     }
 
                     let nf_data = {
-                        if let Some(obj) = interp.get_object(o.id) {
+                        if let Some(obj) = interp.get_object_cell(o.id) {
                             let b = obj.borrow();
                             b.intl_data.clone()
                         } else {
@@ -3033,7 +3047,7 @@ impl Interpreter {
                             },
                         ));
 
-                        if let Some(obj) = interp.get_object(o.id) {
+                        if let Some(obj) = interp.get_object_cell(o.id) {
                             obj.borrow_mut().properties.insert(
                                 "[[BoundFormat]]".to_string(),
                                 PropertyDescriptor::data(format_fn.clone(), false, false, false),
@@ -3062,7 +3076,7 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     let nf_data = {
-                        if let Some(obj) = interp.get_object(o.id) {
+                        if let Some(obj) = interp.get_object_cell(o.id) {
                             let b = obj.borrow();
                             b.intl_data.clone()
                         } else {
@@ -3181,36 +3195,38 @@ impl Interpreter {
             "formatRange".to_string(),
             2,
             |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id) {
-                        let has_nf = {
-                            let b = obj.borrow();
-                            matches!(b.intl_data, Some(IntlData::NumberFormat { .. }))
-                        };
-                        if !has_nf {
-                            return Completion::Throw(interp.create_type_error(
-                                "Intl.NumberFormat.prototype.formatRange called on incompatible receiver",
-                            ));
-                        }
-
+                if let JsValue::Object(o) = this {
+                    let nf_present = interp.get_object_cell(o.id).is_some_and(|cell| {
+                        matches!(cell.borrow().intl_data, Some(IntlData::NumberFormat { .. }))
+                    });
+                    if nf_present {
                         let start = args.first().cloned().unwrap_or(JsValue::Undefined);
                         let end = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
-                        if matches!(start, JsValue::Undefined) || matches!(end, JsValue::Undefined) {
-                            return Completion::Throw(interp.create_type_error(
-                                "start and end must not be undefined",
-                            ));
+                        if matches!(start, JsValue::Undefined) || matches!(end, JsValue::Undefined)
+                        {
+                            return Completion::Throw(
+                                interp.create_type_error("start and end must not be undefined"),
+                            );
                         }
 
                         let start_str = if let JsValue::String(s) = &start {
                             let sv = s.to_string();
-                            if string_needs_decimal_precision(&sv) { Some(sv) } else { None }
+                            if string_needs_decimal_precision(&sv) {
+                                Some(sv)
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         };
                         let end_str = if let JsValue::String(s) = &end {
                             let sv = s.to_string();
-                            if string_needs_decimal_precision(&sv) { Some(sv) } else { None }
+                            if string_needs_decimal_precision(&sv) {
+                                Some(sv)
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         };
@@ -3230,10 +3246,9 @@ impl Interpreter {
                             );
                         }
 
-                        let nf_data = {
-                            let b = obj.borrow();
-                            b.intl_data.clone()
-                        };
+                        let nf_data = interp
+                            .get_object_cell(o.id)
+                            .and_then(|cell| cell.borrow().intl_data.clone());
 
                         if let Some(IntlData::NumberFormat {
                             locale,
@@ -3261,50 +3276,106 @@ impl Interpreter {
                         {
                             let fmt_start = if let Some(ref s) = start_str {
                                 format_number_from_string_decimal(
-                                    s, &locale, &style, &currency, &currency_display,
-                                    &currency_sign, &unit, &unit_display, &sign_display,
-                                    &use_grouping, minimum_integer_digits, minimum_fraction_digits,
-                                    maximum_fraction_digits, &numbering_system,
+                                    s,
+                                    &locale,
+                                    &style,
+                                    &currency,
+                                    &currency_display,
+                                    &currency_sign,
+                                    &unit,
+                                    &unit_display,
+                                    &sign_display,
+                                    &use_grouping,
+                                    minimum_integer_digits,
+                                    minimum_fraction_digits,
+                                    maximum_fraction_digits,
+                                    &numbering_system,
                                 )
                             } else {
                                 format_number_internal(
-                                    x, &locale, &style, &currency, &currency_display,
-                                    &currency_sign, &unit, &unit_display, &notation,
-                                    &compact_display, &sign_display, &use_grouping,
-                                    minimum_integer_digits, minimum_fraction_digits,
-                                    maximum_fraction_digits, &minimum_significant_digits,
-                                    &maximum_significant_digits, &rounding_mode, rounding_increment,
-                                    &rounding_priority, &trailing_zero_display, &numbering_system,
+                                    x,
+                                    &locale,
+                                    &style,
+                                    &currency,
+                                    &currency_display,
+                                    &currency_sign,
+                                    &unit,
+                                    &unit_display,
+                                    &notation,
+                                    &compact_display,
+                                    &sign_display,
+                                    &use_grouping,
+                                    minimum_integer_digits,
+                                    minimum_fraction_digits,
+                                    maximum_fraction_digits,
+                                    &minimum_significant_digits,
+                                    &maximum_significant_digits,
+                                    &rounding_mode,
+                                    rounding_increment,
+                                    &rounding_priority,
+                                    &trailing_zero_display,
+                                    &numbering_system,
                                 )
                             };
                             let fmt_end = if let Some(ref s) = end_str {
                                 format_number_from_string_decimal(
-                                    s, &locale, &style, &currency, &currency_display,
-                                    &currency_sign, &unit, &unit_display, &sign_display,
-                                    &use_grouping, minimum_integer_digits, minimum_fraction_digits,
-                                    maximum_fraction_digits, &numbering_system,
+                                    s,
+                                    &locale,
+                                    &style,
+                                    &currency,
+                                    &currency_display,
+                                    &currency_sign,
+                                    &unit,
+                                    &unit_display,
+                                    &sign_display,
+                                    &use_grouping,
+                                    minimum_integer_digits,
+                                    minimum_fraction_digits,
+                                    maximum_fraction_digits,
+                                    &numbering_system,
                                 )
                             } else {
                                 format_number_internal(
-                                    y, &locale, &style, &currency, &currency_display,
-                                    &currency_sign, &unit, &unit_display, &notation,
-                                    &compact_display, &sign_display, &use_grouping,
-                                    minimum_integer_digits, minimum_fraction_digits,
-                                    maximum_fraction_digits, &minimum_significant_digits,
-                                    &maximum_significant_digits, &rounding_mode, rounding_increment,
-                                    &rounding_priority, &trailing_zero_display, &numbering_system,
+                                    y,
+                                    &locale,
+                                    &style,
+                                    &currency,
+                                    &currency_display,
+                                    &currency_sign,
+                                    &unit,
+                                    &unit_display,
+                                    &notation,
+                                    &compact_display,
+                                    &sign_display,
+                                    &use_grouping,
+                                    minimum_integer_digits,
+                                    minimum_fraction_digits,
+                                    maximum_fraction_digits,
+                                    &minimum_significant_digits,
+                                    &maximum_significant_digits,
+                                    &rounding_mode,
+                                    rounding_increment,
+                                    &rounding_priority,
+                                    &trailing_zero_display,
+                                    &numbering_system,
                                 )
                             };
 
                             let result = format_range_string(
-                                &fmt_start, &fmt_end, &locale, &style,
-                                &currency, &currency_display, &sign_display,
+                                &fmt_start,
+                                &fmt_end,
+                                &locale,
+                                &style,
+                                &currency,
+                                &currency_display,
+                                &sign_display,
                             );
                             return Completion::Normal(JsValue::String(JsString::from_str(
                                 &result,
                             )));
                         }
                     }
+                }
                 Completion::Throw(interp.create_type_error(
                     "Intl.NumberFormat.prototype.formatRange called on incompatible receiver",
                 ))
@@ -3319,18 +3390,11 @@ impl Interpreter {
             "formatRangeToParts".to_string(),
             2,
             |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id) {
-                        let has_nf = {
-                            let b = obj.borrow();
-                            matches!(b.intl_data, Some(IntlData::NumberFormat { .. }))
-                        };
-                        if !has_nf {
-                            return Completion::Throw(interp.create_type_error(
-                                "Intl.NumberFormat.prototype.formatRangeToParts called on incompatible receiver",
-                            ));
-                        }
-
+                if let JsValue::Object(o) = this {
+                    let nf_present = interp
+                        .get_object_cell(o.id)
+                        .is_some_and(|cell| matches!(cell.borrow().intl_data, Some(IntlData::NumberFormat { .. })));
+                    if nf_present {
                         let start = args.first().cloned().unwrap_or(JsValue::Undefined);
                         let end = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
@@ -3355,10 +3419,9 @@ impl Interpreter {
                             );
                         }
 
-                        let nf_data = {
-                            let b = obj.borrow();
-                            b.intl_data.clone()
-                        };
+                        let nf_data = interp
+                            .get_object_cell(o.id)
+                            .and_then(|cell| cell.borrow().intl_data.clone());
 
                         if let Some(IntlData::NumberFormat {
                             locale,
@@ -3476,6 +3539,7 @@ impl Interpreter {
                             return Completion::Normal(interp.create_array(result_parts));
                         }
                     }
+                }
                 Completion::Throw(interp.create_type_error(
                     "Intl.NumberFormat.prototype.formatRangeToParts called on incompatible receiver",
                 ))
@@ -3491,7 +3555,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let data = {
                         let b = obj.borrow();
@@ -4388,12 +4452,15 @@ impl Interpreter {
 
         // Set NumberFormat.prototype on constructor
         if let JsValue::Object(ctor_ref) = &nf_ctor
-            && let Some(obj) = self.get_object(ctor_ref.id)
+            && self.get_object_cell(ctor_ref.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), false, false, false),
-            );
+            let ctor_id = ctor_ref.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
+                );
 
             // supportedLocalesOf static method
             let slof = self.create_function(JsFunction::native(
@@ -4412,7 +4479,8 @@ impl Interpreter {
                     }
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
                 .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 

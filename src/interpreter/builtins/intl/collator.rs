@@ -239,24 +239,63 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        let cached = {
-                            let b = obj.borrow();
+                    if let Some(cell) = interp.get_object_cell(o.id) {
+                        enum Probe {
+                            NotCollator,
+                            Cached(JsValue),
+                            Uncached,
+                        }
+                        let probe = {
+                            let b = cell.borrow();
                             if !matches!(b.intl_data, Some(IntlData::Collator { .. })) {
+                                Probe::NotCollator
+                            } else if let Some(func) = b
+                                .properties
+                                .get("[[BoundCompare]]")
+                                .and_then(|pd| pd.value.clone())
+                            {
+                                Probe::Cached(func)
+                            } else {
+                                Probe::Uncached
+                            }
+                        };
+                        match probe {
+                            Probe::NotCollator => {
                                 return Completion::Throw(interp.create_type_error(
                                     "Intl.Collator.prototype.compare called on non-Collator object",
                                 ));
                             }
-                            b.properties
-                                .get("[[BoundCompare]]")
-                                .and_then(|pd| pd.value.clone())
-                        };
-
-                        if let Some(func) = cached {
-                            return Completion::Normal(func);
+                            Probe::Cached(func) => return Completion::Normal(func),
+                            Probe::Uncached => {}
                         }
                     }
 
+                    let snapshot = interp.get_object_cell(o.id).and_then(|cell| {
+                        let b = cell.borrow();
+                        if let Some(IntlData::Collator {
+                            ref locale,
+                            ref usage,
+                            ref collation,
+                            ref sensitivity,
+                            ref ignore_punctuation,
+                            ref numeric,
+                            ref case_first,
+                            ..
+                        }) = b.intl_data
+                        {
+                            Some((
+                                locale.clone(),
+                                usage.clone(),
+                                collation.clone(),
+                                sensitivity.clone(),
+                                *numeric,
+                                case_first.clone(),
+                                *ignore_punctuation,
+                            ))
+                        } else {
+                            None
+                        }
+                    });
                     let (
                         locale,
                         usage,
@@ -265,35 +304,9 @@ impl Interpreter {
                         numeric,
                         case_first,
                         ignore_punctuation,
-                    ) = {
-                        if let Some(obj) = interp.get_object(o.id) {
-                            let b = obj.borrow();
-                            if let Some(IntlData::Collator {
-                                ref locale,
-                                ref usage,
-                                ref collation,
-                                ref sensitivity,
-                                ref ignore_punctuation,
-                                ref numeric,
-                                ref case_first,
-                                ..
-                            }) = b.intl_data
-                            {
-                                (
-                                    locale.clone(),
-                                    usage.clone(),
-                                    collation.clone(),
-                                    sensitivity.clone(),
-                                    *numeric,
-                                    case_first.clone(),
-                                    *ignore_punctuation,
-                                )
-                            } else {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Intl.Collator.prototype.compare called on non-Collator object",
-                                ));
-                            }
-                        } else {
+                    ) = match snapshot {
+                        Some(t) => t,
+                        None => {
                             return Completion::Throw(interp.create_type_error(
                                 "Intl.Collator.prototype.compare called on non-Collator object",
                             ));
@@ -330,7 +343,7 @@ impl Interpreter {
                         },
                     ));
 
-                    if let Some(obj) = interp.get_object(o.id) {
+                    if let Some(obj) = interp.get_object_cell(o.id) {
                         obj.borrow_mut().properties.insert(
                             "[[BoundCompare]]".to_string(),
                             PropertyDescriptor::data(compare_fn.clone(), false, false, false),
@@ -357,7 +370,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let data = {
                         let b = obj.borrow();
@@ -680,12 +693,15 @@ impl Interpreter {
 
         // Set Collator.prototype on constructor
         if let JsValue::Object(ctor_ref) = &collator_ctor
-            && let Some(obj) = self.get_object(ctor_ref.id)
+            && self.get_object_cell(ctor_ref.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), false, false, false),
-            );
+            let ctor_id = ctor_ref.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
+                );
 
             // supportedLocalesOf static method
             let slof = self.create_function(JsFunction::native(
@@ -704,7 +720,8 @@ impl Interpreter {
                     }
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
                 .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 

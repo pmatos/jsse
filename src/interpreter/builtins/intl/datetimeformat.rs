@@ -4171,7 +4171,7 @@ fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, 
 
 fn extract_dtf_data(interp: &mut Interpreter, this: &JsValue) -> Result<DtfOptions, JsValue> {
     if let JsValue::Object(o) = this
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(obj) = interp.get_object_cell(o.id)
     {
         let b = obj.borrow();
         if let Some(IntlData::DateTimeFormat {
@@ -4246,7 +4246,7 @@ fn resolve_date_value(interp: &mut Interpreter, date_arg: &JsValue) -> Result<f6
     }
     // Check if it's a Temporal object
     if let JsValue::Object(o) = date_arg
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(obj) = interp.get_object_cell(o.id)
     {
         let temporal = obj.borrow().temporal_data.clone();
         if let Some(td) = temporal {
@@ -4274,7 +4274,7 @@ enum TemporalType {
 
 fn detect_temporal_type(interp: &Interpreter, val: &JsValue) -> Option<TemporalType> {
     if let JsValue::Object(o) = val
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(obj) = interp.get_object_cell(o.id)
     {
         let td = obj.borrow().temporal_data.clone();
         return match td {
@@ -4293,7 +4293,7 @@ fn detect_temporal_type(interp: &Interpreter, val: &JsValue) -> Option<TemporalT
 
 fn detect_temporal_calendar(interp: &Interpreter, val: &JsValue) -> Option<String> {
     if let JsValue::Object(o) = val
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(obj) = interp.get_object_cell(o.id)
     {
         let td = obj.borrow().temporal_data.clone();
         return match td {
@@ -4742,79 +4742,93 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        let cached = {
-                            let b = obj.borrow();
+                    enum Probe {
+                        NotDtf,
+                        Cached(JsValue),
+                        Uncached,
+                    }
+                    let probe = interp
+                        .get_object_cell(o.id)
+                        .map(|cell| {
+                            let b = cell.borrow();
                             if !matches!(b.intl_data, Some(IntlData::DateTimeFormat { .. })) {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Intl.DateTimeFormat.prototype.format called on incompatible receiver",
-                                ));
-                            }
-                            b.properties
+                                Probe::NotDtf
+                            } else if let Some(func) = b
+                                .properties
                                 .get("[[BoundFormat]]")
                                 .and_then(|pd| pd.value.clone())
-                        };
-
-                        if let Some(func) = cached {
-                            return Completion::Normal(func);
+                            {
+                                Probe::Cached(func)
+                            } else {
+                                Probe::Uncached
+                            }
+                        })
+                        .unwrap_or(Probe::Uncached);
+                    match probe {
+                        Probe::NotDtf => {
+                            return Completion::Throw(interp.create_type_error(
+                                "Intl.DateTimeFormat.prototype.format called on incompatible receiver",
+                            ));
                         }
+                        Probe::Cached(func) => return Completion::Normal(func),
+                        Probe::Uncached => {}
                     }
 
-                    let opts = {
-                        if let Some(obj) = interp.get_object(o.id) {
-                            let b = obj.borrow();
-                            if let Some(IntlData::DateTimeFormat {
-                                ref locale,
-                                ref calendar,
-                                ref numbering_system,
-                                ref time_zone,
-                                ref hour_cycle,
-                                ref hour12,
-                                ref weekday,
-                                ref era,
-                                ref year,
-                                ref month,
-                                ref day,
-                                ref day_period,
-                                ref hour,
-                                ref minute,
-                                ref second,
-                                ref fractional_second_digits,
-                                ref time_zone_name,
-                                ref date_style,
-                                ref time_style,
+                    let opts_snapshot = interp.get_object_cell(o.id).and_then(|cell| {
+                        let b = cell.borrow();
+                        if let Some(IntlData::DateTimeFormat {
+                            ref locale,
+                            ref calendar,
+                            ref numbering_system,
+                            ref time_zone,
+                            ref hour_cycle,
+                            ref hour12,
+                            ref weekday,
+                            ref era,
+                            ref year,
+                            ref month,
+                            ref day,
+                            ref day_period,
+                            ref hour,
+                            ref minute,
+                            ref second,
+                            ref fractional_second_digits,
+                            ref time_zone_name,
+                            ref date_style,
+                            ref time_style,
+                            has_explicit_components,
+                        }) = b.intl_data
+                        {
+                            Some(DtfOptions {
+                                locale: locale.clone(),
+                                calendar: calendar.clone(),
+                                numbering_system: numbering_system.clone(),
+                                time_zone: time_zone.clone(),
+                                hour_cycle: hour_cycle.clone(),
+                                hour12: *hour12,
+                                weekday: weekday.clone(),
+                                era: era.clone(),
+                                year: year.clone(),
+                                month: month.clone(),
+                                day: day.clone(),
+                                day_period: day_period.clone(),
+                                hour: hour.clone(),
+                                minute: minute.clone(),
+                                second: second.clone(),
+                                fractional_second_digits: *fractional_second_digits,
+                                time_zone_name: time_zone_name.clone(),
+                                date_style: date_style.clone(),
+                                time_style: time_style.clone(),
                                 has_explicit_components,
-                            }) = b.intl_data
-                            {
-                                DtfOptions {
-                                    locale: locale.clone(),
-                                    calendar: calendar.clone(),
-                                    numbering_system: numbering_system.clone(),
-                                    time_zone: time_zone.clone(),
-                                    hour_cycle: hour_cycle.clone(),
-                                    hour12: *hour12,
-                                    weekday: weekday.clone(),
-                                    era: era.clone(),
-                                    year: year.clone(),
-                                    month: month.clone(),
-                                    day: day.clone(),
-                                    day_period: day_period.clone(),
-                                    hour: hour.clone(),
-                                    minute: minute.clone(),
-                                    second: second.clone(),
-                                    fractional_second_digits: *fractional_second_digits,
-                                    time_zone_name: time_zone_name.clone(),
-                                    date_style: date_style.clone(),
-                                    time_style: time_style.clone(),
-                                    has_explicit_components,
-                                    temporal_type: None,
-                                }
-                            } else {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Intl.DateTimeFormat.prototype.format called on incompatible receiver",
-                                ));
-                            }
+                                temporal_type: None,
+                            })
                         } else {
+                            None
+                        }
+                    });
+                    let opts = match opts_snapshot {
+                        Some(o) => o,
+                        None => {
                             return Completion::Throw(interp.create_type_error(
                                 "Intl.DateTimeFormat.prototype.format called on incompatible receiver",
                             ));
@@ -4858,7 +4872,7 @@ impl Interpreter {
                         },
                     ));
 
-                    if let Some(obj) = interp.get_object(o.id) {
+                    if let Some(obj) = interp.get_object_cell(o.id) {
                         obj.borrow_mut().properties.insert(
                             "[[BoundFormat]]".to_string(),
                             PropertyDescriptor::data(format_fn.clone(), false, false, false),
@@ -5738,12 +5752,15 @@ impl Interpreter {
 
         // Set DateTimeFormat.prototype on constructor
         if let JsValue::Object(ctor_ref) = &dtf_ctor
-            && let Some(obj) = self.get_object(ctor_ref.id)
+            && self.get_object_cell(ctor_ref.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), false, false, false),
-            );
+            let ctor_id = ctor_ref.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
+                );
 
             // supportedLocalesOf static method
             let slof = self.create_function(JsFunction::native(
@@ -5762,7 +5779,8 @@ impl Interpreter {
                     }
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
                 .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 

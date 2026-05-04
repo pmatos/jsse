@@ -147,7 +147,7 @@ fn extract_segmenter_data(
     this: &JsValue,
 ) -> Result<(String, String), JsValue> {
     if let JsValue::Object(o) = this
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(obj) = interp.get_object_cell(o.id)
     {
         let b = obj.borrow();
         if let Some(IntlData::Segmenter {
@@ -269,7 +269,7 @@ impl Interpreter {
                     |interp, this, args| {
                         // RequireInternalSlot(segments, [[SegmentsSegmenter]])
                         let is_segments = if let JsValue::Object(o) = this {
-                            if let Some(obj) = interp.get_object(o.id) {
+                            if let Some(obj) = interp.get_object_cell(o.id) {
                                 let b = obj.borrow();
                                 b.class_name == "Segmenter Segments"
                                     && b.properties.contains_key("[[SegmenterInput]]")
@@ -304,7 +304,7 @@ impl Interpreter {
                         let idx = idx as usize;
 
                         let (input_u16, granularity, breaks) = if let JsValue::Object(o) = this {
-                            if let Some(obj) = interp.get_object(o.id) {
+                            if let Some(obj) = interp.get_object_cell(o.id) {
                                 let b = obj.borrow();
                                 let input_u16 = b
                                     .properties
@@ -336,7 +336,7 @@ impl Interpreter {
 
                                 let mut break_points = Vec::new();
                                 if let Some(JsValue::Object(arr_obj)) = breaks_val
-                                    && let Some(arr) = interp.get_object(arr_obj.id)
+                                    && let Some(arr) = interp.get_object_cell(arr_obj.id)
                                 {
                                     let ab = arr.borrow();
                                     if let Some(elems) = &ab.array_elements {
@@ -453,26 +453,57 @@ impl Interpreter {
                             0,
                             |interp, this, _args| {
                                 if let JsValue::Object(o) = this
-                                    && let Some(obj) = interp.get_object(o.id)
+                                    && interp.get_object_cell(o.id).is_some()
                                 {
-                                    let has_word_like = {
-                                        let b = obj.borrow();
-                                        b.properties
+                                    let iter_id = o.id;
+                                    enum Step {
+                                        Done,
+                                        Yield {
+                                            seg: Vec<u16>,
+                                            idx: usize,
+                                            input: std::rc::Rc<Vec<u16>>,
+                                            wl: bool,
+                                            has_word_like: bool,
+                                        },
+                                        NotIter,
+                                    }
+                                    let step = {
+                                        let cell = interp.get_object_cell_expect(iter_id);
+                                        let has_word_like = cell
+                                            .borrow()
+                                            .properties
                                             .get("[[HasWordLike]]")
                                             .and_then(|pd| pd.value.as_ref())
                                             .map(|v| matches!(v, JsValue::Boolean(true)))
-                                            .unwrap_or(false)
+                                            .unwrap_or(false);
+                                        let mut b = cell.borrow_mut();
+                                        if let Some(IteratorState::SegmentIterator {
+                                            ref mut segments,
+                                            ref input,
+                                            ref mut position,
+                                            ref mut done,
+                                        }) = b.iterator_state
+                                        {
+                                            if *done || *position >= segments.len() {
+                                                *done = true;
+                                                Step::Done
+                                            } else {
+                                                let (seg, idx, wl) = segments[*position].clone();
+                                                *position += 1;
+                                                Step::Yield {
+                                                    seg,
+                                                    idx,
+                                                    input: input.clone(),
+                                                    wl,
+                                                    has_word_like,
+                                                }
+                                            }
+                                        } else {
+                                            Step::NotIter
+                                        }
                                     };
-
-                                    if let Some(IteratorState::SegmentIterator {
-                                        ref mut segments,
-                                        ref input,
-                                        ref mut position,
-                                        ref mut done,
-                                    }) = obj.borrow_mut().iterator_state
-                                    {
-                                        if *done || *position >= segments.len() {
-                                            *done = true;
+                                    match step {
+                                        Step::Done => {
                                             return Completion::Normal(
                                                 interp.create_iter_result_object(
                                                     JsValue::Undefined,
@@ -480,23 +511,27 @@ impl Interpreter {
                                                 ),
                                             );
                                         }
-
-                                        let (seg, idx, wl) = segments[*position].clone();
-                                        *position += 1;
-
-                                        let is_word_like =
-                                            if has_word_like { Some(wl) } else { None };
-                                        let seg_obj = create_segment_object(
-                                            interp,
-                                            &seg,
+                                        Step::Yield {
+                                            seg,
                                             idx,
                                             input,
-                                            is_word_like,
-                                        );
-
-                                        return Completion::Normal(
-                                            interp.create_iter_result_object(seg_obj, false),
-                                        );
+                                            wl,
+                                            has_word_like,
+                                        } => {
+                                            let is_word_like =
+                                                if has_word_like { Some(wl) } else { None };
+                                            let seg_obj = create_segment_object(
+                                                interp,
+                                                &seg,
+                                                idx,
+                                                &input,
+                                                is_word_like,
+                                            );
+                                            return Completion::Normal(
+                                                interp.create_iter_result_object(seg_obj, false),
+                                            );
+                                        }
+                                        Step::NotIter => {}
                                     }
                                 }
                                 Completion::Normal(
@@ -651,12 +686,15 @@ impl Interpreter {
 
         // Set Segmenter.prototype on constructor
         if let JsValue::Object(ctor_ref) = &segmenter_ctor
-            && let Some(obj) = self.get_object(ctor_ref.id)
+            && self.get_object_cell(ctor_ref.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), false, false, false),
-            );
+            let ctor_id = ctor_ref.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
+                );
 
             // supportedLocalesOf static method
             let slof = self.create_function(JsFunction::native(
@@ -675,7 +713,8 @@ impl Interpreter {
                     }
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
                 .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 

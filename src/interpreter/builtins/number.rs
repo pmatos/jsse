@@ -261,7 +261,7 @@ impl Interpreter {
         ) -> Option<crate::types::JsSymbol> {
             match this {
                 JsValue::Symbol(s) => Some(s.clone()),
-                JsValue::Object(o) => interp.get_object(o.id).and_then(|obj| {
+                JsValue::Object(o) => interp.get_object_cell(o.id).and_then(|obj| {
                     let b = obj.borrow();
                     if b.class_name == "Symbol"
                         && let Some(JsValue::Symbol(s)) = &b.primitive_value
@@ -418,7 +418,7 @@ impl Interpreter {
         // Set Symbol.prototype on the Symbol constructor
         if let Some(sym_val) = self.get_global_var("Symbol")
             && let JsValue::Object(o) = &sym_val
-            && let Some(sym_obj) = self.get_object(o.id)
+            && let Some(sym_obj) = self.get_object_cell(o.id)
         {
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             sym_obj.borrow_mut().insert_property(
@@ -447,7 +447,7 @@ impl Interpreter {
         fn this_number_value(interp: &Interpreter, this: &JsValue) -> Option<f64> {
             match this {
                 JsValue::Number(n) => Some(*n),
-                JsValue::Object(o) => interp.get_object(o.id).and_then(|obj| {
+                JsValue::Object(o) => interp.get_object_cell(o.id).and_then(|obj| {
                     let b = obj.borrow();
                     if b.class_name == "Number"
                         && let Some(JsValue::Number(n)) = &b.primitive_value
@@ -685,7 +685,7 @@ impl Interpreter {
         // Set Number.prototype on the Number constructor
         if let Some(num_val) = self.get_global_var("Number")
             && let JsValue::Object(o) = &num_val
-            && let Some(num_obj) = self.get_object(o.id)
+            && let Some(num_obj) = self.get_object_cell(o.id)
         {
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             num_obj.borrow_mut().insert_property(
@@ -712,7 +712,7 @@ impl Interpreter {
         fn this_boolean_value(interp: &Interpreter, this: &JsValue) -> Option<bool> {
             match this {
                 JsValue::Boolean(b) => Some(*b),
-                JsValue::Object(o) => interp.get_object(o.id).and_then(|obj| {
+                JsValue::Object(o) => interp.get_object_cell(o.id).and_then(|obj| {
                     let b = obj.borrow();
                     if b.class_name == "Boolean"
                         && let Some(JsValue::Boolean(v)) = &b.primitive_value
@@ -772,7 +772,7 @@ impl Interpreter {
         // Set Boolean.prototype on the Boolean constructor
         if let Some(bool_val) = self.get_global_var("Boolean")
             && let JsValue::Object(o) = &bool_val
-            && let Some(bool_obj) = self.get_object(o.id)
+            && let Some(bool_obj) = self.get_object_cell(o.id)
         {
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             bool_obj.borrow_mut().insert_property(

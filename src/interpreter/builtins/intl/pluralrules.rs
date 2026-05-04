@@ -182,7 +182,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let data = {
                         let b = obj.borrow();
@@ -249,7 +249,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let data = {
                         let b = obj.borrow();
@@ -331,7 +331,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let data = {
                         let b = obj.borrow();
@@ -1025,12 +1025,15 @@ impl Interpreter {
 
         // Set PluralRules.prototype on constructor
         if let JsValue::Object(ctor_ref) = &ctor
-            && let Some(obj) = self.get_object(ctor_ref.id)
+            && self.get_object_cell(ctor_ref.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), false, false, false),
-            );
+            let ctor_id = ctor_ref.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
+                );
 
             // supportedLocalesOf static method
             let slof = self.create_function(JsFunction::native(
@@ -1049,7 +1052,8 @@ impl Interpreter {
                     }
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
                 .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 

@@ -15,22 +15,25 @@ static WAITER_MAP: LazyLock<Mutex<FxHashMap<(u64, usize), Vec<WaiterEntry>>>> =
     LazyLock::new(|| Mutex::new(FxHashMap::default()));
 
 fn check_ta_detached(interp: &mut Interpreter, ta_val: &JsValue) -> Result<(), JsValue> {
-    if let JsValue::Object(o) = ta_val
-        && let Some(obj) = interp.get_object(o.id)
-    {
-        let obj_ref = obj.borrow();
-        if let Some(ref info) = obj_ref.typed_array_info
-            && info.is_detached.get()
-        {
-            return Err(interp.create_type_error("typed array is detached"));
-        }
+    let detached = if let JsValue::Object(o) = ta_val {
+        interp.get_object_cell(o.id).is_some_and(|cell| {
+            cell.borrow()
+                .typed_array_info
+                .as_ref()
+                .is_some_and(|info| info.is_detached.get())
+        })
+    } else {
+        false
+    };
+    if detached {
+        return Err(interp.create_type_error("typed array is detached"));
     }
     Ok(())
 }
 
 fn get_sab_info(interp: &Interpreter, ta_val: &JsValue) -> Option<(Arc<SharedBufferInner>, usize)> {
     if let JsValue::Object(o) = ta_val
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(obj) = interp.get_object_cell(o.id)
     {
         let obj_ref = obj.borrow();
         let byte_offset = obj_ref
@@ -39,7 +42,7 @@ fn get_sab_info(interp: &Interpreter, ta_val: &JsValue) -> Option<(Arc<SharedBuf
             .map(|i| i.byte_offset)
             .unwrap_or(0);
         if let Some(buf_id) = obj_ref.view_buffer_object_id
-            && let Some(buf_obj) = interp.get_object(buf_id)
+            && let Some(buf_obj) = interp.get_object_cell(buf_id)
         {
             let buf_ref = buf_obj.borrow();
             if buf_ref.arraybuffer_is_shared
@@ -556,12 +559,12 @@ impl Interpreter {
                     };
                 // Step 3: IsSharedArrayBuffer check — before index/value/timeout
                 let buffer_is_shared = if let JsValue::Object(o) = &ta_val
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
                     if obj_ref.typed_array_info.is_some() {
                         if let Some(buf_id) = obj_ref.view_buffer_object_id
-                            && let Some(buf_obj) = interp.get_object(buf_id)
+                            && let Some(buf_obj) = interp.get_object_cell(buf_id)
                         {
                             buf_obj.borrow().arraybuffer_is_shared
                         } else {
@@ -1262,42 +1265,43 @@ fn validate_integer_typed_array(
     ),
     JsValue,
 > {
-    if let JsValue::Object(o) = ta_val
-        && let Some(obj) = interp.get_object(o.id)
-    {
-        let obj_ref = obj.borrow();
-        if let Some(ref info) = obj_ref.typed_array_info {
-            let kind = info.kind;
-            if waitable {
-                if !matches!(kind, TypedArrayKind::Int32 | TypedArrayKind::BigInt64) {
-                    return Err(interp.create_type_error(
-                        "Atomics.wait/notify requires Int32Array or BigInt64Array",
-                    ));
-                }
-            } else if matches!(
-                kind,
-                TypedArrayKind::Float16
-                    | TypedArrayKind::Float32
-                    | TypedArrayKind::Float64
-                    | TypedArrayKind::Uint8Clamped
-            ) {
-                return Err(
-                    interp.create_type_error("Atomics operations require integer typed arrays")
-                );
+    let info_snapshot = if let JsValue::Object(o) = ta_val {
+        interp.get_object_cell(o.id).and_then(|cell| {
+            let obj_ref = cell.borrow();
+            obj_ref.typed_array_info.as_ref().map(|info| {
+                (
+                    info.kind,
+                    info.buffer.clone(),
+                    info.byte_offset,
+                    info.is_detached.get(),
+                )
+            })
+        })
+    } else {
+        None
+    };
+    if let Some((kind, buffer, byte_offset, is_detached)) = info_snapshot {
+        if waitable {
+            if !matches!(kind, TypedArrayKind::Int32 | TypedArrayKind::BigInt64) {
+                return Err(interp.create_type_error(
+                    "Atomics.wait/notify requires Int32Array or BigInt64Array",
+                ));
             }
-            if info.is_detached.get() {
-                return Err(interp.create_type_error("typed array is detached"));
-            }
-            let element_size = kind.bytes_per_element();
-            let is_bigint = kind.is_bigint();
-            return Ok((
-                kind,
-                info.buffer.clone(),
-                info.byte_offset,
-                element_size,
-                is_bigint,
-            ));
+        } else if matches!(
+            kind,
+            TypedArrayKind::Float16
+                | TypedArrayKind::Float32
+                | TypedArrayKind::Float64
+                | TypedArrayKind::Uint8Clamped
+        ) {
+            return Err(interp.create_type_error("Atomics operations require integer typed arrays"));
         }
+        if is_detached {
+            return Err(interp.create_type_error("typed array is detached"));
+        }
+        let element_size = kind.bytes_per_element();
+        let is_bigint = kind.is_bigint();
+        return Ok((kind, buffer, byte_offset, element_size, is_bigint));
     }
     Err(interp.create_type_error("first argument must be a typed array"))
 }
@@ -1314,7 +1318,7 @@ fn validate_atomic_access(
         _ => 0,
     };
     let array_length = if let JsValue::Object(o) = ta_val
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(obj) = interp.get_object_cell(o.id)
     {
         let obj_ref = obj.borrow();
         if let Some(ref info) = obj_ref.typed_array_info {
