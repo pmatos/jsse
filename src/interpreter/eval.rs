@@ -983,11 +983,11 @@ impl Interpreter {
                         return Completion::Normal(cached.clone());
                     }
                 }
-                let meta = self.create_object();
-                meta.borrow_mut().prototype_id = None;
+                let meta_id = self.create_object_id();
+                self.get_object_cell_expect(meta_id).borrow_mut().prototype_id = None;
                 if let Some(ref path) = module_path {
                     let url = format!("file://{}", path.display());
-                    meta.borrow_mut().insert_property(
+                    self.get_object_cell_expect(meta_id).borrow_mut().insert_property(
                         "url".to_string(),
                         PropertyDescriptor::data(
                             JsValue::String(JsString::from_str(&url)),
@@ -997,7 +997,7 @@ impl Interpreter {
                         ),
                     );
                 }
-                let id = meta.borrow().id.unwrap();
+                let id = meta_id;
                 let meta_val = JsValue::Object(crate::types::JsObject { id });
                 if let Some(ref path) = module_path {
                     let canon = path.canonicalize().unwrap_or_else(|_| path.clone());
@@ -4843,17 +4843,17 @@ impl Interpreter {
         for prop in props {
             // Handle rest: {...rest} = obj
             if let Expression::Spread(inner) = &prop.value {
-                let rest_obj = self.create_object();
+                let rest_obj_id = self.create_object_id();
                 if let JsValue::Object(o) = &obj_val {
                     let pairs = match self.copy_data_properties(o.id, &obj_val, &excluded_keys) {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
                     };
                     for (k, v) in pairs {
-                        rest_obj.borrow_mut().insert_value(k, v);
+                        self.get_object_cell_expect(rest_obj_id).borrow_mut().insert_value(k, v);
                     }
                 }
-                let rest_id = rest_obj.borrow().id.unwrap();
+                let rest_id = rest_obj_id;
                 let rest_val = JsValue::Object(crate::types::JsObject { id: rest_id });
                 match self.put_value_to_target(inner, rest_val, env) {
                     Completion::Normal(_) | Completion::Empty => {}
@@ -12113,13 +12113,13 @@ impl Interpreter {
                                 }
                             }
                             // §14.5.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
-                            let gen_obj = self.create_object();
+                            let gen_obj_id = self.create_object_id();
                             let mut proto_set = false;
                             if let Some(func_obj_rc) = self.get_object(o.id) {
                                 let proto_val =
                                     func_obj_rc.borrow().get_property_value("prototype");
                                 if let Some(JsValue::Object(ref p)) = proto_val {
-                                    gen_obj.borrow_mut().prototype_id = Some(p.id);
+                                    self.get_object_cell_expect(gen_obj_id).borrow_mut().prototype_id = Some(p.id);
                                     proto_set = true;
                                 }
                             }
@@ -12129,9 +12129,9 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 };
                                 let agp_id = self.realms[fn_realm_id].async_generator_prototype;
-                                gen_obj.borrow_mut().prototype_id = agp_id;
+                                self.get_object_cell_expect(gen_obj_id).borrow_mut().prototype_id = agp_id;
                             }
-                            gen_obj.borrow_mut().class_name = "AsyncGenerator".to_string();
+                            self.get_object_cell_expect(gen_obj_id).borrow_mut().class_name = "AsyncGenerator".to_string();
                             let is_simple =
                                 params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
                             let exec_env = if !is_simple {
@@ -12185,7 +12185,7 @@ impl Interpreter {
                                     exec_env.borrow_mut().declare(&lv.name, bk);
                                 }
                             }
-                            gen_obj.borrow_mut().iterator_state =
+                            self.get_object_cell_expect(gen_obj_id).borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineAsyncGenerator {
                                     state_machine,
                                     func_env: exec_env,
@@ -12198,7 +12198,7 @@ impl Interpreter {
                                     pending_exception: None,
                                     pending_return: None,
                                 });
-                            let gen_id = gen_obj.borrow().id.unwrap();
+                            let gen_id = gen_obj_id;
                             if let Some(obj_rc) = self.get_object(gen_id) {
                                 obj_rc.borrow_mut().generator_realm_id =
                                     Some(self.current_realm_id);
@@ -12305,13 +12305,13 @@ impl Interpreter {
                                 }
                             }
                             // §14.4.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
-                            let gen_obj = self.create_object();
+                            let gen_obj_id = self.create_object_id();
                             let mut proto_set = false;
                             if let Some(func_obj_rc) = self.get_object(o.id) {
                                 let proto_val =
                                     func_obj_rc.borrow().get_property_value("prototype");
                                 if let Some(JsValue::Object(ref p)) = proto_val {
-                                    gen_obj.borrow_mut().prototype_id = Some(p.id);
+                                    self.get_object_cell_expect(gen_obj_id).borrow_mut().prototype_id = Some(p.id);
                                     proto_set = true;
                                 }
                             }
@@ -12321,9 +12321,9 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 };
                                 let gp_id = self.realms[fn_realm_id].generator_prototype;
-                                gen_obj.borrow_mut().prototype_id = gp_id;
+                                self.get_object_cell_expect(gen_obj_id).borrow_mut().prototype_id = gp_id;
                             }
-                            gen_obj.borrow_mut().class_name = "Generator".to_string();
+                            self.get_object_cell_expect(gen_obj_id).borrow_mut().class_name = "Generator".to_string();
                             let is_simple =
                                 params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
                             let exec_env = if !is_simple {
@@ -12377,7 +12377,7 @@ impl Interpreter {
                                     exec_env.borrow_mut().declare(&lv.name, bk);
                                 }
                             }
-                            gen_obj.borrow_mut().iterator_state =
+                            self.get_object_cell_expect(gen_obj_id).borrow_mut().iterator_state =
                                 Some(IteratorState::StateMachineGenerator {
                                     state_machine,
                                     func_env: exec_env,
@@ -12390,7 +12390,7 @@ impl Interpreter {
                                     pending_exception: None,
                                     pending_return: None,
                                 });
-                            let gen_id = gen_obj.borrow().id.unwrap();
+                            let gen_id = gen_obj_id;
                             if let Some(obj_rc) = self.get_object(gen_id) {
                                 obj_rc.borrow_mut().generator_realm_id =
                                     Some(self.current_realm_id);
@@ -13673,13 +13673,13 @@ impl Interpreter {
             }
         } else {
             // Base constructor: create this object as before
-            let new_obj = self.create_object();
+            let new_obj_id = self.create_object_id();
             if let JsValue::Object(o) = &callee_val
                 && let Some(func_obj) = self.get_object(o.id)
             {
                 let proto = func_obj.borrow().get_property_value("prototype");
                 if let Some(JsValue::Object(proto_obj)) = proto {
-                    new_obj.borrow_mut().prototype_id = Some(proto_obj.id);
+                    self.get_object_cell_expect(new_obj_id).borrow_mut().prototype_id = Some(proto_obj.id);
                 }
             }
             let instance_field_defs = if let JsValue::Object(o) = &callee_val
@@ -13689,7 +13689,7 @@ impl Interpreter {
             } else {
                 Vec::new()
             };
-            let new_obj_id = new_obj.borrow().id.unwrap();
+            let new_obj_id = new_obj_id;
             let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
             // Use constructor's closure (class_env) so the class name binding
             // is accessible in field initializers (spec §15.7.14 step 28.e.i).
@@ -14003,7 +14003,7 @@ impl Interpreter {
             let (this_val, new_obj_id) = if deferred {
                 (JsValue::Undefined, 0)
             } else {
-                let new_obj = self.create_object();
+                let new_obj_id = self.create_object_id();
                 // Use new_target's .prototype for the new object's [[Prototype]]
                 // Must use get_object_property to invoke proxy get traps
                 if let JsValue::Object(nt_o) = &new_target {
@@ -14014,7 +14014,7 @@ impl Interpreter {
                         _ => JsValue::Undefined,
                     };
                     if let JsValue::Object(proto_obj) = proto {
-                        new_obj.borrow_mut().prototype_id = Some(proto_obj.id);
+                        self.get_object_cell_expect(new_obj_id).borrow_mut().prototype_id = Some(proto_obj.id);
                     } else {
                         // proto is not an Object: GetFunctionRealm(newTarget) → realm's %ObjectPrototype%
                         let nt_realm_id =
@@ -14024,11 +14024,11 @@ impl Interpreter {
                             };
                         let op_id = self.realms[nt_realm_id].object_prototype;
                         if let Some(proto_rc) = op_id {
-                            new_obj.borrow_mut().prototype_id = Some(proto_rc);
+                            self.get_object_cell_expect(new_obj_id).borrow_mut().prototype_id = Some(proto_rc);
                         }
                     }
                 }
-                let id = new_obj.borrow().id.unwrap();
+                let id = new_obj_id;
                 (JsValue::Object(crate::types::JsObject { id }), id)
             };
 
