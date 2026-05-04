@@ -1,4 +1,6 @@
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use rustc_hash::FxHashMap;
 
@@ -18,6 +20,11 @@ pub(crate) struct JobScheduler {
     async_gen_yield_pending: bool,
     async_function_states: FxHashMap<u64, AsyncFunctionState>,
     next_async_function_id: u64,
+    /// Count of host-async worker jobs that may later enqueue completions.
+    pending_async_jobs: Arc<AtomicUsize>,
+    /// Promise IDs whose resolution is blocked on a host-async worker thread
+    /// (e.g. Atomics.waitAsync, $262.agent.getReportAsync).
+    pending_async_promise_ids: Arc<Mutex<HashSet<u64>>>,
 }
 
 impl JobScheduler {
@@ -81,6 +88,26 @@ impl JobScheduler {
 
     pub(crate) fn iter_async_function_states(&self) -> impl Iterator<Item = &AsyncFunctionState> {
         self.async_function_states.values()
+    }
+
+    pub(crate) fn pending_async_jobs_handle(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.pending_async_jobs)
+    }
+
+    pub(crate) fn incr_pending_async_jobs(&self) {
+        self.pending_async_jobs.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub(crate) fn pending_async_jobs_count(&self) -> usize {
+        self.pending_async_jobs.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn pending_async_promise_ids_handle(&self) -> Arc<Mutex<HashSet<u64>>> {
+        Arc::clone(&self.pending_async_promise_ids)
+    }
+
+    pub(crate) fn pending_async_promise_ids_lock(&self) -> MutexGuard<'_, HashSet<u64>> {
+        self.pending_async_promise_ids.lock().unwrap()
     }
 
     #[cfg(test)]
@@ -201,6 +228,38 @@ mod tests {
             .collect();
 
         assert_eq!(tags, vec![1.0, 2.0, 3.0]);
+    }
+
+    #[test]
+    fn pending_async_jobs_count_reflects_increments() {
+        let sched = JobScheduler::default();
+        assert_eq!(sched.pending_async_jobs_count(), 0);
+        sched.incr_pending_async_jobs();
+        sched.incr_pending_async_jobs();
+        assert_eq!(sched.pending_async_jobs_count(), 2);
+    }
+
+    #[test]
+    fn pending_async_jobs_handle_shares_state_with_scheduler() {
+        let sched = JobScheduler::default();
+        let handle = sched.pending_async_jobs_handle();
+        handle.fetch_add(3, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            sched.pending_async_jobs_count(),
+            3,
+            "external handle increments must be visible through the scheduler"
+        );
+    }
+
+    #[test]
+    fn pending_async_promise_ids_handle_shares_state_with_scheduler() {
+        let sched = JobScheduler::default();
+        let handle = sched.pending_async_promise_ids_handle();
+        handle.lock().unwrap().insert(42);
+        assert!(
+            sched.pending_async_promise_ids_lock().contains(&42),
+            "external handle updates must be visible through the scheduler"
+        );
     }
 
     #[test]

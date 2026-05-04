@@ -7,7 +7,6 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 pub struct AgentBroadcastMsg {
     pub sab_shared: Arc<types::SharedBufferInner>,
@@ -112,12 +111,6 @@ pub struct Interpreter {
         std::sync::Mutex<Vec<Box<dyn FnOnce(&mut Interpreter) + Send>>>,
         std::sync::Condvar,
     )>,
-    pub(crate) pending_async_jobs: Arc<AtomicUsize>,
-    /// Promise IDs whose resolution is blocked on a host-async worker thread
-    /// (e.g. Atomics.waitAsync, $262.agent.getReportAsync). Used by
-    /// drain_microtasks_until_idle to decide whether pending host work is
-    /// actually awaited by JS code (Promise has reactions) versus detached.
-    pub(crate) pending_async_promise_ids: Arc<std::sync::Mutex<std::collections::HashSet<u64>>>,
     pub(crate) regex_cache: HashMap<(String, String), Rc<builtins::regexp::CachedRegex>>,
     pub(crate) iterator_next_cache: FxHashMap<u64, JsValue>,
     last_identifier_with_base: Option<u64>,
@@ -272,10 +265,6 @@ impl Interpreter {
             agent_async_completions: Arc::new((
                 std::sync::Mutex::new(Vec::new()),
                 std::sync::Condvar::new(),
-            )),
-            pending_async_jobs: Arc::new(AtomicUsize::new(0)),
-            pending_async_promise_ids: Arc::new(std::sync::Mutex::new(
-                std::collections::HashSet::new(),
             )),
             regex_cache: HashMap::new(),
             iterator_next_cache: FxHashMap::default(),
@@ -564,12 +553,12 @@ impl Interpreter {
                     return Completion::Normal(promise_val);
                 }
 
-                interp.pending_async_jobs.fetch_add(1, Ordering::SeqCst);
+                interp.scheduler.incr_pending_async_jobs();
                 let reports = interp.agent_reports.clone();
                 let resolve = resolve_fn;
                 let pending = interp.agent_async_completions.clone();
-                let pending_jobs = interp.pending_async_jobs.clone();
-                let pending_promise_ids = interp.pending_async_promise_ids.clone();
+                let pending_jobs = interp.scheduler.pending_async_jobs_handle();
+                let pending_promise_ids = interp.scheduler.pending_async_promise_ids_handle();
                 let promise_id = if let JsValue::Object(ref o) = promise_val {
                     o.id
                 } else {
@@ -598,11 +587,11 @@ impl Interpreter {
                             let _ =
                                 interp.call_function(&resolve, &JsValue::Undefined, &[report_val]);
                             interp.gc_unroot_value(&resolve);
+                            if promise_id != 0 {
+                                pending_promise_ids.lock().unwrap().remove(&promise_id);
+                            }
+                            pending_jobs.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
                         }));
-                    if promise_id != 0 {
-                        pending_promise_ids.lock().unwrap().remove(&promise_id);
-                    }
-                    pending_jobs.fetch_sub(1, Ordering::SeqCst);
                     completion_cvar.notify_one();
                 });
 
@@ -4426,10 +4415,26 @@ impl Interpreter {
                 // Periodically check agent async completions (e.g. waitAsync timeouts)
                 // so they get processed even when the microtask queue stays busy
                 if iterations.is_multiple_of(64) {
-                    let completions: Vec<_> = {
+                    let mut completions: Vec<_> = {
                         let mut lock = self.agent_async_completions.0.lock().unwrap();
                         lock.drain(..).collect()
                     };
+                    if completions.is_empty() && self.has_awaited_pending_async() {
+                        let (ref mtx, ref cvar) = *self.agent_async_completions;
+                        let lock = mtx.lock().unwrap();
+                        if lock.is_empty() {
+                            let (_guard, _) = cvar
+                                .wait_timeout(lock, std::time::Duration::from_millis(1))
+                                .unwrap();
+                            drop(_guard);
+                        } else {
+                            drop(lock);
+                        }
+                        completions = {
+                            let mut lock = self.agent_async_completions.0.lock().unwrap();
+                            lock.drain(..).collect()
+                        };
+                    }
                     for f in completions {
                         f(self);
                     }
@@ -4496,10 +4501,10 @@ impl Interpreter {
     /// functions or queued microtasks do not count — only per-promise evidence
     /// tied to an in-flight host worker.
     fn has_awaited_pending_async(&self) -> bool {
-        if self.pending_async_jobs.load(Ordering::SeqCst) == 0 {
+        if self.scheduler.pending_async_jobs_count() == 0 {
             return false;
         }
-        let ids = self.pending_async_promise_ids.lock().unwrap();
+        let ids = self.scheduler.pending_async_promise_ids_lock();
         for &id in ids.iter() {
             if let Some(obj) = self.get_object(id)
                 && let Some(ref pd) = obj.borrow().promise_data
