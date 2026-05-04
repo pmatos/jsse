@@ -40,8 +40,8 @@ impl Interpreter {
         fn this_bigint_value(interp: &Interpreter, this: &JsValue) -> Option<num_bigint::BigInt> {
             match this {
                 JsValue::BigInt(b) => Some(b.value.clone()),
-                JsValue::Object(o) => interp.get_object(o.id).and_then(|obj| {
-                    let b = obj.borrow();
+                JsValue::Object(o) => interp.get_object_cell(o.id).and_then(|cell| {
+                    let b = cell.borrow();
                     if b.class_name == "BigInt"
                         && let Some(JsValue::BigInt(bi)) = &b.primitive_value
                     {
@@ -310,17 +310,17 @@ impl Interpreter {
 
         if let Some(bigint_val) = self.get_global_var("BigInt")
             && let JsValue::Object(o) = &bigint_val
-            && let Some(bigint_obj) = self.get_object(o.id)
+            && let Some(bigint_cell) = self.get_object_cell(o.id)
         {
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-            bigint_obj.borrow_mut().insert_property(
+            bigint_cell.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
             );
-            bigint_obj
+            bigint_cell
                 .borrow_mut()
                 .insert_builtin("asIntN".to_string(), as_int_n);
-            bigint_obj
+            bigint_cell
                 .borrow_mut()
                 .insert_builtin("asUintN".to_string(), as_uint_n);
         }
