@@ -178,7 +178,7 @@ where
     F: FnOnce(&IntlData) -> Completion,
 {
     if let JsValue::Object(o) = this
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(obj) = interp.get_object_cell(o.id)
     {
         let b = obj.borrow();
         if let Some(ref data @ IntlData::Locale { .. }) = b.intl_data {
@@ -568,20 +568,23 @@ impl Interpreter {
             "maximize".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let tag = {
-                        let b = obj.borrow();
+                if let JsValue::Object(o) = this {
+                    let tag_opt = interp.get_object_cell(o.id).and_then(|cell| {
+                        let b = cell.borrow();
                         if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
-                            tag.clone()
+                            Some(tag.clone())
                         } else {
+                            None
+                        }
+                    });
+                    let tag = match tag_opt {
+                        Some(t) => t,
+                        None => {
                             return Completion::Throw(interp.create_type_error(
                                 "Intl.Locale.prototype.maximize requires an Intl.Locale object",
                             ));
                         }
                     };
-
                     match tag.parse::<IcuLocale>() {
                         Ok(mut locale) => {
                             let expander = LocaleExpander::new_extended();
@@ -613,20 +616,23 @@ impl Interpreter {
             "minimize".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let tag = {
-                        let b = obj.borrow();
+                if let JsValue::Object(o) = this {
+                    let tag_opt = interp.get_object_cell(o.id).and_then(|cell| {
+                        let b = cell.borrow();
                         if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
-                            tag.clone()
+                            Some(tag.clone())
                         } else {
+                            None
+                        }
+                    });
+                    let tag = match tag_opt {
+                        Some(t) => t,
+                        None => {
                             return Completion::Throw(interp.create_type_error(
                                 "Intl.Locale.prototype.minimize requires an Intl.Locale object",
                             ));
                         }
                     };
-
                     match tag.parse::<IcuLocale>() {
                         Ok(mut locale) => {
                             let expander = LocaleExpander::new_extended();
@@ -658,19 +664,22 @@ impl Interpreter {
             "getCalendars".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let cal = {
-                        let b = obj.borrow();
+                if let JsValue::Object(o) = this {
+                    let cal_opt = interp.get_object_cell(o.id).and_then(|cell| {
+                        let b = cell.borrow();
                         if let Some(IntlData::Locale { ref calendar, .. }) = b.intl_data {
-                            calendar.clone()
+                            Some(calendar.clone())
                         } else {
-                            return Completion::Throw(interp.create_type_error(
-                                "Intl.Locale.prototype.getCalendars requires an Intl.Locale object",
-                            ));
+                            None
                         }
-                    };
+                    });
+                    let cal =
+                        match cal_opt {
+                            Some(t) => t,
+                            None => return Completion::Throw(interp.create_type_error(
+                                "Intl.Locale.prototype.getCalendars requires an Intl.Locale object",
+                            )),
+                        };
                     let calendars = if let Some(ca) = cal {
                         vec![JsValue::String(JsString::from_str(&ca))]
                     } else {
@@ -692,18 +701,20 @@ impl Interpreter {
             "getCollations".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let col = {
-                        let b = obj.borrow();
+                if let JsValue::Object(o) = this {
+                    let col_opt = interp.get_object_cell(o.id).and_then(|cell| {
+                        let b = cell.borrow();
                         if let Some(IntlData::Locale { ref collation, .. }) = b.intl_data {
-                            collation.clone()
+                            Some(collation.clone())
                         } else {
-                            return Completion::Throw(interp.create_type_error(
-                                "Intl.Locale.prototype.getCollations requires an Intl.Locale object",
-                            ));
+                            None
                         }
+                    });
+                    let col = match col_opt {
+                        Some(t) => t,
+                        None => return Completion::Throw(interp.create_type_error(
+                            "Intl.Locale.prototype.getCollations requires an Intl.Locale object",
+                        )),
                     };
                     let collations = if let Some(co) = col {
                         if co == "standard" || co == "search" {
@@ -716,11 +727,9 @@ impl Interpreter {
                     };
                     return Completion::Normal(interp.create_array(collations));
                 }
-                Completion::Throw(
-                    interp.create_type_error(
-                        "Intl.Locale.prototype.getCollations requires an Intl.Locale object",
-                    ),
-                )
+                Completion::Throw(interp.create_type_error(
+                    "Intl.Locale.prototype.getCollations requires an Intl.Locale object",
+                ))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -732,19 +741,23 @@ impl Interpreter {
             "getHourCycles".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let (hc, region) = {
-                        let b = obj.borrow();
+                if let JsValue::Object(o) = this {
+                    let snapshot = interp.get_object_cell(o.id).and_then(|cell| {
+                        let b = cell.borrow();
                         if let Some(IntlData::Locale {
                             ref hour_cycle,
                             ref region,
                             ..
                         }) = b.intl_data
                         {
-                            (hour_cycle.clone(), region.clone())
+                            Some((hour_cycle.clone(), region.clone()))
                         } else {
+                            None
+                        }
+                    });
+                    let (hc, region) = match snapshot {
+                        Some(t) => t,
+                        None => {
                             return Completion::Throw(interp.create_type_error(
                                 "Intl.Locale.prototype.getHourCycles requires an Intl.Locale object",
                             ));
@@ -779,18 +792,22 @@ impl Interpreter {
             "getNumberingSystems".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let nu = {
-                        let b = obj.borrow();
+                if let JsValue::Object(o) = this {
+                    let nu_opt = interp.get_object_cell(o.id).and_then(|cell| {
+                        let b = cell.borrow();
                         if let Some(IntlData::Locale {
                             ref numbering_system,
                             ..
                         }) = b.intl_data
                         {
-                            numbering_system.clone()
+                            Some(numbering_system.clone())
                         } else {
+                            None
+                        }
+                    });
+                    let nu = match nu_opt {
+                        Some(t) => t,
+                        None => {
                             return Completion::Throw(interp.create_type_error(
                                 "Intl.Locale.prototype.getNumberingSystems requires an Intl.Locale object",
                             ));
@@ -819,20 +836,22 @@ impl Interpreter {
             "getTextInfo".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let tag = {
-                        let b = obj.borrow();
+                if let JsValue::Object(o) = this {
+                    let tag_opt = interp.get_object_cell(o.id).and_then(|cell| {
+                        let b = cell.borrow();
                         if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
-                            tag.clone()
+                            Some(tag.clone())
                         } else {
-                            return Completion::Throw(interp.create_type_error(
-                                "Intl.Locale.prototype.getTextInfo requires an Intl.Locale object",
-                            ));
+                            None
                         }
-                    };
-
+                    });
+                    let tag =
+                        match tag_opt {
+                            Some(t) => t,
+                            None => return Completion::Throw(interp.create_type_error(
+                                "Intl.Locale.prototype.getTextInfo requires an Intl.Locale object",
+                            )),
+                        };
                     let direction = if let Ok(locale) = tag.parse::<IcuLocale>() {
                         let ld = LocaleDirectionality::new_extended();
                         if ld.is_right_to_left(&locale.id) {
@@ -882,20 +901,22 @@ impl Interpreter {
             "getTimeZones".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let region = {
-                        let b = obj.borrow();
+                if let JsValue::Object(o) = this {
+                    let region_opt = interp.get_object_cell(o.id).and_then(|cell| {
+                        let b = cell.borrow();
                         if let Some(IntlData::Locale { ref region, .. }) = b.intl_data {
-                            region.clone()
+                            Some(region.clone())
                         } else {
-                            return Completion::Throw(interp.create_type_error(
-                                "Intl.Locale.prototype.getTimeZones requires an Intl.Locale object",
-                            ));
+                            None
                         }
-                    };
-
+                    });
+                    let region =
+                        match region_opt {
+                            Some(t) => t,
+                            None => return Completion::Throw(interp.create_type_error(
+                                "Intl.Locale.prototype.getTimeZones requires an Intl.Locale object",
+                            )),
+                        };
                     if region.is_none() {
                         return Completion::Normal(JsValue::Undefined);
                     }
@@ -922,19 +943,23 @@ impl Interpreter {
             "getWeekInfo".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let (tag, fw_value) = {
-                        let b = obj.borrow();
+                if let JsValue::Object(o) = this {
+                    let snapshot = interp.get_object_cell(o.id).and_then(|cell| {
+                        let b = cell.borrow();
                         if let Some(IntlData::Locale {
                             ref tag,
                             ref first_day_of_week,
                             ..
                         }) = b.intl_data
                         {
-                            (tag.clone(), first_day_of_week.clone())
+                            Some((tag.clone(), first_day_of_week.clone()))
                         } else {
+                            None
+                        }
+                    });
+                    let (tag, fw_value) = match snapshot {
+                        Some(t) => t,
+                        None => {
                             return Completion::Throw(interp.create_type_error(
                                 "Intl.Locale.prototype.getWeekInfo requires an Intl.Locale object",
                             ));
@@ -1060,7 +1085,7 @@ impl Interpreter {
 
                 // If tag_arg is an Intl.Locale, get its tag string
                 let tag_string = if let JsValue::Object(o) = &tag_arg {
-                    if let Some(obj) = interp.get_object(o.id) {
+                    if let Some(obj) = interp.get_object_cell(o.id) {
                         let b = obj.borrow();
                         if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
                             tag.clone()
@@ -1440,12 +1465,15 @@ impl Interpreter {
 
         // Set Locale.prototype on constructor
         if let JsValue::Object(ctor_ref) = &locale_ctor
-            && let Some(obj) = self.get_object(ctor_ref.id)
+            && self.get_object_cell(ctor_ref.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), false, false, false),
-            );
+            let ctor_id = ctor_ref.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
+                );
 
             // supportedLocalesOf static method
             let slof = self.create_function(JsFunction::native(
@@ -1464,7 +1492,8 @@ impl Interpreter {
                     }
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
                 .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 

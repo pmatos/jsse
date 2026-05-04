@@ -46,29 +46,19 @@ fn get_ym_fields(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<(i32, u8, u8, String), Completion> {
-    let obj = match this {
-        JsValue::Object(o) => match interp.get_object(o.id) {
-            Some(obj) => obj,
-            None => {
-                return Err(Completion::Throw(
-                    interp.create_type_error("invalid object"),
-                ));
-            }
-        },
-        _ => {
-            return Err(Completion::Throw(
-                interp.create_type_error("not a Temporal.PlainYearMonth"),
-            ));
-        }
+    let snapshot = match this {
+        JsValue::Object(o) => interp
+            .get_object_cell(o.id)
+            .map(|cell| cell.borrow().temporal_data.clone()),
+        _ => None,
     };
-    let data = obj.borrow();
-    match &data.temporal_data {
-        Some(TemporalData::PlainYearMonth {
+    match snapshot {
+        Some(Some(TemporalData::PlainYearMonth {
             iso_year,
             iso_month,
             reference_iso_day,
             calendar,
-        }) => Ok((*iso_year, *iso_month, *reference_iso_day, calendar.clone())),
+        })) => Ok((iso_year, iso_month, reference_iso_day, calendar.clone())),
         _ => Err(Completion::Throw(
             interp.create_type_error("not a Temporal.PlainYearMonth"),
         )),
@@ -195,7 +185,7 @@ fn to_temporal_plain_year_month(
 ) -> Result<(i32, u8, u8, String), Completion> {
     match &item {
         JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object(o.id) {
+            if let Some(obj) = interp.get_object_cell(o.id) {
                 let data = obj.borrow();
                 if let Some(TemporalData::PlainYearMonth {
                     iso_year,
@@ -1284,7 +1274,7 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             obj.borrow_mut().insert_property(
@@ -1322,7 +1312,7 @@ impl Interpreter {
                 }
                 // Check if it's a Temporal PlainYearMonth (read overflow first, return copy)
                 let is_temporal = if let JsValue::Object(ref o) = item {
-                    if let Some(obj) = interp.get_object(o.id) {
+                    if let Some(obj) = interp.get_object_cell(o.id) {
                         let data = obj.borrow();
                         matches!(
                             &data.temporal_data,
@@ -1435,7 +1425,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
         }
@@ -1472,7 +1462,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut()
                 .insert_builtin("compare".to_string(), compare_fn);

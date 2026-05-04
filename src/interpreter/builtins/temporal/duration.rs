@@ -218,7 +218,7 @@ fn to_relative_to_date(
     }
     // If the value is a Temporal object, handle directly (no property bag reading)
     if let JsValue::Object(obj_ref) = val
-        && let Some(obj) = interp.get_object(obj_ref.id)
+        && let Some(obj) = interp.get_object_cell(obj_ref.id)
     {
         let td = obj.borrow().temporal_data.clone();
         if let Some(super::TemporalData::ZonedDateTime {
@@ -1679,22 +1679,14 @@ impl Interpreter {
                 format!("get {name}"),
                 0,
                 move |interp, this, _args| {
-                    let obj = match &this {
-                        JsValue::Object(o) => match interp.get_object(o.id) {
-                            Some(obj) => obj,
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("invalid object"),
-                                );
-                            }
-                        },
-                        _ => return Completion::Throw(interp.create_type_error(&format!(
-                            "get Temporal.Duration.prototype.{name} requires a Temporal.Duration"
-                        ))),
+                    let snapshot = match &this {
+                        JsValue::Object(o) => interp
+                            .get_object_cell(o.id)
+                            .map(|cell| cell.borrow().temporal_data.clone()),
+                        _ => None,
                     };
-                    let data = obj.borrow();
-                    match &data.temporal_data {
-                        Some(TemporalData::Duration {
+                    match snapshot {
+                        Some(Some(TemporalData::Duration {
                             years,
                             months,
                             weeks,
@@ -1705,42 +1697,42 @@ impl Interpreter {
                             milliseconds,
                             microseconds,
                             nanoseconds,
-                        }) => {
+                        })) => {
                             let val = match name {
-                                "years" => JsValue::Number(*years),
-                                "months" => JsValue::Number(*months),
-                                "weeks" => JsValue::Number(*weeks),
-                                "days" => JsValue::Number(*days),
-                                "hours" => JsValue::Number(*hours),
-                                "minutes" => JsValue::Number(*minutes),
-                                "seconds" => JsValue::Number(*seconds),
-                                "milliseconds" => JsValue::Number(*milliseconds),
-                                "microseconds" => JsValue::Number(*microseconds),
-                                "nanoseconds" => JsValue::Number(*nanoseconds),
+                                "years" => JsValue::Number(years),
+                                "months" => JsValue::Number(months),
+                                "weeks" => JsValue::Number(weeks),
+                                "days" => JsValue::Number(days),
+                                "hours" => JsValue::Number(hours),
+                                "minutes" => JsValue::Number(minutes),
+                                "seconds" => JsValue::Number(seconds),
+                                "milliseconds" => JsValue::Number(milliseconds),
+                                "microseconds" => JsValue::Number(microseconds),
+                                "nanoseconds" => JsValue::Number(nanoseconds),
                                 "sign" => JsValue::Number(duration_sign(
-                                    *years,
-                                    *months,
-                                    *weeks,
-                                    *days,
-                                    *hours,
-                                    *minutes,
-                                    *seconds,
-                                    *milliseconds,
-                                    *microseconds,
-                                    *nanoseconds,
+                                    years,
+                                    months,
+                                    weeks,
+                                    days,
+                                    hours,
+                                    minutes,
+                                    seconds,
+                                    milliseconds,
+                                    microseconds,
+                                    nanoseconds,
                                 ) as f64),
                                 "blank" => JsValue::Boolean(
                                     duration_sign(
-                                        *years,
-                                        *months,
-                                        *weeks,
-                                        *days,
-                                        *hours,
-                                        *minutes,
-                                        *seconds,
-                                        *milliseconds,
-                                        *microseconds,
-                                        *nanoseconds,
+                                        years,
+                                        months,
+                                        weeks,
+                                        days,
+                                        hours,
+                                        minutes,
+                                        seconds,
+                                        milliseconds,
+                                        microseconds,
+                                        nanoseconds,
                                     ) == 0,
                                 ),
                                 _ => JsValue::Undefined,
@@ -2632,7 +2624,7 @@ impl Interpreter {
 
         // Constructor.prototype_id
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             obj.borrow_mut().insert_property(
@@ -2664,7 +2656,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
         }
@@ -2818,7 +2810,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut()
                 .insert_builtin("compare".to_string(), compare_fn);
@@ -2838,24 +2830,14 @@ fn get_duration_fields(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<(f64, f64, f64, f64, f64, f64, f64, f64, f64, f64), Completion> {
-    let obj = match this {
-        JsValue::Object(o) => match interp.get_object(o.id) {
-            Some(obj) => obj,
-            None => {
-                return Err(Completion::Throw(
-                    interp.create_type_error("invalid object"),
-                ));
-            }
-        },
-        _ => {
-            return Err(Completion::Throw(
-                interp.create_type_error("not a Temporal.Duration"),
-            ));
-        }
+    let snapshot = match this {
+        JsValue::Object(o) => interp
+            .get_object_cell(o.id)
+            .map(|cell| cell.borrow().temporal_data.clone()),
+        _ => None,
     };
-    let data = obj.borrow();
-    match &data.temporal_data {
-        Some(TemporalData::Duration {
+    match snapshot {
+        Some(Some(TemporalData::Duration {
             years,
             months,
             weeks,
@@ -2866,17 +2848,17 @@ fn get_duration_fields(
             milliseconds,
             microseconds,
             nanoseconds,
-        }) => Ok((
-            *years,
-            *months,
-            *weeks,
-            *days,
-            *hours,
-            *minutes,
-            *seconds,
-            *milliseconds,
-            *microseconds,
-            *nanoseconds,
+        })) => Ok((
+            years,
+            months,
+            weeks,
+            days,
+            hours,
+            minutes,
+            seconds,
+            milliseconds,
+            microseconds,
+            nanoseconds,
         )),
         _ => Err(Completion::Throw(
             interp.create_type_error("not a Temporal.Duration"),
@@ -2991,7 +2973,7 @@ pub(crate) fn to_temporal_duration_record(
     }
     // Check for existing Duration instance
     if let JsValue::Object(o) = &item
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(obj) = interp.get_object_cell(o.id)
     {
         let data = obj.borrow();
         if let Some(TemporalData::Duration {

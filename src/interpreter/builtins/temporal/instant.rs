@@ -607,7 +607,7 @@ impl Interpreter {
 
         // Constructor.prototype_id
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             obj.borrow_mut().insert_property(
@@ -636,7 +636,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
         }
@@ -664,7 +664,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut()
                 .insert_builtin("fromEpochMilliseconds".to_string(), from_ms_fn);
@@ -687,7 +687,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut()
                 .insert_builtin("fromEpochNanoseconds".to_string(), from_ns_fn);
@@ -723,7 +723,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut()
                 .insert_builtin("compare".to_string(), compare_fn);
@@ -815,24 +815,14 @@ fn is_valid_instant_round_unit(unit: &str) -> bool {
 }
 
 fn get_instant_ns(interp: &mut Interpreter, this: &JsValue) -> Result<BigInt, Completion> {
-    let obj = match this {
-        JsValue::Object(o) => match interp.get_object(o.id) {
-            Some(obj) => obj,
-            None => {
-                return Err(Completion::Throw(
-                    interp.create_type_error("invalid object"),
-                ));
-            }
-        },
-        _ => {
-            return Err(Completion::Throw(
-                interp.create_type_error("not a Temporal.Instant"),
-            ));
-        }
+    let snapshot = match this {
+        JsValue::Object(o) => interp
+            .get_object_cell(o.id)
+            .map(|cell| cell.borrow().temporal_data.clone()),
+        _ => None,
     };
-    let data = obj.borrow();
-    match &data.temporal_data {
-        Some(TemporalData::Instant { epoch_nanoseconds }) => Ok(epoch_nanoseconds.clone()),
+    match snapshot {
+        Some(Some(TemporalData::Instant { epoch_nanoseconds })) => Ok(epoch_nanoseconds),
         _ => Err(Completion::Throw(
             interp.create_type_error("not a Temporal.Instant"),
         )),
@@ -867,7 +857,7 @@ pub(super) fn to_temporal_instant(
 ) -> Result<BigInt, Completion> {
     match &item {
         JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object(o.id) {
+            if let Some(obj) = interp.get_object_cell(o.id) {
                 let data = obj.borrow();
                 if let Some(TemporalData::Instant { epoch_nanoseconds }) = &data.temporal_data {
                     return Ok(epoch_nanoseconds.clone());

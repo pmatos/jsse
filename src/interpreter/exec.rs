@@ -210,7 +210,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Option<Completion> {
         let gid = env.borrow().global_object_id?;
-        let global_obj = self.get_object(gid)?;
+        let global_obj = self.get_object_cell(gid)?;
 
         // §16.1.7 step 3: Check lexical names
         let lex_names = Self::collect_lex_names(stmts);
@@ -938,7 +938,7 @@ impl Interpreter {
                     other => return other,
                 };
                 if let JsValue::Object(obj_ref) = &obj_val {
-                    if self.get_object(obj_ref.id).is_some() {
+                    if self.get_object_cell(obj_ref.id).is_some() {
                         let with_env = Rc::new(RefCell::new(Environment {
                             bindings: HashMap::new(),
                             parent: Some(env.clone()),
@@ -1162,7 +1162,7 @@ impl Interpreter {
                         let vs = var_scope.borrow();
                         vs.bindings.contains_key(name)
                             || gid
-                                .and_then(|id| self.get_object(id))
+                                .and_then(|id| self.get_object_cell(id))
                                 .is_some_and(|g| g.borrow().properties.contains_key(name))
                     };
                     if !already_declared {
@@ -1415,9 +1415,9 @@ impl Interpreter {
                                     let gid = var_scope.borrow().global_object_id;
                                     let vs = var_scope.borrow();
                                     vs.bindings.contains_key(binding_name)
-                                        || gid.and_then(|id| self.get_object(id)).is_some_and(|g| {
-                                            g.borrow().properties.contains_key(binding_name)
-                                        })
+                                        || gid.and_then(|id| self.get_object_cell(id)).is_some_and(
+                                            |g| g.borrow().properties.contains_key(binding_name),
+                                        )
                                 };
                                 if !already {
                                     var_scope.borrow_mut().declare(binding_name, kind);
@@ -1845,7 +1845,7 @@ impl Interpreter {
                 let obj_id = o.id;
                 let keys = {
                     let needs_proxy_path = self
-                        .get_object(obj_id)
+                        .get_object_cell(obj_id)
                         .map(|obj| {
                             let b = obj.borrow();
                             b.is_proxy() || b.module_namespace.is_some()
@@ -1856,7 +1856,7 @@ impl Interpreter {
                             Ok(k) => k,
                             Err(e) => break 'unroot Completion::Throw(e),
                         }
-                    } else if self.get_object(obj_id).is_some() {
+                    } else if self.get_object_cell(obj_id).is_some() {
                         self.enumerable_keys_with_proto_on_id(obj_id)
                     } else {
                         break 'unroot Completion::Normal(JsValue::Undefined);
@@ -2557,7 +2557,7 @@ impl Interpreter {
         if let Some(ctor_val) = ctor {
             let new_obj_id = self.create_object_id();
             if let JsValue::Object(ref o) = ctor_val
-                && let Some(func_obj) = self.get_object(o.id)
+                && let Some(func_obj) = self.get_object_cell(o.id)
             {
                 let proto = func_obj.borrow().get_property_value("prototype");
                 if let Some(JsValue::Object(proto_obj)) = proto {

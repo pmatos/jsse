@@ -154,18 +154,20 @@ fn get_zdt_fields(
 ) -> Result<(BigInt, String, String), Completion> {
     match this {
         JsValue::Object(o) => {
-            let obj = interp.get_object(o.id).ok_or_else(|| {
-                Completion::Throw(interp.create_type_error("invalid ZonedDateTime"))
-            })?;
-            let data = obj.borrow().temporal_data.clone();
-            match data {
-                Some(TemporalData::ZonedDateTime {
+            let snapshot = interp
+                .get_object_cell(o.id)
+                .map(|cell| cell.borrow().temporal_data.clone());
+            match snapshot {
+                Some(Some(TemporalData::ZonedDateTime {
                     epoch_nanoseconds,
                     time_zone,
                     calendar,
-                }) => Ok((epoch_nanoseconds, time_zone, calendar)),
-                _ => Err(Completion::Throw(
+                })) => Ok((epoch_nanoseconds, time_zone, calendar)),
+                Some(_) => Err(Completion::Throw(
                     interp.create_type_error("this is not a Temporal.ZonedDateTime"),
+                )),
+                None => Err(Completion::Throw(
+                    interp.create_type_error("invalid ZonedDateTime"),
                 )),
             }
         }
@@ -747,7 +749,7 @@ fn to_temporal_zoned_date_time_with_options(
 ) -> Completion {
     match item {
         JsValue::Object(o) => {
-            let obj = match interp.get_object(o.id) {
+            let obj = match interp.get_object_cell(o.id) {
                 Some(o) => o,
                 None => return Completion::Throw(interp.create_type_error("invalid object")),
             };
@@ -2230,7 +2232,7 @@ impl Interpreter {
                         // Copy properties from user options if present
                         if let JsValue::Object(ref o) = options_arg {
                             let keys: Vec<String> = interp
-                                .get_object(o.id)
+                                .get_object_cell(o.id)
                                 .map(|rc| rc.borrow().properties.keys().cloned().collect())
                                 .unwrap_or_default();
                             for key in keys {
@@ -3552,7 +3554,7 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             obj.borrow_mut().insert_property(
@@ -3588,7 +3590,7 @@ impl Interpreter {
                     // Check if item is already a ZDT — read options then clone
                     let is_zdt = if let JsValue::Object(o) = &item {
                         interp
-                            .get_object(o.id)
+                            .get_object_cell(o.id)
                             .map(|obj| {
                                 matches!(
                                     obj.borrow().temporal_data,
@@ -3626,7 +3628,7 @@ impl Interpreter {
                 },
             ));
             if let JsValue::Object(ref o) = constructor
-                && let Some(obj) = self.get_object(o.id)
+                && let Some(obj) = self.get_object_cell(o.id)
             {
                 obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
             }
@@ -3667,7 +3669,7 @@ impl Interpreter {
                 },
             ));
             if let JsValue::Object(ref o) = constructor
-                && let Some(obj) = self.get_object(o.id)
+                && let Some(obj) = self.get_object_cell(o.id)
             {
                 obj.borrow_mut()
                     .insert_builtin("compare".to_string(), compare_fn);
