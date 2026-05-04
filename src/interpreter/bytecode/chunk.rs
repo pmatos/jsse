@@ -20,6 +20,7 @@ impl Constant {
 pub(crate) struct Chunk {
     pub(crate) code: Vec<u8>,
     pub(crate) constants: Vec<Constant>,
+    pub(crate) names: Vec<Rc<str>>,
     pub(crate) max_stack: u16,
     pub(crate) num_params: u16,
 }

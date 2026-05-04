@@ -10,6 +10,7 @@ pub(crate) enum CompileError {
 struct Compiler {
     code: Vec<u8>,
     constants: Vec<Constant>,
+    names: Vec<std::rc::Rc<str>>,
     current_stack: u16,
     max_stack: u16,
 }
@@ -19,6 +20,7 @@ impl Compiler {
         Self {
             code: Vec::new(),
             constants: Vec::new(),
+            names: Vec::new(),
             current_stack: 0,
             max_stack: 0,
         }
@@ -30,6 +32,18 @@ impl Compiler {
             return Err(CompileError::Unsupported("constant pool overflow"));
         }
         self.constants.push(c);
+        Ok(idx as u16)
+    }
+
+    fn add_name(&mut self, name: &str) -> Result<u16, CompileError> {
+        if let Some(i) = self.names.iter().position(|n| n.as_ref() == name) {
+            return Ok(i as u16);
+        }
+        let idx = self.names.len();
+        if idx > u16::MAX as usize {
+            return Err(CompileError::Unsupported("name pool overflow"));
+        }
+        self.names.push(std::rc::Rc::from(name));
         Ok(idx as u16)
     }
 
@@ -82,6 +96,13 @@ impl Compiler {
     fn compile_expr(&mut self, expr: &Expression) -> Result<(), CompileError> {
         match expr {
             Expression::Literal(lit) => self.compile_literal(lit),
+            Expression::Identifier(name) => {
+                let idx = self.add_name(name)?;
+                self.emit(Op::LoadName);
+                self.emit_u16(idx);
+                self.push_n(1);
+                Ok(())
+            }
             Expression::Unary(op, operand) => {
                 self.compile_expr(operand)?;
                 let bop = match op {
@@ -229,6 +250,7 @@ impl Compiler {
         Chunk {
             code: self.code,
             constants: self.constants,
+            names: self.names,
             max_stack: self.max_stack,
             num_params: 0,
         }

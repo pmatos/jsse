@@ -97,6 +97,7 @@ fn load_const_and_return_yields_number_completion() {
     let chunk = Chunk {
         code: vec![Op::LoadConst as u8, 0, 0, Op::Return as u8],
         constants: vec![Constant::Number(42.0)],
+        names: vec![],
         max_stack: 1,
         num_params: 0,
     };
@@ -111,6 +112,7 @@ fn return_undefined_completes_with_undefined() {
     let chunk = Chunk {
         code: vec![Op::ReturnUndefined as u8],
         constants: vec![],
+        names: vec![],
         max_stack: 0,
         num_params: 0,
     };
@@ -135,6 +137,7 @@ fn add_two_numbers_via_eval_binary() {
             Op::Return as u8,
         ],
         constants: vec![Constant::Number(2.0), Constant::Number(3.0)],
+        names: vec![],
         max_stack: 2,
         num_params: 0,
     };
@@ -368,6 +371,39 @@ fn end_to_end_logical_short_circuit_via_bytecode() {
 }
 
 #[test]
+fn end_to_end_param_read_via_bytecode() {
+    // Function that just returns its parameter
+    let source = "var __r = (function(x){ return x; })(42);";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(count >= 1, "bytecode path must run");
+    assert!(matches!(v, JsValue::Number(n) if n == 42.0), "got {v:?}");
+}
+
+#[test]
+fn end_to_end_param_arithmetic_via_bytecode() {
+    let source = "var __r = (function(x, y){ return x + y * 2; })(3, 5);";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(count >= 1, "bytecode path must run");
+    assert!(matches!(v, JsValue::Number(n) if n == 13.0), "got {v:?}");
+}
+
+#[test]
+fn end_to_end_param_compare_returns_boolean() {
+    let source = "var __r = (function(n){ return n > 10; })(5);";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(count >= 1, "bytecode path must run");
+    assert!(matches!(v, JsValue::Boolean(false)), "got {v:?}");
+}
+
+#[test]
+fn end_to_end_undeclared_identifier_throws_reference_error() {
+    // Should throw ReferenceError, not just falsely succeed via the bytecode path
+    let source = "var __r = false; try { (function(){ return undeclaredX; })(); } catch (e) { __r = e instanceof ReferenceError; }";
+    let (v, _count) = eval_with_mode(source, true);
+    assert!(matches!(v, JsValue::Boolean(true)), "got {v:?}");
+}
+
+#[test]
 fn add_string_and_number_falls_through_to_string_concat() {
     // Bytecode for `return "x" + 1;`  → "x1"
     let chunk = Chunk {
@@ -382,6 +418,7 @@ fn add_string_and_number_falls_through_to_string_concat() {
             Op::Return as u8,
         ],
         constants: vec![Constant::String("x".into()), Constant::Number(1.0)],
+        names: vec![],
         max_stack: 2,
         num_params: 0,
     };
@@ -396,6 +433,7 @@ fn load_undefined_then_return_completes_with_undefined() {
     let chunk = Chunk {
         code: vec![Op::LoadUndefined as u8, Op::Return as u8],
         constants: vec![],
+        names: vec![],
         max_stack: 1,
         num_params: 0,
     };

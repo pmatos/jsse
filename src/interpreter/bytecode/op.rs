@@ -39,6 +39,7 @@ pub(crate) enum Op {
     JumpIfTruthyKeep = 35,
     JumpIfFalsyKeep = 36,
     JumpIfNotNullishKeep = 37,
+    LoadName = 38,
 }
 
 impl Op {
@@ -82,6 +83,7 @@ impl Op {
             35 => Some(Op::JumpIfTruthyKeep),
             36 => Some(Op::JumpIfFalsyKeep),
             37 => Some(Op::JumpIfNotNullishKeep),
+            38 => Some(Op::LoadName),
             _ => None,
         }
     }

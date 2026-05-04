@@ -15,7 +15,7 @@ fn decode_i16(chunk: &Chunk, pc: usize) -> i16 {
 pub(crate) fn run_chunk(
     interp: &mut Interpreter,
     chunk: &Chunk,
-    _env: &EnvRef,
+    env: &EnvRef,
     _this: JsValue,
 ) -> Completion {
     interp.bytecode_chunks_executed += 1;
@@ -33,6 +33,18 @@ pub(crate) fn run_chunk(
                 let idx = (hi << 8) | lo;
                 let v = chunk.constants[idx as usize].to_value();
                 stack.push(v);
+            }
+            Op::LoadName => {
+                let lo = chunk.code[pc] as u16;
+                let hi = chunk.code[pc + 1] as u16;
+                pc += 2;
+                let idx = (hi << 8) | lo;
+                let name = chunk.names[idx as usize].clone();
+                let strict = env.borrow().strict;
+                match interp.resolve_identifier(&name, env, strict) {
+                    Completion::Normal(v) => stack.push(v),
+                    abrupt => return abrupt,
+                }
             }
             Op::LoadUndefined => {
                 stack.push(JsValue::Undefined);

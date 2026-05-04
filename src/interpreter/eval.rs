@@ -14682,7 +14682,12 @@ impl Interpreter {
 
     /// Single-pass identifier resolution: combines with-scope check, binding lookup,
     /// and global getter resolution into one scope chain walk.
-    fn resolve_identifier(&mut self, name: &str, env: &EnvRef, strict: bool) -> Completion {
+    pub(super) fn resolve_identifier(
+        &mut self,
+        name: &str,
+        env: &EnvRef,
+        strict: bool,
+    ) -> Completion {
         let mut current = Some(env.clone());
         while let Some(env_ref) = current {
             let env_borrow = env_ref.borrow();
