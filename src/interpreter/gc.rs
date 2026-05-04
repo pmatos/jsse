@@ -92,7 +92,7 @@ impl Interpreter {
         // Temporary roots (iterators, etc.)
         worklist.extend_from_slice(&self.gc_temp_roots);
         // Root values captured in pending microtask closures
-        for roots in self.scheduler.iter_microtask_roots() {
+        for (roots, _) in &self.microtask_queue {
             for val in roots {
                 Self::collect_value_roots(val, &mut worklist);
             }
@@ -109,7 +109,7 @@ impl Interpreter {
         for val in self.iterator_next_cache.values() {
             Self::collect_value_roots(val, &mut worklist);
         }
-        for afs in self.scheduler.iter_async_function_states() {
+        for afs in self.async_function_states.values() {
             Self::collect_env_roots(&afs.func_env, &mut worklist);
             Self::collect_value_roots(&afs.resolve_fn, &mut worklist);
             Self::collect_value_roots(&afs.reject_fn, &mut worklist);

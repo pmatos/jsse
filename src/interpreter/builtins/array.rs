@@ -405,7 +405,7 @@ fn from_async_attach_await(
             let value = v.clone();
             let state_c = state.clone();
             let roots = from_async_collect_roots(&state);
-            interp.scheduler.enqueue_microtask((
+            interp.microtask_queue.push((
                 roots,
                 Box::new(move |interp| {
                     on_fulfill(interp, value, state_c);

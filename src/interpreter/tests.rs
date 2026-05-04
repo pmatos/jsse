@@ -85,7 +85,7 @@ fn microtask_queue_drains_before_run_returns() {
         "#,
     );
     assert_eq!(global_string(&interp, "result"), "done");
-    assert!(interp.scheduler.microtask_queue_is_empty());
+    assert!(interp.microtask_queue.is_empty());
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn nested_microtasks_run_to_quiescence_in_order() {
         "#,
     );
     assert_eq!(global_string(&interp, "order"), "abc");
-    assert!(interp.scheduler.microtask_queue_is_empty());
+    assert!(interp.microtask_queue.is_empty());
 }
 
 #[test]
@@ -495,7 +495,7 @@ fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
     let id = obj.borrow().id.expect("object id");
     let obj_val = JsValue::Object(crate::types::JsObject { id });
 
-    interp.scheduler.enqueue_microtask((
+    interp.microtask_queue.push((
         vec![obj_val.clone()],
         Box::new(|_| Completion::Normal(JsValue::Undefined)),
     ));
@@ -506,7 +506,7 @@ fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
         "microtask root should keep object alive"
     );
 
-    interp.scheduler.clear_microtasks();
+    interp.microtask_queue.clear();
     interp.gc_requested = true;
     interp.gc_safepoint();
     assert!(
