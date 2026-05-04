@@ -503,9 +503,9 @@ impl Interpreter {
             |interp, _this, args| {
                 let sab_val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = &sab_val
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(cell) = interp.get_object_cell(o.id)
                 {
-                    let sab_shared = obj.borrow().sab_shared.clone();
+                    let sab_shared = cell.borrow().sab_shared.clone();
                     if let Some(inner) = sab_shared {
                         for tx in &interp.agent_broadcast_txs {
                             let _ = tx.send(AgentBroadcastMsg {
@@ -703,7 +703,7 @@ impl Interpreter {
         let ams_proto_val = JsValue::Object(crate::types::JsObject { id: ams_proto_id });
 
         // Wire prototype on the constructor: {writable: false, enumerable: false, configurable: false}
-        if let Some(obj) = self.get_object(ams_fn_id) {
+        if let Some(obj) = self.get_object_cell(ams_fn_id) {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(ams_proto_val, false, false, false),
@@ -777,7 +777,7 @@ impl Interpreter {
     // GetFunctionRealm — §10.2.4
     pub(crate) fn get_function_realm(&mut self, func_val: &JsValue) -> Result<usize, JsValue> {
         if let JsValue::Object(o) = func_val
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             let obj_ref = obj.borrow();
             // Bound function: recurse on [[BoundTargetFunction]]
@@ -893,7 +893,7 @@ impl Interpreter {
                 && !matches!(getter, JsValue::Undefined)
             {
                 let is_callable = if let JsValue::Object(o) = getter
-                    && let Some(obj) = self.get_object(o.id)
+                    && let Some(obj) = self.get_object_cell(o.id)
                 {
                     obj.borrow().callable.is_some()
                 } else {
@@ -907,7 +907,7 @@ impl Interpreter {
                 && !matches!(setter, JsValue::Undefined)
             {
                 let is_callable = if let JsValue::Object(o) = setter
-                    && let Some(obj) = self.get_object(o.id)
+                    && let Some(obj) = self.get_object_cell(o.id)
                 {
                     obj.borrow().callable.is_some()
                 } else {
@@ -1163,7 +1163,7 @@ impl Interpreter {
                 .get_object_cell_expect(func_id)
                 .borrow()
                 .get_property_value("prototype")
-            && let Some(proto_obj) = self.get_object(proto_ref.id)
+            && let Some(proto_obj) = self.get_object_cell(proto_ref.id)
         {
             proto_obj
                 .borrow_mut()
@@ -1338,7 +1338,7 @@ impl Interpreter {
 
     pub(crate) fn set_function_name(&self, val: &JsValue, name: &str) {
         if let JsValue::Object(o) = val
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             let obj_ref = obj.borrow();
             if obj_ref.callable.is_none() {
@@ -1452,7 +1452,7 @@ impl Interpreter {
                 .clone()
                 .unwrap_or_else(|| self.create_thrower_function());
             if let JsValue::Object(ref o) = result
-                && let Some(obj_rc) = self.get_object(o.id)
+                && let Some(obj_rc) = self.get_object_cell(o.id)
             {
                 obj_rc.borrow_mut().define_own_property(
                     "callee".to_string(),
@@ -1478,7 +1478,7 @@ impl Interpreter {
             if let Some(iter_fn) = array_iter_fn
                 && !matches!(iter_fn, JsValue::Undefined)
                 && let JsValue::Object(ref o) = result
-                && let Some(obj_rc) = self.get_object(o.id)
+                && let Some(obj_rc) = self.get_object_cell(o.id)
             {
                 obj_rc
                     .borrow_mut()
@@ -4537,7 +4537,7 @@ impl Interpreter {
         }
         let ids = self.scheduler.pending_async_promise_ids_lock();
         for &id in ids.iter() {
-            if let Some(obj) = self.get_object(id)
+            if let Some(obj) = self.get_object_cell(id)
                 && let Some(ref pd) = obj.borrow().promise_data
                 && (!pd.fulfill_reactions.is_empty() || !pd.reject_reactions.is_empty())
             {
@@ -4599,7 +4599,7 @@ impl Interpreter {
     ) -> Result<bool, JsValue> {
         // 1. If Desc does not have [[Value]], just do OrdinaryDefineOwnProperty(A, "length", Desc)
         if desc.value.is_none() {
-            let obj_rc = self.get_object(obj_id as u64).unwrap();
+            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             return Ok(obj_rc
                 .borrow_mut()
                 .define_own_property("length".to_string(), desc));
@@ -4628,7 +4628,7 @@ impl Interpreter {
 
         // 6. Let oldLenDesc be OrdinaryGetOwnProperty(A, "length").
         let (old_len, old_len_writable) = {
-            let obj_rc = self.get_object(obj_id as u64).unwrap();
+            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let obj = obj_rc.borrow();
             let old_len_desc = obj.properties.get("length").cloned();
             match old_len_desc {
@@ -4653,7 +4653,7 @@ impl Interpreter {
 
         // 7. If newLen >= oldLen, return OrdinaryDefineOwnProperty(A, "length", newLenDesc).
         if new_len >= old_len {
-            let obj_rc = self.get_object(obj_id as u64).unwrap();
+            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let result = obj_rc
                 .borrow_mut()
                 .define_own_property("length".to_string(), new_len_desc);
@@ -4676,7 +4676,7 @@ impl Interpreter {
 
         // 11. Let succeeded be OrdinaryDefineOwnProperty(A, "length", newLenDesc).
         {
-            let obj_rc = self.get_object(obj_id as u64).unwrap();
+            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let succeeded = obj_rc
                 .borrow_mut()
                 .define_own_property("length".to_string(), new_len_desc);
@@ -4690,7 +4690,7 @@ impl Interpreter {
         //     Stop if a deletion fails (non-configurable).
         let mut actual_new_len = new_len;
         {
-            let obj_rc = self.get_object(obj_id as u64).unwrap();
+            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let mut obj = obj_rc.borrow_mut();
 
             // Collect array index keys >= newLen and < oldLen, sorted descending.
@@ -4731,7 +4731,7 @@ impl Interpreter {
 
         // If we were blocked by a non-configurable element, update length and handle writable.
         if actual_new_len != new_len {
-            let obj_rc = self.get_object(obj_id as u64).unwrap();
+            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let mut obj = obj_rc.borrow_mut();
             if let Some(len_desc) = obj.properties.get_mut("length") {
                 len_desc.value = Some(JsValue::Number(actual_new_len as f64));
@@ -4745,7 +4745,7 @@ impl Interpreter {
 
         // 14. If newWritable is false, set [[Writable]] on length to false.
         if !new_writable {
-            let obj_rc = self.get_object(obj_id as u64).unwrap();
+            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let mut obj = obj_rc.borrow_mut();
             if let Some(len_desc) = obj.properties.get_mut("length") {
                 len_desc.writable = Some(false);
@@ -4776,7 +4776,7 @@ impl Interpreter {
 
             // 2.a. Let oldLen be the current length value.
             let (old_len, length_writable) = {
-                let obj_rc = self.get_object(obj_id as u64).unwrap();
+                let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 let obj = obj_rc.borrow();
                 let len_desc = obj.properties.get("length");
                 let ol = len_desc
@@ -4800,7 +4800,7 @@ impl Interpreter {
 
             // 2.c. Let succeeded be OrdinaryDefineOwnProperty(A, P, Desc).
             let succeeded = {
-                let obj_rc = self.get_object(obj_id as u64).unwrap();
+                let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 obj_rc
                     .borrow_mut()
                     .define_own_property(key.to_string(), desc.clone())
@@ -4814,7 +4814,7 @@ impl Interpreter {
             // 2.e. If index >= oldLen, set length to index + 1.
             if index_u32 >= old_len {
                 let new_len = index_u32 + 1;
-                let obj_rc = self.get_object(obj_id as u64).unwrap();
+                let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 let mut obj = obj_rc.borrow_mut();
                 if let Some(len_desc) = obj.properties.get_mut("length") {
                     len_desc.value = Some(JsValue::Number(new_len as f64));
@@ -4832,7 +4832,7 @@ impl Interpreter {
                     }
                 }
             } else {
-                let obj_rc = self.get_object(obj_id as u64).unwrap();
+                let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 let mut obj = obj_rc.borrow_mut();
                 if let Some(ref mut elems) = obj.array_elements {
                     let idx = index_u32 as usize;
@@ -4848,7 +4848,7 @@ impl Interpreter {
         }
 
         // 3. Return OrdinaryDefineOwnProperty(A, P, Desc).
-        let obj_rc = self.get_object(obj_id as u64).unwrap();
+        let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
         Ok(obj_rc
             .borrow_mut()
             .define_own_property(key.to_string(), desc))
@@ -4857,7 +4857,7 @@ impl Interpreter {
     pub fn format_value(&self, val: &JsValue) -> String {
         match val {
             JsValue::Object(o) => {
-                if self.get_object(o.id).is_some() {
+                if self.get_object_cell(o.id).is_some() {
                     let name = self.get_property_on_id(o.id, "name");
                     let message = self.get_property_on_id(o.id, "message");
                     if let JsValue::String(ref msg) = message {

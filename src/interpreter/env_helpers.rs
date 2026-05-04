@@ -127,10 +127,10 @@ impl Interpreter {
                 }
                 EnvSetAction::ImplicitGlobal { gid } => {
                     let already_on_global = self
-                        .get_object(gid)
+                        .get_object_cell(gid)
                         .is_some_and(|go| go.borrow().has_own_property(name));
                     let ok = self
-                        .get_object(gid)
+                        .get_object_cell(gid)
                         .is_some_and(|go| go.borrow_mut().set_property_value(name, value.clone()));
                     if !ok {
                         return Ok(());
@@ -233,7 +233,7 @@ impl Interpreter {
         if let Some(gid) = gid {
             if !env.borrow().bindings.contains_key(name) {
                 let has_global_prop = self
-                    .get_object(gid)
+                    .get_object_cell(gid)
                     .is_some_and(|g| g.borrow().properties.contains_key(name));
                 if !has_global_prop {
                     env.borrow_mut().declare(name, BindingKind::Var);

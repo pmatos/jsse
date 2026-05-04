@@ -501,7 +501,7 @@ fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
     interp.gc_requested = true;
     interp.gc_safepoint();
     assert!(
-        interp.get_object(id).is_some(),
+        interp.get_object_cell(id).is_some(),
         "microtask root should keep object alive"
     );
 
@@ -509,7 +509,7 @@ fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
     interp.gc_requested = true;
     interp.gc_safepoint();
     assert!(
-        interp.get_object(id).is_none(),
+        interp.get_object_cell(id).is_none(),
         "object should be collectable after queue clears"
     );
 }
@@ -540,12 +540,12 @@ fn gc_keeps_module_exports_alive_until_registry_entry_is_removed() {
 
     interp.gc_requested = true;
     interp.gc_safepoint();
-    assert!(interp.get_object(obj_ref.id).is_some());
+    assert!(interp.get_object_cell(obj_ref.id).is_some());
 
     interp.module_registry.remove(&key);
     interp.gc_requested = true;
     interp.gc_safepoint();
-    assert!(interp.get_object(obj_ref.id).is_none());
+    assert!(interp.get_object_cell(obj_ref.id).is_none());
 
     let _ = fs::remove_dir_all(&dir);
 }
