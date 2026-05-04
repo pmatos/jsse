@@ -57,26 +57,40 @@ impl Interpreter {
             "get byteLength".to_string(),
             0,
             |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let obj_ref = obj.borrow();
-                    if let Some(ref buf_data) = obj_ref.arraybuffer_data {
-                        if obj_ref.arraybuffer_is_shared {
-                            return Completion::Throw(
-                                interp.create_type_error("not an ArrayBuffer"),
-                            );
-                        }
-                        if let Some(ref det) = obj_ref.arraybuffer_detached
-                            && det.get()
-                        {
-                            return Completion::Normal(JsValue::Number(0.0));
-                        }
-                        let len = buffer_len(buf_data);
-                        return Completion::Normal(JsValue::Number(len as f64));
-                    }
+                enum Probe {
+                    NotAB,
+                    Shared,
+                    Detached,
+                    Bytes(usize),
                 }
-                Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+                let probe = if let JsValue::Object(o) = this_val {
+                    interp
+                        .get_object_cell(o.id)
+                        .map(|cell| {
+                            let r = cell.borrow();
+                            if let Some(ref buf_data) = r.arraybuffer_data {
+                                if r.arraybuffer_is_shared {
+                                    Probe::Shared
+                                } else if r.arraybuffer_detached.as_ref().is_some_and(|d| d.get()) {
+                                    Probe::Detached
+                                } else {
+                                    Probe::Bytes(buffer_len(buf_data))
+                                }
+                            } else {
+                                Probe::NotAB
+                            }
+                        })
+                        .unwrap_or(Probe::NotAB)
+                } else {
+                    Probe::NotAB
+                };
+                match probe {
+                    Probe::Shared | Probe::NotAB => {
+                        Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+                    }
+                    Probe::Detached => Completion::Normal(JsValue::Number(0.0)),
+                    Probe::Bytes(n) => Completion::Normal(JsValue::Number(n as f64)),
+                }
             },
         ));
         self.get_object_cell_expect(ab_proto_id)
@@ -98,24 +112,38 @@ impl Interpreter {
             "get detached".to_string(),
             0,
             |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let obj_ref = obj.borrow();
-                    if obj_ref.arraybuffer_data.is_some() {
-                        if obj_ref.arraybuffer_is_shared {
-                            return Completion::Throw(
-                                interp.create_type_error("not an ArrayBuffer"),
-                            );
-                        }
-                        let detached = obj_ref
-                            .arraybuffer_detached
-                            .as_ref()
-                            .is_some_and(|d| d.get());
-                        return Completion::Normal(JsValue::Boolean(detached));
-                    }
+                enum Probe {
+                    NotAB,
+                    Shared,
+                    Detached(bool),
                 }
-                Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+                let probe = if let JsValue::Object(o) = this_val {
+                    interp
+                        .get_object_cell(o.id)
+                        .map(|cell| {
+                            let r = cell.borrow();
+                            if r.arraybuffer_data.is_some() {
+                                if r.arraybuffer_is_shared {
+                                    Probe::Shared
+                                } else {
+                                    let det =
+                                        r.arraybuffer_detached.as_ref().is_some_and(|d| d.get());
+                                    Probe::Detached(det)
+                                }
+                            } else {
+                                Probe::NotAB
+                            }
+                        })
+                        .unwrap_or(Probe::NotAB)
+                } else {
+                    Probe::NotAB
+                };
+                match probe {
+                    Probe::NotAB | Probe::Shared => {
+                        Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+                    }
+                    Probe::Detached(b) => Completion::Normal(JsValue::Boolean(b)),
+                }
             },
         ));
         self.get_object_cell_expect(ab_proto_id)
@@ -137,21 +165,36 @@ impl Interpreter {
             "get resizable".to_string(),
             0,
             |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let obj_ref = obj.borrow();
-                    if obj_ref.arraybuffer_data.is_some() {
-                        if obj_ref.arraybuffer_is_shared {
-                            return Completion::Throw(
-                                interp.create_type_error("not an ArrayBuffer"),
-                            );
-                        }
-                        let is_resizable = obj_ref.arraybuffer_max_byte_length.is_some();
-                        return Completion::Normal(JsValue::Boolean(is_resizable));
-                    }
+                enum Probe {
+                    NotAB,
+                    Shared,
+                    Resizable(bool),
                 }
-                Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+                let probe = if let JsValue::Object(o) = this_val {
+                    interp
+                        .get_object_cell(o.id)
+                        .map(|cell| {
+                            let r = cell.borrow();
+                            if r.arraybuffer_data.is_some() {
+                                if r.arraybuffer_is_shared {
+                                    Probe::Shared
+                                } else {
+                                    Probe::Resizable(r.arraybuffer_max_byte_length.is_some())
+                                }
+                            } else {
+                                Probe::NotAB
+                            }
+                        })
+                        .unwrap_or(Probe::NotAB)
+                } else {
+                    Probe::NotAB
+                };
+                match probe {
+                    Probe::NotAB | Probe::Shared => {
+                        Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+                    }
+                    Probe::Resizable(b) => Completion::Normal(JsValue::Boolean(b)),
+                }
             },
         ));
         self.get_object_cell_expect(ab_proto_id)
@@ -173,22 +216,36 @@ impl Interpreter {
             "get immutable".to_string(),
             0,
             |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let obj_ref = obj.borrow();
-                    if obj_ref.arraybuffer_data.is_some() {
-                        if obj_ref.arraybuffer_is_shared {
-                            return Completion::Throw(
-                                interp.create_type_error("not an ArrayBuffer"),
-                            );
-                        }
-                        return Completion::Normal(JsValue::Boolean(
-                            obj_ref.arraybuffer_is_immutable,
-                        ));
-                    }
+                enum Probe {
+                    NotAB,
+                    Shared,
+                    Immutable(bool),
                 }
-                Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+                let probe = if let JsValue::Object(o) = this_val {
+                    interp
+                        .get_object_cell(o.id)
+                        .map(|cell| {
+                            let r = cell.borrow();
+                            if r.arraybuffer_data.is_some() {
+                                if r.arraybuffer_is_shared {
+                                    Probe::Shared
+                                } else {
+                                    Probe::Immutable(r.arraybuffer_is_immutable)
+                                }
+                            } else {
+                                Probe::NotAB
+                            }
+                        })
+                        .unwrap_or(Probe::NotAB)
+                } else {
+                    Probe::NotAB
+                };
+                match probe {
+                    Probe::NotAB | Probe::Shared => {
+                        Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+                    }
+                    Probe::Immutable(b) => Completion::Normal(JsValue::Boolean(b)),
+                }
             },
         ));
         self.get_object_cell_expect(ab_proto_id)
@@ -210,28 +267,43 @@ impl Interpreter {
             "get maxByteLength".to_string(),
             0,
             |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let obj_ref = obj.borrow();
-                    if obj_ref.arraybuffer_data.is_some() {
-                        if obj_ref.arraybuffer_is_shared {
-                            return Completion::Throw(
-                                interp.create_type_error("not an ArrayBuffer"),
-                            );
-                        }
-                        if let Some(ref det) = obj_ref.arraybuffer_detached
-                            && det.get()
-                        {
-                            return Completion::Normal(JsValue::Number(0.0));
-                        }
-                        let max = obj_ref.arraybuffer_max_byte_length.unwrap_or_else(|| {
-                            buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
-                        });
-                        return Completion::Normal(JsValue::Number(max as f64));
-                    }
+                enum Probe {
+                    NotAB,
+                    Shared,
+                    Detached,
+                    Max(usize),
                 }
-                Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+                let probe = if let JsValue::Object(o) = this_val {
+                    interp
+                        .get_object_cell(o.id)
+                        .map(|cell| {
+                            let r = cell.borrow();
+                            if r.arraybuffer_data.is_some() {
+                                if r.arraybuffer_is_shared {
+                                    Probe::Shared
+                                } else if r.arraybuffer_detached.as_ref().is_some_and(|d| d.get()) {
+                                    Probe::Detached
+                                } else {
+                                    let max = r.arraybuffer_max_byte_length.unwrap_or_else(|| {
+                                        buffer_len(r.arraybuffer_data.as_ref().unwrap())
+                                    });
+                                    Probe::Max(max)
+                                }
+                            } else {
+                                Probe::NotAB
+                            }
+                        })
+                        .unwrap_or(Probe::NotAB)
+                } else {
+                    Probe::NotAB
+                };
+                match probe {
+                    Probe::NotAB | Probe::Shared => {
+                        Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
+                    }
+                    Probe::Detached => Completion::Normal(JsValue::Number(0.0)),
+                    Probe::Max(n) => Completion::Normal(JsValue::Number(n as f64)),
+                }
             },
         ));
         self.get_object_cell_expect(ab_proto_id)
