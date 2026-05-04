@@ -62,15 +62,13 @@ fn date_to_locale_string(
         }
     };
 
-    let has_prop = |obj: &Rc<RefCell<JsObjectData>>, name: &str| -> bool {
-        obj.borrow().properties.contains_key(name)
-    };
+    let has_prop = |obj: &JsObjectData, name: &str| -> bool { obj.properties.contains_key(name) };
 
     let mut need_defaults = true;
 
     if required == "date" || required == "any" {
         for prop in &["weekday", "year", "month", "day"] {
-            if has_prop(&options_obj, prop) {
+            if has_prop(&options_obj.borrow(), prop) {
                 need_defaults = false;
                 break;
             }
@@ -84,13 +82,15 @@ fn date_to_locale_string(
             "second",
             "fractionalSecondDigits",
         ] {
-            if has_prop(&options_obj, prop) {
+            if has_prop(&options_obj.borrow(), prop) {
                 need_defaults = false;
                 break;
             }
         }
     }
-    if need_defaults && (has_prop(&options_obj, "dateStyle") || has_prop(&options_obj, "timeStyle"))
+    if need_defaults
+        && (has_prop(&options_obj.borrow(), "dateStyle")
+            || has_prop(&options_obj.borrow(), "timeStyle"))
     {
         need_defaults = false;
     }

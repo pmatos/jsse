@@ -151,8 +151,7 @@ impl Interpreter {
     }
 
     /// §9.1.1.4.16 CanDeclareGlobalFunction
-    fn can_declare_global_function(global_obj: &Rc<RefCell<JsObjectData>>, name: &str) -> bool {
-        let gb = global_obj.borrow();
+    fn can_declare_global_function(gb: &JsObjectData, name: &str) -> bool {
         if let Some(desc) = gb.properties.get(name) {
             if desc.configurable == Some(true) {
                 return true;
@@ -168,8 +167,7 @@ impl Interpreter {
     }
 
     /// §9.1.1.4.15 CanDeclareGlobalVar
-    fn can_declare_global_var(global_obj: &Rc<RefCell<JsObjectData>>, name: &str) -> bool {
-        let gb = global_obj.borrow();
+    fn can_declare_global_var(gb: &JsObjectData, name: &str) -> bool {
         if gb.properties.contains_key(name) {
             return true;
         }
@@ -196,8 +194,7 @@ impl Interpreter {
     }
 
     /// §9.1.1.4.13 HasRestrictedGlobalProperty
-    fn has_restricted_global_property(global_obj: &Rc<RefCell<JsObjectData>>, name: &str) -> bool {
-        let gb = global_obj.borrow();
+    fn has_restricted_global_property(gb: &JsObjectData, name: &str) -> bool {
         if let Some(desc) = gb.properties.get(name) {
             desc.configurable == Some(false)
         } else {
@@ -231,7 +228,7 @@ impl Interpreter {
             // Step 3b-d: If HasRestrictedGlobalProperty(name) is true, throw SyntaxError
             // Non-eval var/function declarations create non-configurable global properties,
             // so this also catches var-lex collisions for non-eval declarations.
-            if Self::has_restricted_global_property(&global_obj, name) {
+            if Self::has_restricted_global_property(&global_obj.borrow(), name) {
                 let err = self.create_error(
                     "SyntaxError",
                     &format!("Identifier '{}' has already been declared", name),
@@ -271,7 +268,7 @@ impl Interpreter {
                     );
                     return Some(Completion::Throw(err));
                 }
-                if !Self::can_declare_global_function(&global_obj, &f.name) {
+                if !Self::can_declare_global_function(&global_obj.borrow(), &f.name) {
                     let err = self
                         .create_type_error(&format!("Cannot declare global function '{}'", f.name));
                     return Some(Completion::Throw(err));
@@ -283,7 +280,7 @@ impl Interpreter {
         // Collect var declaration names (step 12)
         for name in &var_names {
             if !declared_function_names.contains(name)
-                && !Self::can_declare_global_var(&global_obj, name)
+                && !Self::can_declare_global_var(&global_obj.borrow(), name)
             {
                 let err =
                     self.create_type_error(&format!("Cannot declare global variable '{}'", name));

@@ -2781,12 +2781,11 @@ impl Interpreter {
                     let fp_id = fp.borrow().id;
 
                     // Helper: fix a single object's prototype if it's callable
-                    let fix_callable =
-                        |obj: &Rc<RefCell<JsObjectData>>, fp: &Rc<RefCell<JsObjectData>>| {
-                            if obj.borrow().callable.is_some() {
-                                obj.borrow_mut().prototype_id = Some(fp.borrow().id.unwrap());
-                            }
-                        };
+                    let fix_callable = |obj: &RefCell<JsObjectData>, fp: &RefCell<JsObjectData>| {
+                        if obj.borrow().callable.is_some() {
+                            obj.borrow_mut().prototype_id = Some(fp.borrow().id.unwrap());
+                        }
+                    };
 
                     // Collect all JsValue objects from a property descriptor (value + accessors)
                     fn collect_pd_objects(pd: &PropertyDescriptor) -> Vec<JsValue> {
