@@ -50,10 +50,22 @@ fn run_module_with_path(source: &str, path: &Path) -> Interpreter {
 }
 
 fn global_string(interp: &Interpreter, name: &str) -> String {
-    let env = interp.realm().global_env.borrow();
-    match env.get(name).unwrap_or(JsValue::Undefined) {
+    match interp
+        .get_global_var_ref(name)
+        .unwrap_or(JsValue::Undefined)
+    {
         JsValue::String(s) => s.to_string(),
         other => panic!("expected global string for {name}, got {other:?}"),
+    }
+}
+
+fn global_number(interp: &Interpreter, name: &str) -> f64 {
+    match interp
+        .get_global_var_ref(name)
+        .unwrap_or(JsValue::Undefined)
+    {
+        JsValue::Number(n) => n,
+        other => panic!("expected global number for {name}, got {other:?}"),
     }
 }
 
@@ -356,7 +368,7 @@ fn transitive_module_import_link_error_aborts_parent_before_evaluation() {
     };
     assert!(err.contains("SyntaxError"), "unexpected error: {err}");
     assert!(err.contains("nonExistent"), "unexpected error: {err}");
-    assert!(interp.realm().global_env.borrow().get("marker").is_none());
+    assert!(interp.get_global_var_ref("marker").is_none());
 
     let broken_canon = broken_path.canonicalize().unwrap_or(broken_path.clone());
     let realm_id = interp.current_realm_id;
@@ -414,7 +426,7 @@ fn transitive_reexport_link_error_aborts_parent_before_evaluation() {
     };
     assert!(err.contains("SyntaxError"), "unexpected error: {err}");
     assert!(err.contains("nonExistent"), "unexpected error: {err}");
-    assert!(interp.realm().global_env.borrow().get("marker").is_none());
+    assert!(interp.get_global_var_ref("marker").is_none());
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -456,7 +468,7 @@ fn default_cannot_be_reexported_through_star_resolution() {
     };
     assert!(err.contains("SyntaxError"), "unexpected error: {err}");
     assert!(err.contains("default"), "unexpected error: {err}");
-    assert!(interp.realm().global_env.borrow().get("marker").is_none());
+    assert!(interp.get_global_var_ref("marker").is_none());
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -781,11 +793,11 @@ fn ic_records_after_repeated_dot_access() {
         }
         "#,
     );
-    let env = interp.realm().global_env.borrow();
-    match env.get("sum").unwrap_or(JsValue::Undefined) {
-        JsValue::Number(n) => assert_eq!(n, 4200.0, "behavioral correctness"),
-        other => panic!("expected sum=4200, got {other:?}"),
-    }
+    assert_eq!(
+        global_number(&interp, "sum"),
+        4200.0,
+        "behavioral correctness"
+    );
     assert!(
         interp.ic_hit_count() > 0,
         "expected IC hits after 100-iteration hot loop on o.x; got 0 \
@@ -840,11 +852,11 @@ fn call_ic_records_after_repeated_call() {
         for (var i = 0; i < 100; i++) sum += f();
         "#,
     );
-    let env = interp.realm().global_env.borrow();
-    match env.get("sum").unwrap_or(JsValue::Undefined) {
-        JsValue::Number(n) => assert_eq!(n, 4200.0, "behavioral correctness"),
-        other => panic!("expected sum=4200, got {other:?}"),
-    }
+    assert_eq!(
+        global_number(&interp, "sum"),
+        4200.0,
+        "behavioral correctness"
+    );
     assert!(
         interp.call_ic_hit_count() > 0,
         "expected call-IC hits after 100-iteration hot loop on f(); got 0"
@@ -865,11 +877,11 @@ fn call_ic_fast_dispatch_actually_skips_entry_checks() {
         for (var i = 0; i < 100; i++) sum += f();
         "#,
     );
-    let env = interp.realm().global_env.borrow();
-    match env.get("sum").unwrap_or(JsValue::Undefined) {
-        JsValue::Number(n) => assert_eq!(n, 700.0, "behavioral correctness"),
-        other => panic!("expected sum=700, got {other:?}"),
-    }
+    assert_eq!(
+        global_number(&interp, "sum"),
+        700.0,
+        "behavioral correctness"
+    );
     assert!(
         interp.call_ic_fast_dispatch_count() > 0,
         "expected fast-dispatch path to fire on IC hits; got 0 \
@@ -918,11 +930,11 @@ fn call_ic_does_not_cache_class_ctor_without_new() {
         var result = threw_count;
         "#,
     );
-    let env = interp.realm().global_env.borrow();
-    match env.get("result").unwrap_or(JsValue::Undefined) {
-        JsValue::Number(n) => assert_eq!(n, 5.0, "expected 5 TypeErrors"),
-        other => panic!("expected 5, got {other:?}"),
-    }
+    assert_eq!(
+        global_number(&interp, "result"),
+        5.0,
+        "expected 5 TypeErrors"
+    );
 }
 
 #[test]
@@ -981,11 +993,11 @@ fn ic_megamorphic_stays_terminal_after_non_cacheable_miss() {
         var result = sum;
         "#,
     );
-    let env = interp.realm().global_env.borrow();
-    match env.get("result").unwrap_or(JsValue::Undefined) {
-        JsValue::Number(n) => assert_eq!(n, 16.0, "behavioral correctness"),
-        other => panic!("expected result=16, got {other:?}"),
-    }
+    assert_eq!(
+        global_number(&interp, "result"),
+        16.0,
+        "behavioral correctness"
+    );
     assert_eq!(
         interp.ic_hit_count(),
         0,
@@ -1010,11 +1022,11 @@ fn call_ic_megamorphic_stays_terminal_after_non_cacheable_miss() {
         var result = sum;
         "#,
     );
-    let env = interp.realm().global_env.borrow();
-    match env.get("result").unwrap_or(JsValue::Undefined) {
-        JsValue::Number(n) => assert_eq!(n, 16.0, "behavioral correctness"),
-        other => panic!("expected result=16, got {other:?}"),
-    }
+    assert_eq!(
+        global_number(&interp, "result"),
+        16.0,
+        "behavioral correctness"
+    );
     assert_eq!(
         interp.call_ic_hit_count(),
         0,

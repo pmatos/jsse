@@ -20,6 +20,7 @@ type Chunk = Box<[Slot; CHUNK_SIZE]>;
 pub(crate) struct ObjectArena {
     chunks: Vec<Chunk>,
     free_list: Vec<u64>,
+    next_slot: u64,
     live_count: usize,
 }
 
@@ -28,6 +29,7 @@ impl ObjectArena {
         Self {
             chunks: Vec::new(),
             free_list: Vec::new(),
+            next_slot: 0,
             live_count: 0,
         }
     }
@@ -40,8 +42,11 @@ impl ObjectArena {
         let (id, was_reuse) = if let Some(idx) = self.free_list.pop() {
             (idx, true)
         } else {
-            let idx = (self.chunks.len() * CHUNK_SIZE) as u64;
-            self.grow_one_chunk();
+            if self.next_slot == self.capacity() {
+                self.grow_one_chunk();
+            }
+            let idx = self.next_slot;
+            self.next_slot += 1;
             (idx, false)
         };
         data.id = Some(id);
@@ -126,5 +131,45 @@ impl ObjectArena {
 impl Default for ObjectArena {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_allocations_fill_current_chunk_before_growing() {
+        let mut arena = ObjectArena::new();
+
+        for expected in 0..CHUNK_SIZE as u64 {
+            let (id, was_reuse) = arena.alloc(JsObjectData::new());
+            assert_eq!(id, expected);
+            assert!(!was_reuse);
+            assert_eq!(arena.capacity(), CHUNK_SIZE as u64);
+        }
+
+        let (id, was_reuse) = arena.alloc(JsObjectData::new());
+        assert_eq!(id, CHUNK_SIZE as u64);
+        assert!(!was_reuse);
+        assert_eq!(arena.capacity(), (CHUNK_SIZE * 2) as u64);
+    }
+
+    #[test]
+    fn freed_slots_are_reused_before_next_fresh_slot() {
+        let mut arena = ObjectArena::new();
+        let (first, _) = arena.alloc(JsObjectData::new());
+        let (second, _) = arena.alloc(JsObjectData::new());
+
+        arena.free(first);
+
+        let (reused, was_reuse) = arena.alloc(JsObjectData::new());
+        assert_eq!(reused, first);
+        assert!(was_reuse);
+        assert_eq!(arena.live_count(), 2);
+
+        let (fresh, was_reuse) = arena.alloc(JsObjectData::new());
+        assert_eq!(fresh, second + 1);
+        assert!(!was_reuse);
     }
 }
