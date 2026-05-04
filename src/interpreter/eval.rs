@@ -31,7 +31,7 @@ fn string_to_bigint_for_comparison(s: &str) -> Option<num_bigint::BigInt> {
     trimmed.parse::<num_bigint::BigInt>().ok()
 }
 
-enum IdentifierRef {
+pub(super) enum IdentifierRef {
     WithObject(u64),
     Unresolvable,
     SpecificEnv(EnvRef),
@@ -14493,7 +14493,7 @@ impl Interpreter {
     }
 
     /// Resolve an identifier to a reference (for capturing before RHS evaluation).
-    fn resolve_identifier_ref(
+    pub(super) fn resolve_identifier_ref(
         &mut self,
         name: &str,
         env: &EnvRef,
@@ -14566,7 +14566,7 @@ impl Interpreter {
     }
 
     /// Write a value through a captured identifier reference.
-    fn put_value_by_ref(
+    pub(super) fn put_value_by_ref(
         &mut self,
         name: &str,
         value: JsValue,

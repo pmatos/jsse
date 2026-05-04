@@ -404,6 +404,31 @@ fn end_to_end_undeclared_identifier_throws_reference_error() {
 }
 
 #[test]
+fn end_to_end_param_mutation_via_bytecode() {
+    let source = "var __r = (function(x){ x = x + 1; return x; })(5);";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(count >= 1, "bytecode path must run");
+    assert!(matches!(v, JsValue::Number(n) if n == 6.0), "got {v:?}");
+}
+
+#[test]
+fn end_to_end_multiple_statements_via_bytecode() {
+    let source = "var __r = (function(x){ x = x + 1; x = x * 2; return x; })(3);";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(count >= 1, "bytecode path must run");
+    assert!(matches!(v, JsValue::Number(n) if n == 8.0), "got {v:?}");
+}
+
+#[test]
+fn end_to_end_assignment_returns_assigned_value() {
+    // `(x = expr)` evaluates to the assigned value
+    let source = "var __r = (function(x){ return (x = 99); })(0);";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(count >= 1, "bytecode path must run");
+    assert!(matches!(v, JsValue::Number(n) if n == 99.0), "got {v:?}");
+}
+
+#[test]
 fn add_string_and_number_falls_through_to_string_concat() {
     // Bytecode for `return "x" + 1;`  → "x1"
     let chunk = Chunk {

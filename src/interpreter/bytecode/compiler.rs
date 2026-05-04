@@ -1,6 +1,6 @@
 use super::chunk::{Chunk, Constant};
 use super::op::Op;
-use crate::ast::{BinaryOp, Expression, Literal, LogicalOp, Statement, UnaryOp};
+use crate::ast::{AssignOp, BinaryOp, Expression, Literal, LogicalOp, Statement, UnaryOp};
 
 #[derive(Debug)]
 pub(crate) enum CompileError {
@@ -113,6 +113,31 @@ impl Compiler {
                 };
                 self.emit(bop);
                 // Stack height unchanged: pop one, push one.
+                Ok(())
+            }
+            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
+                if exprs.is_empty() {
+                    return Err(CompileError::Unsupported("empty sequence"));
+                }
+                let last = exprs.len() - 1;
+                for (i, e) in exprs.iter().enumerate() {
+                    self.compile_expr(e)?;
+                    if i != last {
+                        self.emit(Op::Pop);
+                        self.pop_n(1);
+                    }
+                }
+                Ok(())
+            }
+            Expression::Assign(AssignOp::Assign, target, value) => {
+                let Expression::Identifier(name) = target.as_ref() else {
+                    return Err(CompileError::Unsupported("assign target"));
+                };
+                let idx = self.add_name(name)?;
+                self.compile_expr(value)?;
+                self.emit(Op::StoreName);
+                self.emit_u16(idx);
+                // Stack height unchanged: value remains on stack.
                 Ok(())
             }
             Expression::Logical(op, lhs, rhs) => {
@@ -229,6 +254,13 @@ impl Compiler {
 
     fn compile_statement(&mut self, stmt: &Statement) -> Result<(), CompileError> {
         match stmt {
+            Statement::Empty => Ok(()),
+            Statement::Expression(expr) => {
+                self.compile_expr(expr)?;
+                self.emit(Op::Pop);
+                self.pop_n(1);
+                Ok(())
+            }
             Statement::Return(None) => {
                 self.emit(Op::ReturnUndefined);
                 Ok(())

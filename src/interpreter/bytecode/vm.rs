@@ -46,6 +46,23 @@ pub(crate) fn run_chunk(
                     abrupt => return abrupt,
                 }
             }
+            Op::StoreName => {
+                // Stack on entry: [..., value]
+                // Stack on exit:  [..., value]   (assignment leaves value on stack)
+                let lo = chunk.code[pc] as u16;
+                let hi = chunk.code[pc + 1] as u16;
+                pc += 2;
+                let idx = (hi << 8) | lo;
+                let name = chunk.names[idx as usize].clone();
+                let value = stack.last().expect("stack underflow on StoreName").clone();
+                let id_ref = match interp.resolve_identifier_ref(&name, env) {
+                    Ok(r) => r,
+                    Err(e) => return Completion::Throw(e),
+                };
+                if let Completion::Throw(e) = interp.put_value_by_ref(&name, value, &id_ref, env) {
+                    return Completion::Throw(e);
+                }
+            }
             Op::LoadUndefined => {
                 stack.push(JsValue::Undefined);
             }
