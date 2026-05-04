@@ -2551,8 +2551,7 @@ impl Interpreter {
             let fp = self.realm().function_prototype;
             if let Some(fp_id) = fp {
                 // Already has callable from early init, but ensure length/name
-                let fp_obj = self.get_object_expect(fp_id);
-                let mut b = fp_obj.borrow_mut();
+                let mut b = self.get_object_cell_expect(fp_id).borrow_mut();
                 if !b.properties.contains_key("length") {
                     b.insert_property(
                         "length".to_string(),
@@ -4614,7 +4613,7 @@ impl Interpreter {
                                                     ),
                                                 );
                                             }
-                                            check = interp.get_object_expect(c_id).borrow().prototype_id;
+                                            check = interp.get_object_cell_expect(c_id).borrow().prototype_id;
                                         }
                                         obj.borrow_mut().prototype_id = Some(p.id);
                                     }
@@ -8528,7 +8527,7 @@ impl Interpreter {
                 interp.call_function(_this, &this_arg, call_args)
             },
         ));
-        self.get_object_expect(obj_proto_id)
+        self.get_object_cell_expect(obj_proto_id)
             .borrow_mut()
             .insert_builtin("call".to_string(), call_fn);
 
@@ -8584,7 +8583,7 @@ impl Interpreter {
                 interp.call_function(_this, &this_arg, &call_args)
             },
         ));
-        self.get_object_expect(obj_proto_id)
+        self.get_object_cell_expect(obj_proto_id)
             .borrow_mut()
             .insert_builtin("apply".to_string(), apply_fn);
 
@@ -8752,7 +8751,7 @@ impl Interpreter {
                 Completion::Normal(result)
             },
         ));
-        self.get_object_expect(obj_proto_id)
+        self.get_object_cell_expect(obj_proto_id)
             .borrow_mut()
             .insert_builtin("bind".to_string(), bind_fn);
 
@@ -8825,7 +8824,7 @@ impl Interpreter {
                 ))
             },
         ));
-        self.get_object_expect(obj_proto_id)
+        self.get_object_cell_expect(obj_proto_id)
             .borrow_mut()
             .insert_builtin("toString".to_string(), fn_tostring);
     }

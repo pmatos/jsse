@@ -153,8 +153,7 @@ impl Interpreter {
     pub(crate) fn setup_intl_plural_rules(&mut self, intl_obj_id: u64) {
         let proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype_id =
-                Some(op_id);
+            proto.borrow_mut().prototype_id = Some(op_id);
         }
         proto.borrow_mut().class_name = "Intl.PluralRules".to_string();
 
@@ -349,8 +348,7 @@ impl Interpreter {
                     {
                         let result = interp.create_object();
                         if let Some(op_id) = interp.realm().object_prototype {
-                            result.borrow_mut().prototype_id =
-                                Some(op_id);
+                            result.borrow_mut().prototype_id = Some(op_id);
                         }
 
                         // Spec order: locale, type, notation, minimumIntegerDigits,

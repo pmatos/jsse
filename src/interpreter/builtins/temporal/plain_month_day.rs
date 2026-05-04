@@ -15,8 +15,7 @@ pub(super) fn create_plain_month_day_result(
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.PlainMonthDay".to_string();
     if let Some(proto_id) = interp.realm().temporal_plain_month_day_prototype {
-        obj.borrow_mut().prototype_id =
-            Some(proto_id);
+        obj.borrow_mut().prototype_id = Some(proto_id);
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::PlainMonthDay {
         iso_month: m,

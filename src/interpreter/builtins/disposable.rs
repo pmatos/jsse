@@ -4,8 +4,7 @@ impl Interpreter {
     pub(crate) fn setup_disposable_stack(&mut self) {
         let ds_proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
-            ds_proto.borrow_mut().prototype_id =
-                Some(op_id);
+            ds_proto.borrow_mut().prototype_id = Some(op_id);
         }
 
         // Symbol.toStringTag
@@ -453,8 +452,7 @@ impl Interpreter {
     pub(crate) fn setup_async_disposable_stack(&mut self) {
         let ads_proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
-            ads_proto.borrow_mut().prototype_id =
-                Some(op_id);
+            ads_proto.borrow_mut().prototype_id = Some(op_id);
         }
 
         // Symbol.toStringTag
@@ -771,8 +769,7 @@ impl Interpreter {
                     {
                         let default_proto_id = interp.realm().async_disposable_stack_prototype;
                         if let Some(pid) = default_proto_id {
-                            new_obj.borrow_mut().prototype_id =
-                                Some(interp.get_object_expect(pid).borrow().id.unwrap());
+                            new_obj.borrow_mut().prototype_id = Some(pid);
                         }
                     }
                     {

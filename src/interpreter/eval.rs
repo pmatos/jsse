@@ -2785,7 +2785,7 @@ impl Interpreter {
                                 }
                                 break;
                             }
-                            proto_opt = self.get_object_expect(proto_id).borrow().prototype_id;
+                            proto_opt = self.get_object_cell_expect(proto_id).borrow().prototype_id;
                         }
                     }
                     obj.borrow_mut().set_property_value(&key, value);
@@ -3303,8 +3303,7 @@ impl Interpreter {
                             let proto_id = proto_rc;
                             // TypedArray [[Set]] §10.4.5.5: canonical numeric index in TA prototype
                             {
-                                let proto_borrow = self.get_object_expect(proto_rc);
-                                let proto_borrow = proto_borrow.borrow();
+                                let proto_borrow = self.get_object_cell_expect(proto_rc).borrow();
                                 if let Some(ref ta) = proto_borrow.typed_array_info
                                     && let Some(index) = canonical_numeric_index_string(&key)
                                     && !is_valid_integer_index(ta, index)
@@ -3371,7 +3370,7 @@ impl Interpreter {
                                 }
                                 break;
                             }
-                            proto_opt = self.get_object_expect(proto_rc).borrow().prototype_id;
+                            proto_opt = self.get_object_cell_expect(proto_rc).borrow().prototype_id;
                         }
                     }
                     // ArraySetLength §10.4.2.4 via [[Set]]
@@ -3471,7 +3470,7 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 }
                             }
-                            proto_opt = self.get_object_expect(proto_rc).borrow().prototype_id;
+                            proto_opt = self.get_object_cell_expect(proto_rc).borrow().prototype_id;
                         }
                     }
                 }
@@ -4144,8 +4143,7 @@ impl Interpreter {
                     let proto_id = proto_rc;
                     // TypedArray [[Set]] §10.4.5.5: canonical numeric index in TA prototype
                     {
-                        let proto_borrow = self.get_object_expect(proto_rc);
-                        let proto_borrow = proto_borrow.borrow();
+                        let proto_borrow = self.get_object_cell_expect(proto_rc).borrow();
                         if let Some(ref ta) = proto_borrow.typed_array_info
                             && let Some(index) = canonical_numeric_index_string(key)
                             && !is_valid_integer_index(ta, index)
@@ -4204,7 +4202,7 @@ impl Interpreter {
                         }
                         break;
                     }
-                    proto_opt = self.get_object_expect(proto_rc).borrow().prototype_id;
+                    proto_opt = self.get_object_cell_expect(proto_rc).borrow().prototype_id;
                 }
             }
             let success = obj.borrow_mut().set_property_value(key, val);

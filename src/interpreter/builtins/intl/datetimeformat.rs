@@ -4713,8 +4713,7 @@ impl Interpreter {
     pub(crate) fn setup_intl_date_time_format(&mut self, intl_obj_id: u64) {
         let proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype_id =
-                Some(op_id);
+            proto.borrow_mut().prototype_id = Some(op_id);
         }
         proto.borrow_mut().class_name = "Intl.DateTimeFormat".to_string();
 
@@ -4918,8 +4917,7 @@ impl Interpreter {
                     .map(|(ptype, value)| {
                         let part_obj = interp.create_object();
                         if let Some(op_id) = interp.realm().object_prototype {
-                            part_obj.borrow_mut().prototype_id =
-                                Some(op_id);
+                            part_obj.borrow_mut().prototype_id = Some(op_id);
                         }
                         part_obj.borrow_mut().insert_property(
                             "type".to_string(),
@@ -5212,8 +5210,7 @@ impl Interpreter {
 
                 let result = interp.create_object();
                 if let Some(op_id) = interp.realm().object_prototype {
-                    result.borrow_mut().prototype_id =
-                        Some(op_id);
+                    result.borrow_mut().prototype_id = Some(op_id);
                 }
 
                 // Properties in spec order

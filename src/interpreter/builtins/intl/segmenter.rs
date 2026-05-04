@@ -150,8 +150,7 @@ impl Interpreter {
     pub(crate) fn setup_intl_segmenter(&mut self, intl_obj_id: u64) {
         let proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype_id =
-                Some(op_id);
+            proto.borrow_mut().prototype_id = Some(op_id);
         }
         proto.borrow_mut().class_name = "Intl.Segmenter".to_string();
 
@@ -189,8 +188,7 @@ impl Interpreter {
 
                 let segments_obj = interp.create_object();
                 if let Some(op_id) = interp.realm().object_prototype {
-                    segments_obj.borrow_mut().prototype_id =
-                        Some(op_id);
+                    segments_obj.borrow_mut().prototype_id = Some(op_id);
                 }
                 segments_obj.borrow_mut().class_name = "Segmenter Segments".to_string();
 
@@ -375,8 +373,7 @@ impl Interpreter {
 
                         let iter_obj = interp.create_object();
                         if let Some(ip_id) = interp.realm().iterator_prototype {
-                            iter_obj.borrow_mut().prototype_id =
-                                Some(interp.get_object_expect(ip_id).borrow().id.unwrap());
+                            iter_obj.borrow_mut().prototype_id = Some(ip_id);
                         }
                         iter_obj.borrow_mut().class_name = "Segmenter String Iterator".to_string();
 
@@ -490,8 +487,7 @@ impl Interpreter {
 
                 let result = interp.create_object();
                 if let Some(op_id) = interp.realm().object_prototype {
-                    result.borrow_mut().prototype_id =
-                        Some(op_id);
+                    result.borrow_mut().prototype_id = Some(op_id);
                 }
 
                 let props = vec![

@@ -1559,8 +1559,7 @@ pub(super) fn create_plain_date_result(
     let obj = interp.create_object();
     obj.borrow_mut().class_name = "Temporal.PlainDate".to_string();
     if let Some(proto_id) = interp.realm().temporal_plain_date_prototype {
-        obj.borrow_mut().prototype_id =
-            Some(proto_id);
+        obj.borrow_mut().prototype_id = Some(proto_id);
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::PlainDate {
         iso_year: y,

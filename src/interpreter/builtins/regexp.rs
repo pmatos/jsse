@@ -8424,8 +8424,7 @@ impl Interpreter {
                 let iter_obj = interp.create_object();
                 iter_obj.borrow_mut().class_name = "RegExp String Iterator".to_string();
                 if let Some(rsi_proto_id) = interp.realm().regexp_string_iterator_prototype {
-                    iter_obj.borrow_mut().prototype_id =
-                        Some(interp.get_object_expect(rsi_proto_id).borrow().id.unwrap());
+                    iter_obj.borrow_mut().prototype_id = Some(rsi_proto_id);
                 }
 
                 // Store matcher ID for spec-compliant RegExpExec
@@ -8462,8 +8461,7 @@ impl Interpreter {
         let rsi_proto = self.create_object();
         rsi_proto.borrow_mut().class_name = "RegExp String Iterator".to_string();
         if let Some(ip_id) = self.realm().iterator_prototype {
-            rsi_proto.borrow_mut().prototype_id =
-                Some(self.get_object_expect(ip_id).borrow().id.unwrap());
+            rsi_proto.borrow_mut().prototype_id = Some(ip_id);
         }
 
         // %RegExpStringIteratorPrototype%.next
