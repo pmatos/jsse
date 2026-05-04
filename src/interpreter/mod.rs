@@ -1237,6 +1237,21 @@ impl Interpreter {
         self.objects.get_expect(id)
     }
 
+    /// Borrow the object's `RefCell` directly without bumping the slot's
+    /// `Rc`. Lifetime tied to `&self`; drop the borrow before any
+    /// `&mut self` call. Use this at new sites to avoid the per-call
+    /// `Rc::clone`; existing `get_object{,_expect}` callers can migrate
+    /// gradually.
+    #[allow(dead_code)] // migration target — see PR 2b.2 step 4 commit message
+    pub(crate) fn get_object_cell(&self, id: u64) -> Option<&RefCell<JsObjectData>> {
+        self.objects.get_cell(id)
+    }
+
+    #[allow(dead_code)] // migration target — see PR 2b.2 step 4 commit message
+    pub(crate) fn get_object_cell_expect(&self, id: u64) -> &RefCell<JsObjectData> {
+        self.objects.get_cell_expect(id)
+    }
+
     /// Iterative prototype-chain walk of `get_property`. Returns
     /// `JsValue::Undefined` when the key is not found anywhere in the chain.
     /// Each frame is pinned by the Rc returned from `get_object_expect` so

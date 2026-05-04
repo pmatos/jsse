@@ -61,6 +61,22 @@ impl ObjectArena {
         self.get(id).expect("dead object id")
     }
 
+    /// Return a borrow of the slot's `RefCell` if live, else `None`. Lifetime
+    /// is tied to `&self`; callers must drop the borrow before any
+    /// `&mut self` call. Forward-compatible with the eventual PR 2b.2.final
+    /// API flip that drops the slot's `Rc` wrapper entirely.
+    #[allow(dead_code)] // migration target — see PR 2b.2 step 4 commit message
+    pub(crate) fn get_cell(&self, id: u64) -> Option<&RefCell<JsObjectData>> {
+        self.slot_at(id)
+            .and_then(|s| s.as_ref().map(|rc| rc.as_ref()))
+    }
+
+    /// Like `get_cell`, but panics for dead ids.
+    #[allow(dead_code)] // migration target — see PR 2b.2 step 4 commit message
+    pub(crate) fn get_cell_expect(&self, id: u64) -> &RefCell<JsObjectData> {
+        self.get_cell(id).expect("dead object id")
+    }
+
     /// Drop the slot at `id`. Caller is responsible for any external
     /// bookkeeping (e.g. ArrayBuffer external bytes) before calling.
     pub(crate) fn free(&mut self, id: u64) {
