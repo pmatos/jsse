@@ -331,7 +331,6 @@ impl Interpreter {
 
     pub(crate) fn create_dollar_262(&mut self, realm_id: usize) -> JsValue {
         let dollar_262_id = self.create_object_id();
-        let dollar_262_id = dollar_262_id;
 
         // $262.detachArrayBuffer
         let detach_fn = self.create_function(JsFunction::native(
@@ -450,7 +449,6 @@ impl Interpreter {
 
         // $262.agent
         let agent_obj_id = self.create_object_id();
-        let agent_obj_id = agent_obj_id;
 
         // $262.agent.start(script)
         let _reports_clone = self.agent_reports.clone();
@@ -1148,7 +1146,6 @@ impl Interpreter {
                     .borrow_mut()
                     .prototype_id = self.realm().generator_prototype;
             }
-            let proto_id = proto_id;
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             obj_data.insert_property(
                 "prototype".to_string(),
@@ -4901,10 +4898,8 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
     use crate::types::JsObject;
 
     let dollar_262_id = interp.create_object_id();
-    let dollar_262_id = dollar_262_id;
 
     let agent_obj_id = interp.create_object_id();
-    let agent_obj_id = agent_obj_id;
 
     // $262.agent.receiveBroadcast(callback)
     let receive_fn = interp.create_function(JsFunction::native(

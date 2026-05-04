@@ -1617,7 +1617,6 @@ impl Interpreter {
             .insert_builtin("setYear".to_string(), set_year_fn);
 
         // Annex B: toGMTString() -- alias for toUTCString()
-        let proto_id = proto_id;
         let to_gmt = self.get_property_on_id(proto_id, "toUTCString");
         self.get_object_cell_expect(proto_id)
             .borrow_mut()

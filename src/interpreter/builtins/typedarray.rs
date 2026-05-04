@@ -939,7 +939,6 @@ impl Interpreter {
         let buf_rc = Rc::new(RefCell::new(BufferData::Owned(data)));
         let detached = Rc::new(Cell::new(false));
         let obj_id = self.create_object_id();
-        let obj_id = obj_id;
         let ab_proto = self.realm().arraybuffer_prototype;
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
@@ -4321,7 +4320,6 @@ impl Interpreter {
                 );
 
             // Store prototype for this kind
-            let type_proto_id = type_proto_id;
             match kind {
                 TypedArrayKind::Int8 => self.realm_mut().int8array_prototype = Some(type_proto_id),
                 TypedArrayKind::Uint8 => {
@@ -4717,7 +4715,6 @@ impl Interpreter {
     ) -> u64 {
         let proto = self.get_typed_array_prototype(info.kind);
         let obj_id = self.create_object_id();
-        let obj_id = obj_id;
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = info.kind.name().to_string();
@@ -4737,7 +4734,6 @@ impl Interpreter {
         proto_id: u64,
     ) -> u64 {
         let obj_id = self.create_object_id();
-        let obj_id = obj_id;
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = info.kind.name().to_string();

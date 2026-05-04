@@ -602,7 +602,6 @@ impl Interpreter {
         }
         // @@toStringTag on %IteratorPrototype% — accessor property per spec
         {
-            let iter_proto_id = iter_proto_id;
             let tst_getter = self.create_function(JsFunction::native(
                 "get [Symbol.toStringTag]".to_string(),
                 0,
@@ -766,7 +765,6 @@ impl Interpreter {
         // Set %IteratorPrototype%.constructor as accessor property per spec
         // Getter returns Iterator, setter implements SetterThatIgnoresPrototypeProperties
         {
-            let iter_proto_id = iter_proto_id;
             let ctor_val = iterator_ctor.clone();
             let getter = self.create_function(JsFunction::native(
                 "get constructor".to_string(),
@@ -850,7 +848,6 @@ impl Interpreter {
         let _ = self.env_set(&env, "Iterator", iterator_ctor.clone());
 
         // Setup consuming and lazy helper methods on %IteratorPrototype%
-        let iter_proto_id = iter_proto_id;
         self.setup_iterator_helper_methods(iter_proto_id);
 
         // Setup static methods on Iterator constructor
@@ -2711,8 +2708,6 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("return".to_string(), wrap_return_fn);
 
-        let wrap_valid_proto_id = wrap_valid_proto_id;
-
         let wvp_for_from: Option<u64> = Some(wrap_valid_proto_id);
         let iterator_ctor_for_from = iterator_ctor.clone();
         let from_fn = self.create_function(JsFunction::native(
@@ -2756,7 +2751,6 @@ impl Interpreter {
                     .borrow_mut()
                     .gc_native_roots = Some(vec![iter_val, next_method]);
 
-                let wrapper_id = wrapper_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: wrapper_id }))
             },
         ));
@@ -3802,7 +3796,6 @@ impl Interpreter {
         }
 
         // GeneratorFunction.prototype.prototype_id = Generator.prototype_id
-        let gen_proto_id = gen_proto_id;
         self.get_object_cell_expect(gf_proto_id)
             .borrow_mut()
             .insert_property(
@@ -3829,7 +3822,6 @@ impl Interpreter {
             );
 
         // Set constructor on Generator.prototype pointing back to GeneratorFunction.prototype_id
-        let gf_proto_id = gf_proto_id;
         self.get_object_cell_expect(gen_proto_id)
             .borrow_mut()
             .insert_property(
@@ -4098,7 +4090,6 @@ impl Interpreter {
             .borrow_mut()
             .class_name = "AsyncGeneratorFunction".to_string();
         // prototype property points to AsyncGenerator.prototype_id
-        let gen_proto_id = gen_proto_id;
         self.get_object_cell_expect(agf_proto_id)
             .borrow_mut()
             .insert_property(
@@ -4123,7 +4114,6 @@ impl Interpreter {
                 ),
             );
         // Set constructor on AsyncGenerator.prototype pointing back to AsyncGeneratorFunction.prototype_id
-        let agf_proto_id = agf_proto_id;
         self.get_object_cell_expect(gen_proto_id)
             .borrow_mut()
             .insert_property(

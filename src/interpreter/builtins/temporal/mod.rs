@@ -1637,7 +1637,6 @@ impl Interpreter {
                 .insert(key, desc);
         }
 
-        let temporal_obj_id = temporal_obj_id;
         self.setup_temporal_duration(temporal_obj_id);
         self.setup_temporal_instant(temporal_obj_id);
         self.setup_temporal_plain_time(temporal_obj_id);

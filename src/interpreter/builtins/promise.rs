@@ -458,7 +458,6 @@ impl Interpreter {
         if let JsValue::Object(ref o) = ctor
             && let Some(func_obj) = self.get_object(o.id)
         {
-            let proto_id = proto_id;
             func_obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(

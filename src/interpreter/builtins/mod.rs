@@ -407,7 +407,6 @@ impl Interpreter {
         }
 
         let console_id = self.create_object_id();
-        let console_id = console_id;
         {
             let log_fn = self.create_function(JsFunction::native(
                 "log".to_string(),
@@ -724,7 +723,6 @@ impl Interpreter {
                 );
 
             // Store native error prototype on realm
-            let native_proto_id = native_proto_id;
             match name {
                 "SyntaxError" => self.realm_mut().syntax_error_prototype = Some(native_proto_id),
                 "TypeError" => self.realm_mut().type_error_prototype = Some(native_proto_id),
@@ -3579,7 +3577,6 @@ impl Interpreter {
                     match result {
                         Completion::Normal(parsed) => {
                             let wrapper_id = interp.create_object_id();
-                            let wrapper_id = wrapper_id;
                             interp
                                 .get_object_cell_expect(wrapper_id)
                                 .borrow_mut()
@@ -6611,7 +6608,6 @@ impl Interpreter {
                 |interp, _this, args| {
                     let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let obj_id = interp.create_object_id();
-                    let obj_id = obj_id;
                     let obj_val = JsValue::Object(crate::types::JsObject { id: obj_id });
                     let iterator = match interp.get_iterator(&iterable) {
                         Ok(v) => v,
@@ -8593,7 +8589,6 @@ impl Interpreter {
                         .get_object_cell_expect(result_id)
                         .borrow_mut()
                         .insert_builtin("revoke".to_string(), revoke_fn);
-                    let result_id = result_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
                 },
             ));
@@ -9113,7 +9108,6 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("importValue".to_string(), import_value_fn);
 
-        let proto_id = proto_id;
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
         // ShadowRealm constructor

@@ -6897,7 +6897,6 @@ fn regexp_exec_raw(
                         .borrow_mut()
                         .insert_value(name.clone(), val);
                 }
-                let idx_groups_id = idx_groups_id;
                 if let JsValue::Object(ref io) = indices_arr
                     && let Some(iobj) = interp.get_object(io.id)
                 {
@@ -8853,7 +8852,6 @@ impl Interpreter {
             ("sticky", 'y'),
             ("hasIndices", 'd'),
         ];
-        let regexp_proto_id = regexp_proto_id;
         let my_realm_id = self.current_realm_id;
         for &(prop_name, flag_char) in flag_props {
             let name = prop_name.to_string();

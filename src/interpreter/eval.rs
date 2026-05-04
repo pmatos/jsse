@@ -13711,7 +13711,6 @@ impl Interpreter {
             } else {
                 Vec::new()
             };
-            let new_obj_id = new_obj_id;
             let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
             // Use constructor's closure (class_env) so the class name binding
             // is accessible in field initializers (spec §15.7.14 step 28.e.i).

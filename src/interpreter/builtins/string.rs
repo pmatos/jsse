@@ -1666,7 +1666,6 @@ impl Interpreter {
         }
 
         // Aliases
-        let proto_id = proto_id;
         let trim_start_fn = self.get_property_on_id(proto_id, "trimStart");
         self.get_object_cell_expect(proto_id)
             .borrow_mut()

@@ -2566,7 +2566,6 @@ impl Interpreter {
                         .prototype_id = Some(proto_obj.id);
                 }
             }
-            let new_obj_id = new_obj_id;
             let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
             let prev_new_target = self.new_target.take();
             self.new_target = Some(ctor_val.clone());

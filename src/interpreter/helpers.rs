@@ -846,7 +846,6 @@ fn json_parse_value_inner(
         }
         let pairs = json_split_items(inner);
         let obj_id = interp.create_object_id();
-        let obj_id = obj_id;
         for pair in &pairs {
             let pair = pair.trim();
             if pair.is_empty() {

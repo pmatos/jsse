@@ -596,7 +596,6 @@ impl Interpreter {
             );
 
         // constructor property
-        let proto_id = proto_id;
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
         // Map constructor
@@ -621,7 +620,6 @@ impl Interpreter {
                 interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
                 interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "Map".to_string();
                 interp.get_object_cell_expect(obj_id).borrow_mut().map_data = Some(Vec::new());
-                let obj_id = obj_id;
                 let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1883,7 +1881,6 @@ impl Interpreter {
                 ),
             );
 
-        let proto_id = proto_id;
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
         // Set constructor
@@ -1908,7 +1905,6 @@ impl Interpreter {
                 interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
                 interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "Set".to_string();
                 interp.get_object_cell_expect(obj_id).borrow_mut().set_data = Some(Vec::new());
-                let obj_id = obj_id;
                 let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -2297,7 +2293,6 @@ impl Interpreter {
                 ),
             );
 
-        let proto_id = proto_id;
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
         // WeakMap constructor
@@ -2322,7 +2317,6 @@ impl Interpreter {
                 interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
                 interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "WeakMap".to_string();
                 interp.get_object_cell_expect(obj_id).borrow_mut().map_data = Some(Vec::new());
-                let obj_id = obj_id;
                 let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -2583,7 +2577,6 @@ impl Interpreter {
                 ),
             );
 
-        let proto_id = proto_id;
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
         // WeakSet constructor
@@ -2608,7 +2601,6 @@ impl Interpreter {
                 interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
                 interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "WeakSet".to_string();
                 interp.get_object_cell_expect(obj_id).borrow_mut().set_data = Some(Vec::new());
-                let obj_id = obj_id;
                 let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
