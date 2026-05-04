@@ -99,7 +99,6 @@ fn load_const_and_return_yields_number_completion() {
         constants: vec![Constant::Number(42.0)],
         names: vec![],
         max_stack: 1,
-        num_params: 0,
     };
     match run(chunk) {
         Completion::Return(JsValue::Number(n)) => assert_eq!(n, 42.0),
@@ -114,7 +113,6 @@ fn return_undefined_completes_with_undefined() {
         constants: vec![],
         names: vec![],
         max_stack: 0,
-        num_params: 0,
     };
     match run(chunk) {
         Completion::Return(JsValue::Undefined) => {}
@@ -139,7 +137,6 @@ fn add_two_numbers_via_eval_binary() {
         constants: vec![Constant::Number(2.0), Constant::Number(3.0)],
         names: vec![],
         max_stack: 2,
-        num_params: 0,
     };
     match run(chunk) {
         Completion::Return(JsValue::Number(n)) => assert_eq!(n, 5.0),
@@ -445,7 +442,6 @@ fn add_string_and_number_falls_through_to_string_concat() {
         constants: vec![Constant::String("x".into()), Constant::Number(1.0)],
         names: vec![],
         max_stack: 2,
-        num_params: 0,
     };
     match run(chunk) {
         Completion::Return(JsValue::String(s)) => assert_eq!(s.to_string(), "x1"),
@@ -460,7 +456,6 @@ fn load_undefined_then_return_completes_with_undefined() {
         constants: vec![],
         names: vec![],
         max_stack: 1,
-        num_params: 0,
     };
     match run(chunk) {
         Completion::Return(JsValue::Undefined) => {}

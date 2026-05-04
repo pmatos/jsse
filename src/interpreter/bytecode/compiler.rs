@@ -4,6 +4,11 @@ use crate::ast::{AssignOp, BinaryOp, Expression, Literal, LogicalOp, Statement, 
 
 #[derive(Debug)]
 pub(crate) enum CompileError {
+    /// The string carries a construction-site label for greppable
+    /// documentation and to surface in `{:?}` traces when debugging the
+    /// eligibility membrane. Callers only ever match `Err(_)`, hence the
+    /// allow.
+    #[allow(dead_code)]
     Unsupported(&'static str),
 }
 
@@ -284,7 +289,6 @@ impl Compiler {
             constants: self.constants,
             names: self.names,
             max_stack: self.max_stack,
-            num_params: 0,
         }
     }
 }
