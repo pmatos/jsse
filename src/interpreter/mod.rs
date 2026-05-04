@@ -1242,25 +1242,24 @@ impl Interpreter {
     /// `&mut self` call. Use this at new sites to avoid the per-call
     /// `Rc::clone`; existing `get_object{,_expect}` callers can migrate
     /// gradually.
-    #[allow(dead_code)] // migration target — see PR 2b.2 step 4 commit message
+    #[allow(dead_code)] // get_object_cell isn't yet used; get_object_cell_expect is
     pub(crate) fn get_object_cell(&self, id: u64) -> Option<&RefCell<JsObjectData>> {
         self.objects.get_cell(id)
     }
 
-    #[allow(dead_code)] // migration target — see PR 2b.2 step 4 commit message
     pub(crate) fn get_object_cell_expect(&self, id: u64) -> &RefCell<JsObjectData> {
         self.objects.get_cell_expect(id)
     }
 
     /// Iterative prototype-chain walk of `get_property`. Returns
     /// `JsValue::Undefined` when the key is not found anywhere in the chain.
-    /// Each frame is pinned by the Rc returned from `get_object_expect` so
-    /// intermediate safepoints cannot sweep the next prototype before we reach it.
+    /// Each frame borrows the slot's `RefCell` directly via `get_object_cell_expect`,
+    /// avoiding an `Rc::clone` per prototype hop. The walk holds no state across
+    /// `&mut self` calls, so the `&self`-tied lifetime is safe.
     pub(crate) fn get_property_on_id(&self, start_id: u64, key: &str) -> JsValue {
         let mut current = Some(start_id);
         while let Some(id) = current {
-            let obj_rc = self.get_object_expect(id);
-            let b = obj_rc.borrow();
+            let b = self.get_object_cell_expect(id).borrow();
             if let Some(v) = b.own_property_lookup(key) {
                 return v;
             }
@@ -1279,8 +1278,7 @@ impl Interpreter {
     ) -> Option<PropertyDescriptor> {
         let mut current = Some(start_id);
         while let Some(id) = current {
-            let obj_rc = self.get_object_expect(id);
-            let b = obj_rc.borrow();
+            let b = self.get_object_cell_expect(id).borrow();
             if let Some(d) = b.own_property_descriptor_lookup(key) {
                 return Some(d);
             }
@@ -1296,8 +1294,7 @@ impl Interpreter {
     pub(crate) fn has_property_on_id(&self, start_id: u64, key: &str) -> bool {
         let mut current = Some(start_id);
         while let Some(id) = current {
-            let obj_rc = self.get_object_expect(id);
-            let b = obj_rc.borrow();
+            let b = self.get_object_cell_expect(id).borrow();
             if let Some(result) = b.own_has_property(key) {
                 return result;
             }
@@ -1317,8 +1314,7 @@ impl Interpreter {
         let mut result: Vec<String> = Vec::new();
         let mut current = Some(start_id);
         while let Some(id) = current {
-            let obj_rc = self.get_object_expect(id);
-            let b = obj_rc.borrow();
+            let b = self.get_object_cell_expect(id).borrow();
             let (keys, shadow) = b.own_enumerable_keys_with_shadow();
             for k in keys {
                 if global_seen.insert(k.clone()) {

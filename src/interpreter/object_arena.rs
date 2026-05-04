@@ -65,14 +65,13 @@ impl ObjectArena {
     /// is tied to `&self`; callers must drop the borrow before any
     /// `&mut self` call. Forward-compatible with the eventual PR 2b.2.final
     /// API flip that drops the slot's `Rc` wrapper entirely.
-    #[allow(dead_code)] // migration target — see PR 2b.2 step 4 commit message
+    #[allow(dead_code)] // get_cell isn't yet used; get_cell_expect is
     pub(crate) fn get_cell(&self, id: u64) -> Option<&RefCell<JsObjectData>> {
         self.slot_at(id)
             .and_then(|s| s.as_ref().map(|rc| rc.as_ref()))
     }
 
     /// Like `get_cell`, but panics for dead ids.
-    #[allow(dead_code)] // migration target — see PR 2b.2 step 4 commit message
     pub(crate) fn get_cell_expect(&self, id: u64) -> &RefCell<JsObjectData> {
         self.get_cell(id).expect("dead object id")
     }
