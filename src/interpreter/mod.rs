@@ -2719,8 +2719,7 @@ impl Interpreter {
         };
 
         let proto_id = self.realm().uint8array_prototype.unwrap();
-        let ta_obj = self.create_typed_array_object_with_proto(ta_info, buf_val, proto_id);
-        let ta_id = ta_obj.borrow().id.unwrap();
+        let ta_id = self.create_typed_array_object_with_proto(ta_info, buf_val, proto_id);
         JsValue::Object(crate::types::JsObject { id: ta_id })
     }
 

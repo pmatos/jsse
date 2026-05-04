@@ -493,8 +493,7 @@ impl Interpreter {
                             Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
                     interp.gc_untrack_external_bytes(old_data_len);
-                    let new_ab = interp.create_arraybuffer_resizable(new_data, max_byte_length);
-                    let id = new_ab.borrow().id.unwrap();
+                    let id = interp.create_arraybuffer_resizable(new_data, max_byte_length);
                     return Completion::Normal(JsValue::Object(JsObject { id }));
                 }
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
@@ -577,8 +576,7 @@ impl Interpreter {
                             Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
                     interp.gc_untrack_external_bytes(old_data_len);
-                    let new_ab = interp.create_arraybuffer(new_data);
-                    let id = new_ab.borrow().id.unwrap();
+                    let id = interp.create_arraybuffer(new_data);
                     return Completion::Normal(JsValue::Object(JsObject { id }));
                 }
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
@@ -662,9 +660,11 @@ impl Interpreter {
                     }
                     interp.gc_untrack_external_bytes(old_data_len);
                     // Create immutable ArrayBuffer
-                    let new_ab = interp.create_arraybuffer(new_data);
-                    new_ab.borrow_mut().arraybuffer_is_immutable = true;
-                    let id = new_ab.borrow().id.unwrap();
+                    let id = interp.create_arraybuffer(new_data);
+                    interp
+                        .get_object_expect(id)
+                        .borrow_mut()
+                        .arraybuffer_is_immutable = true;
                     return Completion::Normal(JsValue::Object(JsObject { id }));
                 }
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
@@ -912,7 +912,7 @@ impl Interpreter {
         let _ = self.env_set(&env, "ArrayBuffer", ctor);
     }
 
-    pub(crate) fn create_arraybuffer(&mut self, data: Vec<u8>) -> Rc<RefCell<JsObjectData>> {
+    pub(crate) fn create_arraybuffer(&mut self, data: Vec<u8>) -> u64 {
         self.create_arraybuffer_resizable(data, None)
     }
 
@@ -920,11 +920,12 @@ impl Interpreter {
         &mut self,
         data: Vec<u8>,
         max_byte_length: Option<usize>,
-    ) -> Rc<RefCell<JsObjectData>> {
+    ) -> u64 {
         let data_len = data.len();
         let buf_rc = Rc::new(RefCell::new(BufferData::Owned(data)));
         let detached = Rc::new(Cell::new(false));
         let obj = self.create_object();
+        let obj_id = obj.borrow().id.unwrap();
         let ab_proto = self.realm().arraybuffer_prototype;
         {
             let mut o = obj.borrow_mut();
@@ -935,7 +936,7 @@ impl Interpreter {
             o.arraybuffer_max_byte_length = max_byte_length;
         }
         self.gc_track_external_bytes(data_len);
-        obj
+        obj_id
     }
 
     pub(crate) fn detach_arraybuffer(&mut self, ab_val: &JsValue) -> Completion {
@@ -2689,8 +2690,7 @@ impl Interpreter {
                     interp.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj.borrow().id.unwrap();
                     let buf_val = JsValue::Object(JsObject { id: ab_id });
-                    let result = interp.create_typed_array_object(new_ta, buf_val);
-                    let id = result.borrow().id.unwrap();
+                    let id = interp.create_typed_array_object(new_ta, buf_val);
                     return Completion::Normal(JsValue::Object(JsObject { id }));
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -2832,8 +2832,7 @@ impl Interpreter {
                     interp.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj.borrow().id.unwrap();
                     let buf_val = JsValue::Object(JsObject { id: ab_id });
-                    let result = interp.create_typed_array_object(new_ta, buf_val);
-                    let id = result.borrow().id.unwrap();
+                    let id = interp.create_typed_array_object(new_ta, buf_val);
                     return Completion::Normal(JsValue::Object(JsObject { id }));
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -3053,8 +3052,7 @@ impl Interpreter {
                     interp.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj.borrow().id.unwrap();
                     let buf_val = JsValue::Object(JsObject { id: ab_id });
-                    let result = interp.create_typed_array_object(new_ta, buf_val);
-                    let id = result.borrow().id.unwrap();
+                    let id = interp.create_typed_array_object(new_ta, buf_val);
                     return Completion::Normal(JsValue::Object(JsObject { id }));
                 }
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -4101,8 +4099,7 @@ impl Interpreter {
                                         is_length_tracking,
                                     };
                                     let buf_val = first.clone();
-                                    let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, proto);
-                                    let id = result.borrow().id.unwrap();
+                                    let id = interp.create_typed_array_object_with_proto(ta_info, buf_val, proto);
                                     return Completion::Normal(JsValue::Object(JsObject { id }));
                                 }
                                 // Case: new XArray(typedArray)
@@ -4159,8 +4156,7 @@ impl Interpreter {
                                     };
                                     let ab_id = ab_obj.borrow().id.unwrap();
                                     let buf_val = JsValue::Object(JsObject { id: ab_id });
-                                    let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, proto);
-                                    let id = result.borrow().id.unwrap();
+                                    let id = interp.create_typed_array_object_with_proto(new_ta, buf_val, proto);
                                     return Completion::Normal(JsValue::Object(JsObject { id }));
                                 }
                                 // Case: new XArray(arrayLike/iterable)
@@ -4207,8 +4203,7 @@ impl Interpreter {
                                 };
                                 let ab_id = ab_obj.borrow().id.unwrap();
                                 let buf_val = JsValue::Object(JsObject { id: ab_id });
-                                let result = interp.create_typed_array_object_with_proto(new_ta, buf_val, proto);
-                                let id = result.borrow().id.unwrap();
+                                let id = interp.create_typed_array_object_with_proto(new_ta, buf_val, proto);
                                 return Completion::Normal(JsValue::Object(JsObject { id }));
                             }
                             Completion::Throw(interp.create_type_error("invalid argument"))
@@ -4658,8 +4653,7 @@ impl Interpreter {
         self.gc_track_external_bytes(buf_byte_len);
         let ab_id = ab_obj.borrow().id.unwrap();
         let buf_val = JsValue::Object(JsObject { id: ab_id });
-        let result = self.create_typed_array_object_with_proto(ta_info, buf_val, type_proto_id);
-        let id = result.borrow().id.unwrap();
+        let id = self.create_typed_array_object_with_proto(ta_info, buf_val, type_proto_id);
         Completion::Normal(JsValue::Object(JsObject { id }))
     }
 
@@ -4667,9 +4661,10 @@ impl Interpreter {
         &mut self,
         info: TypedArrayInfo,
         buf_val: JsValue,
-    ) -> Rc<RefCell<JsObjectData>> {
+    ) -> u64 {
         let proto = self.get_typed_array_prototype(info.kind);
         let obj = self.create_object();
+        let obj_id = obj.borrow().id.unwrap();
         {
             let mut o = obj.borrow_mut();
             o.class_name = info.kind.name().to_string();
@@ -4679,7 +4674,7 @@ impl Interpreter {
             }
             o.typed_array_info = Some(info);
         }
-        obj
+        obj_id
     }
 
     pub(crate) fn create_typed_array_object_with_proto(
@@ -4687,8 +4682,9 @@ impl Interpreter {
         info: TypedArrayInfo,
         buf_val: JsValue,
         proto_id: u64,
-    ) -> Rc<RefCell<JsObjectData>> {
+    ) -> u64 {
         let obj = self.create_object();
+        let obj_id = obj.borrow().id.unwrap();
         {
             let mut o = obj.borrow_mut();
             o.class_name = info.kind.name().to_string();
@@ -4698,7 +4694,7 @@ impl Interpreter {
             }
             o.typed_array_info = Some(info);
         }
-        obj
+        obj_id
     }
 
     fn get_typed_array_prototype(&self, kind: TypedArrayKind) -> Option<u64> {
@@ -6586,8 +6582,7 @@ fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Compl
     let buf_val = JsValue::Object(JsObject { id: ab_id });
 
     let proto_id = interp.realm().uint8array_prototype.unwrap();
-    let result = interp.create_typed_array_object_with_proto(ta_info, buf_val, proto_id);
-    let id = result.borrow().id.unwrap();
+    let id = interp.create_typed_array_object_with_proto(ta_info, buf_val, proto_id);
     Completion::Normal(JsValue::Object(JsObject { id }))
 }
 
