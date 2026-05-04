@@ -251,7 +251,9 @@ fn format_precision(n: f64, precision: usize) -> String {
 impl Interpreter {
     pub(crate) fn setup_symbol_prototype(&mut self) {
         let proto_id = self.create_object_id();
-        self.get_object_cell_expect(proto_id).borrow_mut().class_name = "Symbol".to_string();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Symbol".to_string();
 
         fn this_symbol_value(
             interp: &Interpreter,
@@ -314,7 +316,9 @@ impl Interpreter {
         for (name, arity, func) in methods {
             let fn_val =
                 self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
-            self.get_object_cell_expect(proto_id).borrow_mut().insert_builtin(name.to_string(), fn_val);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
         }
 
         // description getter
@@ -334,17 +338,19 @@ impl Interpreter {
             }),
             false,
         ));
-        self.get_object_cell_expect(proto_id).borrow_mut().insert_property(
-            "description".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(desc_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "description".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(desc_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // [Symbol.toPrimitive]
         let to_prim_fn = self.create_function(JsFunction::Native(
@@ -373,10 +379,12 @@ impl Interpreter {
                         .map(|d| d.to_rust_string())
                         .unwrap_or_default()
                 );
-                self.get_object_cell_expect(proto_id).borrow_mut().insert_property(
-                    key,
-                    PropertyDescriptor::data(to_prim_fn, false, false, true),
-                );
+                self.get_object_cell_expect(proto_id)
+                    .borrow_mut()
+                    .insert_property(
+                        key,
+                        PropertyDescriptor::data(to_prim_fn, false, false, true),
+                    );
             }
         }
 
@@ -393,15 +401,17 @@ impl Interpreter {
                         .map(|d| d.to_rust_string())
                         .unwrap_or_default()
                 );
-                self.get_object_cell_expect(proto_id).borrow_mut().insert_property(
-                    key,
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str("Symbol")),
-                        false,
-                        false,
-                        true,
-                    ),
-                );
+                self.get_object_cell_expect(proto_id)
+                    .borrow_mut()
+                    .insert_property(
+                        key,
+                        PropertyDescriptor::data(
+                            JsValue::String(JsString::from_str("Symbol")),
+                            false,
+                            false,
+                            true,
+                        ),
+                    );
             }
         }
 
@@ -410,16 +420,15 @@ impl Interpreter {
             && let JsValue::Object(o) = &sym_val
             && let Some(sym_obj) = self.get_object(o.id)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject {
-                id: proto_id,
-            });
+            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             sym_obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
             );
             // Set constructor on prototype
             let ctor_val = sym_val.clone();
-            self.get_object_cell_expect(proto_id).borrow_mut()
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
                 .insert_builtin("constructor".to_string(), ctor_val);
         }
 
@@ -428,8 +437,12 @@ impl Interpreter {
 
     pub(crate) fn setup_number_prototype(&mut self) {
         let proto_id = self.create_object_id();
-        self.get_object_cell_expect(proto_id).borrow_mut().class_name = "Number".to_string();
-        self.get_object_cell_expect(proto_id).borrow_mut().primitive_value = Some(JsValue::Number(0.0));
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Number".to_string();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .primitive_value = Some(JsValue::Number(0.0));
 
         fn this_number_value(interp: &Interpreter, this: &JsValue) -> Option<f64> {
             match this {
@@ -664,7 +677,9 @@ impl Interpreter {
         for (name, arity, func) in methods {
             let fn_val =
                 self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
-            self.get_object_cell_expect(proto_id).borrow_mut().insert_builtin(name.to_string(), fn_val);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
         }
 
         // Set Number.prototype on the Number constructor
@@ -672,14 +687,13 @@ impl Interpreter {
             && let JsValue::Object(o) = &num_val
             && let Some(num_obj) = self.get_object(o.id)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject {
-                id: proto_id,
-            });
+            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             num_obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
             );
-            self.get_object_cell_expect(proto_id).borrow_mut()
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
                 .insert_builtin("constructor".to_string(), num_val);
         }
 
@@ -688,8 +702,12 @@ impl Interpreter {
 
     pub(crate) fn setup_boolean_prototype(&mut self) {
         let proto_id = self.create_object_id();
-        self.get_object_cell_expect(proto_id).borrow_mut().class_name = "Boolean".to_string();
-        self.get_object_cell_expect(proto_id).borrow_mut().primitive_value = Some(JsValue::Boolean(false));
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Boolean".to_string();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .primitive_value = Some(JsValue::Boolean(false));
 
         fn this_boolean_value(interp: &Interpreter, this: &JsValue) -> Option<bool> {
             match this {
@@ -746,7 +764,9 @@ impl Interpreter {
         for (name, arity, func) in methods {
             let fn_val =
                 self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
-            self.get_object_cell_expect(proto_id).borrow_mut().insert_builtin(name.to_string(), fn_val);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
         }
 
         // Set Boolean.prototype on the Boolean constructor
@@ -754,14 +774,13 @@ impl Interpreter {
             && let JsValue::Object(o) = &bool_val
             && let Some(bool_obj) = self.get_object(o.id)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject {
-                id: proto_id,
-            });
+            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             bool_obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
             );
-            self.get_object_cell_expect(proto_id).borrow_mut()
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
                 .insert_builtin("constructor".to_string(), bool_val);
         }
 

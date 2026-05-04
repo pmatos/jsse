@@ -3498,7 +3498,7 @@ impl Interpreter {
         }
 
         // JSON object
-        let json_obj = self.create_object();
+        let json_obj_id = self.create_object_id();
         let json_stringify = self.create_function(JsFunction::native(
             "stringify".to_string(),
             3,
@@ -3688,16 +3688,16 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));
-        json_obj
+        self.get_object_cell_expect(json_obj_id)
             .borrow_mut()
             .insert_builtin("stringify".to_string(), json_stringify);
-        json_obj
+        self.get_object_cell_expect(json_obj_id)
             .borrow_mut()
             .insert_builtin("parse".to_string(), json_parse);
-        json_obj
+        self.get_object_cell_expect(json_obj_id)
             .borrow_mut()
             .insert_builtin("rawJSON".to_string(), json_raw_json);
-        json_obj
+        self.get_object_cell_expect(json_obj_id)
             .borrow_mut()
             .insert_builtin("isRawJSON".to_string(), json_is_raw_json);
         // @@toStringTag
@@ -3711,12 +3711,16 @@ impl Interpreter {
                 set: None,
             };
             let key = "Symbol(Symbol.toStringTag)".to_string();
-            json_obj.borrow_mut().property_order.push(key.clone());
-            json_obj.borrow_mut().properties.insert(key, desc);
+            self.get_object_cell_expect(json_obj_id)
+                .borrow_mut()
+                .property_order
+                .push(key.clone());
+            self.get_object_cell_expect(json_obj_id)
+                .borrow_mut()
+                .properties
+                .insert(key, desc);
         }
-        let json_val = JsValue::Object(crate::types::JsObject {
-            id: json_obj.borrow().id.unwrap(),
-        });
+        let json_val = JsValue::Object(crate::types::JsObject { id: json_obj_id });
         self.realm()
             .global_env
             .borrow_mut()
@@ -3830,10 +3834,8 @@ impl Interpreter {
         self.setup_shadow_realm();
 
         // globalThis - create a global object
-        let global_obj = self.create_object();
-        let global_val = JsValue::Object(crate::types::JsObject {
-            id: global_obj.borrow().id.unwrap(),
-        });
+        let global_obj_id = self.create_object_id();
+        let global_val = JsValue::Object(crate::types::JsObject { id: global_obj_id });
         self.realm()
             .global_env
             .borrow_mut()
@@ -3929,19 +3931,21 @@ impl Interpreter {
                 "NaN" | "Infinity" | "undefined" => (false, false),
                 _ => (true, true),
             };
-            global_obj.borrow_mut().insert_property(
-                name,
-                PropertyDescriptor::data(val, writable, false, configurable),
-            );
+            self.get_object_cell_expect(global_obj_id)
+                .borrow_mut()
+                .insert_property(
+                    name,
+                    PropertyDescriptor::data(val, writable, false, configurable),
+                );
         }
         // Also set globalThis on itself
-        let gt_val = JsValue::Object(crate::types::JsObject {
-            id: global_obj.borrow().id.unwrap(),
-        });
-        global_obj.borrow_mut().insert_property(
-            "globalThis".to_string(),
-            PropertyDescriptor::data(gt_val, true, false, true),
-        );
+        let gt_val = JsValue::Object(crate::types::JsObject { id: global_obj_id });
+        self.get_object_cell_expect(global_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "globalThis".to_string(),
+                PropertyDescriptor::data(gt_val, true, false, true),
+            );
 
         // Fix .prototype descriptors on built-in constructors.
         // create_function sets writable=true (correct for user-defined constructors per §10.2.5),
@@ -3988,7 +3992,7 @@ impl Interpreter {
         // Per spec §9.1.1.4, the Global Environment Record has an Object Environment
         // Record whose binding object is the global object. Variable lookups in global
         // scope should check global object properties.
-        let gid = global_obj.borrow().id.unwrap();
+        let gid = global_obj_id;
         self.realm().global_env.borrow_mut().global_object_id = Some(gid);
         self.realm_mut().global_object = Some(gid);
 

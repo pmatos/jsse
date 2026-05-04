@@ -984,18 +984,22 @@ impl Interpreter {
                     }
                 }
                 let meta_id = self.create_object_id();
-                self.get_object_cell_expect(meta_id).borrow_mut().prototype_id = None;
+                self.get_object_cell_expect(meta_id)
+                    .borrow_mut()
+                    .prototype_id = None;
                 if let Some(ref path) = module_path {
                     let url = format!("file://{}", path.display());
-                    self.get_object_cell_expect(meta_id).borrow_mut().insert_property(
-                        "url".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str(&url)),
-                            true,
-                            true,
-                            true,
-                        ),
-                    );
+                    self.get_object_cell_expect(meta_id)
+                        .borrow_mut()
+                        .insert_property(
+                            "url".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::String(JsString::from_str(&url)),
+                                true,
+                                true,
+                                true,
+                            ),
+                        );
                 }
                 let id = meta_id;
                 let meta_val = JsValue::Object(crate::types::JsObject { id });
@@ -4850,7 +4854,9 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     for (k, v) in pairs {
-                        self.get_object_cell_expect(rest_obj_id).borrow_mut().insert_value(k, v);
+                        self.get_object_cell_expect(rest_obj_id)
+                            .borrow_mut()
+                            .insert_value(k, v);
                     }
                 }
                 let rest_id = rest_obj_id;
@@ -12119,7 +12125,9 @@ impl Interpreter {
                                 let proto_val =
                                     func_obj_rc.borrow().get_property_value("prototype");
                                 if let Some(JsValue::Object(ref p)) = proto_val {
-                                    self.get_object_cell_expect(gen_obj_id).borrow_mut().prototype_id = Some(p.id);
+                                    self.get_object_cell_expect(gen_obj_id)
+                                        .borrow_mut()
+                                        .prototype_id = Some(p.id);
                                     proto_set = true;
                                 }
                             }
@@ -12129,9 +12137,13 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 };
                                 let agp_id = self.realms[fn_realm_id].async_generator_prototype;
-                                self.get_object_cell_expect(gen_obj_id).borrow_mut().prototype_id = agp_id;
+                                self.get_object_cell_expect(gen_obj_id)
+                                    .borrow_mut()
+                                    .prototype_id = agp_id;
                             }
-                            self.get_object_cell_expect(gen_obj_id).borrow_mut().class_name = "AsyncGenerator".to_string();
+                            self.get_object_cell_expect(gen_obj_id)
+                                .borrow_mut()
+                                .class_name = "AsyncGenerator".to_string();
                             let is_simple =
                                 params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
                             let exec_env = if !is_simple {
@@ -12185,19 +12197,20 @@ impl Interpreter {
                                     exec_env.borrow_mut().declare(&lv.name, bk);
                                 }
                             }
-                            self.get_object_cell_expect(gen_obj_id).borrow_mut().iterator_state =
-                                Some(IteratorState::StateMachineAsyncGenerator {
-                                    state_machine,
-                                    func_env: exec_env,
-                                    is_strict,
-                                    execution_state: StateMachineExecutionState::SuspendedStart,
-                                    _sent_value: JsValue::Undefined,
-                                    try_stack: vec![],
-                                    pending_binding: None,
-                                    delegated_iterator: None,
-                                    pending_exception: None,
-                                    pending_return: None,
-                                });
+                            self.get_object_cell_expect(gen_obj_id)
+                                .borrow_mut()
+                                .iterator_state = Some(IteratorState::StateMachineAsyncGenerator {
+                                state_machine,
+                                func_env: exec_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::SuspendedStart,
+                                _sent_value: JsValue::Undefined,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                                pending_return: None,
+                            });
                             let gen_id = gen_obj_id;
                             if let Some(obj_rc) = self.get_object(gen_id) {
                                 obj_rc.borrow_mut().generator_realm_id =
@@ -12311,7 +12324,9 @@ impl Interpreter {
                                 let proto_val =
                                     func_obj_rc.borrow().get_property_value("prototype");
                                 if let Some(JsValue::Object(ref p)) = proto_val {
-                                    self.get_object_cell_expect(gen_obj_id).borrow_mut().prototype_id = Some(p.id);
+                                    self.get_object_cell_expect(gen_obj_id)
+                                        .borrow_mut()
+                                        .prototype_id = Some(p.id);
                                     proto_set = true;
                                 }
                             }
@@ -12321,9 +12336,13 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 };
                                 let gp_id = self.realms[fn_realm_id].generator_prototype;
-                                self.get_object_cell_expect(gen_obj_id).borrow_mut().prototype_id = gp_id;
+                                self.get_object_cell_expect(gen_obj_id)
+                                    .borrow_mut()
+                                    .prototype_id = gp_id;
                             }
-                            self.get_object_cell_expect(gen_obj_id).borrow_mut().class_name = "Generator".to_string();
+                            self.get_object_cell_expect(gen_obj_id)
+                                .borrow_mut()
+                                .class_name = "Generator".to_string();
                             let is_simple =
                                 params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
                             let exec_env = if !is_simple {
@@ -12377,19 +12396,20 @@ impl Interpreter {
                                     exec_env.borrow_mut().declare(&lv.name, bk);
                                 }
                             }
-                            self.get_object_cell_expect(gen_obj_id).borrow_mut().iterator_state =
-                                Some(IteratorState::StateMachineGenerator {
-                                    state_machine,
-                                    func_env: exec_env,
-                                    is_strict,
-                                    execution_state: StateMachineExecutionState::SuspendedStart,
-                                    _sent_value: JsValue::Undefined,
-                                    try_stack: vec![],
-                                    pending_binding: None,
-                                    delegated_iterator: None,
-                                    pending_exception: None,
-                                    pending_return: None,
-                                });
+                            self.get_object_cell_expect(gen_obj_id)
+                                .borrow_mut()
+                                .iterator_state = Some(IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env: exec_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::SuspendedStart,
+                                _sent_value: JsValue::Undefined,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                                pending_return: None,
+                            });
                             let gen_id = gen_obj_id;
                             if let Some(obj_rc) = self.get_object(gen_id) {
                                 obj_rc.borrow_mut().generator_realm_id =
@@ -13679,7 +13699,9 @@ impl Interpreter {
             {
                 let proto = func_obj.borrow().get_property_value("prototype");
                 if let Some(JsValue::Object(proto_obj)) = proto {
-                    self.get_object_cell_expect(new_obj_id).borrow_mut().prototype_id = Some(proto_obj.id);
+                    self.get_object_cell_expect(new_obj_id)
+                        .borrow_mut()
+                        .prototype_id = Some(proto_obj.id);
                 }
             }
             let instance_field_defs = if let JsValue::Object(o) = &callee_val
@@ -14014,7 +14036,9 @@ impl Interpreter {
                         _ => JsValue::Undefined,
                     };
                     if let JsValue::Object(proto_obj) = proto {
-                        self.get_object_cell_expect(new_obj_id).borrow_mut().prototype_id = Some(proto_obj.id);
+                        self.get_object_cell_expect(new_obj_id)
+                            .borrow_mut()
+                            .prototype_id = Some(proto_obj.id);
                     } else {
                         // proto is not an Object: GetFunctionRealm(newTarget) → realm's %ObjectPrototype%
                         let nt_realm_id =
@@ -14024,7 +14048,9 @@ impl Interpreter {
                             };
                         let op_id = self.realms[nt_realm_id].object_prototype;
                         if let Some(proto_rc) = op_id {
-                            self.get_object_cell_expect(new_obj_id).borrow_mut().prototype_id = Some(proto_rc);
+                            self.get_object_cell_expect(new_obj_id)
+                                .borrow_mut()
+                                .prototype_id = Some(proto_rc);
                         }
                     }
                 }

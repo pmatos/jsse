@@ -491,8 +491,7 @@ fn missing_named_module_import_throws_syntax_error() {
 #[test]
 fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
     let mut interp = Interpreter::new();
-    let obj = interp.create_object();
-    let id = obj.borrow().id.expect("object id");
+    let id = interp.create_object_id();
     let obj_val = JsValue::Object(crate::types::JsObject { id });
 
     interp.scheduler.enqueue_microtask((

@@ -37,8 +37,8 @@ fn date_to_locale_string(
     let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
     // ToDateTimeOptions(options, required, defaults)
-    let options_obj = if matches!(options_arg, JsValue::Undefined) {
-        interp.create_object()
+    let options_obj_id = if matches!(options_arg, JsValue::Undefined) {
+        interp.create_object_id()
     } else {
         match interp.to_object(&options_arg) {
             Completion::Normal(v) => {
@@ -57,16 +57,16 @@ fn date_to_locale_string(
                                 .borrow_mut()
                                 .insert_property(k, pd);
                         }
-                        interp.get_object_expect(new_obj_id)
+                        new_obj_id
                     } else {
-                        interp.create_object()
+                        interp.create_object_id()
                     }
                 } else {
-                    interp.create_object()
+                    interp.create_object_id()
                 }
             }
             Completion::Throw(e) => return Completion::Throw(e),
-            _ => interp.create_object(),
+            _ => interp.create_object_id(),
         }
     };
 
@@ -76,7 +76,10 @@ fn date_to_locale_string(
 
     if required == "date" || required == "any" {
         for prop in &["weekday", "year", "month", "day"] {
-            if has_prop(&options_obj.borrow(), prop) {
+            if has_prop(
+                &interp.get_object_cell_expect(options_obj_id).borrow(),
+                prop,
+            ) {
                 need_defaults = false;
                 break;
             }
@@ -90,15 +93,23 @@ fn date_to_locale_string(
             "second",
             "fractionalSecondDigits",
         ] {
-            if has_prop(&options_obj.borrow(), prop) {
+            if has_prop(
+                &interp.get_object_cell_expect(options_obj_id).borrow(),
+                prop,
+            ) {
                 need_defaults = false;
                 break;
             }
         }
     }
     if need_defaults
-        && (has_prop(&options_obj.borrow(), "dateStyle")
-            || has_prop(&options_obj.borrow(), "timeStyle"))
+        && (has_prop(
+            &interp.get_object_cell_expect(options_obj_id).borrow(),
+            "dateStyle",
+        ) || has_prop(
+            &interp.get_object_cell_expect(options_obj_id).borrow(),
+            "timeStyle",
+        ))
     {
         need_defaults = false;
     }
@@ -106,37 +117,54 @@ fn date_to_locale_string(
     if need_defaults {
         let numeric = JsValue::String(JsString::from_str("numeric"));
         if defaults == "date" || defaults == "all" {
-            options_obj.borrow_mut().insert_property(
-                "year".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            options_obj.borrow_mut().insert_property(
-                "month".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            options_obj.borrow_mut().insert_property(
-                "day".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
+            interp
+                .get_object_cell_expect(options_obj_id)
+                .borrow_mut()
+                .insert_property(
+                    "year".to_string(),
+                    PropertyDescriptor::data(numeric.clone(), true, true, true),
+                );
+            interp
+                .get_object_cell_expect(options_obj_id)
+                .borrow_mut()
+                .insert_property(
+                    "month".to_string(),
+                    PropertyDescriptor::data(numeric.clone(), true, true, true),
+                );
+            interp
+                .get_object_cell_expect(options_obj_id)
+                .borrow_mut()
+                .insert_property(
+                    "day".to_string(),
+                    PropertyDescriptor::data(numeric.clone(), true, true, true),
+                );
         }
         if defaults == "time" || defaults == "all" {
-            options_obj.borrow_mut().insert_property(
-                "hour".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            options_obj.borrow_mut().insert_property(
-                "minute".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            options_obj.borrow_mut().insert_property(
-                "second".to_string(),
-                PropertyDescriptor::data(numeric, true, true, true),
-            );
+            interp
+                .get_object_cell_expect(options_obj_id)
+                .borrow_mut()
+                .insert_property(
+                    "hour".to_string(),
+                    PropertyDescriptor::data(numeric.clone(), true, true, true),
+                );
+            interp
+                .get_object_cell_expect(options_obj_id)
+                .borrow_mut()
+                .insert_property(
+                    "minute".to_string(),
+                    PropertyDescriptor::data(numeric.clone(), true, true, true),
+                );
+            interp
+                .get_object_cell_expect(options_obj_id)
+                .borrow_mut()
+                .insert_property(
+                    "second".to_string(),
+                    PropertyDescriptor::data(numeric, true, true, true),
+                );
         }
     }
 
-    let opt_id = options_obj.borrow().id.unwrap();
-    let opt_val = JsValue::Object(crate::types::JsObject { id: opt_id });
+    let opt_val = JsValue::Object(crate::types::JsObject { id: options_obj_id });
 
     // Use the built-in DateTimeFormat constructor directly (not through user-visible Intl property)
     let dtf_val = match interp.realm().intl_date_time_format_ctor.clone() {
