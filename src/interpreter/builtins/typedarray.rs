@@ -1540,10 +1540,11 @@ impl Interpreter {
         );
 
         // [Symbol.iterator] = values
-        self.setup_ta_values_method(&proto);
+        let proto_id_for_iter = proto.borrow().id.unwrap();
+        self.setup_ta_values_method(proto_id_for_iter);
 
         // entries, keys, values
-        self.setup_ta_iterator_methods(&proto);
+        self.setup_ta_iterator_methods(proto_id_for_iter);
 
         // at
         let at_fn = self.create_function(JsFunction::native(
@@ -2330,7 +2331,8 @@ impl Interpreter {
 
         // Higher-order methods: find, findIndex, findLast, findLastIndex, forEach, map, filter,
         // every, some, reduce, reduceRight
-        self.setup_ta_higher_order_methods(&proto);
+        let proto_id_for_higher = proto.borrow().id.unwrap();
+        self.setup_ta_higher_order_methods(proto_id_for_higher);
 
         // reverse
         let reverse_fn = self.create_function(JsFunction::native(
@@ -3093,7 +3095,7 @@ impl Interpreter {
         );
     }
 
-    fn setup_ta_values_method(&mut self, proto: &Rc<RefCell<JsObjectData>>) {
+    fn setup_ta_values_method(&mut self, proto_id: u64) {
         let values_fn = self.create_function(JsFunction::native(
             "values".to_string(),
             0,
@@ -3119,15 +3121,15 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_expect(proto_id)
             .borrow_mut()
             .insert_builtin("values".to_string(), values_fn.clone());
-        proto
+        self.get_object_expect(proto_id)
             .borrow_mut()
             .insert_builtin("Symbol(Symbol.iterator)".to_string(), values_fn);
     }
 
-    fn setup_ta_iterator_methods(&mut self, proto: &Rc<RefCell<JsObjectData>>) {
+    fn setup_ta_iterator_methods(&mut self, proto_id: u64) {
         let entries_fn = self.create_function(JsFunction::native(
             "entries".to_string(),
             0,
@@ -3153,7 +3155,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_expect(proto_id)
             .borrow_mut()
             .insert_builtin("entries".to_string(), entries_fn);
 
@@ -3182,12 +3184,12 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_expect(proto_id)
             .borrow_mut()
             .insert_builtin("keys".to_string(), keys_fn);
     }
 
-    fn setup_ta_higher_order_methods(&mut self, proto: &Rc<RefCell<JsObjectData>>) {
+    fn setup_ta_higher_order_methods(&mut self, proto_id: u64) {
         // find
         let find_fn = self.create_function(JsFunction::native(
             "find".to_string(),
@@ -3217,7 +3219,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        proto
+        self.get_object_expect(proto_id)
             .borrow_mut()
             .insert_builtin("find".to_string(), find_fn);
 
@@ -3250,7 +3252,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(-1.0))
             },
         ));
-        proto
+        self.get_object_expect(proto_id)
             .borrow_mut()
             .insert_builtin("findIndex".to_string(), find_index_fn);
 
@@ -3285,7 +3287,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        proto
+        self.get_object_expect(proto_id)
             .borrow_mut()
             .insert_builtin("findLast".to_string(), find_last_fn);
 
@@ -3320,7 +3322,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(-1.0))
             },
         ));
-        proto
+        self.get_object_expect(proto_id)
             .borrow_mut()
             .insert_builtin("findLastIndex".to_string(), find_last_index_fn);
 
@@ -3349,7 +3351,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        proto
+        self.get_object_expect(proto_id)
             .borrow_mut()
             .insert_builtin("forEach".to_string(), for_each_fn);
 
@@ -3398,7 +3400,9 @@ impl Interpreter {
                 Completion::Normal(new_ta_val)
             },
         ));
-        proto.borrow_mut().insert_builtin("map".to_string(), map_fn);
+        self.get_object_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("map".to_string(), map_fn);
 
         // filter
         let filter_fn = self.create_function(JsFunction::native(
@@ -3448,7 +3452,7 @@ impl Interpreter {
                 Completion::Normal(new_ta_val)
             },
         ));
-        proto
+        self.get_object_expect(proto_id)
             .borrow_mut()
             .insert_builtin("filter".to_string(), filter_fn);
 
@@ -3481,7 +3485,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(true))
             },
         ));
-        proto
+        self.get_object_expect(proto_id)
             .borrow_mut()
             .insert_builtin("every".to_string(), every_fn);
 
@@ -3514,7 +3518,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));
-        proto
+        self.get_object_expect(proto_id)
             .borrow_mut()
             .insert_builtin("some".to_string(), some_fn);
 
@@ -3556,7 +3560,7 @@ impl Interpreter {
                 Completion::Normal(acc)
             },
         ));
-        proto
+        self.get_object_expect(proto_id)
             .borrow_mut()
             .insert_builtin("reduce".to_string(), reduce_fn);
 
@@ -3600,7 +3604,7 @@ impl Interpreter {
                 Completion::Normal(acc)
             },
         ));
-        proto
+        self.get_object_expect(proto_id)
             .borrow_mut()
             .insert_builtin("reduceRight".to_string(), reduce_right_fn);
     }

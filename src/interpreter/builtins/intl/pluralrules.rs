@@ -150,7 +150,7 @@ fn get_plural_categories_sorted(locale_str: &str, plural_type: &str) -> Vec<&'st
 }
 
 impl Interpreter {
-    pub(crate) fn setup_intl_plural_rules(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
+    pub(crate) fn setup_intl_plural_rules(&mut self, intl_obj_id: u64) {
         let proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
             proto.borrow_mut().prototype_id =
@@ -1011,9 +1011,11 @@ impl Interpreter {
         );
 
         // Register Intl.PluralRules on the Intl namespace
-        intl_obj.borrow_mut().insert_property(
-            "PluralRules".to_string(),
-            PropertyDescriptor::data(ctor, true, false, true),
-        );
+        self.get_object_expect(intl_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "PluralRules".to_string(),
+                PropertyDescriptor::data(ctor, true, false, true),
+            );
     }
 }

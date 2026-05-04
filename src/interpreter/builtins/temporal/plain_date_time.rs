@@ -541,10 +541,7 @@ fn format_plain_date_time(
 }
 
 impl Interpreter {
-    pub(crate) fn setup_temporal_plain_date_time(
-        &mut self,
-        temporal_obj: &Rc<RefCell<JsObjectData>>,
-    ) {
+    pub(crate) fn setup_temporal_plain_date_time(&mut self, temporal_obj_id: u64) {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "Temporal.PlainDateTime".to_string();
         {
@@ -2418,10 +2415,12 @@ impl Interpreter {
                 .insert_builtin("compare".to_string(), compare_fn);
         }
 
-        temporal_obj.borrow_mut().insert_property(
-            "PlainDateTime".to_string(),
-            PropertyDescriptor::data(constructor, true, false, true),
-        );
+        self.get_object_expect(temporal_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "PlainDateTime".to_string(),
+                PropertyDescriptor::data(constructor, true, false, true),
+            );
     }
 }
 

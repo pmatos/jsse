@@ -404,10 +404,7 @@ fn to_temporal_plain_month_day(
 }
 
 impl Interpreter {
-    pub(crate) fn setup_temporal_plain_month_day(
-        &mut self,
-        temporal_obj: &Rc<RefCell<JsObjectData>>,
-    ) {
+    pub(crate) fn setup_temporal_plain_month_day(&mut self, temporal_obj_id: u64) {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "Temporal.PlainMonthDay".to_string();
         {
@@ -1220,10 +1217,12 @@ impl Interpreter {
             obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
         }
 
-        temporal_obj.borrow_mut().insert_property(
-            "PlainMonthDay".to_string(),
-            PropertyDescriptor::data(constructor, true, false, true),
-        );
+        self.get_object_expect(temporal_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "PlainMonthDay".to_string(),
+                PropertyDescriptor::data(constructor, true, false, true),
+            );
     }
 }
 

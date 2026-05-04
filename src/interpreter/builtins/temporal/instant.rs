@@ -14,7 +14,7 @@ pub(super) fn is_valid_epoch_ns(ns: &BigInt) -> bool {
 }
 
 impl Interpreter {
-    pub(crate) fn setup_temporal_instant(&mut self, temporal_obj: &Rc<RefCell<JsObjectData>>) {
+    pub(crate) fn setup_temporal_instant(&mut self, temporal_obj_id: u64) {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "Temporal.Instant".to_string();
 
@@ -713,10 +713,12 @@ impl Interpreter {
                 .insert_builtin("compare".to_string(), compare_fn);
         }
 
-        temporal_obj.borrow_mut().insert_property(
-            "Instant".to_string(),
-            PropertyDescriptor::data(constructor, true, false, true),
-        );
+        self.get_object_expect(temporal_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "Instant".to_string(),
+                PropertyDescriptor::data(constructor, true, false, true),
+            );
     }
 }
 

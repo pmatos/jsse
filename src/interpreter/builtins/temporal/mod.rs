@@ -1631,15 +1631,16 @@ impl Interpreter {
             temporal_obj.borrow_mut().properties.insert(key, desc);
         }
 
-        self.setup_temporal_duration(&temporal_obj);
-        self.setup_temporal_instant(&temporal_obj);
-        self.setup_temporal_plain_time(&temporal_obj);
-        self.setup_temporal_plain_date(&temporal_obj);
-        self.setup_temporal_plain_date_time(&temporal_obj);
-        self.setup_temporal_plain_year_month(&temporal_obj);
-        self.setup_temporal_plain_month_day(&temporal_obj);
-        self.setup_temporal_zoned_date_time(&temporal_obj);
-        self.setup_temporal_now(&temporal_obj);
+        let temporal_obj_id = temporal_obj.borrow().id.unwrap();
+        self.setup_temporal_duration(temporal_obj_id);
+        self.setup_temporal_instant(temporal_obj_id);
+        self.setup_temporal_plain_time(temporal_obj_id);
+        self.setup_temporal_plain_date(temporal_obj_id);
+        self.setup_temporal_plain_date_time(temporal_obj_id);
+        self.setup_temporal_plain_year_month(temporal_obj_id);
+        self.setup_temporal_plain_month_day(temporal_obj_id);
+        self.setup_temporal_zoned_date_time(temporal_obj_id);
+        self.setup_temporal_now(temporal_obj_id);
 
         // Register Temporal as global (writable, not enumerable, configurable)
         let temporal_val = JsValue::Object(crate::types::JsObject { id: temporal_id });

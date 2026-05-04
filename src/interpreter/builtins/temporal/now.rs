@@ -3,7 +3,7 @@ use num_bigint::BigInt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl Interpreter {
-    pub(crate) fn setup_temporal_now(&mut self, temporal_obj: &Rc<RefCell<JsObjectData>>) {
+    pub(crate) fn setup_temporal_now(&mut self, temporal_obj_id: u64) {
         let now_obj = self.create_object();
         let now_id = now_obj.borrow().id.unwrap();
 
@@ -149,10 +149,12 @@ impl Interpreter {
             .insert_builtin("zonedDateTimeISO".to_string(), zdt_fn);
 
         let now_val = JsValue::Object(crate::types::JsObject { id: now_id });
-        temporal_obj.borrow_mut().insert_property(
-            "Now".to_string(),
-            PropertyDescriptor::data(now_val, true, false, true),
-        );
+        self.get_object_expect(temporal_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "Now".to_string(),
+                PropertyDescriptor::data(now_val, true, false, true),
+            );
     }
 }
 

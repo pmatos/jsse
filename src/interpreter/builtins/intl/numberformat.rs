@@ -2903,7 +2903,7 @@ pub(crate) fn format_to_parts_internal(
 }
 
 impl Interpreter {
-    pub(crate) fn setup_intl_number_format(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
+    pub(crate) fn setup_intl_number_format(&mut self, intl_obj_id: u64) {
         let proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
             proto.borrow_mut().prototype_id =
@@ -4408,9 +4408,11 @@ impl Interpreter {
         self.realm_mut().intl_number_format_ctor = Some(nf_ctor.clone());
 
         // Register Intl.NumberFormat on the Intl namespace
-        intl_obj.borrow_mut().insert_property(
-            "NumberFormat".to_string(),
-            PropertyDescriptor::data(nf_ctor, true, false, true),
-        );
+        self.get_object_expect(intl_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "NumberFormat".to_string(),
+                PropertyDescriptor::data(nf_ctor, true, false, true),
+            );
     }
 }

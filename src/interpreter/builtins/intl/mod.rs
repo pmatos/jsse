@@ -283,35 +283,37 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("supportedValuesOf".to_string(), svo_fn);
 
+        let intl_obj_id = intl_obj.borrow().id.unwrap();
+
         // Intl.Locale
-        self.setup_intl_locale(&intl_obj);
+        self.setup_intl_locale(intl_obj_id);
 
         // Intl.Collator
-        self.setup_intl_collator(&intl_obj);
+        self.setup_intl_collator(intl_obj_id);
 
         // Intl.NumberFormat
-        self.setup_intl_number_format(&intl_obj);
+        self.setup_intl_number_format(intl_obj_id);
 
         // Intl.PluralRules
-        self.setup_intl_plural_rules(&intl_obj);
+        self.setup_intl_plural_rules(intl_obj_id);
 
         // Intl.ListFormat
-        self.setup_intl_list_format(&intl_obj);
+        self.setup_intl_list_format(intl_obj_id);
 
         // Intl.RelativeTimeFormat
-        self.setup_intl_relative_time_format(&intl_obj);
+        self.setup_intl_relative_time_format(intl_obj_id);
 
         // Intl.Segmenter
-        self.setup_intl_segmenter(&intl_obj);
+        self.setup_intl_segmenter(intl_obj_id);
 
         // Intl.DisplayNames
-        self.setup_intl_display_names(&intl_obj);
+        self.setup_intl_display_names(intl_obj_id);
 
         // Intl.DateTimeFormat
-        self.setup_intl_date_time_format(&intl_obj);
+        self.setup_intl_date_time_format(intl_obj_id);
 
         // Intl.DurationFormat
-        self.setup_intl_duration_format(&intl_obj);
+        self.setup_intl_duration_format(intl_obj_id);
 
         let intl_val = JsValue::Object(crate::types::JsObject { id: intl_id });
         self.realm()

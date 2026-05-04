@@ -2641,7 +2641,8 @@ impl Interpreter {
                     self.realm_mut().function_prototype = Some(fp.borrow().id.unwrap());
 
                     // Install call/apply/bind/toString on Function.prototype_id
-                    self.setup_function_prototype(&fp);
+                    let fp_id = fp.borrow().id.unwrap();
+                    self.setup_function_prototype(fp_id);
 
                     // Add Function.prototype[@@hasInstance]
                     if let Some(sym_key) = self.get_symbol_key("hasInstance") {
@@ -8516,7 +8517,7 @@ impl Interpreter {
         let _ = self.env_set(&env, "Proxy", proxy_fn);
     }
 
-    fn setup_function_prototype(&mut self, obj_proto: &Rc<RefCell<JsObjectData>>) {
+    fn setup_function_prototype(&mut self, obj_proto_id: u64) {
         let fn_proto_realm_id = self.current_realm_id;
         // Add call to Object.prototype (simplified - applies to all functions via prototype chain)
         let call_fn = self.create_function(JsFunction::native(
@@ -8528,7 +8529,7 @@ impl Interpreter {
                 interp.call_function(_this, &this_arg, call_args)
             },
         ));
-        obj_proto
+        self.get_object_expect(obj_proto_id)
             .borrow_mut()
             .insert_builtin("call".to_string(), call_fn);
 
@@ -8584,7 +8585,7 @@ impl Interpreter {
                 interp.call_function(_this, &this_arg, &call_args)
             },
         ));
-        obj_proto
+        self.get_object_expect(obj_proto_id)
             .borrow_mut()
             .insert_builtin("apply".to_string(), apply_fn);
 
@@ -8752,7 +8753,7 @@ impl Interpreter {
                 Completion::Normal(result)
             },
         ));
-        obj_proto
+        self.get_object_expect(obj_proto_id)
             .borrow_mut()
             .insert_builtin("bind".to_string(), bind_fn);
 
@@ -8825,7 +8826,7 @@ impl Interpreter {
                 ))
             },
         ));
-        obj_proto
+        self.get_object_expect(obj_proto_id)
             .borrow_mut()
             .insert_builtin("toString".to_string(), fn_tostring);
     }

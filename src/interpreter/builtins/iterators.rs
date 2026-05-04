@@ -838,7 +838,8 @@ impl Interpreter {
         let _ = self.env_set(&env, "Iterator", iterator_ctor.clone());
 
         // Setup consuming and lazy helper methods on %IteratorPrototype%
-        self.setup_iterator_helper_methods(&iter_proto);
+        let iter_proto_id = iter_proto.borrow().id.unwrap();
+        self.setup_iterator_helper_methods(iter_proto_id);
 
         // Setup static methods on Iterator constructor
         self.setup_iterator_static_methods(&iterator_ctor);
@@ -1453,7 +1454,7 @@ impl Interpreter {
         }
     }
 
-    fn setup_iterator_helper_methods(&mut self, iter_proto: &Rc<RefCell<JsObjectData>>) {
+    fn setup_iterator_helper_methods(&mut self, iter_proto_id: u64) {
         // toArray()
         let to_array_fn = self.create_function(JsFunction::native(
             "toArray".to_string(),
@@ -1484,7 +1485,7 @@ impl Interpreter {
                 Completion::Normal(arr)
             },
         ));
-        iter_proto
+        self.get_object_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("toArray".to_string(), to_array_fn);
 
@@ -1529,7 +1530,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        iter_proto
+        self.get_object_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("forEach".to_string(), for_each_fn);
 
@@ -1584,7 +1585,7 @@ impl Interpreter {
                 }
             },
         ));
-        iter_proto
+        self.get_object_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("some".to_string(), some_fn);
 
@@ -1638,7 +1639,7 @@ impl Interpreter {
                 }
             },
         ));
-        iter_proto
+        self.get_object_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("every".to_string(), every_fn);
 
@@ -1692,7 +1693,7 @@ impl Interpreter {
                 }
             },
         ));
-        iter_proto
+        self.get_object_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("find".to_string(), find_fn);
 
@@ -1761,15 +1762,15 @@ impl Interpreter {
                 }
             },
         ));
-        iter_proto
+        self.get_object_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("reduce".to_string(), reduce_fn);
 
         // Lazy helpers: map, filter, take, drop, flatMap
-        self.setup_iterator_lazy_helpers(iter_proto);
+        self.setup_iterator_lazy_helpers(iter_proto_id);
     }
 
-    fn setup_iterator_lazy_helpers(&mut self, iter_proto: &Rc<RefCell<JsObjectData>>) {
+    fn setup_iterator_lazy_helpers(&mut self, iter_proto_id: u64) {
         // map(mapper)
         let map_fn = self.create_function(JsFunction::native(
             "map".to_string(),
@@ -1896,7 +1897,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        iter_proto
+        self.get_object_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("map".to_string(), map_fn);
 
@@ -2034,7 +2035,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        iter_proto
+        self.get_object_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("filter".to_string(), filter_fn);
 
@@ -2188,7 +2189,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        iter_proto
+        self.get_object_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("take".to_string(), take_fn);
 
@@ -2353,7 +2354,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        iter_proto
+        self.get_object_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("drop".to_string(), drop_fn);
 
@@ -2585,7 +2586,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        iter_proto
+        self.get_object_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("flatMap".to_string(), flat_map_fn);
     }

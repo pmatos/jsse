@@ -1632,7 +1632,7 @@ fn round_relative_duration(
 }
 
 impl Interpreter {
-    pub(crate) fn setup_temporal_duration(&mut self, temporal_obj: &Rc<RefCell<JsObjectData>>) {
+    pub(crate) fn setup_temporal_duration(&mut self, temporal_obj_id: u64) {
         let proto = self.create_object();
         proto.borrow_mut().class_name = "Temporal.Duration".to_string();
 
@@ -2811,10 +2811,12 @@ impl Interpreter {
         }
 
         // Register Duration on Temporal namespace
-        temporal_obj.borrow_mut().insert_property(
-            "Duration".to_string(),
-            PropertyDescriptor::data(constructor, true, false, true),
-        );
+        self.get_object_expect(temporal_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "Duration".to_string(),
+                PropertyDescriptor::data(constructor, true, false, true),
+            );
     }
 }
 

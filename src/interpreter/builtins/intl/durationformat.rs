@@ -1136,7 +1136,7 @@ fn format_to_parts_duration(
 }
 
 impl Interpreter {
-    pub(crate) fn setup_intl_duration_format(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
+    pub(crate) fn setup_intl_duration_format(&mut self, intl_obj_id: u64) {
         let proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
             proto.borrow_mut().prototype_id =
@@ -1762,9 +1762,11 @@ impl Interpreter {
         self.realm_mut().intl_duration_format_ctor = Some(duration_format_ctor.clone());
 
         // Register Intl.DurationFormat on the Intl namespace
-        intl_obj.borrow_mut().insert_property(
-            "DurationFormat".to_string(),
-            PropertyDescriptor::data(duration_format_ctor, true, false, true),
-        );
+        self.get_object_expect(intl_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "DurationFormat".to_string(),
+                PropertyDescriptor::data(duration_format_ctor, true, false, true),
+            );
     }
 }

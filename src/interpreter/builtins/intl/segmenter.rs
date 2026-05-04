@@ -147,7 +147,7 @@ fn extract_segmenter_data(
 }
 
 impl Interpreter {
-    pub(crate) fn setup_intl_segmenter(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
+    pub(crate) fn setup_intl_segmenter(&mut self, intl_obj_id: u64) {
         let proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
             proto.borrow_mut().prototype_id =
@@ -625,9 +625,11 @@ impl Interpreter {
         );
 
         // Register Intl.Segmenter on the Intl namespace
-        intl_obj.borrow_mut().insert_property(
-            "Segmenter".to_string(),
-            PropertyDescriptor::data(segmenter_ctor, true, false, true),
-        );
+        self.get_object_expect(intl_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "Segmenter".to_string(),
+                PropertyDescriptor::data(segmenter_ctor, true, false, true),
+            );
     }
 }
