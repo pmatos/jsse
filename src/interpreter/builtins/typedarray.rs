@@ -949,14 +949,17 @@ impl Interpreter {
             JsValue::Object(crate::types::JsObject { id })
         };
         if let JsValue::Object(o) = &ctor
-            && let Some(obj) = self.get_object(o.id)
+            && self.get_object_cell(o.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(ab_proto_val, false, false, false),
-            );
-            obj.borrow_mut()
-                .insert_builtin("isView".to_string(), is_view_fn);
+            let ctor_id = o.id;
+            {
+                let mut b = self.get_object_cell_expect(ctor_id).borrow_mut();
+                b.insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(ab_proto_val, false, false, false),
+                );
+                b.insert_builtin("isView".to_string(), is_view_fn);
+            }
 
             // ArrayBuffer[Symbol.species] getter
             let species_getter = self.create_function(JsFunction::native(
@@ -964,17 +967,19 @@ impl Interpreter {
                 0,
                 |_interp, this_val, _args| Completion::Normal(this_val.clone()),
             ));
-            obj.borrow_mut().insert_property(
-                "Symbol(Symbol.species)".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(species_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "Symbol(Symbol.species)".to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: Some(species_getter),
+                        set: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                    },
+                );
         }
         self.get_object_cell_expect(ab_proto_id)
             .borrow_mut()
@@ -1466,12 +1471,15 @@ impl Interpreter {
             JsValue::Object(crate::types::JsObject { id })
         };
         if let JsValue::Object(o) = &ctor
-            && let Some(obj) = self.get_object(o.id)
+            && self.get_object_cell(o.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(sab_proto_val, false, false, false),
-            );
+            let ctor_id = o.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(sab_proto_val, false, false, false),
+                );
 
             // SharedArrayBuffer[Symbol.species] getter
             let species_getter = self.create_function(JsFunction::native(
@@ -1479,17 +1487,19 @@ impl Interpreter {
                 0,
                 |_interp, this_val, _args| Completion::Normal(this_val.clone()),
             ));
-            obj.borrow_mut().insert_property(
-                "Symbol(Symbol.species)".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(species_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "Symbol(Symbol.species)".to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: Some(species_getter),
+                        set: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                    },
+                );
         }
         self.get_object_cell_expect(sab_proto_id)
             .borrow_mut()
@@ -4656,17 +4666,15 @@ impl Interpreter {
         exemplar: &JsValue,
         args: &[JsValue],
     ) -> Result<JsValue, JsValue> {
-        let (kind, _ta) = if let JsValue::Object(o) = exemplar
-            && let Some(obj) = self.get_object(o.id)
-        {
-            let obj_ref = obj.borrow();
-            if let Some(ref ta) = obj_ref.typed_array_info {
-                (ta.kind, ta.clone())
-            } else {
-                return Err(self.create_type_error("not a TypedArray"));
-            }
+        let snapshot = if let JsValue::Object(o) = exemplar {
+            self.get_object_cell(o.id)
+                .and_then(|cell| cell.borrow().typed_array_info.clone())
         } else {
-            return Err(self.create_type_error("not a TypedArray"));
+            None
+        };
+        let (kind, _ta) = match snapshot {
+            Some(ta) => (ta.kind, ta),
+            None => return Err(self.create_type_error("not a TypedArray")),
         };
 
         let default_ctor_name = kind.name();
@@ -4684,22 +4692,39 @@ impl Interpreter {
         };
 
         // Validate result is a TypedArray
-        let result_kind = if let JsValue::Object(o) = &result_val
-            && let Some(obj) = self.get_object(o.id)
-        {
-            let obj_ref = obj.borrow();
-            if let Some(ref ta) = obj_ref.typed_array_info {
-                if ta.is_detached.get() {
-                    return Err(self.create_type_error("new TypedArray is detached"));
-                }
-                ta.kind
-            } else {
+        enum KindProbe {
+            NotTa,
+            Detached,
+            Kind(TypedArrayKind),
+        }
+        let kind_probe = if let JsValue::Object(o) = &result_val {
+            self.get_object_cell(o.id)
+                .map(|cell| {
+                    let r = cell.borrow();
+                    if let Some(ref ta) = r.typed_array_info {
+                        if ta.is_detached.get() {
+                            KindProbe::Detached
+                        } else {
+                            KindProbe::Kind(ta.kind)
+                        }
+                    } else {
+                        KindProbe::NotTa
+                    }
+                })
+                .unwrap_or(KindProbe::NotTa)
+        } else {
+            KindProbe::NotTa
+        };
+        let result_kind = match kind_probe {
+            KindProbe::NotTa => {
                 return Err(
                     self.create_type_error("species constructor did not return a TypedArray")
                 );
             }
-        } else {
-            return Err(self.create_type_error("species constructor did not return a TypedArray"));
+            KindProbe::Detached => {
+                return Err(self.create_type_error("new TypedArray is detached"));
+            }
+            KindProbe::Kind(k) => k,
         };
 
         // ContentType compatibility check (only for single-length-arg case)
@@ -4712,17 +4737,22 @@ impl Interpreter {
         // Validate length >= requested
         if let Some(JsValue::Number(requested_len)) = args.first() {
             let requested = *requested_len as usize;
-            if let JsValue::Object(o) = &result_val
-                && let Some(obj) = self.get_object(o.id)
-            {
-                let obj_ref = obj.borrow();
-                if let Some(ref ta) = obj_ref.typed_array_info
-                    && typed_array_length(ta) < requested
-                {
-                    return Err(self.create_type_error(
-                        "species constructor returned a TypedArray that is too small",
-                    ));
-                }
+            let too_small = if let JsValue::Object(o) = &result_val {
+                self.get_object_cell(o.id)
+                    .and_then(|cell| {
+                        cell.borrow()
+                            .typed_array_info
+                            .as_ref()
+                            .map(|ta| typed_array_length(ta) < requested)
+                    })
+                    .unwrap_or(false)
+            } else {
+                false
+            };
+            if too_small {
+                return Err(self.create_type_error(
+                    "species constructor returned a TypedArray that is too small",
+                ));
             }
         }
 
@@ -5889,7 +5919,7 @@ impl Interpreter {
             );
 
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj.borrow_mut().deferred_construct = true;
         }
