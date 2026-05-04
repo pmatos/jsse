@@ -29,6 +29,7 @@ pub(crate) mod generator_transform;
 pub(crate) mod ic;
 mod property_map;
 pub(crate) use property_map::PropertyMap;
+mod scheduler;
 #[cfg(test)]
 mod tests;
 
@@ -70,10 +71,7 @@ pub struct Interpreter {
     pub(crate) destructuring_yield: bool,
     pub(crate) pending_iter_close: Vec<JsValue>,
     pub(crate) generator_inline_iters: FxHashMap<u64, Vec<JsValue>>,
-    microtask_queue: Vec<(
-        Vec<JsValue>,
-        Box<dyn FnOnce(&mut Interpreter) -> Completion>,
-    )>,
+    pub(crate) scheduler: scheduler::JobScheduler,
     cached_has_instance_key: Option<String>,
     module_registry: HashMap<(usize, PathBuf), Rc<RefCell<LoadedModule>>>,
     synthetic_module_registry: HashMap<(PathBuf, ImportModuleType), Rc<RefCell<LoadedModule>>>,
@@ -86,7 +84,7 @@ pub struct Interpreter {
     pub(crate) call_stack_envs: Vec<EnvRef>,
     pub(crate) call_stack_frames: Vec<CallFrame>,
     pub(crate) gc_temp_roots: Vec<u64>,
-    // microtask roots are now stored inline in the microtask_queue tuples
+    // microtask roots are stored inline alongside their jobs in JobScheduler
     pub(crate) class_private_names: Vec<HashMap<String, String>>,
     next_class_brand_id: u64,
     next_auto_accessor_id: u64,
@@ -123,10 +121,6 @@ pub struct Interpreter {
     pub(crate) regex_cache: HashMap<(String, String), Rc<builtins::regexp::CachedRegex>>,
     pub(crate) iterator_next_cache: FxHashMap<u64, JsValue>,
     last_identifier_with_base: Option<u64>,
-    pub(crate) async_gen_queues: FxHashMap<u64, std::collections::VecDeque<AsyncGenRequest>>,
-    pub(crate) async_gen_yield_pending: bool,
-    pub(crate) async_function_states: FxHashMap<u64, AsyncFunctionState>,
-    next_async_function_id: u64,
     pub(crate) pending_async_dispose_await: bool,
     pub(crate) static_module_load_depth: u32,
     module_async_evaluation_count: u64,
@@ -239,7 +233,7 @@ impl Interpreter {
             destructuring_yield: false,
             pending_iter_close: Vec::new(),
             generator_inline_iters: FxHashMap::default(),
-            microtask_queue: Vec::new(),
+            scheduler: scheduler::JobScheduler::default(),
             cached_has_instance_key: None,
             module_registry: HashMap::new(),
             synthetic_module_registry: HashMap::new(),
@@ -286,10 +280,6 @@ impl Interpreter {
             regex_cache: HashMap::new(),
             iterator_next_cache: FxHashMap::default(),
             last_identifier_with_base: None,
-            async_gen_queues: FxHashMap::default(),
-            async_gen_yield_pending: false,
-            async_function_states: FxHashMap::default(),
-            next_async_function_id: 0,
             pending_async_dispose_await: false,
             static_module_load_depth: 0,
             module_async_evaluation_count: 0,
@@ -2897,11 +2887,10 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        let async_id = self.next_async_function_id;
-        self.next_async_function_id += 1;
+        let async_id = self.scheduler.alloc_async_function_id();
         self.module_async_info
             .insert(async_id, module_path.to_path_buf());
-        self.async_function_states.insert(
+        self.scheduler.insert_async_function_state(
             async_id,
             AsyncFunctionState {
                 state_machine: sm,
@@ -4426,8 +4415,7 @@ impl Interpreter {
     pub(crate) fn drain_microtasks(&mut self) {
         let mut iterations = 0u64;
         loop {
-            if !self.microtask_queue.is_empty() {
-                let (roots, job) = self.microtask_queue.remove(0);
+            if let Some((roots, job)) = self.scheduler.pop_microtask() {
                 let mt_frame = self.gc_root_frame();
                 for val in &roots {
                     self.gc_root_value(val);
@@ -4528,8 +4516,7 @@ impl Interpreter {
     pub(crate) fn drain_microtasks_blocking(&mut self) {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         loop {
-            while !self.microtask_queue.is_empty() {
-                let (roots, job) = self.microtask_queue.remove(0);
+            while let Some((roots, job)) = self.scheduler.pop_microtask() {
                 let mt_frame = self.gc_root_frame();
                 for val in &roots {
                     self.gc_root_value(val);

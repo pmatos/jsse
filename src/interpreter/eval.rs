@@ -7783,7 +7783,7 @@ impl Interpreter {
             false
         };
 
-        let queue = self.async_gen_queues.entry(gen_id).or_default();
+        let queue = self.scheduler.async_gen_queue_or_default(gen_id);
         queue.push_back(request);
         let queue_len = queue.len();
 
@@ -7805,13 +7805,13 @@ impl Interpreter {
         };
 
         let request = {
-            let queue = self.async_gen_queues.get(&gen_id);
+            let queue = self.scheduler.async_gen_queue(gen_id);
             match queue.and_then(|q| q.front().cloned()) {
                 Some(r) => r,
                 None => return,
             }
         };
-        self.async_gen_yield_pending = false;
+        self.scheduler.set_async_gen_yield_pending(false);
         let result = match request.kind {
             super::AsyncGenRequestKind::Next => self
                 .async_generator_next_state_machine_with_promise(
@@ -7841,13 +7841,13 @@ impl Interpreter {
 
         // If the yield suspended asynchronously (pending promise), don't pop — the
         // fulfill/reject handler will pop and schedule the next request
-        if self.async_gen_yield_pending {
-            self.async_gen_yield_pending = false;
+        if self.scheduler.is_async_gen_yield_pending() {
+            self.scheduler.set_async_gen_yield_pending(false);
             let _ = result;
             return;
         }
 
-        if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
             queue.pop_front();
         }
 
@@ -7909,7 +7909,7 @@ impl Interpreter {
                 pending_return: None,
             });
             let _ = self.call_function(reject_fn, &JsValue::Undefined, &[awaited_result]);
-            if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+            if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
                 queue.pop_front();
             }
             self.async_gen_process_queue(gen_this);
@@ -7933,7 +7933,7 @@ impl Interpreter {
                 pending_return: None,
             });
             let _ = self.call_function(reject_fn, &JsValue::Undefined, &[err]);
-            if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+            if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
                 queue.pop_front();
             }
             self.async_gen_process_queue(gen_this);
@@ -7959,7 +7959,7 @@ impl Interpreter {
                         pending_return: None,
                     });
                 let _ = self.call_function(reject_fn, &JsValue::Undefined, &[e]);
-                if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+                if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
                     queue.pop_front();
                 }
                 self.async_gen_process_queue(gen_this);
@@ -7991,7 +7991,7 @@ impl Interpreter {
                             pending_exception: Some(e),
                             pending_return: None,
                         });
-                    self.async_gen_yield_pending = false;
+                    self.scheduler.set_async_gen_yield_pending(false);
                     let _ = self.async_generator_next_state_machine_with_promise(
                         gen_this,
                         JsValue::Undefined,
@@ -7999,11 +7999,11 @@ impl Interpreter {
                         resolve_fn.clone(),
                         reject_fn.clone(),
                     );
-                    if self.async_gen_yield_pending {
-                        self.async_gen_yield_pending = false;
+                    if self.scheduler.is_async_gen_yield_pending() {
+                        self.scheduler.set_async_gen_yield_pending(false);
                         return;
                     }
-                    if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+                    if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
                         queue.pop_front();
                     }
                     self.async_gen_process_queue(gen_this);
@@ -8024,7 +8024,7 @@ impl Interpreter {
                         pending_return: None,
                     });
                 let _ = self.call_function(reject_fn, &JsValue::Undefined, &[e]);
-                if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+                if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
                     queue.pop_front();
                 }
                 self.async_gen_process_queue(gen_this);
@@ -8062,7 +8062,7 @@ impl Interpreter {
                 pending_exception: None,
                 pending_return: None,
             });
-            self.async_gen_yield_pending = false;
+            self.scheduler.set_async_gen_yield_pending(false);
             let _ = self.async_generator_next_state_machine_with_promise(
                 gen_this,
                 value,
@@ -8070,11 +8070,11 @@ impl Interpreter {
                 resolve_fn.clone(),
                 reject_fn.clone(),
             );
-            if self.async_gen_yield_pending {
-                self.async_gen_yield_pending = false;
+            if self.scheduler.is_async_gen_yield_pending() {
+                self.scheduler.set_async_gen_yield_pending(false);
                 return;
             }
-            if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+            if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
                 queue.pop_front();
             }
             self.async_gen_process_queue(gen_this);
@@ -8087,15 +8087,15 @@ impl Interpreter {
         let _ = self.call_function(resolve_fn, &JsValue::Undefined, &[iter_result]);
 
         // Pop the current (Next) request from the queue
-        if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
             queue.pop_front();
         }
 
         // Step 10-11: Check if queue has more requests (e.g. .return()/.throw())
         // If so, process via AsyncGeneratorUnwrapYieldResumption inline
         let next_request = self
-            .async_gen_queues
-            .get(&gen_id)
+            .scheduler
+            .async_gen_queue(gen_id)
             .and_then(|q| q.front().cloned());
 
         if let Some(request) = next_request {
@@ -8184,7 +8184,7 @@ impl Interpreter {
                                 &JsValue::Undefined,
                                 &[reason],
                             );
-                            if let Some(queue) = interp.async_gen_queues.get_mut(&gen_id_r2) {
+                            if let Some(queue) = interp.scheduler.async_gen_queue_mut(gen_id_r2) {
                                 queue.pop_front();
                             }
                             interp.async_gen_process_queue(&gen_this_r2);
@@ -8197,7 +8197,7 @@ impl Interpreter {
                         Some(PromiseState::Fulfilled(v)) => {
                             let handler = on_fulfilled;
                             let val = v.clone();
-                            self.microtask_queue.push((
+                            self.scheduler.enqueue_microtask((
                                 vec![val.clone(), handler.clone()],
                                 Box::new(move |interp| {
                                     let _ =
@@ -8209,7 +8209,7 @@ impl Interpreter {
                         Some(PromiseState::Rejected(r)) => {
                             let handler = on_rejected;
                             let reason = r.clone();
-                            self.microtask_queue.push((
+                            self.scheduler.enqueue_microtask((
                                 vec![reason.clone(), handler.clone()],
                                 Box::new(move |interp| {
                                     let _ = interp.call_function(
@@ -8246,7 +8246,7 @@ impl Interpreter {
                         None => {
                             let handler = on_fulfilled;
                             let val = ret_val.clone();
-                            self.microtask_queue.push((
+                            self.scheduler.enqueue_microtask((
                                 vec![val.clone(), handler.clone()],
                                 Box::new(move |interp| {
                                     let _ =
@@ -8256,7 +8256,7 @@ impl Interpreter {
                             ));
                         }
                     }
-                    self.async_gen_yield_pending = true;
+                    self.scheduler.set_async_gen_yield_pending(true);
                 }
                 _ => {
                     // Normal/Throw: save state and let process_queue handle it
@@ -8356,7 +8356,7 @@ impl Interpreter {
                                 pending_return: None,
                             });
                         let _ = self.call_function(ret_reject, &JsValue::Undefined, &[e]);
-                        if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+                        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
                             queue.pop_front();
                         }
                         self.async_gen_process_queue(gen_this);
@@ -8382,7 +8382,7 @@ impl Interpreter {
                                 pending_return: None,
                             });
                         let _ = self.call_function(ret_reject, &JsValue::Undefined, &[e]);
-                        if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+                        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
                             queue.pop_front();
                         }
                         self.async_gen_process_queue(gen_this);
@@ -8407,7 +8407,7 @@ impl Interpreter {
                                 pending_return: None,
                             });
                         let _ = self.call_function(ret_reject, &JsValue::Undefined, &[e]);
-                        if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+                        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
                             queue.pop_front();
                         }
                         self.async_gen_process_queue(gen_this);
@@ -8435,7 +8435,7 @@ impl Interpreter {
                         0
                     };
                     let _ = self.async_generator_await_return(value, ret_promise_id);
-                    if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+                    if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
                         queue.pop_front();
                     }
                     self.async_gen_process_queue(gen_this);
@@ -8458,7 +8458,7 @@ impl Interpreter {
                         });
                     let iter_result = self.create_iter_result_object(value, false);
                     let _ = self.call_function(ret_resolve, &JsValue::Undefined, &[iter_result]);
-                    if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+                    if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
                         queue.pop_front();
                     }
                     self.async_gen_process_queue(gen_this);
@@ -8486,7 +8486,7 @@ impl Interpreter {
                     0
                 };
                 let _ = self.async_generator_await_return(awaited_val, ret_promise_id);
-                if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+                if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
                     queue.pop_front();
                 }
                 self.async_gen_process_queue(gen_this);
@@ -8507,7 +8507,7 @@ impl Interpreter {
                         pending_return: None,
                     });
                 let _ = self.call_function(ret_reject, &JsValue::Undefined, &[e]);
-                if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+                if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
                     queue.pop_front();
                 }
                 self.async_gen_process_queue(gen_this);
@@ -9863,7 +9863,7 @@ impl Interpreter {
                             Some(PromiseState::Fulfilled(v)) => {
                                 let handler = fulfill_handler;
                                 let val = v.clone();
-                                self.microtask_queue.push((
+                                self.scheduler.enqueue_microtask((
                                     vec![val.clone(), handler.clone()],
                                     Box::new(move |interp| {
                                         let _ = interp.call_function(
@@ -9878,7 +9878,7 @@ impl Interpreter {
                             Some(PromiseState::Rejected(r)) => {
                                 let handler = reject_handler;
                                 let reason = r.clone();
-                                self.microtask_queue.push((
+                                self.scheduler.enqueue_microtask((
                                     vec![reason.clone(), handler.clone()],
                                     Box::new(move |interp| {
                                         let _ = interp.call_function(
@@ -9916,7 +9916,7 @@ impl Interpreter {
                                 // Not a promise — treat as immediately fulfilled
                                 let handler = fulfill_handler;
                                 let val = iter_result.clone();
-                                self.microtask_queue.push((
+                                self.scheduler.enqueue_microtask((
                                     vec![val.clone(), handler.clone()],
                                     Box::new(move |interp| {
                                         let _ = interp.call_function(
@@ -9930,7 +9930,7 @@ impl Interpreter {
                             }
                         }
 
-                        self.async_gen_yield_pending = true;
+                        self.scheduler.set_async_gen_yield_pending(true);
                         return Completion::Normal(promise);
                     }
 
@@ -9983,7 +9983,7 @@ impl Interpreter {
                                     &JsValue::Undefined,
                                     &[iter_result],
                                 );
-                                if let Some(queue) = interp.async_gen_queues.get_mut(&gen_id) {
+                                if let Some(queue) = interp.scheduler.async_gen_queue_mut(gen_id) {
                                     queue.pop_front();
                                 }
                                 interp.async_gen_process_queue(&gen_this);
@@ -10000,7 +10000,7 @@ impl Interpreter {
                                 let e = args.first().cloned().unwrap_or(JsValue::Undefined);
                                 let _ =
                                     interp.call_function(&reject_fn_c, &JsValue::Undefined, &[e]);
-                                if let Some(queue) = interp.async_gen_queues.get_mut(&gen_id2) {
+                                if let Some(queue) = interp.scheduler.async_gen_queue_mut(gen_id2) {
                                     queue.pop_front();
                                 }
                                 interp.async_gen_process_queue(&gen_this2);
@@ -10029,7 +10029,7 @@ impl Interpreter {
                             }
                         }
 
-                        self.async_gen_yield_pending = true;
+                        self.scheduler.set_async_gen_yield_pending(true);
                         return Completion::Normal(promise);
                     }
 
@@ -10056,19 +10056,19 @@ impl Interpreter {
                         let reject_fn_c2 = reject_fn.clone();
                         let gen_this3 = this.clone();
                         let gen_id3 = o.id;
-                        self.microtask_queue.push((
+                        self.scheduler.enqueue_microtask((
                             vec![e.clone(), reject_fn_c2.clone(), gen_this3.clone()],
                             Box::new(move |interp| {
                                 let _ =
                                     interp.call_function(&reject_fn_c2, &JsValue::Undefined, &[e]);
-                                if let Some(queue) = interp.async_gen_queues.get_mut(&gen_id3) {
+                                if let Some(queue) = interp.scheduler.async_gen_queue_mut(gen_id3) {
                                     queue.pop_front();
                                 }
                                 interp.async_gen_process_queue(&gen_this3);
                                 Completion::Normal(JsValue::Undefined)
                             }),
                         ));
-                        self.async_gen_yield_pending = true;
+                        self.scheduler.set_async_gen_yield_pending(true);
                         return Completion::Normal(promise);
                     } else {
                         yield_val
@@ -10100,7 +10100,7 @@ impl Interpreter {
                     let resolve_fn_c2 = resolve_fn.clone();
                     let gen_this3 = this.clone();
                     let gen_id3 = o.id;
-                    self.microtask_queue.push((
+                    self.scheduler.enqueue_microtask((
                         vec![
                             awaited_val.clone(),
                             resolve_fn_c2.clone(),
@@ -10113,7 +10113,7 @@ impl Interpreter {
                                 &JsValue::Undefined,
                                 &[iter_result],
                             );
-                            if let Some(queue) = interp.async_gen_queues.get_mut(&gen_id3) {
+                            if let Some(queue) = interp.scheduler.async_gen_queue_mut(gen_id3) {
                                 queue.pop_front();
                             }
                             // Process next queue item inline (not via microtask) per spec
@@ -10121,7 +10121,7 @@ impl Interpreter {
                             Completion::Normal(JsValue::Undefined)
                         }),
                     ));
-                    self.async_gen_yield_pending = true;
+                    self.scheduler.set_async_gen_yield_pending(true);
                     return Completion::Normal(promise);
                 }
 
@@ -10227,7 +10227,9 @@ impl Interpreter {
                                         &JsValue::Undefined,
                                         &[iter_result],
                                     );
-                                    if let Some(queue) = interp.async_gen_queues.get_mut(&gen_id) {
+                                    if let Some(queue) =
+                                        interp.scheduler.async_gen_queue_mut(gen_id)
+                                    {
                                         queue.pop_front();
                                     }
                                     interp.async_gen_process_queue(&gen_this_f);
@@ -10245,7 +10247,9 @@ impl Interpreter {
                                         &JsValue::Undefined,
                                         &[e],
                                     );
-                                    if let Some(queue) = interp.async_gen_queues.get_mut(&gen_id2) {
+                                    if let Some(queue) =
+                                        interp.scheduler.async_gen_queue_mut(gen_id2)
+                                    {
                                         queue.pop_front();
                                     }
                                     interp.async_gen_process_queue(&gen_this_r);
@@ -10269,7 +10273,7 @@ impl Interpreter {
                             cp_reject,
                         );
 
-                        self.async_gen_yield_pending = true;
+                        self.scheduler.set_async_gen_yield_pending(true);
                         return Completion::Normal(promise);
                     } else {
                         // return; — no expression, no Await per §13.10.1
@@ -11130,7 +11134,7 @@ impl Interpreter {
 
                         let _ = self.promise_then(&p, &fulfill_handler, &reject_handler);
 
-                        self.async_gen_yield_pending = true;
+                        self.scheduler.set_async_gen_yield_pending(true);
                         return Completion::Normal(promise);
                     }
                 }
@@ -11207,7 +11211,7 @@ impl Interpreter {
             }
         }
 
-        self.async_gen_yield_pending = false;
+        self.scheduler.set_async_gen_yield_pending(false);
         let _ = self.async_generator_next_state_machine_with_promise(
             this,
             JsValue::Undefined,
@@ -11215,22 +11219,22 @@ impl Interpreter {
             resolve_fn.clone(),
             reject_fn.clone(),
         );
-        if self.async_gen_yield_pending {
-            self.async_gen_yield_pending = false;
+        if self.scheduler.is_async_gen_yield_pending() {
+            self.scheduler.set_async_gen_yield_pending(false);
             return;
         }
 
         // Pop the queue entry and process next
-        if let Some(queue) = self.async_gen_queues.get_mut(&gen_id) {
+        if let Some(queue) = self.scheduler.async_gen_queue_mut(gen_id) {
             queue.pop_front();
         }
         let this_clone = this.clone();
         if self
-            .async_gen_queues
-            .get(&gen_id)
+            .scheduler
+            .async_gen_queue(gen_id)
             .is_some_and(|q| !q.is_empty())
         {
-            self.microtask_queue.push((
+            self.scheduler.enqueue_microtask((
                 vec![this_clone.clone()],
                 Box::new(move |interp| {
                     interp.async_gen_process_queue(&this_clone);
@@ -16251,10 +16255,9 @@ impl Interpreter {
             }
         }
 
-        let async_id = self.next_async_function_id;
-        self.next_async_function_id += 1;
+        let async_id = self.scheduler.alloc_async_function_id();
 
-        self.async_function_states.insert(
+        self.scheduler.insert_async_function_state(
             async_id,
             AsyncFunctionState {
                 state_machine: sm,
@@ -16287,7 +16290,7 @@ impl Interpreter {
     ) {
         use crate::interpreter::generator_transform::{SentValueBindingKind, StateTerminator};
 
-        let Some(state) = self.async_function_states.remove(&async_id) else {
+        let Some(state) = self.scheduler.remove_async_function_state(async_id) else {
             return;
         };
 
@@ -16337,7 +16340,7 @@ impl Interpreter {
         let mut pending_exception: Option<JsValue> = if is_error { Some(sent_value) } else { None };
 
         // Re-insert state so GC can trace it during execution
-        self.async_function_states.insert(
+        self.scheduler.insert_async_function_state(
             async_id,
             AsyncFunctionState {
                 state_machine: state_machine.clone(),
@@ -16385,7 +16388,7 @@ impl Interpreter {
                     let disp = self.dispose_resources(&func_env, Completion::Return(ret_val));
                     match disp {
                         Completion::Return(v) => {
-                            self.async_function_states.remove(&async_id);
+                            self.scheduler.remove_async_function_state(async_id);
                             let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[v]);
                             return;
                         }
@@ -16470,7 +16473,7 @@ impl Interpreter {
                     Completion::Throw(e) => e,
                     _ => JsValue::Undefined,
                 };
-                self.async_function_states.remove(&async_id);
+                self.scheduler.remove_async_function_state(async_id);
                 let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exc]);
                 return;
             }
@@ -17121,7 +17124,7 @@ impl Interpreter {
         reject_fn: &JsValue,
     ) {
         let disp = self.dispose_resources(func_env, Completion::Normal(JsValue::Undefined));
-        self.async_function_states.remove(&async_id);
+        self.scheduler.remove_async_function_state(async_id);
         match disp {
             Completion::Throw(e) => {
                 let _ = self.call_function(reject_fn, &JsValue::Undefined, &[e]);
@@ -17157,7 +17160,7 @@ impl Interpreter {
         };
 
         // Save state for resumption
-        self.async_function_states.insert(
+        self.scheduler.insert_async_function_state(
             async_id,
             AsyncFunctionState {
                 state_machine: state_machine.clone(),
@@ -17181,7 +17184,7 @@ impl Interpreter {
         match pstate {
             Some(PromiseState::Fulfilled(v)) => {
                 let value = v.clone();
-                self.microtask_queue.push((
+                self.scheduler.enqueue_microtask((
                     vec![resolve_fn.clone(), reject_fn.clone(), value.clone()],
                     Box::new(move |interp| {
                         interp.async_function_resume(async_id, value, false);
@@ -17191,7 +17194,7 @@ impl Interpreter {
             }
             Some(PromiseState::Rejected(e)) => {
                 let err = e.clone();
-                self.microtask_queue.push((
+                self.scheduler.enqueue_microtask((
                     vec![resolve_fn.clone(), reject_fn.clone(), err.clone()],
                     Box::new(move |interp| {
                         interp.async_function_resume(async_id, err, true);
@@ -17306,7 +17309,7 @@ impl Interpreter {
                 let done_c = done.clone();
                 let result_c = result.clone();
                 let value = v.clone();
-                self.microtask_queue.push((
+                self.scheduler.enqueue_microtask((
                     vec![value.clone()],
                     Box::new(move |_interp| {
                         done_c.set(true);
@@ -17319,7 +17322,7 @@ impl Interpreter {
                 let done_c = done.clone();
                 let result_c = result.clone();
                 let reason = r.clone();
-                self.microtask_queue.push((
+                self.scheduler.enqueue_microtask((
                     vec![reason.clone()],
                     Box::new(move |_interp| {
                         done_c.set(true);
@@ -17391,8 +17394,7 @@ impl Interpreter {
             if done.get() {
                 break;
             }
-            if !self.microtask_queue.is_empty() {
-                let (roots, job) = self.microtask_queue.remove(0);
+            if let Some((roots, job)) = self.scheduler.pop_microtask() {
                 let mt_frame = self.gc_root_frame();
                 for val in &roots {
                     self.gc_root_value(val);

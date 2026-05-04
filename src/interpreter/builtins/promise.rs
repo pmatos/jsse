@@ -922,7 +922,7 @@ impl Interpreter {
             if let Some(pid) = reaction.promise_id {
                 roots.push(JsValue::Object(crate::types::JsObject { id: pid }));
             }
-            self.microtask_queue.push((
+            self.scheduler.enqueue_microtask((
                 roots,
                 Box::new(move |interp| {
                     let handler_result = if let Some(ref handler) = reaction.handler {
@@ -991,7 +991,7 @@ impl Interpreter {
             reject_fn.clone(),
             JsValue::Object(crate::types::JsObject { id: promise_id }),
         ];
-        self.microtask_queue.push((
+        self.scheduler.enqueue_microtask((
             roots,
             Box::new(move |interp| {
                 let result =
