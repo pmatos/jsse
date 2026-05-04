@@ -245,16 +245,16 @@ fn json_quote_js_string(s: &JsString) -> String {
 
 // Proxy-aware IsArray (§7.2.2)
 pub(crate) fn is_array_value(interp: &mut Interpreter, obj_id: u64) -> Result<bool, JsValue> {
-    if let Some(obj) = interp.get_object(obj_id) {
-        let (is_revoked, is_proxy, target_id, class) = {
-            let b = obj.borrow();
-            let tid = if b.is_proxy() {
-                b.proxy_target_id
-            } else {
-                None
-            };
-            (b.proxy_revoked, b.is_proxy(), tid, b.class_name.clone())
+    let snapshot = interp.get_object_cell(obj_id).map(|cell| {
+        let b = cell.borrow();
+        let tid = if b.is_proxy() {
+            b.proxy_target_id
+        } else {
+            None
         };
+        (b.proxy_revoked, b.is_proxy(), tid, b.class_name.clone())
+    });
+    if let Some((is_revoked, is_proxy, target_id, class)) = snapshot {
         if is_revoked {
             return Err(interp.create_error(
                 "TypeError",
@@ -558,8 +558,8 @@ fn json_stringify_internal(
 
     // Step 4: Unwrap wrapper objects per spec (ToNumber/ToString trigger valueOf/toString)
     if let JsValue::Object(o) = &value {
-        let class = if let Some(obj) = interp.get_object(o.id) {
-            obj.borrow().class_name.clone()
+        let class = if let Some(cell) = interp.get_object_cell(o.id) {
+            cell.borrow().class_name.clone()
         } else {
             String::new()
         };
@@ -573,15 +573,15 @@ fn json_stringify_internal(
                 Err(e) => return Err(e),
             },
             "Boolean" => {
-                if let Some(obj) = interp.get_object(o.id)
-                    && let Some(pv) = obj.borrow().primitive_value.clone()
+                if let Some(cell) = interp.get_object_cell(o.id)
+                    && let Some(pv) = cell.borrow().primitive_value.clone()
                 {
                     value = pv;
                 }
             }
             "BigInt" => {
-                if let Some(obj) = interp.get_object(o.id)
-                    && let Some(pv) = obj.borrow().primitive_value.clone()
+                if let Some(cell) = interp.get_object_cell(o.id)
+                    && let Some(pv) = cell.borrow().primitive_value.clone()
                 {
                     value = pv;
                 }
@@ -966,8 +966,8 @@ fn json_internalize_apply(
     new_val: JsValue,
 ) -> Result<(), JsValue> {
     let is_proxy = interp
-        .get_object(obj_id)
-        .map(|o| o.borrow().is_proxy() || o.borrow().proxy_revoked)
+        .get_object_cell(obj_id)
+        .map(|c| c.borrow().is_proxy() || c.borrow().proxy_revoked)
         .unwrap_or(false);
 
     if is_proxy {
@@ -1042,8 +1042,8 @@ fn json_internalize_apply(
     }
 
     // Non-proxy path
-    if let Some(obj) = interp.get_object(obj_id) {
-        let configurable = obj
+    if let Some(cell) = interp.get_object_cell(obj_id) {
+        let configurable = cell
             .borrow()
             .properties
             .get(key)
@@ -1053,11 +1053,11 @@ fn json_internalize_apply(
             return Ok(());
         }
         if let JsValue::Undefined = &new_val {
-            obj.borrow_mut().properties.remove(key);
-            obj.borrow_mut().property_order.retain(|k| k != key);
+            cell.borrow_mut().properties.remove(key);
+            cell.borrow_mut().property_order.retain(|k| k != key);
             // Also clear dense array storage so get_property doesn't find stale values
             if let Ok(idx) = key.parse::<usize>() {
-                let mut b = obj.borrow_mut();
+                let mut b = cell.borrow_mut();
                 if let Some(ref mut elems) = b.array_elements
                     && idx < elems.len()
                 {
@@ -1065,7 +1065,7 @@ fn json_internalize_apply(
                 }
             }
         } else {
-            obj.borrow_mut().insert_value(key.to_string(), new_val);
+            cell.borrow_mut().insert_value(key.to_string(), new_val);
         }
     }
     Ok(())

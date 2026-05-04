@@ -33,7 +33,7 @@ impl Interpreter {
         }
         let gid = env.global_object_id?;
         drop(env);
-        self.get_object(gid)
+        self.get_object_cell(gid)
             .and_then(|go| go.borrow().own_property_lookup(name))
     }
 
@@ -103,7 +103,7 @@ impl Interpreter {
                     if let Some(gid) = mirror_gid {
                         // Borrow on `current` is dropped above; safe to call
                         // out to the slab (re-entrant set traps OK).
-                        if let Some(go) = self.get_object(gid) {
+                        if let Some(go) = self.get_object_cell(gid) {
                             let ok = go.borrow_mut().set_property_value(name, value.clone());
                             if !ok {
                                 if strict {
@@ -171,7 +171,7 @@ impl Interpreter {
             }
             if let Some(gid) = e.global_object_id {
                 drop(e);
-                if let Some(go) = self.get_object(gid)
+                if let Some(go) = self.get_object_cell(gid)
                     && let Some(v) = go.borrow().own_property_lookup(name)
                 {
                     return Some(v);
@@ -196,7 +196,7 @@ impl Interpreter {
             }
             if let Some(gid) = e.global_object_id {
                 drop(e);
-                if let Some(go) = self.get_object(gid) {
+                if let Some(go) = self.get_object_cell(gid) {
                     return go.borrow().own_has_property(name).unwrap_or(false);
                 }
                 return false;
@@ -212,7 +212,7 @@ impl Interpreter {
     pub(crate) fn env_declare_global_var(&mut self, env: &EnvRef, name: &str) {
         let gid = env.borrow().global_object_id;
         if let Some(gid) = gid {
-            if let Some(go) = self.get_object(gid) {
+            if let Some(go) = self.get_object_cell(gid) {
                 let mut g = go.borrow_mut();
                 if !g.properties.contains_key(name) {
                     g.property_order.push(name.to_string());
@@ -239,7 +239,7 @@ impl Interpreter {
                     env.borrow_mut().declare(name, BindingKind::Var);
                 }
             }
-            if let Some(go) = self.get_object(gid) {
+            if let Some(go) = self.get_object_cell(gid) {
                 let mut g = go.borrow_mut();
                 if !g.properties.contains_key(name) {
                     g.property_order.push(name.to_string());
@@ -282,7 +282,7 @@ impl Interpreter {
                 }
                 if let Some(gid) = e.global_object_id {
                     drop(e);
-                    if let Some(go) = self.get_object(gid)
+                    if let Some(go) = self.get_object_cell(gid)
                         && matches!(go.borrow().own_has_property(name), Some(true))
                     {
                         return SetBindingCheck::Ok;
@@ -310,7 +310,7 @@ impl Interpreter {
             .declare_global_function_binding(name, value.clone(), configurable);
         let gid = env.borrow().global_object_id;
         if let Some(gid) = gid
-            && let Some(go) = self.get_object(gid)
+            && let Some(go) = self.get_object_cell(gid)
         {
             let mut g = go.borrow_mut();
             let existing = g.properties.get(name);
