@@ -2,23 +2,13 @@ use super::*;
 
 impl Interpreter {
     /// Allocate a fresh object slot for `data` and return its id. The id is
-    /// written to `data.id` *before* wrapping in `Rc<RefCell<>>`, so the field
-    /// is set exactly once at allocation and never reassigned.
+    /// written to `data.id` inside the arena's `alloc`, so the field is set
+    /// exactly once at allocation and never reassigned.
     pub(crate) fn alloc_object(&mut self, mut data: JsObjectData) -> u64 {
         self.gc_alloc_count += 1;
-        let is_reuse = !self.free_list.is_empty();
         data.shape_id = crate::interpreter::types::fresh_shape_id();
-        let id = if let Some(idx) = self.free_list.pop() {
-            data.id = Some(idx as u64);
-            self.objects[idx] = Some(Rc::new(RefCell::new(data)));
-            idx as u64
-        } else {
-            let idx = self.objects.len();
-            data.id = Some(idx as u64);
-            self.objects.push(Some(Rc::new(RefCell::new(data))));
-            idx as u64
-        };
-        let cost = if is_reuse {
+        let (id, was_reuse) = self.objects.alloc(data);
+        let cost = if was_reuse {
             GC_OBJECT_OVERHEAD / 2
         } else {
             GC_OBJECT_OVERHEAD
@@ -49,7 +39,7 @@ impl Interpreter {
         }
         self.gc_requested = false;
         self.gc_alloc_count = 0;
-        let obj_count = self.objects.len();
+        let obj_count = self.objects.capacity() as usize;
         let mut marks = vec![false; obj_count];
 
         // Collect roots from all realms
@@ -132,8 +122,8 @@ impl Interpreter {
                 continue;
             }
             marks[idx] = true;
-            let obj_rc = match &self.objects[idx] {
-                Some(rc) => rc.clone(),
+            let obj_rc = match self.objects.get(id) {
+                Some(rc) => rc,
                 None => continue,
             };
             let obj = obj_rc.borrow();
@@ -147,8 +137,8 @@ impl Interpreter {
                 if !marks[i] {
                     continue;
                 }
-                let obj_rc = match &self.objects[i] {
-                    Some(rc) => rc.clone(),
+                let obj_rc = match self.objects.get(i as u64) {
+                    Some(rc) => rc,
                     None => continue,
                 };
                 let obj = obj_rc.borrow();
@@ -182,8 +172,8 @@ impl Interpreter {
                 }
                 marks[idx] = true;
                 new_marks = true;
-                let obj_rc = match &self.objects[idx] {
-                    Some(rc) => rc.clone(),
+                let obj_rc = match self.objects.get(id) {
+                    Some(rc) => rc,
                     None => continue,
                 };
                 let obj = obj_rc.borrow();
@@ -196,8 +186,10 @@ impl Interpreter {
 
         // Sweep phase
         for (i, mark) in marks.iter().enumerate().take(obj_count) {
-            if !mark && self.objects[i].is_some() {
-                if let Some(ref obj_rc) = self.objects[i] {
+            let id = i as u64;
+            let live = self.objects.slot_at(id).is_some_and(|s| s.is_some());
+            if !mark && live {
+                if let Some(obj_rc) = self.objects.get(id) {
                     let obj = obj_rc.borrow();
                     if let Some(ref buf_data) = obj.arraybuffer_data
                         && let BufferData::Owned(ref v) = *buf_data.borrow()
@@ -205,15 +197,14 @@ impl Interpreter {
                         self.gc_external_bytes = self.gc_external_bytes.saturating_sub(v.len());
                     }
                 }
-                self.objects[i] = None;
-                self.free_list.push(i);
-                self.function_realm_map.remove(&(i as u64));
-                self.iterator_next_cache.remove(&(i as u64));
-                self.generator_inline_iters.remove(&(i as u64));
+                self.objects.free(id);
+                self.function_realm_map.remove(&id);
+                self.iterator_next_cache.remove(&id);
+                self.generator_inline_iters.remove(&id);
             }
         }
         // Adaptive threshold: scale next GC budget from live heap size
-        let live_count = self.objects.iter().filter(|o| o.is_some()).count();
+        let live_count = self.objects.live_count();
         let live_bytes = live_count * GC_OBJECT_OVERHEAD + self.gc_external_bytes;
         self.gc_threshold_bytes =
             std::cmp::max(GC_MIN_THRESHOLD_BYTES, live_bytes * GC_GROWTH_FACTOR);
@@ -223,8 +214,8 @@ impl Interpreter {
             if !marks[i] {
                 continue;
             }
-            let obj_rc = match &self.objects[i] {
-                Some(rc) => rc.clone(),
+            let obj_rc = match self.objects.get(i as u64) {
+                Some(rc) => rc,
                 None => continue,
             };
             let mut obj = obj_rc.borrow_mut();

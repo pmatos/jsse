@@ -27,6 +27,7 @@ mod gc;
 pub(crate) mod generator_analysis;
 pub(crate) mod generator_transform;
 pub(crate) mod ic;
+mod object_arena;
 mod property_map;
 pub(crate) use property_map::PropertyMap;
 mod scheduler;
@@ -52,16 +53,14 @@ fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
     None
 }
 
-#[allow(clippy::type_complexity)]
 pub struct Interpreter {
     pub(crate) realms: Vec<Realm>,
     pub(crate) current_realm_id: usize,
-    objects: Vec<Option<Rc<RefCell<JsObjectData>>>>,
+    objects: object_arena::ObjectArena,
     global_symbol_registry: HashMap<String, crate::types::JsSymbol>,
     pub(crate) well_known_symbols: HashMap<String, crate::types::JsSymbol>,
     next_symbol_id: u64,
     new_target: Option<JsValue>,
-    free_list: Vec<usize>,
     gc_alloc_count: usize,
     gc_requested: bool,
     gc_bytes_since_gc: usize,
@@ -214,12 +213,11 @@ impl Interpreter {
         let mut interp = Self {
             realms: vec![realm],
             current_realm_id: 0,
-            objects: Vec::new(),
+            objects: object_arena::ObjectArena::new(),
             global_symbol_registry: HashMap::new(),
             well_known_symbols: HashMap::new(),
             next_symbol_id: 1,
             new_target: None,
-            free_list: Vec::new(),
             gc_alloc_count: 0,
             gc_requested: false,
             gc_bytes_since_gc: 0,
@@ -972,7 +970,7 @@ impl Interpreter {
 
     pub(crate) fn to_boolean_val(&self, val: &JsValue) -> bool {
         if let JsValue::Object(o) = val
-            && let Some(Some(obj)) = self.objects.get(o.id as usize)
+            && let Some(obj) = self.objects.get(o.id)
             && obj.borrow().is_htmldda
         {
             return false;
@@ -1167,7 +1165,7 @@ impl Interpreter {
     }
 
     pub(crate) fn get_object(&self, id: u64) -> Option<Rc<RefCell<JsObjectData>>> {
-        self.objects.get(id as usize).and_then(|slot| slot.clone())
+        self.objects.get(id)
     }
 
     /// Total IC hits since interpreter construction. Whitebox accessor used
@@ -1236,10 +1234,7 @@ impl Interpreter {
     /// `self.objects[id as usize].as_ref().unwrap().clone()` used at most
     /// call sites where the id is known live (held by a live JsValue).
     pub(crate) fn get_object_expect(&self, id: u64) -> Rc<RefCell<JsObjectData>> {
-        self.objects[id as usize]
-            .as_ref()
-            .expect("dead object id")
-            .clone()
+        self.objects.get_expect(id)
     }
 
     /// Iterative prototype-chain walk of `get_property`. Returns

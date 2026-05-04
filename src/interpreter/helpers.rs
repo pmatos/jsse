@@ -164,10 +164,7 @@ pub(crate) fn strict_equality(left: &JsValue, right: &JsValue) -> bool {
     }
 }
 
-pub(crate) fn typeof_val<'a>(
-    val: &JsValue,
-    objects: &[Option<Rc<RefCell<JsObjectData>>>],
-) -> &'a str {
+pub(crate) fn typeof_val<'a>(val: &JsValue, objects: &super::object_arena::ObjectArena) -> &'a str {
     match val {
         JsValue::Undefined => "undefined",
         JsValue::Null => "object",
@@ -177,11 +174,12 @@ pub(crate) fn typeof_val<'a>(
         JsValue::Symbol(_) => "symbol",
         JsValue::BigInt(_) => "bigint",
         JsValue::Object(o) => {
-            if let Some(Some(obj)) = objects.get(o.id as usize) {
-                if obj.borrow().is_htmldda {
+            if let Some(obj) = objects.get(o.id) {
+                let b = obj.borrow();
+                if b.is_htmldda {
                     return "undefined";
                 }
-                if obj.borrow().callable.is_some() {
+                if b.callable.is_some() {
                     return "function";
                 }
             }

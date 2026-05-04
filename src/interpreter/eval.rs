@@ -1677,14 +1677,14 @@ impl Interpreter {
         }
         // B.3.6.2: IsHTMLDDA == null/undefined
         if let JsValue::Object(o) = left
-            && let Some(Some(obj)) = self.objects.get(o.id as usize)
+            && let Some(obj) = self.objects.get(o.id)
             && obj.borrow().is_htmldda
             && (right.is_null() || right.is_undefined())
         {
             return Ok(true);
         }
         if let JsValue::Object(o) = right
-            && let Some(Some(obj)) = self.objects.get(o.id as usize)
+            && let Some(obj) = self.objects.get(o.id)
             && obj.borrow().is_htmldda
             && (left.is_null() || left.is_undefined())
         {
