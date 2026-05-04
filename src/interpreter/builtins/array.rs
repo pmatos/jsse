@@ -2,19 +2,19 @@ use super::super::*;
 
 // §7.2.2 IsArray — Proxy-aware check
 fn is_array_check(interp: &mut Interpreter, obj_id: u64) -> Result<bool, JsValue> {
-    if let Some(obj) = interp.get_object(obj_id) {
-        let (is_revoked, is_proxy, target_id, class) = {
-            let b = obj.borrow();
-            let tid = b.proxy_target_id;
-            // is_proxy() checks proxy_target_id.is_some(), but revoked proxies have proxy_target_id=None
-            // Use proxy_revoked flag to also detect revoked proxies
-            (
-                b.proxy_revoked,
-                b.is_proxy() || b.proxy_revoked,
-                tid,
-                b.class_name.clone(),
-            )
-        };
+    let snapshot = interp.get_object_cell(obj_id).map(|cell| {
+        let b = cell.borrow();
+        let tid = b.proxy_target_id;
+        // is_proxy() checks proxy_target_id.is_some(), but revoked proxies have proxy_target_id=None
+        // Use proxy_revoked flag to also detect revoked proxies
+        (
+            b.proxy_revoked,
+            b.is_proxy() || b.proxy_revoked,
+            tid,
+            b.class_name.clone(),
+        )
+    });
+    if let Some((is_revoked, is_proxy, target_id, class)) = snapshot {
         if is_revoked {
             return Err(interp
                 .create_type_error("Cannot perform 'IsArray' on a proxy that has been revoked"));
@@ -59,9 +59,9 @@ fn length_of_array_like(interp: &mut Interpreter, o: &JsValue) -> Result<usize, 
     Ok(len.min(9007199254740991.0) as usize)
 }
 
-fn get_obj(interp: &Interpreter, o: &JsValue) -> Option<Rc<RefCell<JsObjectData>>> {
+fn get_obj<'a>(interp: &'a Interpreter, o: &JsValue) -> Option<&'a RefCell<JsObjectData>> {
     if let JsValue::Object(obj_ref) = o {
-        interp.get_object(obj_ref.id)
+        interp.get_object_cell(obj_ref.id)
     } else {
         None
     }
@@ -87,9 +87,11 @@ fn obj_set_throw(
 ) -> Result<(), JsValue> {
     if let JsValue::Object(obj_ref) = o {
         // Check for Proxy
-        if let Some(obj) = interp.get_object(obj_ref.id)
-            && (obj.borrow().is_proxy() || obj.borrow().proxy_revoked)
-        {
+        let is_proxy = interp.get_object_cell(obj_ref.id).is_some_and(|cell| {
+            let b = cell.borrow();
+            b.is_proxy() || b.proxy_revoked
+        });
+        if is_proxy {
             match interp.proxy_set(obj_ref.id, key, value, o) {
                 Ok(true) => return Ok(()),
                 Ok(false) => {
@@ -131,8 +133,8 @@ fn obj_set_throw(
         }
         // TypedArray [[Set]]: must call ToNumber/ToBigInt before writing (§10.4.5.5)
         {
-            let ta_info = interp.get_object(obj_ref.id).and_then(|obj| {
-                let b = obj.borrow();
+            let ta_info = interp.get_object_cell(obj_ref.id).and_then(|cell| {
+                let b = cell.borrow();
                 b.typed_array_info
                     .as_ref()
                     .map(|ta| (ta.kind.is_bigint(), ta.kind))
@@ -148,8 +150,8 @@ fn obj_set_throw(
                         Err(e) => return Err(e),
                     }
                 };
-                if let Some(obj) = interp.get_object(obj_ref.id)
-                    && let Some(ref ta) = obj.borrow().typed_array_info
+                if let Some(cell) = interp.get_object_cell(obj_ref.id)
+                    && let Some(ref ta) = cell.borrow().typed_array_info
                     && is_valid_integer_index(ta, index)
                 {
                     typed_array_set_index(ta, index as usize, &num_val);
@@ -158,14 +160,17 @@ fn obj_set_throw(
             }
         }
         // Normal set
-        if let Some(obj) = interp.get_object(obj_ref.id) {
-            let mut borrow = obj.borrow_mut();
-            if !borrow.extensible && !borrow.has_own_property(key) {
+        if let Some(cell) = interp.get_object_cell(obj_ref.id) {
+            let needs_error = {
+                let borrow = cell.borrow();
+                !borrow.extensible && !borrow.has_own_property(key)
+            };
+            if needs_error {
                 return Err(interp.create_type_error(&format!(
                     "Cannot add property {key}, object is not extensible"
                 )));
             }
-            borrow.set_property_value(key, value);
+            cell.borrow_mut().set_property_value(key, value);
         }
     }
     Ok(())
@@ -180,8 +185,8 @@ pub(crate) fn create_data_property_or_throw(
     if let JsValue::Object(obj_ref) = o {
         // Deferred namespace: trigger evaluation on [[DefineOwnProperty]]
         {
-            let is_deferred_ns = interp.get_object(obj_ref.id).is_some_and(|obj| {
-                obj.borrow()
+            let is_deferred_ns = interp.get_object_cell(obj_ref.id).is_some_and(|cell| {
+                cell.borrow()
                     .module_namespace
                     .as_ref()
                     .is_some_and(|ns| ns.deferred)
@@ -191,9 +196,10 @@ pub(crate) fn create_data_property_or_throw(
             }
         }
         // Check for Proxy defineProperty trap
-        if let Some(obj) = interp.get_object(obj_ref.id)
-            && obj.borrow().is_proxy()
-        {
+        let is_proxy = interp
+            .get_object_cell(obj_ref.id)
+            .is_some_and(|cell| cell.borrow().is_proxy());
+        if is_proxy {
             // Build descriptor object for proxy trap
             let desc_obj_id = interp.create_object_id();
             {
@@ -213,26 +219,29 @@ pub(crate) fn create_data_property_or_throw(
                 Err(e) => Err(e),
             };
         }
-        if let Some(obj) = interp.get_object(obj_ref.id) {
+        if interp.get_object_cell(obj_ref.id).is_some() {
             // Check extensibility — if object is not extensible and property doesn't exist, fail
-            let not_extensible = !obj.borrow().extensible;
+            let not_extensible = !interp
+                .get_object_cell_expect(obj_ref.id)
+                .borrow()
+                .extensible;
             if not_extensible && !interp.has_property_on_id(obj_ref.id, key) {
                 return Err(interp.create_type_error(&format!(
                     "Cannot add property {key}, object is not extensible"
                 )));
             }
-            {
-                let borrow = obj.borrow();
-                // Check for non-configurable existing property
-                if let Some(desc) = borrow.get_own_property(key)
-                    && desc.configurable == Some(false)
-                {
-                    return Err(
-                        interp.create_type_error(&format!("Cannot redefine property: {key}"))
-                    );
-                }
+            // Check for non-configurable existing property
+            let non_configurable = {
+                let borrow = interp.get_object_cell_expect(obj_ref.id).borrow();
+                borrow
+                    .get_own_property(key)
+                    .is_some_and(|desc| desc.configurable == Some(false))
+            };
+            if non_configurable {
+                return Err(interp.create_type_error(&format!("Cannot redefine property: {key}")));
             }
-            let mut borrow = obj.borrow_mut();
+            let cell = interp.get_object_cell_expect(obj_ref.id);
+            let mut borrow = cell.borrow_mut();
             if let Some(ref mut elems) = borrow.array_elements
                 && let Ok(idx) = key.parse::<usize>()
             {
@@ -442,8 +451,8 @@ fn from_async_attach_await(
                 },
             ));
 
-            if let Some(obj) = interp.get_object(promise_id) {
-                let mut ob = obj.borrow_mut();
+            if let Some(cell) = interp.get_object_cell(promise_id) {
+                let mut ob = cell.borrow_mut();
                 if let Some(ref mut pd) = ob.promise_data {
                     pd.is_handled = true;
                     pd.fulfill_reactions.push(PromiseReaction {
@@ -674,8 +683,8 @@ fn from_async_store_arraylike_and_continue(
 }
 
 fn obj_delete(interp: &mut Interpreter, o: &JsValue, key: &str) {
-    if let Some(obj) = get_obj(interp, o) {
-        let mut borrow = obj.borrow_mut();
+    if let Some(cell) = get_obj(interp, o) {
+        let mut borrow = cell.borrow_mut();
         borrow.properties.remove(key);
         borrow.property_order.retain(|k| k != key);
         if let Some(ref mut elems) = borrow.array_elements
@@ -691,9 +700,11 @@ fn obj_delete(interp: &mut Interpreter, o: &JsValue, key: &str) {
 fn obj_delete_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<(), JsValue> {
     if let JsValue::Object(obj_ref) = o {
         // Check for Proxy deleteProperty trap
-        if let Some(obj) = interp.get_object(obj_ref.id)
-            && (obj.borrow().is_proxy() || obj.borrow().proxy_revoked)
-        {
+        let is_proxy = interp.get_object_cell(obj_ref.id).is_some_and(|cell| {
+            let b = cell.borrow();
+            b.is_proxy() || b.proxy_revoked
+        });
+        if is_proxy {
             match interp.proxy_delete_property(obj_ref.id, key) {
                 Ok(true) => return Ok(()),
                 Ok(false) => {
@@ -705,15 +716,15 @@ fn obj_delete_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<
             }
         }
         // Check if property is non-configurable
-        if let Some(obj) = interp.get_object(obj_ref.id) {
-            let desc = obj.borrow().get_own_property(key);
-            if let Some(ref d) = desc
-                && d.configurable == Some(false)
-            {
-                return Err(
-                    interp.create_type_error(&format!("Cannot delete property '{key}' of object"))
-                );
-            }
+        let non_configurable = interp.get_object_cell(obj_ref.id).is_some_and(|cell| {
+            cell.borrow()
+                .get_own_property(key)
+                .is_some_and(|desc| desc.configurable == Some(false))
+        });
+        if non_configurable {
+            return Err(
+                interp.create_type_error(&format!("Cannot delete property '{key}' of object"))
+            );
         }
     }
     obj_delete(interp, o, key);
@@ -721,8 +732,8 @@ fn obj_delete_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<
 }
 
 fn set_length(interp: &mut Interpreter, o: &JsValue, len: usize) {
-    if let Some(obj) = get_obj(interp, o) {
-        let mut borrow = obj.borrow_mut();
+    if let Some(cell) = get_obj(interp, o) {
+        let mut borrow = cell.borrow_mut();
         if let Some(ref mut elems) = borrow.array_elements
             && len <= elems.len()
         {
@@ -735,42 +746,41 @@ fn set_length(interp: &mut Interpreter, o: &JsValue, len: usize) {
 
 // Set(O, "length", len, true) — uses obj_set_throw for setter invocation
 fn set_length_throw(interp: &mut Interpreter, o: &JsValue, len: usize) -> Result<(), JsValue> {
-    if let Some(obj) = get_obj(interp, o)
-        && obj.borrow().array_elements.is_some()
-    {
+    let snapshot = get_obj(interp, o).and_then(|cell| {
+        let b = cell.borrow();
+        b.array_elements.as_ref()?;
+        let length_desc = b.get_own_property("length");
+        let length_writable_false = length_desc
+            .as_ref()
+            .is_some_and(|d| d.writable == Some(false));
+        let length_frozen = length_desc
+            .as_ref()
+            .is_some_and(|d| d.configurable == Some(false) && d.writable == Some(false));
+        Some((b.extensible, length_writable_false, length_frozen))
+    });
+    if let Some((extensible, length_writable_false, length_frozen)) = snapshot {
         // ArraySetLength §10.4.2.4: ToUint32(len) must equal ToNumber(len)
         let len_f64 = len as f64;
         let len_u32 = len_f64 as u32;
         if (len_u32 as f64) != len_f64 {
             return Err(interp.create_range_error("Invalid array length"));
         }
-        // Check if length is writable
-        let desc = obj.borrow().get_own_property("length");
-        if let Some(ref d) = desc
-            && d.writable == Some(false)
-        {
+        if length_writable_false {
             return Err(interp.create_type_error("Cannot assign to read only property 'length'"));
         }
-        // Check if frozen (not extensible + all props non-configurable)
-        if !obj.borrow().extensible {
-            let desc = obj.borrow().get_own_property("length");
-            if let Some(ref d) = desc
-                && d.configurable == Some(false)
-                && d.writable == Some(false)
+        if !extensible && length_frozen {
+            return Err(interp.create_type_error("Cannot assign to read only property 'length'"));
+        }
+        if let Some(cell) = get_obj(interp, o) {
+            let mut borrow = cell.borrow_mut();
+            if let Some(ref mut elems) = borrow.array_elements
+                && len <= elems.len()
             {
-                return Err(
-                    interp.create_type_error("Cannot assign to read only property 'length'")
-                );
+                elems.truncate(len);
             }
+            // Don't pre-allocate for sparse arrays
+            borrow.set_property_value("length", JsValue::Number(len as f64));
         }
-        let mut borrow = obj.borrow_mut();
-        if let Some(ref mut elems) = borrow.array_elements
-            && len <= elems.len()
-        {
-            elems.truncate(len);
-        }
-        // Don't pre-allocate for sparse arrays
-        borrow.set_property_value("length", JsValue::Number(len as f64));
         return Ok(());
     }
     obj_set_throw(interp, o, "length", JsValue::Number(len as f64))
@@ -833,8 +843,8 @@ fn array_species_create(
             // on the global object).
             let realm_array = interp.realms[c_realm]
                 .global_object
-                .and_then(|gid| interp.get_object(gid))
-                .and_then(|go| go.borrow().own_property_lookup("Array"));
+                .and_then(|gid| interp.get_object_cell(gid))
+                .and_then(|cell| cell.borrow().own_property_lookup("Array"));
             if let Some(ref ra) = realm_array
                 && same_value(&c, ra)
             {
@@ -3832,20 +3842,21 @@ impl Interpreter {
         let array_val = self.get_global_var("Array");
         if let Some(array_val) = array_val
             && let JsValue::Object(o) = &array_val
-            && let Some(obj) = self.get_object(o.id)
+            && self.get_object_cell(o.id).is_some()
         {
-            obj.borrow_mut()
-                .insert_builtin("isArray".to_string(), is_array_fn);
-            obj.borrow_mut()
-                .insert_builtin("from".to_string(), array_from);
-            obj.borrow_mut().insert_builtin("of".to_string(), array_of);
-            obj.borrow_mut()
-                .insert_builtin("fromAsync".to_string(), from_async_fn);
-            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val, false, false, false),
-            );
+            let array_id = o.id;
+            {
+                let mut borrow = self.get_object_cell_expect(array_id).borrow_mut();
+                borrow.insert_builtin("isArray".to_string(), is_array_fn);
+                borrow.insert_builtin("from".to_string(), array_from);
+                borrow.insert_builtin("of".to_string(), array_of);
+                borrow.insert_builtin("fromAsync".to_string(), from_async_fn);
+                let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+                borrow.insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val, false, false, false),
+                );
+            }
 
             // Array[Symbol.species] getter - returns `this`
             let species_getter = self.create_function(JsFunction::native(
@@ -3853,17 +3864,19 @@ impl Interpreter {
                 0,
                 |_interp, this_val, _args| Completion::Normal(this_val.clone()),
             ));
-            obj.borrow_mut().insert_property(
-                "Symbol(Symbol.species)".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(species_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            self.get_object_cell_expect(array_id)
+                .borrow_mut()
+                .insert_property(
+                    "Symbol(Symbol.species)".to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: Some(species_getter),
+                        set: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                    },
+                );
 
             // Array.prototype.constructor = Array
             self.get_object_cell_expect(proto_id)
