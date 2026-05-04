@@ -1485,7 +1485,7 @@ impl Interpreter {
                 Completion::Normal(arr)
             },
         ));
-        self.get_object_expect(iter_proto_id)
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("toArray".to_string(), to_array_fn);
 
@@ -1530,7 +1530,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        self.get_object_expect(iter_proto_id)
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("forEach".to_string(), for_each_fn);
 
@@ -1585,7 +1585,7 @@ impl Interpreter {
                 }
             },
         ));
-        self.get_object_expect(iter_proto_id)
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("some".to_string(), some_fn);
 
@@ -1639,7 +1639,7 @@ impl Interpreter {
                 }
             },
         ));
-        self.get_object_expect(iter_proto_id)
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("every".to_string(), every_fn);
 
@@ -1693,7 +1693,7 @@ impl Interpreter {
                 }
             },
         ));
-        self.get_object_expect(iter_proto_id)
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("find".to_string(), find_fn);
 
@@ -1762,7 +1762,7 @@ impl Interpreter {
                 }
             },
         ));
-        self.get_object_expect(iter_proto_id)
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("reduce".to_string(), reduce_fn);
 
@@ -1897,7 +1897,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        self.get_object_expect(iter_proto_id)
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("map".to_string(), map_fn);
 
@@ -2035,7 +2035,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        self.get_object_expect(iter_proto_id)
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("filter".to_string(), filter_fn);
 
@@ -2189,7 +2189,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        self.get_object_expect(iter_proto_id)
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("take".to_string(), take_fn);
 
@@ -2354,7 +2354,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        self.get_object_expect(iter_proto_id)
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("drop".to_string(), drop_fn);
 
@@ -2586,7 +2586,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        self.get_object_expect(iter_proto_id)
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("flatMap".to_string(), flat_map_fn);
     }

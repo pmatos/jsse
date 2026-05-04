@@ -16,7 +16,7 @@ pub(super) fn create_plain_month_day_result(
     obj.borrow_mut().class_name = "Temporal.PlainMonthDay".to_string();
     if let Some(proto_id) = interp.realm().temporal_plain_month_day_prototype {
         obj.borrow_mut().prototype_id =
-            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
+            Some(proto_id);
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::PlainMonthDay {
         iso_month: m,
@@ -1217,7 +1217,7 @@ impl Interpreter {
             obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
         }
 
-        self.get_object_expect(temporal_obj_id)
+        self.get_object_cell_expect(temporal_obj_id)
             .borrow_mut()
             .insert_property(
                 "PlainMonthDay".to_string(),

@@ -1767,7 +1767,7 @@ impl Interpreter {
             let mut o = obj.borrow_mut();
             o.class_name = "AggregateError".to_string();
             if let Some(proto_id) = self.realm().aggregate_error_prototype {
-                o.prototype_id = Some(self.get_object_expect(proto_id).borrow().id.unwrap());
+                o.prototype_id = Some(proto_id);
             }
             o.insert_builtin(
                 "message".to_string(),

@@ -691,7 +691,7 @@ fn create_zdt(interp: &mut Interpreter, ns: BigInt, tz: String, cal: String) -> 
     obj.borrow_mut().class_name = "Temporal.ZonedDateTime".to_string();
     if let Some(proto_id) = interp.realm().temporal_zoned_date_time_prototype {
         obj.borrow_mut().prototype_id =
-            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
+            Some(proto_id);
     }
     obj.borrow_mut().temporal_data = Some(TemporalData::ZonedDateTime {
         epoch_nanoseconds: ns,
@@ -2203,7 +2203,7 @@ impl Interpreter {
                         let opts_obj = interp.create_object();
                         if let Some(op_id) = interp.realm().object_prototype {
                             opts_obj.borrow_mut().prototype_id =
-                                Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                                Some(op_id);
                         }
                         // Copy properties from user options if present
                         if let JsValue::Object(ref o) = options_arg {
@@ -2385,7 +2385,7 @@ impl Interpreter {
                     obj.borrow_mut().class_name = "Temporal.Instant".to_string();
                     if let Some(proto_id) = interp.realm().temporal_instant_prototype {
                         obj.borrow_mut().prototype_id =
-                            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
+                            Some(proto_id);
                     }
                     obj.borrow_mut().temporal_data = Some(TemporalData::Instant {
                         epoch_nanoseconds: ns,
@@ -3630,7 +3630,7 @@ impl Interpreter {
             }
         }
 
-        self.get_object_expect(temporal_obj_id)
+        self.get_object_cell_expect(temporal_obj_id)
             .borrow_mut()
             .insert_property(
                 "ZonedDateTime".to_string(),

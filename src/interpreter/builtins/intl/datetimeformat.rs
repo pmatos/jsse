@@ -4714,7 +4714,7 @@ impl Interpreter {
         let proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
             proto.borrow_mut().prototype_id =
-                Some(self.get_object_expect(op_id).borrow().id.unwrap());
+                Some(op_id);
         }
         proto.borrow_mut().class_name = "Intl.DateTimeFormat".to_string();
 
@@ -4919,7 +4919,7 @@ impl Interpreter {
                         let part_obj = interp.create_object();
                         if let Some(op_id) = interp.realm().object_prototype {
                             part_obj.borrow_mut().prototype_id =
-                                Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                                Some(op_id);
                         }
                         part_obj.borrow_mut().insert_property(
                             "type".to_string(),
@@ -5159,7 +5159,7 @@ impl Interpreter {
                     .map(|(ptype, value, source)| {
                         let part_obj = interp.create_object();
                         if let Some(op_id) = interp.realm().object_prototype {
-                            part_obj.borrow_mut().prototype_id = Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                            part_obj.borrow_mut().prototype_id = Some(op_id);
                         }
                         part_obj.borrow_mut().insert_property(
                             "type".to_string(),
@@ -5213,7 +5213,7 @@ impl Interpreter {
                 let result = interp.create_object();
                 if let Some(op_id) = interp.realm().object_prototype {
                     result.borrow_mut().prototype_id =
-                        Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                        Some(op_id);
                 }
 
                 // Properties in spec order
@@ -5752,7 +5752,7 @@ impl Interpreter {
         self.realm_mut().intl_date_time_format_ctor = Some(dtf_ctor.clone());
 
         // Register Intl.DateTimeFormat on the Intl namespace
-        self.get_object_expect(intl_obj_id)
+        self.get_object_cell_expect(intl_obj_id)
             .borrow_mut()
             .insert_property(
                 "DateTimeFormat".to_string(),

@@ -93,7 +93,7 @@ fn create_segment_object(
 ) -> JsValue {
     let obj = interp.create_object();
     if let Some(op_id) = interp.realm().object_prototype {
-        obj.borrow_mut().prototype_id = Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+        obj.borrow_mut().prototype_id = Some(op_id);
     }
     obj.borrow_mut().insert_property(
         "segment".to_string(),
@@ -151,7 +151,7 @@ impl Interpreter {
         let proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
             proto.borrow_mut().prototype_id =
-                Some(self.get_object_expect(op_id).borrow().id.unwrap());
+                Some(op_id);
         }
         proto.borrow_mut().class_name = "Intl.Segmenter".to_string();
 
@@ -190,7 +190,7 @@ impl Interpreter {
                 let segments_obj = interp.create_object();
                 if let Some(op_id) = interp.realm().object_prototype {
                     segments_obj.borrow_mut().prototype_id =
-                        Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                        Some(op_id);
                 }
                 segments_obj.borrow_mut().class_name = "Segmenter Segments".to_string();
 
@@ -491,7 +491,7 @@ impl Interpreter {
                 let result = interp.create_object();
                 if let Some(op_id) = interp.realm().object_prototype {
                     result.borrow_mut().prototype_id =
-                        Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                        Some(op_id);
                 }
 
                 let props = vec![
@@ -625,7 +625,7 @@ impl Interpreter {
         );
 
         // Register Intl.Segmenter on the Intl namespace
-        self.get_object_expect(intl_obj_id)
+        self.get_object_cell_expect(intl_obj_id)
             .borrow_mut()
             .insert_property(
                 "Segmenter".to_string(),

@@ -154,7 +154,7 @@ impl Interpreter {
         let proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
             proto.borrow_mut().prototype_id =
-                Some(self.get_object_expect(op_id).borrow().id.unwrap());
+                Some(op_id);
         }
         proto.borrow_mut().class_name = "Intl.PluralRules".to_string();
 
@@ -350,7 +350,7 @@ impl Interpreter {
                         let result = interp.create_object();
                         if let Some(op_id) = interp.realm().object_prototype {
                             result.borrow_mut().prototype_id =
-                                Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                                Some(op_id);
                         }
 
                         // Spec order: locale, type, notation, minimumIntegerDigits,
@@ -1011,7 +1011,7 @@ impl Interpreter {
         );
 
         // Register Intl.PluralRules on the Intl namespace
-        self.get_object_expect(intl_obj_id)
+        self.get_object_cell_expect(intl_obj_id)
             .borrow_mut()
             .insert_property(
                 "PluralRules".to_string(),

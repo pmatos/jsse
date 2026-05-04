@@ -154,8 +154,7 @@ fn build_intl_data_from_locale(locale: &IcuLocale) -> IntlData {
 fn create_locale_object_from_icu(interp: &mut Interpreter, locale: &IcuLocale) -> JsValue {
     let obj = interp.create_object();
     if let Some(proto_id) = interp.realm().intl_locale_prototype {
-        obj.borrow_mut().prototype_id =
-            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
+        obj.borrow_mut().prototype_id = Some(proto_id);
     }
     obj.borrow_mut().class_name = "Intl.Locale".to_string();
     obj.borrow_mut().intl_data = Some(build_intl_data_from_locale(locale));
@@ -190,8 +189,7 @@ impl Interpreter {
     pub(crate) fn setup_intl_locale(&mut self, intl_obj_id: u64) {
         let proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype_id =
-                Some(self.get_object_expect(op_id).borrow().id.unwrap());
+            proto.borrow_mut().prototype_id = Some(op_id);
         }
         proto.borrow_mut().class_name = "Intl.Locale".to_string();
 
@@ -812,8 +810,7 @@ impl Interpreter {
 
                     let info_obj = interp.create_object();
                     if let Some(op_id) = interp.realm().object_prototype {
-                        info_obj.borrow_mut().prototype_id =
-                            Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                        info_obj.borrow_mut().prototype_id = Some(op_id);
                     }
                     info_obj.borrow_mut().insert_property(
                         "direction".to_string(),
@@ -947,8 +944,7 @@ impl Interpreter {
 
                     let info_obj = interp.create_object();
                     if let Some(op_id) = interp.realm().object_prototype {
-                        info_obj.borrow_mut().prototype_id =
-                            Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                        info_obj.borrow_mut().prototype_id = Some(op_id);
                     }
                     info_obj.borrow_mut().insert_property(
                         "firstDay".to_string(),
@@ -1417,7 +1413,7 @@ impl Interpreter {
         );
 
         // Register Intl.Locale on the Intl namespace
-        self.get_object_expect(intl_obj_id)
+        self.get_object_cell_expect(intl_obj_id)
             .borrow_mut()
             .insert_property(
                 "Locale".to_string(),

@@ -1152,7 +1152,7 @@ impl Interpreter {
         if is_constructable
             && !is_gen
             && let Some(JsValue::Object(proto_ref)) = self
-                .get_object_expect(func_id)
+                .get_object_cell_expect(func_id)
                 .borrow()
                 .get_property_value("prototype")
             && let Some(proto_obj) = self.get_object(proto_ref.id)

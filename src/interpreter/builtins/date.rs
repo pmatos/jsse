@@ -1177,7 +1177,7 @@ impl Interpreter {
                     obj.borrow_mut().class_name = "Temporal.Instant".to_string();
                     if let Some(proto_id) = interp.realm().temporal_instant_prototype {
                         obj.borrow_mut().prototype_id =
-                            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
+                            Some(proto_id);
                     }
                     obj.borrow_mut().temporal_data =
                         Some(crate::interpreter::types::TemporalData::Instant {

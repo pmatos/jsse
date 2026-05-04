@@ -662,7 +662,7 @@ impl Interpreter {
                     // Create immutable ArrayBuffer
                     let id = interp.create_arraybuffer(new_data);
                     interp
-                        .get_object_expect(id)
+                        .get_object_cell_expect(id)
                         .borrow_mut()
                         .arraybuffer_is_immutable = true;
                     return Completion::Normal(JsValue::Object(JsObject { id }));
@@ -3121,10 +3121,10 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("values".to_string(), values_fn.clone());
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("Symbol(Symbol.iterator)".to_string(), values_fn);
     }
@@ -3155,7 +3155,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("entries".to_string(), entries_fn);
 
@@ -3184,7 +3184,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("keys".to_string(), keys_fn);
     }
@@ -3219,7 +3219,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("find".to_string(), find_fn);
 
@@ -3252,7 +3252,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(-1.0))
             },
         ));
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("findIndex".to_string(), find_index_fn);
 
@@ -3287,7 +3287,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("findLast".to_string(), find_last_fn);
 
@@ -3322,7 +3322,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(-1.0))
             },
         ));
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("findLastIndex".to_string(), find_last_index_fn);
 
@@ -3351,7 +3351,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("forEach".to_string(), for_each_fn);
 
@@ -3400,7 +3400,7 @@ impl Interpreter {
                 Completion::Normal(new_ta_val)
             },
         ));
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("map".to_string(), map_fn);
 
@@ -3452,7 +3452,7 @@ impl Interpreter {
                 Completion::Normal(new_ta_val)
             },
         ));
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("filter".to_string(), filter_fn);
 
@@ -3485,7 +3485,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(true))
             },
         ));
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("every".to_string(), every_fn);
 
@@ -3518,7 +3518,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("some".to_string(), some_fn);
 
@@ -3560,7 +3560,7 @@ impl Interpreter {
                 Completion::Normal(acc)
             },
         ));
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("reduce".to_string(), reduce_fn);
 
@@ -3604,7 +3604,7 @@ impl Interpreter {
                 Completion::Normal(acc)
             },
         ));
-        self.get_object_expect(proto_id)
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("reduceRight".to_string(), reduce_right_fn);
     }

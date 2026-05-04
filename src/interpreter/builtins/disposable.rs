@@ -5,7 +5,7 @@ impl Interpreter {
         let ds_proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
             ds_proto.borrow_mut().prototype_id =
-                Some(self.get_object_expect(op_id).borrow().id.unwrap());
+                Some(op_id);
         }
 
         // Symbol.toStringTag
@@ -454,7 +454,7 @@ impl Interpreter {
         let ads_proto = self.create_object();
         if let Some(op_id) = self.realm().object_prototype {
             ads_proto.borrow_mut().prototype_id =
-                Some(self.get_object_expect(op_id).borrow().id.unwrap());
+                Some(op_id);
         }
 
         // Symbol.toStringTag
