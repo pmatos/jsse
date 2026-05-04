@@ -963,7 +963,7 @@ impl<'a> Parser<'a> {
                         let right = self.parse_expression()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
-                        let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
+                        let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
                             ForInOfLeft::Expression(expr)
                         } else {
                             let pat = expr_to_pattern(expr)?;
@@ -980,7 +980,7 @@ impl<'a> Parser<'a> {
                         let right = self.parse_assignment_expression()?;
                         self.eat(&Token::RightParen)?;
                         let body = self.parse_iteration_body()?;
-                        let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
+                        let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
                             ForInOfLeft::Expression(expr)
                         } else {
                             let pat = expr_to_pattern(expr)?;
@@ -1173,7 +1173,7 @@ impl<'a> Parser<'a> {
                     let right = self.parse_expression()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
-                    let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
+                    let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
                         ForInOfLeft::Expression(expr)
                     } else {
                         let pat = expr_to_pattern(expr)?;
@@ -1198,7 +1198,7 @@ impl<'a> Parser<'a> {
                     let right = self.parse_assignment_expression()?;
                     self.eat(&Token::RightParen)?;
                     let body = self.parse_iteration_body()?;
-                    let left = if !self.strict && matches!(&expr, Expression::Call(_, _)) {
+                    let left = if !self.strict && matches!(&expr, Expression::Call(_, _, _)) {
                         ForInOfLeft::Expression(expr)
                     } else {
                         let pat = expr_to_pattern(expr)?;

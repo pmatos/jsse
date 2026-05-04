@@ -543,11 +543,11 @@ impl<'a> Parser<'a> {
                 Self::contains_arguments(&p.value)
                     || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::contains_arguments(e))
             }),
-            Expression::Member(object, property) => {
+            Expression::Member(object, property, _) => {
                 Self::contains_arguments(object)
                     || matches!(property, MemberProperty::Computed(e) if Self::contains_arguments(e))
             }
-            Expression::Call(callee, args) | Expression::New(callee, args) => {
+            Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
                 Self::contains_arguments(callee)
                     || args.iter().any(Self::contains_arguments)
             }
@@ -738,11 +738,11 @@ impl<'a> Parser<'a> {
                 Self::expr_contains_await_identifier(&p.value)
                     || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_contains_await_identifier(e))
             }),
-            Expression::Member(object, property) => {
+            Expression::Member(object, property, _) => {
                 Self::expr_contains_await_identifier(object)
                     || matches!(property, MemberProperty::Computed(e) if Self::expr_contains_await_identifier(e))
             }
-            Expression::Call(callee, args) | Expression::New(callee, args) => {
+            Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
                 Self::expr_contains_await_identifier(callee)
                     || args.iter().any(Self::expr_contains_await_identifier)
             }
@@ -841,11 +841,11 @@ impl<'a> Parser<'a> {
                 Self::expr_contains_await_expression(&p.value)
                     || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_contains_await_expression(e))
             }),
-            Expression::Member(object, property) => {
+            Expression::Member(object, property, _) => {
                 Self::expr_contains_await_expression(object)
                     || matches!(property, MemberProperty::Computed(e) if Self::expr_contains_await_expression(e))
             }
-            Expression::Call(callee, args) | Expression::New(callee, args) => {
+            Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
                 Self::expr_contains_await_expression(callee)
                     || args.iter().any(Self::expr_contains_await_expression)
             }
@@ -929,11 +929,11 @@ impl<'a> Parser<'a> {
                 Self::expr_contains_yield_expression(&p.value)
                     || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_contains_yield_expression(e))
             }),
-            Expression::Member(object, property) => {
+            Expression::Member(object, property, _) => {
                 Self::expr_contains_yield_expression(object)
                     || matches!(property, MemberProperty::Computed(e) if Self::expr_contains_yield_expression(e))
             }
-            Expression::Call(callee, args) | Expression::New(callee, args) => {
+            Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
                 Self::expr_contains_yield_expression(callee)
                     || args.iter().any(Self::expr_contains_yield_expression)
             }
@@ -1525,7 +1525,7 @@ fn expr_to_pattern(expr: Expression) -> Result<Pattern, ParseError> {
             let pat = expr_to_pattern(*inner)?;
             Ok(Pattern::Rest(Box::new(pat)))
         }
-        Expression::Member(_, _) => Ok(Pattern::MemberExpression(Box::new(expr))),
+        Expression::Member(_, _, _) => Ok(Pattern::MemberExpression(Box::new(expr))),
         _ => Err(ParseError {
             message: "Invalid destructuring target".to_string(),
         }),

@@ -409,9 +409,13 @@ impl Interpreter {
                     self.eval_expr(alt, env)
                 }
             }
-            Expression::Call(callee, args) => self.eval_call(callee, args, env),
-            Expression::New(callee, args) => self.eval_new(callee, args, env),
-            Expression::Member(obj, prop) => self.eval_member(obj, prop, env),
+            Expression::Call(callee, args, ic_cell) => {
+                self.eval_call(callee, args, env, Some(ic_cell))
+            }
+            Expression::New(callee, args, _) => self.eval_new(callee, args, env),
+            Expression::Member(obj, prop, ic_cell) => {
+                self.eval_member(obj, prop, env, Some(ic_cell))
+            }
             Expression::Array(elements, _) => self.eval_array_literal(elements, env),
             Expression::Object(props) => self.eval_object_literal(props, env),
             Expression::Function(f) => {
@@ -561,7 +565,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             }
             Expression::Delete(expr) => match expr.as_ref() {
-                Expression::Member(obj_expr, prop) => {
+                Expression::Member(obj_expr, prop, _) => {
                     // §13.5.1.2 step 5a: delete on SuperReference is always ReferenceError.
                     // §13.3.7.1: SuperProperty evaluation calls GetThisBinding() (step 2)
                     // before evaluating the key expression (step 3).
@@ -1220,7 +1224,7 @@ impl Interpreter {
                 let saved_tail = self.in_tail_position;
                 self.in_tail_position = false;
                 let (func_val, this_val) = match tag_expr.as_ref() {
-                    Expression::Member(obj_expr, prop) => {
+                    Expression::Member(obj_expr, prop, _) => {
                         let obj_val = match self.eval_expr(obj_expr, env) {
                             Completion::Normal(v) => v,
                             other => return other,
@@ -2368,7 +2372,7 @@ impl Interpreter {
                 other => return other,
             }
             Completion::Normal(if prefix { new_val } else { old_val })
-        } else if let Expression::Member(obj_expr, prop) = arg {
+        } else if let Expression::Member(obj_expr, prop, _) = arg {
             // §13.3.7.1: super[expr]++ — special evaluation order
             if matches!(obj_expr.as_ref(), Expression::Super)
                 && !matches!(prop, MemberProperty::Private(_))
@@ -2515,7 +2519,7 @@ impl Interpreter {
                 return Completion::Throw(e);
             }
             Completion::Normal(if prefix { new_val } else { old_val })
-        } else if let Expression::Call(_, _) = arg {
+        } else if let Expression::Call(_, _, _) = arg {
             match self.eval_expr(arg, env) {
                 Completion::Normal(_) => {}
                 other => return other,
@@ -2537,7 +2541,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Result<(), JsValue> {
         match expr {
-            Expression::Member(obj_expr, prop) => {
+            Expression::Member(obj_expr, prop, _) => {
                 // Handle super.prop / super[expr] assignment
                 if matches!(obj_expr.as_ref(), Expression::Super) {
                     let key = match prop {
@@ -2898,7 +2902,7 @@ impl Interpreter {
                 };
                 self.put_value_by_ref(name, final_val, &id_ref, env)
             }
-            Expression::Member(obj_expr, prop) => {
+            Expression::Member(obj_expr, prop, _) => {
                 // §13.3.7.1: super[expr] = val — special evaluation order
                 if matches!(obj_expr.as_ref(), Expression::Super)
                     && !matches!(prop, MemberProperty::Private(_))
@@ -3455,7 +3459,7 @@ impl Interpreter {
                     other => other,
                 }
             }
-            Expression::Call(_, _) => {
+            Expression::Call(_, _, _) => {
                 match self.eval_expr(left, env) {
                     Completion::Normal(_) => {}
                     other => return other,
@@ -3554,7 +3558,7 @@ impl Interpreter {
                 }
                 self.put_value_by_ref(name, rval, &id_ref, env)
             }
-            Expression::Member(obj_expr, MemberProperty::Private(name)) => {
+            Expression::Member(obj_expr, MemberProperty::Private(name), _) => {
                 let branded = self.resolve_private_name(name, env);
                 let obj_val = match self.eval_expr(obj_expr, env) {
                     Completion::Normal(v) => v,
@@ -3652,7 +3656,7 @@ impl Interpreter {
                 }
                 Completion::Normal(rval)
             }
-            Expression::Member(obj_expr, prop) => {
+            Expression::Member(obj_expr, prop, _) => {
                 // Super property logical assignment: super.p &&= / ||= / ??=
                 if matches!(obj_expr.as_ref(), Expression::Super)
                     && !matches!(prop, MemberProperty::Private(_))
@@ -4383,7 +4387,7 @@ impl Interpreter {
                     other => other,
                 }
             }
-            Expression::Member(obj_expr, prop) => {
+            Expression::Member(obj_expr, prop, _) => {
                 match self.set_member_property(obj_expr, prop, val, env) {
                     Ok(()) => Completion::Normal(JsValue::Undefined),
                     Err(e) => Completion::Throw(e),
@@ -4430,7 +4434,7 @@ impl Interpreter {
         env: &EnvRef,
         yield_val: &mut Option<JsValue>,
     ) -> Result<Option<DestructLRef>, JsValue> {
-        let Expression::Member(obj_expr, prop) = target else {
+        let Expression::Member(obj_expr, prop, _) = target else {
             return Ok(None);
         };
 
@@ -4936,7 +4940,13 @@ impl Interpreter {
         Completion::Normal(JsValue::Undefined)
     }
 
-    fn eval_call(&mut self, callee: &Expression, args: &[Expression], env: &EnvRef) -> Completion {
+    fn eval_call(
+        &mut self,
+        callee: &Expression,
+        args: &[Expression],
+        env: &EnvRef,
+        ic_cell: Option<&std::cell::Cell<crate::interpreter::ic::CallIcSlot>>,
+    ) -> Completion {
         let saved_tail = self.in_tail_position;
         self.in_tail_position = false;
 
@@ -5005,7 +5015,7 @@ impl Interpreter {
 
         // Handle member calls: obj.method()
         let (func_val, this_val) = match callee {
-            Expression::Member(obj_expr, prop) => {
+            Expression::Member(obj_expr, prop, _) => {
                 let is_super_call = matches!(obj_expr.as_ref(), Expression::Super);
                 let obj_val = match self.eval_expr(obj_expr, env) {
                     Completion::Normal(v) => v,
@@ -5258,9 +5268,104 @@ impl Interpreter {
                 args: evaluated_args,
             };
         }
+        // Phase 3 call-IC probe + record. Issue #71. v1 scope:
+        //  - Probe HIT increments call_ic_hit_count; dispatch is unchanged
+        //    (the fast path that skips proxy/wrapped/class-ctor checks is a
+        //    follow-up — see plan Step 15).
+        //  - Probe MISS classifies the callable; if it's a plain native or
+        //    user function (no proxy, no wrapped, not a class ctor without
+        //    `new`, not bound), records Mono. Otherwise transitions to
+        //    Megamorphic. State machine identical to PropIcSlot.
+        if let Some(cell) = ic_cell
+            && self.with_scope_depth == 0
+            && let JsValue::Object(o) = &func_val
+        {
+            use crate::interpreter::ic::CallIcSlot;
+            let slot = cell.get();
+            let mut probe_hit = false;
+            if let CallIcSlot::Mono {
+                callee_obj_id,
+                callee_shape_id,
+                ..
+            } = slot
+                && o.id == callee_obj_id
+                && let Some(obj_rc) = self.get_object(o.id)
+                && obj_rc.borrow().shape_id == callee_shape_id
+            {
+                self.call_ic_hit_count.set(self.call_ic_hit_count.get() + 1);
+                probe_hit = true;
+            }
+            if !probe_hit {
+                self.call_ic_slow_path_count
+                    .set(self.call_ic_slow_path_count.get() + 1);
+            }
+            // Phase-3 follow-up: route IC hits through the fast dispatch
+            // entry that skips proxy/wrapped/class-ctor checks. Misses use
+            // the slow path so the entry checks correctly classify novel
+            // callables (proxies, bound, class ctors) before IC recording.
+            let result = if probe_hit {
+                self.call_function_ic_validated(&func_val, &this_val, &evaluated_args)
+            } else {
+                self.call_function(&func_val, &this_val, &evaluated_args)
+            };
+            // Record only on success to avoid caching error-paths.
+            if !probe_hit && matches!(result, Completion::Normal(_)) {
+                let new_slot = self.classify_for_call_ic(o.id);
+                let next = match (slot, new_slot) {
+                    (_, None) => CallIcSlot::Empty,
+                    (CallIcSlot::Empty, Some(s)) => s,
+                    (
+                        CallIcSlot::Mono {
+                            callee_obj_id: prev,
+                            ..
+                        },
+                        Some(
+                            s @ CallIcSlot::Mono {
+                                callee_obj_id: new, ..
+                            },
+                        ),
+                    ) if prev == new => s,
+                    (CallIcSlot::Mono { .. }, Some(_)) => CallIcSlot::Megamorphic,
+                    (CallIcSlot::Megamorphic, _) => CallIcSlot::Megamorphic,
+                };
+                cell.set(next);
+            }
+            self.gc_unroot_frame(gc_frame);
+            return result;
+        }
         let result = self.call_function(&func_val, &this_val, &evaluated_args);
         self.gc_unroot_frame(gc_frame);
         result
+    }
+
+    /// Classifies the post-call state of `callee_obj_id` into a
+    /// `CallIcSlot::Mono { kind: ... }` ready for caching, or `None` if the
+    /// site is not IC-able under the v1 narrow scope (proxy, wrapped, bound,
+    /// or class-ctor-without-new). Phase 3, plan Step 14.
+    fn classify_for_call_ic(
+        &self,
+        callee_obj_id: u64,
+    ) -> Option<crate::interpreter::ic::CallIcSlot> {
+        use crate::interpreter::ic::{CallIcKind, CallIcSlot};
+        let obj_rc = self.get_object(callee_obj_id)?;
+        let obj = obj_rc.borrow();
+        if obj.proxy_target_id.is_some()
+            || obj.proxy_revoked
+            || obj.wrapped_target_function_id.is_some()
+            || obj.bound_target_function.is_some()
+            || obj.is_class_constructor
+        {
+            return None;
+        }
+        let kind = match obj.callable.as_ref()? {
+            JsFunction::Native(..) => CallIcKind::NativeFn,
+            JsFunction::User { .. } => CallIcKind::UserFn,
+        };
+        Some(CallIcSlot::Mono {
+            callee_obj_id,
+            callee_shape_id: obj.shape_id,
+            kind,
+        })
     }
 
     pub(crate) fn generator_next(&mut self, this: &JsValue, sent_value: JsValue) -> Completion {
@@ -11706,7 +11811,7 @@ impl Interpreter {
         this_val: &JsValue,
         args: &[JsValue],
     ) -> Completion {
-        let mut result = self.call_function_inner(func_val, this_val, args);
+        let mut result = self.call_function_inner(func_val, this_val, args, false);
         loop {
             match result {
                 Completion::TailCall {
@@ -11714,7 +11819,34 @@ impl Interpreter {
                     this,
                     args: tc_args,
                 } => {
-                    result = self.call_function_inner(&func, &this, &tc_args);
+                    result = self.call_function_inner(&func, &this, &tc_args, false);
+                }
+                other => return other,
+            }
+        }
+    }
+
+    /// Issue #71 Phase-3 follow-up: call_function variant for IC-validated
+    /// hits. The first dispatch skips the proxy/wrapped/class-ctor entry
+    /// checks (the IC's `Mono` state guarantees the callable is a plain
+    /// native or user function). Tail-call recursion falls back to the
+    /// slow path because the tail-called function is a different callable
+    /// not validated by the originating IC slot.
+    pub(crate) fn call_function_ic_validated(
+        &mut self,
+        func_val: &JsValue,
+        this_val: &JsValue,
+        args: &[JsValue],
+    ) -> Completion {
+        let mut result = self.call_function_inner(func_val, this_val, args, true);
+        loop {
+            match result {
+                Completion::TailCall {
+                    func,
+                    this,
+                    args: tc_args,
+                } => {
+                    result = self.call_function_inner(&func, &this, &tc_args, false);
                 }
                 other => return other,
             }
@@ -11726,12 +11858,19 @@ impl Interpreter {
         func_val: &JsValue,
         _this_val: &JsValue,
         args: &[JsValue],
+        skip_entry_checks: bool,
     ) -> Completion {
         if let JsValue::Object(o) = func_val
             && let Some(obj) = self.get_object(o.id)
         {
-            // Single borrow to check proxy/wrapped/class-ctor status
-            let (is_proxy_or_revoked, has_wrapped_target, is_class_ctor) = {
+            // Single borrow to check proxy/wrapped/class-ctor status. Skipped
+            // when an IC hit already validated the callable category — see
+            // `call_function_ic_validated`.
+            let (is_proxy_or_revoked, has_wrapped_target, is_class_ctor) = if skip_entry_checks {
+                self.call_ic_fast_dispatch_count
+                    .set(self.call_ic_fast_dispatch_count.get() + 1);
+                (false, false, false)
+            } else {
                 let b = obj.borrow();
                 (
                     b.is_proxy() || b.proxy_revoked,
@@ -12558,11 +12697,11 @@ impl Interpreter {
                 Self::expr_contains_arguments(&p.value)
                     || matches!(&p.key, PropertyKey::Computed(e) if Self::expr_contains_arguments(e))
             }),
-            Expression::Member(obj, prop) => {
+            Expression::Member(obj, prop, _) => {
                 Self::expr_contains_arguments(obj)
                     || matches!(prop, MemberProperty::Computed(e) if Self::expr_contains_arguments(e))
             }
-            Expression::Call(callee, args) | Expression::New(callee, args) => {
+            Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
                 Self::expr_contains_arguments(callee)
                     || args.iter().any(Self::expr_contains_arguments)
             }
@@ -12630,7 +12769,7 @@ impl Interpreter {
     fn expr_contains_super_call(expr: &Expression) -> bool {
         use crate::ast::*;
         match expr {
-            Expression::Call(callee, args) => {
+            Expression::Call(callee, args, _) => {
                 matches!(**callee, Expression::Super)
                     || Self::expr_contains_super_call(callee)
                     || args.iter().any(Self::expr_contains_super_call)
@@ -12655,11 +12794,11 @@ impl Interpreter {
                 ArrowBody::Expression(e) => Self::expr_contains_super_call(e),
                 ArrowBody::Block(stmts) => Self::stmts_contain_super_call(stmts),
             },
-            Expression::New(callee, args) => {
+            Expression::New(callee, args, _) => {
                 Self::expr_contains_super_call(callee)
                     || args.iter().any(Self::expr_contains_super_call)
             }
-            Expression::Member(obj, prop) => {
+            Expression::Member(obj, prop, _) => {
                 Self::expr_contains_super_call(obj)
                     || matches!(prop, MemberProperty::Computed(e) if Self::expr_contains_super_call(e))
             }

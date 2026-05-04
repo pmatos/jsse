@@ -24,7 +24,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Result<(JsValue, JsValue), Completion> {
         match base {
-            Expression::Member(obj_expr, member_prop) => {
+            Expression::Member(obj_expr, member_prop, _) => {
                 if matches!(obj_expr.as_ref(), Expression::Super) {
                     // §13.3.7.1: super property in optional chain — use HomeObject.__proto__
                     let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
@@ -216,7 +216,7 @@ impl Interpreter {
                     Ok((val, base_val.clone()))
                 }
             }
-            Expression::Call(callee, args) => {
+            Expression::Call(callee, args, _) => {
                 let (func_val, this_val) =
                     self.eval_oc_tail_with_this_ctx(base_val, chain_this, callee, env)?;
                 let evaluated_args = match self.eval_spread_args(args, env) {
@@ -228,7 +228,7 @@ impl Interpreter {
                     other => Err(other),
                 }
             }
-            Expression::Member(inner, mp) => {
+            Expression::Member(inner, mp, _) => {
                 let (inner_val, _) =
                     self.eval_oc_tail_with_this_ctx(base_val, chain_this, inner, env)?;
                 // Non-optional member access within optional chain: null/undefined throws
@@ -353,7 +353,7 @@ impl Interpreter {
                 // delete obj?.prop → delete obj.prop
                 self.eval_delete_on_object(base_val, name, env)
             }
-            Expression::Member(inner, mp) => {
+            Expression::Member(inner, mp, _) => {
                 // Evaluate inner to get the object, then delete the last property
                 let (inner_val, _) = match self.eval_oc_tail_with_this_ctx(
                     base_val,
@@ -399,7 +399,7 @@ impl Interpreter {
                 };
                 self.eval_delete_on_object(&inner_val, &key, env)
             }
-            Expression::Call(callee, args) => {
+            Expression::Call(callee, args, _) => {
                 // delete obj?.method() — evaluate the call for side effects, return true
                 let (func_val, this_val) = match self.eval_oc_tail_with_this_ctx(
                     base_val,
@@ -496,11 +496,66 @@ impl Interpreter {
         Completion::Normal(JsValue::Boolean(true))
     }
 
+    /// Classifies the post-lookup state of `(obj_id, key)` into a
+    /// `PropIcSlot::Mono { kind: ... }` ready for caching, or `None` if the
+    /// site is not IC-able under the v1 narrow scope. Caller uses this after
+    /// the slow path returns successfully. Issue #71, plan Step 11.
+    ///
+    /// v1 scope:
+    /// - Object must NOT be a proxy / module-namespace / typed-array.
+    /// - Property must resolve as own data (→ `OwnData`) or be absent up to
+    ///   the immediate prototype (→ `Missing`).
+    /// - Own accessors, proto-chain hits, and depth>1 misses return `None`
+    ///   (caller leaves the slot Empty rather than caching).
+    fn classify_for_prop_ic(
+        &self,
+        obj_id: u64,
+        key: &str,
+    ) -> Option<crate::interpreter::ic::PropIcSlot> {
+        use crate::interpreter::ic::{PropIcKind, PropIcSlot};
+        let obj_rc = self.get_object(obj_id)?;
+        let obj = obj_rc.borrow();
+        // Non-cacheable categories (plan "Excluded from IC in v1").
+        if obj.proxy_target_id.is_some()
+            || obj.proxy_revoked
+            || obj.module_namespace.is_some()
+            || obj.typed_array_info.is_some()
+        {
+            return None;
+        }
+        // Own property?
+        if let Some(d) = obj.properties.get(key) {
+            if d.is_data_descriptor() {
+                return Some(PropIcSlot::Mono {
+                    obj_id,
+                    obj_shape_id: obj.shape_id,
+                    kind: PropIcKind::OwnData,
+                });
+            }
+            // Own accessor — not recorded in v1 narrow scope.
+            return None;
+        }
+        // Absent on receiver — only cacheable if the immediate prototype is
+        // null (depth-1 Missing). Anything deeper stays uncached for v1.
+        if obj.prototype_id.is_none() {
+            return Some(PropIcSlot::Mono {
+                obj_id,
+                obj_shape_id: obj.shape_id,
+                kind: PropIcKind::Missing {
+                    proto_id: None,
+                    proto_shape_id: 0,
+                },
+            });
+        }
+        None
+    }
+
     pub(super) fn eval_member(
         &mut self,
         obj: &Expression,
         prop: &MemberProperty,
         env: &EnvRef,
+        ic_cell: Option<&std::cell::Cell<crate::interpreter::ic::PropIcSlot>>,
     ) -> Completion {
         // §13.3.7.1: super[expr] — special evaluation order:
         // 1. GetThisBinding (throws if uninitialized) — before key expression
@@ -690,7 +745,79 @@ impl Interpreter {
         };
         let _ = computed_raw;
         match &obj_val {
-            JsValue::Object(o) => self.get_object_property(o.id, &key, &obj_val.clone()),
+            JsValue::Object(o) => {
+                // Phase 2 IC: probe + record for Dot access only (v1 scope).
+                // Computed access goes straight to the slow path; caching it
+                // requires extra logic for non-string keys and is deferred.
+                if matches!(prop, MemberProperty::Dot(_))
+                    && let Some(cell) = ic_cell
+                    && self.with_scope_depth == 0
+                {
+                    use crate::interpreter::ic::{PropIcKind, PropIcSlot};
+                    let slot = cell.get();
+                    if let PropIcSlot::Mono {
+                        obj_id,
+                        obj_shape_id,
+                        kind,
+                    } = slot
+                        && o.id == obj_id
+                        && let Some(obj_rc) = self.get_object(o.id)
+                        && obj_rc.borrow().shape_id == obj_shape_id
+                    {
+                        // Shape match — IC hit. Dispatch on kind.
+                        match kind {
+                            PropIcKind::OwnData => {
+                                let val = {
+                                    let b = obj_rc.borrow();
+                                    b.properties.get(&key).and_then(|d| d.value.clone())
+                                };
+                                if let Some(v) = val {
+                                    self.ic_hit_count.set(self.ic_hit_count.get() + 1);
+                                    return Completion::Normal(v);
+                                }
+                                // Slot stale (descriptor flipped to accessor or
+                                // value field cleared) — fall through.
+                            }
+                            PropIcKind::Missing { proto_id, .. } => {
+                                let cur_proto = obj_rc.borrow().prototype_id;
+                                if cur_proto == proto_id {
+                                    self.ic_hit_count.set(self.ic_hit_count.get() + 1);
+                                    return Completion::Normal(JsValue::Undefined);
+                                }
+                            }
+                            // OwnAccessor / ProtoData / TypedArrayElement not
+                            // recorded in the v1 narrow scope; they'd be
+                            // unreachable here. Safe to fall through.
+                            _ => {}
+                        }
+                    }
+                    // Probe miss — fall to the slow path and record afterwards.
+                    self.ic_slow_path_count
+                        .set(self.ic_slow_path_count.get() + 1);
+                    let result = self.get_object_property(o.id, &key, &obj_val.clone());
+                    if let Completion::Normal(_) = &result {
+                        // Classify for IC recording. Cheap one-borrow walk.
+                        let new_slot = self.classify_for_prop_ic(o.id, &key);
+                        // Apply the state-machine transition (plan Step 10):
+                        // Empty → Mono(new); Mono(A)→same-obj refresh; Mono(A)→different-obj Megamorphic.
+                        let next = match (slot, new_slot) {
+                            (_, None) => PropIcSlot::Empty, // not IC-able; leave Empty
+                            (PropIcSlot::Empty, Some(s)) => s,
+                            (
+                                PropIcSlot::Mono {
+                                    obj_id: prev_id, ..
+                                },
+                                Some(s @ PropIcSlot::Mono { obj_id: new_id, .. }),
+                            ) if prev_id == new_id => s,
+                            (PropIcSlot::Mono { .. }, Some(_)) => PropIcSlot::Megamorphic,
+                            (PropIcSlot::Megamorphic, _) => PropIcSlot::Megamorphic,
+                        };
+                        cell.set(next);
+                    }
+                    return result;
+                }
+                self.get_object_property(o.id, &key, &obj_val.clone())
+            }
             JsValue::String(s) => {
                 if key == "length" {
                     Completion::Normal(JsValue::Number(s.len() as f64))

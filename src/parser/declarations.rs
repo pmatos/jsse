@@ -634,12 +634,12 @@ impl<'a> Parser<'a> {
     fn expr_has_direct_super(expr: &Expression) -> bool {
         use crate::ast::Expression;
         match expr {
-            Expression::Call(callee, args) => {
+            Expression::Call(callee, args, _) => {
                 matches!(callee.as_ref(), Expression::Super)
                     || Self::expr_has_direct_super(callee)
                     || args.iter().any(Self::expr_has_direct_super)
             }
-            Expression::New(callee, args) => {
+            Expression::New(callee, args, _) => {
                 Self::expr_has_direct_super(callee)
                     || args.iter().any(Self::expr_has_direct_super)
             }
@@ -650,7 +650,7 @@ impl<'a> Parser<'a> {
                 Self::expr_has_direct_super(&p.value)
                     || matches!(&p.key, crate::ast::PropertyKey::Computed(e) if Self::expr_has_direct_super(e))
             }),
-            Expression::Member(object, property) => {
+            Expression::Member(object, property, _) => {
                 Self::expr_has_direct_super(object)
                     || matches!(property, crate::ast::MemberProperty::Computed(e) if Self::expr_has_direct_super(e))
             }

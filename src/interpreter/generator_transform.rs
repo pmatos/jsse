@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::interpreter::generator_analysis::*;
+use crate::interpreter::ic::{fresh_call_ic_cell, fresh_prop_ic_cell};
 use crate::types::JsValue;
 use std::collections::HashMap;
 
@@ -814,11 +815,11 @@ fn transform_yielding_expression(
             }
         }
 
-        Expression::Call(callee, args) => {
+        Expression::Call(callee, args, _) => {
             transform_call_expression(callee, args, binding, ctx);
         }
 
-        Expression::New(callee, args) => {
+        Expression::New(callee, args, _) => {
             let mut temp_callee = *callee.clone();
             if expr_has_suspension(callee, ctx.is_async) {
                 let temp_var = ctx.new_temp_var("new_callee");
@@ -850,7 +851,7 @@ fn transform_yielding_expression(
                 }
             }
 
-            let combined = Expression::New(Box::new(temp_callee), temp_args);
+            let combined = Expression::New(Box::new(temp_callee), temp_args, fresh_call_ic_cell());
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -968,7 +969,7 @@ fn transform_yielding_expression(
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
-        Expression::Member(obj, prop) => {
+        Expression::Member(obj, prop, _) => {
             let mut temp_obj = *obj.clone();
             if expr_has_suspension(obj, ctx.is_async) {
                 let tv = ctx.new_temp_var("mem_obj");
@@ -984,11 +985,13 @@ fn transform_yielding_expression(
                     let combined = Expression::Member(
                         Box::new(temp_obj),
                         MemberProperty::Computed(Box::new(Expression::Identifier(tv))),
+                        fresh_prop_ic_cell(),
                     );
                     emit_expression_with_binding(&combined, &binding, ctx);
                 }
                 _ => {
-                    let combined = Expression::Member(Box::new(temp_obj), prop.clone());
+                    let combined =
+                        Expression::Member(Box::new(temp_obj), prop.clone(), fresh_prop_ic_cell());
                     emit_expression_with_binding(&combined, &binding, ctx);
                 }
             }
@@ -1198,14 +1201,15 @@ fn oc_chain_to_regular_expr(chain: &Expression, base_var: &str) -> Expression {
         Expression::Identifier(name) => Expression::Member(
             Box::new(Expression::Identifier(base_var.to_string())),
             MemberProperty::Dot(name.clone()),
+            fresh_prop_ic_cell(),
         ),
-        Expression::Member(inner, prop) => {
+        Expression::Member(inner, prop, _) => {
             let inner_expr = oc_chain_to_regular_expr(inner, base_var);
-            Expression::Member(Box::new(inner_expr), prop.clone())
+            Expression::Member(Box::new(inner_expr), prop.clone(), fresh_prop_ic_cell())
         }
-        Expression::Call(callee, args) => {
+        Expression::Call(callee, args, _) => {
             let callee_expr = oc_chain_to_regular_expr(callee, base_var);
-            Expression::Call(Box::new(callee_expr), args.clone())
+            Expression::Call(Box::new(callee_expr), args.clone(), fresh_call_ic_cell())
         }
         other => other.clone(),
     }
@@ -1219,7 +1223,7 @@ fn transform_call_expression(
 ) {
     let mut temp_callee = callee.clone();
     if expr_has_suspension(callee, ctx.is_async) {
-        if let Expression::Member(obj, prop) = callee {
+        if let Expression::Member(obj, prop, _) = callee {
             let mut temp_obj = *obj.clone();
             if expr_has_suspension(obj, ctx.is_async) {
                 let tv = ctx.new_temp_var("call_obj");
@@ -1235,10 +1239,12 @@ fn transform_call_expression(
                     temp_callee = Expression::Member(
                         Box::new(temp_obj),
                         MemberProperty::Computed(Box::new(Expression::Identifier(tv))),
+                        fresh_prop_ic_cell(),
                     );
                 }
                 _ => {
-                    temp_callee = Expression::Member(Box::new(temp_obj), prop.clone());
+                    temp_callee =
+                        Expression::Member(Box::new(temp_obj), prop.clone(), fresh_prop_ic_cell());
                 }
             }
         } else {
@@ -1272,7 +1278,7 @@ fn transform_call_expression(
         }
     }
 
-    let combined = Expression::Call(Box::new(temp_callee), temp_args);
+    let combined = Expression::Call(Box::new(temp_callee), temp_args, fresh_call_ic_cell());
     emit_expression_with_binding(&combined, &binding, ctx);
 }
 
@@ -1313,7 +1319,7 @@ fn emit_expression_with_binding(
 /// returning a clean LHS expression without suspensions.
 fn extract_lhs_suspensions(expr: &Expression, ctx: &mut TransformContext) -> Expression {
     match expr {
-        Expression::Member(obj, prop) => {
+        Expression::Member(obj, prop, _) => {
             let new_obj = if expr_has_suspension(obj, ctx.is_async) {
                 let temp = ctx.new_temp_var("lhs_obj");
                 transform_yielding_expression(
@@ -1339,7 +1345,7 @@ fn extract_lhs_suspensions(expr: &Expression, ctx: &mut TransformContext) -> Exp
                 }
                 other => other.clone(),
             };
-            Expression::Member(Box::new(new_obj), new_prop)
+            Expression::Member(Box::new(new_obj), new_prop, fresh_prop_ic_cell())
         }
         _ => expr.clone(),
     }
@@ -2188,20 +2194,23 @@ fn rewrite_expr(expr: &Expression) -> Expression {
             Box::new(rewrite_expr(c)),
             Box::new(rewrite_expr(a)),
         ),
-        Expression::Call(callee, args) => Expression::Call(
+        Expression::Call(callee, args, _) => Expression::Call(
             Box::new(rewrite_expr(callee)),
             args.iter().map(rewrite_expr).collect(),
+            fresh_call_ic_cell(),
         ),
-        Expression::New(callee, args) => Expression::New(
+        Expression::New(callee, args, _) => Expression::New(
             Box::new(rewrite_expr(callee)),
             args.iter().map(rewrite_expr).collect(),
+            fresh_call_ic_cell(),
         ),
-        Expression::Member(obj, prop) => Expression::Member(
+        Expression::Member(obj, prop, _) => Expression::Member(
             Box::new(rewrite_expr(obj)),
             match prop {
                 MemberProperty::Computed(e) => MemberProperty::Computed(Box::new(rewrite_expr(e))),
                 other => other.clone(),
             },
+            fresh_prop_ic_cell(),
         ),
         Expression::OptionalChain(base, chain) => {
             Expression::OptionalChain(Box::new(rewrite_expr(base)), Box::new(rewrite_expr(chain)))

@@ -2584,7 +2584,7 @@ impl Interpreter {
 
     fn expr_may_contain_tail_call(expr: &Expression) -> bool {
         match expr {
-            Expression::Call(_, _) | Expression::TaggedTemplate(_, _) => true,
+            Expression::Call(_, _, _) | Expression::TaggedTemplate(_, _) => true,
             Expression::Conditional(_, cons, alt) => {
                 Self::expr_may_contain_tail_call(cons) || Self::expr_may_contain_tail_call(alt)
             }

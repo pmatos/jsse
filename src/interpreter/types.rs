@@ -11,6 +11,18 @@ use std::sync::Arc;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
+/// Process-global monotonic counter for `JsObjectData.shape_id`. Starts at 1;
+/// `0` is reserved as an invalid sentinel. Mirrors the existing
+/// `NEXT_TEMPLATE_ID` pattern in `ast.rs`. Issue #71 (inline caching).
+static NEXT_SHAPE_ID: AtomicU64 = AtomicU64::new(1);
+
+/// Draws a fresh, globally-unique shape id. Cheap (single relaxed atomic
+/// fetch-add); no locking. See `JsObjectData.shape_id` doc.
+#[inline]
+pub(crate) fn fresh_shape_id() -> u64 {
+    NEXT_SHAPE_ID.fetch_add(1, Ordering::Relaxed)
+}
+
 static NEXT_SAB_ID: AtomicU64 = AtomicU64::new(1);
 
 pub fn next_sab_id() -> u64 {
@@ -1685,6 +1697,14 @@ pub struct JsObjectData {
     pub(crate) helper_next_closure: Option<JsValue>,
     pub(crate) helper_return_closure: Option<JsValue>,
     pub(crate) helper_gen_state: Option<Rc<Cell<u8>>>,
+    /// Per-object shape id. Bumped by `Interpreter::mutate_object_shape` on
+    /// every structural mutation (property add/delete/attribute change,
+    /// prototype mutation, proxy install). Pure value reassignment does NOT
+    /// bump. `0` is a transient placeholder set by `JsObjectData::new` and
+    /// overwritten by `alloc_object` before the object is observable; the
+    /// global counter starts at `1`, so an IC slot can never legitimately
+    /// hold `obj_shape_id == 0`. See issue #71.
+    pub shape_id: u64,
 }
 
 #[derive(Clone)]
@@ -1758,6 +1778,7 @@ impl JsObjectData {
             helper_next_closure: None,
             helper_return_closure: None,
             helper_gen_state: None,
+            shape_id: 0,
         }
     }
 
@@ -2328,6 +2349,13 @@ impl JsObjectData {
             };
             self.properties.insert(key, new_desc);
         }
+        // Issue #71 (Step 5): reaching this point means either an existing
+        // property was redefined (line ~2296 `properties.insert(key, merged)`)
+        // or a new property was added (line ~2350). Both are structural
+        // mutations. Earlier `return true` paths (String exotic equality
+        // check, module-namespace no-op, TypedArray element write,
+        // all-absent-desc) are non-mutating and intentionally skip this bump.
+        self.shape_id = fresh_shape_id();
         true
     }
 
@@ -2387,6 +2415,7 @@ impl JsObjectData {
                         .collect();
                     idx_keys.sort_by_key(|a| std::cmp::Reverse(a.0));
 
+                    let mut did_remove = false;
                     for (idx, k) in &idx_keys {
                         let is_non_configurable = self
                             .properties
@@ -2398,10 +2427,20 @@ impl JsObjectData {
                         } else {
                             self.properties.remove(k.as_str());
                             self.property_order.retain(|p| p != k);
+                            did_remove = true;
                         }
                     }
+                    let mut did_truncate = false;
                     if let Some(ref mut elements) = self.array_elements {
+                        let prev_len = elements.len();
                         elements.truncate(actual_new_len as usize);
+                        did_truncate = elements.len() < prev_len;
+                    }
+                    if did_remove || did_truncate {
+                        // Issue #71 (Step 5): Array length truncation deletes
+                        // configurable indexed properties / shrinks
+                        // array_elements — both are structural mutations.
+                        self.shape_id = fresh_shape_id();
                     }
                 }
                 if let Some(desc) = self.properties.get_mut("length") {
@@ -2428,6 +2467,8 @@ impl JsObjectData {
                     elements.push(JsValue::Undefined);
                 }
                 elements.push(value.clone());
+                // Issue #71 (Step 5): array_elements grew — structural mutation.
+                self.shape_id = fresh_shape_id();
                 // Only update length if idx+1 exceeds the current property length
                 let new_idx_len = (idx + 1) as f64;
                 if let Some(len_desc) = self.properties.get_mut("length")
@@ -2468,6 +2509,10 @@ impl JsObjectData {
             self.property_order.push(key.to_string());
             self.properties
                 .insert(key.to_string(), PropertyDescriptor::data_default(value));
+            // Issue #71 (Step 5): new own property added — structural mutation.
+            // The earlier `properties.get_mut(key)` branch (in-place update)
+            // does NOT bump; only this insert branch does.
+            self.shape_id = fresh_shape_id();
             true
         }
     }

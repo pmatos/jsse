@@ -7,6 +7,7 @@ impl Interpreter {
     pub(crate) fn alloc_object(&mut self, mut data: JsObjectData) -> u64 {
         self.gc_alloc_count += 1;
         let is_reuse = !self.free_list.is_empty();
+        data.shape_id = crate::interpreter::types::fresh_shape_id();
         let id = if let Some(idx) = self.free_list.pop() {
             data.id = Some(idx as u64);
             self.objects[idx] = Some(Rc::new(RefCell::new(data)));

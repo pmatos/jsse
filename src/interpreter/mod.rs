@@ -26,6 +26,7 @@ mod exec;
 mod gc;
 pub(crate) mod generator_analysis;
 pub(crate) mod generator_transform;
+pub(crate) mod ic;
 mod property_map;
 pub(crate) use property_map::PropertyMap;
 #[cfg(test)]
@@ -132,6 +133,20 @@ pub struct Interpreter {
     module_async_info: FxHashMap<u64, PathBuf>,
     pub(crate) with_scope_depth: u32,
     pub(crate) has_ever_entered_with: bool,
+    /// IC hit counter for Phase-2 telemetry/tests. Issue #71. Cell so the
+    /// probe (which has `&self` semantics on the immutable parts) can bump
+    /// it without a full `&mut self` borrow.
+    pub(crate) ic_hit_count: std::cell::Cell<u64>,
+    /// IC slow-path counter — incremented on every probe miss that fell
+    /// through to the full lookup chain. Issue #71.
+    pub(crate) ic_slow_path_count: std::cell::Cell<u64>,
+    /// Call-site IC hit counter (Phase 3). Issue #71.
+    pub(crate) call_ic_hit_count: std::cell::Cell<u64>,
+    /// Call-site IC slow-path counter (Phase 3). Issue #71.
+    pub(crate) call_ic_slow_path_count: std::cell::Cell<u64>,
+    /// Counter for the call_function_inner fast-dispatch path (skips
+    /// proxy/wrapped/class-ctor checks). Issue #71 Phase-3 follow-up.
+    pub(crate) call_ic_fast_dispatch_count: std::cell::Cell<u64>,
 }
 
 pub(crate) struct CallFrame {
@@ -281,6 +296,11 @@ impl Interpreter {
             module_async_info: FxHashMap::default(),
             with_scope_depth: 0,
             has_ever_entered_with: false,
+            ic_hit_count: std::cell::Cell::new(0),
+            ic_slow_path_count: std::cell::Cell::new(0),
+            call_ic_hit_count: std::cell::Cell::new(0),
+            call_ic_slow_path_count: std::cell::Cell::new(0),
+            call_ic_fast_dispatch_count: std::cell::Cell::new(0),
         };
         interp.setup_globals();
         interp
@@ -1164,6 +1184,68 @@ impl Interpreter {
 
     pub(crate) fn get_object(&self, id: u64) -> Option<Rc<RefCell<JsObjectData>>> {
         self.objects.get(id as usize).and_then(|slot| slot.clone())
+    }
+
+    /// Total IC hits since interpreter construction. Whitebox accessor used
+    /// by Phase-2 tests; not exposed to JS. Issue #71.
+    #[allow(dead_code)]
+    pub(crate) fn ic_hit_count(&self) -> u64 {
+        self.ic_hit_count.get()
+    }
+
+    /// Total IC slow-path falls since interpreter construction. Whitebox
+    /// accessor used by Phase-2 tests; not exposed to JS. Issue #71.
+    #[allow(dead_code)]
+    pub(crate) fn ic_slow_path_count(&self) -> u64 {
+        self.ic_slow_path_count.get()
+    }
+
+    /// Total call-IC hits since interpreter construction. Phase 3.
+    #[allow(dead_code)]
+    pub(crate) fn call_ic_hit_count(&self) -> u64 {
+        self.call_ic_hit_count.get()
+    }
+
+    /// Total call-IC slow-path falls since interpreter construction. Phase 3.
+    #[allow(dead_code)]
+    pub(crate) fn call_ic_slow_path_count(&self) -> u64 {
+        self.call_ic_slow_path_count.get()
+    }
+
+    /// Total dispatches that skipped proxy/wrapped/class-ctor entry checks
+    /// because an IC hit had pre-validated the callable. Phase-3 follow-up.
+    #[allow(dead_code)]
+    pub(crate) fn call_ic_fast_dispatch_count(&self) -> u64 {
+        self.call_ic_fast_dispatch_count.get()
+    }
+
+    /// Single chokepoint for any structural mutation of `JsObjectData`:
+    /// borrows the object mutably, runs `f`, then unconditionally assigns a
+    /// fresh shape id from the process-global counter. Returns whatever `f`
+    /// returned. Callers that perform pure value-reassignment (e.g. updating
+    /// an existing data property's value without changing its descriptor)
+    /// must NOT use this helper — they take a regular `borrow_mut` so the
+    /// shape id stays stable. Issue #71, plan Step 4.
+    ///
+    /// Phase-1 note: property add/delete/attribute mutations self-bump from
+    /// inside `JsObjectData::set_property_value` / `define_own_property`, so
+    /// the helper is currently exercised only by the IC unit tests. The first
+    /// production callers — prototype mutation and proxy install — are
+    /// migrated as part of the Phase-2/3 IC work (plan Step 5).
+    #[allow(dead_code)]
+    #[inline]
+    pub(crate) fn mutate_object_shape<F, R>(&mut self, obj_id: u64, f: F) -> R
+    where
+        F: FnOnce(&mut JsObjectData) -> R,
+    {
+        let new_shape = crate::interpreter::types::fresh_shape_id();
+        let obj = self
+            .get_object(obj_id)
+            .expect("mutate_object_shape: invalid obj_id");
+        let mut borrow = obj.borrow_mut();
+        let result = f(&mut borrow);
+        borrow.shape_id = new_shape;
+        result
     }
 
     /// Like `get_object` but panics if the id is dead. Matches the pattern
@@ -3246,15 +3328,15 @@ impl Interpreter {
                     || Self::expr_has_await(consequent)
                     || Self::expr_has_await(alternate)
             }
-            Expression::Call(callee, arguments) => {
+            Expression::Call(callee, arguments, _) => {
                 Self::expr_has_await(callee)
                     || arguments.iter().any(Self::expr_has_await)
             }
-            Expression::New(callee, arguments) => {
+            Expression::New(callee, arguments, _) => {
                 Self::expr_has_await(callee)
                     || arguments.iter().any(Self::expr_has_await)
             }
-            Expression::Member(object, prop) => {
+            Expression::Member(object, prop, _) => {
                 Self::expr_has_await(object) || match prop {
                     crate::ast::MemberProperty::Computed(e) => Self::expr_has_await(e),
                     _ => false,
