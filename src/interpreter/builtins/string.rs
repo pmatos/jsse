@@ -26,7 +26,7 @@ fn this_string_value(interp: &mut Interpreter, this: &JsValue) -> Result<String,
         )),
         JsValue::String(s) => Ok(s.to_rust_string()),
         JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object(o.id)
+            if let Some(obj) = interp.get_object_cell(o.id)
                 && obj.borrow().class_name == "String"
                 && let Some(JsValue::String(s)) = &obj.borrow().primitive_value
             {
@@ -52,7 +52,7 @@ fn this_js_string(interp: &mut Interpreter, this: &JsValue) -> Result<JsString, 
         )),
         JsValue::String(s) => Ok(s.clone()),
         JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object(o.id)
+            if let Some(obj) = interp.get_object_cell(o.id)
                 && obj.borrow().class_name == "String"
                 && let Some(JsValue::String(s)) = &obj.borrow().primitive_value
             {
@@ -117,7 +117,7 @@ fn is_regexp(interp: &mut Interpreter, obj_id: u64, obj_val: &JsValue) -> Result
         }
     }
     Ok(interp
-        .get_object(obj_id)
+        .get_object_cell(obj_id)
         .map(|obj| obj.borrow().class_name == "RegExp")
         .unwrap_or(false))
 }
@@ -883,7 +883,7 @@ impl Interpreter {
                     let replace_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                     let is_fn = if let JsValue::Object(ref o) = replace_arg {
                         interp
-                            .get_object(o.id)
+                            .get_object_cell(o.id)
                             .map(|obj| obj.borrow().callable.is_some())
                             .unwrap_or(false)
                     } else {
@@ -983,7 +983,7 @@ impl Interpreter {
                                     interp.to_boolean_val(&v)
                                 }
                                 Completion::Normal(_) => interp
-                                    .get_object(o.id)
+                                    .get_object_cell(o.id)
                                     .map(|obj| obj.borrow().class_name == "RegExp")
                                     .unwrap_or(false),
                                 Completion::Throw(e) => return Completion::Throw(e),
@@ -991,7 +991,7 @@ impl Interpreter {
                             }
                         } else {
                             interp
-                                .get_object(o.id)
+                                .get_object_cell(o.id)
                                 .map(|obj| obj.borrow().class_name == "RegExp")
                                 .unwrap_or(false)
                         };
@@ -1043,7 +1043,7 @@ impl Interpreter {
                     let replace_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                     let is_fn = if let JsValue::Object(ref o) = replace_arg {
                         interp
-                            .get_object(o.id)
+                            .get_object_cell(o.id)
                             .map(|obj| obj.borrow().callable.is_some())
                             .unwrap_or(false)
                     } else {
@@ -1254,7 +1254,7 @@ impl Interpreter {
                             let matched = JsValue::String(JsString::from_str(m.as_str()));
                             let result = interp.create_array(vec![matched]);
                             if let JsValue::Object(ro) = &result
-                                && let Some(robj) = interp.get_object(ro.id)
+                                && let Some(robj) = interp.get_object_cell(ro.id)
                             {
                                 robj.borrow_mut().insert_value(
                                     "index".to_string(),
@@ -1292,7 +1292,7 @@ impl Interpreter {
                                     interp.to_boolean_val(&v)
                                 }
                                 Completion::Normal(_) => interp
-                                    .get_object(o.id)
+                                    .get_object_cell(o.id)
                                     .map(|obj| obj.borrow().class_name == "RegExp")
                                     .unwrap_or(false),
                                 Completion::Throw(e) => return Completion::Throw(e),
@@ -1300,7 +1300,7 @@ impl Interpreter {
                             }
                         } else {
                             interp
-                                .get_object(o.id)
+                                .get_object_cell(o.id)
                                 .map(|obj| obj.borrow().class_name == "RegExp")
                                 .unwrap_or(false)
                         };
@@ -1495,7 +1495,7 @@ impl Interpreter {
                 move |interp, this_val, _args| match this_val {
                     JsValue::String(s) => Completion::Normal(JsValue::String(s.clone())),
                     JsValue::Object(o) => {
-                        if let Some(obj) = interp.get_object(o.id)
+                        if let Some(obj) = interp.get_object_cell(o.id)
                             && obj.borrow().class_name == "String"
                             && let Some(ref pv) = obj.borrow().primitive_value
                         {
@@ -1524,7 +1524,7 @@ impl Interpreter {
                 move |interp, this_val, _args| match this_val {
                     JsValue::String(s) => Completion::Normal(JsValue::String(s.clone())),
                     JsValue::Object(o) => {
-                        if let Some(obj) = interp.get_object(o.id)
+                        if let Some(obj) = interp.get_object_cell(o.id)
                             && obj.borrow().class_name == "String"
                             && let Some(ref pv) = obj.borrow().primitive_value
                         {
@@ -1707,7 +1707,7 @@ impl Interpreter {
         // Set String.prototype on the String constructor and wire constructor back
         if let Some(str_val) = self.get_global_var("String")
             && let JsValue::Object(o) = &str_val
-            && let Some(str_obj) = self.get_object(o.id)
+            && let Some(str_obj) = self.get_object_cell(o.id)
         {
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             str_obj.borrow_mut().insert_property(
