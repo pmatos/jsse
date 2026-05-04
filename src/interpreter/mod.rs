@@ -19,6 +19,7 @@ mod helpers;
 pub(crate) use helpers::*;
 mod builtins;
 pub(crate) use builtins::regexp::validate_js_pattern;
+mod bytecode;
 mod env_helpers;
 mod eval;
 mod exec;
@@ -134,6 +135,8 @@ pub struct Interpreter {
     /// Counter for the call_function_inner fast-dispatch path (skips
     /// proxy/wrapped/class-ctor checks). Issue #71 Phase-3 follow-up.
     pub(crate) call_ic_fast_dispatch_count: std::cell::Cell<u64>,
+    pub(crate) bytecode_enabled: bool,
+    pub(crate) bytecode_chunks_executed: usize,
 }
 
 pub(crate) struct CallFrame {
@@ -280,6 +283,8 @@ impl Interpreter {
             call_ic_hit_count: std::cell::Cell::new(0),
             call_ic_slow_path_count: std::cell::Cell::new(0),
             call_ic_fast_dispatch_count: std::cell::Cell::new(0),
+            bytecode_enabled: false,
+            bytecode_chunks_executed: 0,
         };
         interp.setup_globals();
         interp
