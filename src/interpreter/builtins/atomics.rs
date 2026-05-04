@@ -54,8 +54,8 @@ fn get_sab_info(interp: &Interpreter, ta_val: &JsValue) -> Option<(Arc<SharedBuf
 
 impl Interpreter {
     pub(crate) fn setup_atomics(&mut self) {
-        let atomics_obj = self.create_object();
-        let atomics_id = atomics_obj.borrow().id.unwrap();
+        let atomics_obj_id = self.create_object_id();
+        let atomics_id = atomics_obj_id;
 
         // Atomics.add
         let add_fn = self.create_function(JsFunction::native(
@@ -70,7 +70,7 @@ impl Interpreter {
                 )
             },
         ));
-        atomics_obj
+        self.get_object_cell_expect(atomics_obj_id)
             .borrow_mut()
             .insert_builtin("add".to_string(), add_fn);
 
@@ -87,7 +87,7 @@ impl Interpreter {
                 )
             },
         ));
-        atomics_obj
+        self.get_object_cell_expect(atomics_obj_id)
             .borrow_mut()
             .insert_builtin("sub".to_string(), sub_fn);
 
@@ -99,7 +99,7 @@ impl Interpreter {
                 atomics_rmw(interp, args, |old, val| old & val, |old, val| old & val)
             },
         ));
-        atomics_obj
+        self.get_object_cell_expect(atomics_obj_id)
             .borrow_mut()
             .insert_builtin("and".to_string(), and_fn);
 
@@ -111,7 +111,7 @@ impl Interpreter {
                 atomics_rmw(interp, args, |old, val| old | val, |old, val| old | val)
             },
         ));
-        atomics_obj
+        self.get_object_cell_expect(atomics_obj_id)
             .borrow_mut()
             .insert_builtin("or".to_string(), or_fn);
 
@@ -123,7 +123,7 @@ impl Interpreter {
                 atomics_rmw(interp, args, |old, val| old ^ val, |old, val| old ^ val)
             },
         ));
-        atomics_obj
+        self.get_object_cell_expect(atomics_obj_id)
             .borrow_mut()
             .insert_builtin("xor".to_string(), xor_fn);
 
@@ -133,7 +133,7 @@ impl Interpreter {
             3,
             |interp, _this, args| atomics_rmw(interp, args, |_old, val| val, |_old, val| val),
         ));
-        atomics_obj
+        self.get_object_cell_expect(atomics_obj_id)
             .borrow_mut()
             .insert_builtin("exchange".to_string(), exchange_fn);
 
@@ -170,7 +170,7 @@ impl Interpreter {
                 })
             },
         ));
-        atomics_obj
+        self.get_object_cell_expect(atomics_obj_id)
             .borrow_mut()
             .insert_builtin("load".to_string(), load_fn);
 
@@ -230,7 +230,7 @@ impl Interpreter {
                 Completion::Normal(return_val)
             },
         ));
-        atomics_obj
+        self.get_object_cell_expect(atomics_obj_id)
             .borrow_mut()
             .insert_builtin("store".to_string(), store_fn);
 
@@ -307,7 +307,7 @@ impl Interpreter {
                 })
             },
         ));
-        atomics_obj
+        self.get_object_cell_expect(atomics_obj_id)
             .borrow_mut()
             .insert_builtin("compareExchange".to_string(), cmpxchg_fn);
 
@@ -325,7 +325,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(result))
             },
         ));
-        atomics_obj
+        self.get_object_cell_expect(atomics_obj_id)
             .borrow_mut()
             .insert_builtin("isLockFree".to_string(), is_lock_free_fn);
 
@@ -471,7 +471,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(result)))
             },
         ));
-        atomics_obj
+        self.get_object_cell_expect(atomics_obj_id)
             .borrow_mut()
             .insert_builtin("wait".to_string(), wait_fn);
 
@@ -537,7 +537,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(woken as f64))
             },
         ));
-        atomics_obj
+        self.get_object_cell_expect(atomics_obj_id)
             .borrow_mut()
             .insert_builtin("notify".to_string(), notify_fn);
 
@@ -624,35 +624,47 @@ impl Interpreter {
                     }
                 });
 
-                let result = interp.create_object();
+                let result_id = interp.create_object_id();
                 if !current_matches {
-                    result.borrow_mut().insert_property(
-                        "async".to_string(),
-                        PropertyDescriptor::data(JsValue::Boolean(false), true, true, true),
-                    );
-                    result.borrow_mut().insert_property(
-                        "value".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str("not-equal")),
-                            true,
-                            true,
-                            true,
-                        ),
-                    );
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .insert_property(
+                            "async".to_string(),
+                            PropertyDescriptor::data(JsValue::Boolean(false), true, true, true),
+                        );
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .insert_property(
+                            "value".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::String(JsString::from_str("not-equal")),
+                                true,
+                                true,
+                                true,
+                            ),
+                        );
                 } else if timeout <= 0.0 {
-                    result.borrow_mut().insert_property(
-                        "async".to_string(),
-                        PropertyDescriptor::data(JsValue::Boolean(false), true, true, true),
-                    );
-                    result.borrow_mut().insert_property(
-                        "value".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str("timed-out")),
-                            true,
-                            true,
-                            true,
-                        ),
-                    );
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .insert_property(
+                            "async".to_string(),
+                            PropertyDescriptor::data(JsValue::Boolean(false), true, true, true),
+                        );
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .insert_property(
+                            "value".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::String(JsString::from_str("timed-out")),
+                                true,
+                                true,
+                                true,
+                            ),
+                        );
                 } else {
                     let sab_info = get_sab_info(interp, &ta_val);
                     let (resolve_fn, _reject_fn, promise_val) = interp.create_promise_parts();
@@ -738,22 +750,28 @@ impl Interpreter {
                         });
                     }
 
-                    result.borrow_mut().insert_property(
-                        "async".to_string(),
-                        PropertyDescriptor::data(JsValue::Boolean(true), true, true, true),
-                    );
-                    result.borrow_mut().insert_property(
-                        "value".to_string(),
-                        PropertyDescriptor::data(promise_val.clone(), true, true, true),
-                    );
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .insert_property(
+                            "async".to_string(),
+                            PropertyDescriptor::data(JsValue::Boolean(true), true, true, true),
+                        );
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .insert_property(
+                            "value".to_string(),
+                            PropertyDescriptor::data(promise_val.clone(), true, true, true),
+                        );
                     // resolve_fn stays rooted until completion callback runs
                     interp.gc_unroot_frame(gc_frame_promise);
                 }
-                let id = result.borrow().id.unwrap();
+                let id = result_id;
                 Completion::Normal(JsValue::Object(JsObject { id }))
             },
         ));
-        atomics_obj
+        self.get_object_cell_expect(atomics_obj_id)
             .borrow_mut()
             .insert_builtin("waitAsync".to_string(), wait_async_fn);
 
@@ -782,7 +800,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 },
             ));
-        atomics_obj
+        self.get_object_cell_expect(atomics_obj_id)
             .borrow_mut()
             .insert_builtin("pause".to_string(), pause_fn);
 
@@ -791,11 +809,14 @@ impl Interpreter {
             let tag = JsValue::String(JsString::from_str("Atomics"));
             let sym_key = "Symbol(Symbol.toStringTag)".to_string();
             let desc = PropertyDescriptor::data(tag, false, false, true);
-            atomics_obj
+            self.get_object_cell_expect(atomics_obj_id)
                 .borrow_mut()
                 .property_order
                 .push(sym_key.clone());
-            atomics_obj.borrow_mut().properties.insert(sym_key, desc);
+            self.get_object_cell_expect(atomics_obj_id)
+                .borrow_mut()
+                .properties
+                .insert(sym_key, desc);
         }
 
         let atomics_val = JsValue::Object(crate::types::JsObject { id: atomics_id });

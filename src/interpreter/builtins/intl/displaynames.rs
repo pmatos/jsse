@@ -1068,24 +1068,30 @@ fn get_display_name_for_code(
 
 impl Interpreter {
     pub(crate) fn setup_intl_display_names(&mut self, intl_obj_id: u64) {
-        let proto = self.create_object();
+        let proto_id = self.create_object_id();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype_id = Some(op_id);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .prototype_id = Some(op_id);
         }
-        proto.borrow_mut().class_name = "Intl.DisplayNames".to_string();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Intl.DisplayNames".to_string();
 
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Intl.DisplayNames"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor {
+                    value: Some(JsValue::String(JsString::from_str("Intl.DisplayNames"))),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                    get: None,
+                    set: None,
+                },
+            );
 
         // of(code)
         let of_fn = self.create_function(JsFunction::native(
@@ -1122,7 +1128,9 @@ impl Interpreter {
                 }
             },
         ));
-        proto.borrow_mut().insert_builtin("of".to_string(), of_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("of".to_string(), of_fn);
 
         // resolvedOptions()
         let resolved_fn = self.create_function(JsFunction::native(
@@ -1134,75 +1142,93 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let result = interp.create_object();
+                let result_id = interp.create_object_id();
                 if let Some(op_id) = interp.realm().object_prototype {
-                    result.borrow_mut().prototype_id = Some(op_id);
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .prototype_id = Some(op_id);
                 }
 
                 // Properties in spec order: locale, style, type, fallback, languageDisplay
-                result.borrow_mut().insert_property(
-                    "locale".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str(&data.locale)),
-                        true,
-                        true,
-                        true,
-                    ),
-                );
-                result.borrow_mut().insert_property(
-                    "style".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str(&data.style)),
-                        true,
-                        true,
-                        true,
-                    ),
-                );
-                result.borrow_mut().insert_property(
-                    "type".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str(&data.display_type)),
-                        true,
-                        true,
-                        true,
-                    ),
-                );
-                result.borrow_mut().insert_property(
-                    "fallback".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str(&data.fallback)),
-                        true,
-                        true,
-                        true,
-                    ),
-                );
-                if data.display_type == "language" {
-                    let ld = data.language_display.as_deref().unwrap_or("dialect");
-                    result.borrow_mut().insert_property(
-                        "languageDisplay".to_string(),
+                interp
+                    .get_object_cell_expect(result_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "locale".to_string(),
                         PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str(ld)),
+                            JsValue::String(JsString::from_str(&data.locale)),
                             true,
                             true,
                             true,
                         ),
                     );
+                interp
+                    .get_object_cell_expect(result_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "style".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::String(JsString::from_str(&data.style)),
+                            true,
+                            true,
+                            true,
+                        ),
+                    );
+                interp
+                    .get_object_cell_expect(result_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "type".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::String(JsString::from_str(&data.display_type)),
+                            true,
+                            true,
+                            true,
+                        ),
+                    );
+                interp
+                    .get_object_cell_expect(result_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "fallback".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::String(JsString::from_str(&data.fallback)),
+                            true,
+                            true,
+                            true,
+                        ),
+                    );
+                if data.display_type == "language" {
+                    let ld = data.language_display.as_deref().unwrap_or("dialect");
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .insert_property(
+                            "languageDisplay".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::String(JsString::from_str(ld)),
+                                true,
+                                true,
+                                true,
+                            ),
+                        );
                 }
 
-                let result_id = result.borrow().id.unwrap();
+                let result_id = result_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_display_names_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().intl_display_names_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_id = proto.borrow().id.unwrap();
+        let proto_id = proto_id;
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone_id = proto.borrow().id.unwrap();
+        let proto_clone_id = proto_id;
 
         let display_names_ctor = self.create_function(JsFunction::constructor(
             "DisplayNames".to_string(),
@@ -1314,18 +1340,25 @@ impl Interpreter {
                     Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
-                let obj = interp.create_object();
-                obj.borrow_mut().prototype_id = Some(proto);
-                obj.borrow_mut().class_name = "Intl.DisplayNames".to_string();
-                obj.borrow_mut().intl_data = Some(IntlData::DisplayNames {
-                    locale,
-                    style,
-                    display_type,
-                    fallback,
-                    language_display,
-                });
+                let obj_id = interp.create_object_id();
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .prototype_id = Some(proto);
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .class_name = "Intl.DisplayNames".to_string();
+                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
+                    Some(IntlData::DisplayNames {
+                        locale,
+                        style,
+                        display_type,
+                        fallback,
+                        language_display,
+                    });
 
-                let obj_id = obj.borrow().id.unwrap();
+                let obj_id = obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },
         ));
@@ -1361,10 +1394,12 @@ impl Interpreter {
         }
 
         // Set constructor on prototype
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(display_names_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(display_names_ctor.clone(), true, false, true),
+            );
 
         // Register Intl.DisplayNames on the Intl namespace
         self.get_object_cell_expect(intl_obj_id)

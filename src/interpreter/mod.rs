@@ -985,6 +985,17 @@ impl Interpreter {
         self.get_object_expect(id)
     }
 
+    /// Same as `create_object` but returns the slot id directly without
+    /// the legacy `Rc<RefCell<…>>` wrapper. New callers should use this
+    /// (paired with `get_object_cell_expect(id)` for mutation) to avoid
+    /// the per-call `Rc::clone` and to be forward-compatible with the
+    /// final PR 2b.2 API flip that drops `create_object` altogether.
+    pub(crate) fn create_object_id(&mut self) -> u64 {
+        let mut data = JsObjectData::new();
+        data.prototype_id = self.realm().object_prototype;
+        self.alloc_object(data)
+    }
+
     fn create_thrower_function(&mut self) -> JsValue {
         let realm_id = self.current_realm_id;
         let func = JsFunction::native(

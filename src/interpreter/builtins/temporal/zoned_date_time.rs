@@ -687,17 +687,26 @@ fn create_zdt(interp: &mut Interpreter, ns: BigInt, tz: String, cal: String) -> 
     if !is_valid_epoch_ns(&ns) {
         return Completion::Throw(interp.create_range_error("epochNanoseconds out of range"));
     }
-    let obj = interp.create_object();
-    obj.borrow_mut().class_name = "Temporal.ZonedDateTime".to_string();
+    let obj_id = interp.create_object_id();
+    interp
+        .get_object_cell_expect(obj_id)
+        .borrow_mut()
+        .class_name = "Temporal.ZonedDateTime".to_string();
     if let Some(proto_id) = interp.realm().temporal_zoned_date_time_prototype {
-        obj.borrow_mut().prototype_id = Some(proto_id);
+        interp
+            .get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .prototype_id = Some(proto_id);
     }
-    obj.borrow_mut().temporal_data = Some(TemporalData::ZonedDateTime {
+    interp
+        .get_object_cell_expect(obj_id)
+        .borrow_mut()
+        .temporal_data = Some(TemporalData::ZonedDateTime {
         epoch_nanoseconds: ns,
         time_zone: tz,
         calendar: cal,
     });
-    let id = obj.borrow().id.unwrap();
+    let id = obj_id;
     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
 }
 
@@ -1789,8 +1798,10 @@ fn round_ns_to_increment(ns: i128, increment: i128, mode: &str) -> i128 {
 
 impl Interpreter {
     pub(crate) fn setup_temporal_zoned_date_time(&mut self, temporal_obj_id: u64) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "Temporal.ZonedDateTime".to_string();
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Temporal.ZonedDateTime".to_string();
 
         // @@toStringTag
         {
@@ -1805,8 +1816,14 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            proto.borrow_mut().property_order.push(key.clone());
-            proto.borrow_mut().properties.insert(key, desc);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .property_order
+                .push(key.clone());
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .properties
+                .insert(key, desc);
         }
 
         // --- Getters ---
@@ -1824,17 +1841,19 @@ impl Interpreter {
                         body_fn(&ns, &tz, &cal)
                     },
                 ));
-                proto.borrow_mut().insert_property(
-                    $name.to_string(),
-                    PropertyDescriptor {
-                        value: None,
-                        writable: None,
-                        enumerable: Some(false),
-                        configurable: Some(true),
-                        get: Some(getter),
-                        set: None,
-                    },
-                );
+                self.get_object_cell_expect(proto_id)
+                    .borrow_mut()
+                    .insert_property(
+                        $name.to_string(),
+                        PropertyDescriptor {
+                            value: None,
+                            writable: None,
+                            enumerable: Some(false),
+                            configurable: Some(true),
+                            get: Some(getter),
+                            set: None,
+                        },
+                    );
             }};
         }
 
@@ -2063,17 +2082,19 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(hours))
                 },
             ));
-            proto.borrow_mut().insert_property(
-                "hoursInDay".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: Some(getter),
-                    set: None,
-                },
-            );
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    "hoursInDay".to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                        get: Some(getter),
+                        set: None,
+                    },
+                );
         }
 
         zdt_getter!("era", |ns, tz, cal| {
@@ -2102,7 +2123,7 @@ impl Interpreter {
             Completion::Normal(JsValue::Undefined)
         });
 
-        self.realm_mut().temporal_zoned_date_time_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().temporal_zoned_date_time_prototype = Some(proto_id);
 
         // --- Methods ---
 
@@ -2135,7 +2156,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::String(JsString::from_str(&result)))
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("toString".to_string(), method);
         }
@@ -2155,7 +2176,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::String(JsString::from_str(&result)))
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("toJSON".to_string(), method);
         }
@@ -2199,9 +2220,12 @@ impl Interpreter {
                     }
                     // Inject timeZone from ZDT into options
                     let effective_opts = {
-                        let opts_obj = interp.create_object();
+                        let opts_obj_id = interp.create_object_id();
                         if let Some(op_id) = interp.realm().object_prototype {
-                            opts_obj.borrow_mut().prototype_id = Some(op_id);
+                            interp
+                                .get_object_cell_expect(opts_obj_id)
+                                .borrow_mut()
+                                .prototype_id = Some(op_id);
                         }
                         // Copy properties from user options if present
                         if let JsValue::Object(ref o) = options_arg {
@@ -2216,28 +2240,34 @@ impl Interpreter {
                                     Completion::Throw(e) => return Completion::Throw(e),
                                     _ => JsValue::Undefined,
                                 };
-                                opts_obj.borrow_mut().insert_property(
-                                    key,
-                                    crate::interpreter::types::PropertyDescriptor::data(
-                                        val, true, true, true,
-                                    ),
-                                );
+                                interp
+                                    .get_object_cell_expect(opts_obj_id)
+                                    .borrow_mut()
+                                    .insert_property(
+                                        key,
+                                        crate::interpreter::types::PropertyDescriptor::data(
+                                            val, true, true, true,
+                                        ),
+                                    );
                             }
                         }
                         // Set timeZone from ZDT
-                        opts_obj.borrow_mut().insert_property(
-                            "timeZone".to_string(),
-                            crate::interpreter::types::PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&tz)),
-                                true,
-                                true,
-                                true,
-                            ),
-                        );
+                        interp
+                            .get_object_cell_expect(opts_obj_id)
+                            .borrow_mut()
+                            .insert_property(
+                                "timeZone".to_string(),
+                                crate::interpreter::types::PropertyDescriptor::data(
+                                    JsValue::String(JsString::from_str(&tz)),
+                                    true,
+                                    true,
+                                    true,
+                                ),
+                            );
                         // If no explicit date/time components/styles, set ZDT defaults
                         // (timeZoneName alone doesn't count as explicit)
                         let has_explicit = {
-                            let b = opts_obj.borrow();
+                            let b = interp.get_object_cell_expect(opts_obj_id).borrow();
                             [
                                 "year",
                                 "month",
@@ -2260,7 +2290,7 @@ impl Interpreter {
                         };
                         if !has_explicit {
                             let has_tz_name = {
-                                let b = opts_obj.borrow();
+                                let b = interp.get_object_cell_expect(opts_obj_id).borrow();
                                 b.properties.get("timeZoneName").is_some_and(|pd| {
                                     !matches!(pd.value, Some(JsValue::Undefined) | None)
                                 })
@@ -2273,29 +2303,35 @@ impl Interpreter {
                                 ("minute", "numeric"),
                                 ("second", "numeric"),
                             ] {
-                                opts_obj.borrow_mut().insert_property(
-                                    k.to_string(),
-                                    crate::interpreter::types::PropertyDescriptor::data(
-                                        JsValue::String(JsString::from_str(v)),
-                                        true,
-                                        true,
-                                        true,
-                                    ),
-                                );
+                                interp
+                                    .get_object_cell_expect(opts_obj_id)
+                                    .borrow_mut()
+                                    .insert_property(
+                                        k.to_string(),
+                                        crate::interpreter::types::PropertyDescriptor::data(
+                                            JsValue::String(JsString::from_str(v)),
+                                            true,
+                                            true,
+                                            true,
+                                        ),
+                                    );
                             }
                             if !has_tz_name {
-                                opts_obj.borrow_mut().insert_property(
-                                    "timeZoneName".to_string(),
-                                    crate::interpreter::types::PropertyDescriptor::data(
-                                        JsValue::String(JsString::from_str("short")),
-                                        true,
-                                        true,
-                                        true,
-                                    ),
-                                );
+                                interp
+                                    .get_object_cell_expect(opts_obj_id)
+                                    .borrow_mut()
+                                    .insert_property(
+                                        "timeZoneName".to_string(),
+                                        crate::interpreter::types::PropertyDescriptor::data(
+                                            JsValue::String(JsString::from_str("short")),
+                                            true,
+                                            true,
+                                            true,
+                                        ),
+                                    );
                             }
                         }
-                        let oid = opts_obj.borrow().id.unwrap();
+                        let oid = opts_obj_id;
                         JsValue::Object(crate::types::JsObject { id: oid })
                     };
                     let dtf_instance =
@@ -2319,7 +2355,7 @@ impl Interpreter {
                     super::temporal_format_with_dtf(interp, &dtf_instance, &ms_val)
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("toLocaleString".to_string(), method);
         }
@@ -2335,7 +2371,7 @@ impl Interpreter {
                     )
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("valueOf".to_string(), method);
         }
@@ -2364,7 +2400,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::Boolean(ns == ons && tz_equal && cal == ocal))
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("equals".to_string(), method);
         }
@@ -2379,19 +2415,28 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    let obj = interp.create_object();
-                    obj.borrow_mut().class_name = "Temporal.Instant".to_string();
+                    let obj_id = interp.create_object_id();
+                    interp
+                        .get_object_cell_expect(obj_id)
+                        .borrow_mut()
+                        .class_name = "Temporal.Instant".to_string();
                     if let Some(proto_id) = interp.realm().temporal_instant_prototype {
-                        obj.borrow_mut().prototype_id = Some(proto_id);
+                        interp
+                            .get_object_cell_expect(obj_id)
+                            .borrow_mut()
+                            .prototype_id = Some(proto_id);
                     }
-                    obj.borrow_mut().temporal_data = Some(TemporalData::Instant {
+                    interp
+                        .get_object_cell_expect(obj_id)
+                        .borrow_mut()
+                        .temporal_data = Some(TemporalData::Instant {
                         epoch_nanoseconds: ns,
                     });
-                    let id = obj.borrow().id.unwrap();
+                    let id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("toInstant".to_string(), method);
         }
@@ -2410,7 +2455,7 @@ impl Interpreter {
                     super::plain_date::create_plain_date_result(interp, y, m, d, &cal)
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("toPlainDate".to_string(), method);
         }
@@ -2429,7 +2474,7 @@ impl Interpreter {
                     super::plain_time::create_plain_time_result(interp, h, mi, s, ms, us, nanos)
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("toPlainTime".to_string(), method);
         }
@@ -2450,7 +2495,7 @@ impl Interpreter {
                     )
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("toPlainDateTime".to_string(), method);
         }
@@ -2471,7 +2516,7 @@ impl Interpreter {
                     create_zdt(interp, BigInt::from(epoch_ns), tz, cal)
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("startOfDay".to_string(), method);
         }
@@ -2499,7 +2544,7 @@ impl Interpreter {
                     create_zdt(interp, ns, tz, new_cal)
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("withCalendar".to_string(), method);
         }
@@ -2522,7 +2567,7 @@ impl Interpreter {
                     create_zdt(interp, ns, new_tz, cal)
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("withTimeZone".to_string(), method);
         }
@@ -2564,7 +2609,7 @@ impl Interpreter {
                     }
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("withPlainTime".to_string(), method);
         }
@@ -3153,7 +3198,7 @@ impl Interpreter {
                     create_zdt(interp, new_epoch_ns, tz, cal)
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("with".to_string(), method);
         }
@@ -3165,7 +3210,9 @@ impl Interpreter {
                 1,
                 |interp, this, args| zdt_add_subtract(interp, this, args, 1),
             ));
-            proto.borrow_mut().insert_builtin("add".to_string(), method);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_builtin("add".to_string(), method);
         }
 
         // subtract(duration)
@@ -3175,7 +3222,7 @@ impl Interpreter {
                 1,
                 |interp, this, args| zdt_add_subtract(interp, this, args, -1),
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("subtract".to_string(), method);
         }
@@ -3187,7 +3234,7 @@ impl Interpreter {
                 1,
                 |interp, this, args| zdt_until_since(interp, this, args, 1),
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("until".to_string(), method);
         }
@@ -3199,7 +3246,7 @@ impl Interpreter {
                 1,
                 |interp, this, args| zdt_until_since(interp, this, args, -1),
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("since".to_string(), method);
         }
@@ -3386,7 +3433,7 @@ impl Interpreter {
                     create_zdt(interp, BigInt::from(rounded_ns), tz, cal)
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("round".to_string(), method);
         }
@@ -3460,7 +3507,7 @@ impl Interpreter {
                     }
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("getTimeZoneTransition".to_string(), method);
         }
@@ -3507,18 +3554,18 @@ impl Interpreter {
         if let JsValue::Object(ref o) = constructor
             && let Some(obj) = self.get_object(o.id)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject {
-                id: proto.borrow().id.unwrap(),
-            });
+            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
             );
         }
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(constructor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(constructor.clone(), true, false, true),
+            );
 
         // --- Static methods ---
 

@@ -1137,24 +1137,30 @@ fn format_to_parts_duration(
 
 impl Interpreter {
     pub(crate) fn setup_intl_duration_format(&mut self, intl_obj_id: u64) {
-        let proto = self.create_object();
+        let proto_id = self.create_object_id();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype_id = Some(op_id);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .prototype_id = Some(op_id);
         }
-        proto.borrow_mut().class_name = "Intl.DurationFormat".to_string();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Intl.DurationFormat".to_string();
 
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Intl.DurationFormat"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor {
+                    value: Some(JsValue::String(JsString::from_str("Intl.DurationFormat"))),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                    get: None,
+                    set: None,
+                },
+            );
 
         // format(duration)
         let format_fn = self.create_function(JsFunction::native(
@@ -1176,7 +1182,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("format".to_string(), format_fn);
 
@@ -1201,40 +1207,52 @@ impl Interpreter {
                 let js_parts: Vec<JsValue> = parts
                     .into_iter()
                     .map(|(ptype, value, unit)| {
-                        let part_obj = interp.create_object();
+                        let part_obj_id = interp.create_object_id();
                         if let Some(op_id) = interp.realm().object_prototype {
-                            part_obj.borrow_mut().prototype_id = Some(op_id);
+                            interp
+                                .get_object_cell_expect(part_obj_id)
+                                .borrow_mut()
+                                .prototype_id = Some(op_id);
                         }
-                        part_obj.borrow_mut().insert_property(
-                            "type".to_string(),
-                            PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&ptype)),
-                                true,
-                                true,
-                                true,
-                            ),
-                        );
-                        part_obj.borrow_mut().insert_property(
-                            "value".to_string(),
-                            PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&value)),
-                                true,
-                                true,
-                                true,
-                            ),
-                        );
-                        if !unit.is_empty() {
-                            part_obj.borrow_mut().insert_property(
-                                "unit".to_string(),
+                        interp
+                            .get_object_cell_expect(part_obj_id)
+                            .borrow_mut()
+                            .insert_property(
+                                "type".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&unit)),
+                                    JsValue::String(JsString::from_str(&ptype)),
                                     true,
                                     true,
                                     true,
                                 ),
                             );
+                        interp
+                            .get_object_cell_expect(part_obj_id)
+                            .borrow_mut()
+                            .insert_property(
+                                "value".to_string(),
+                                PropertyDescriptor::data(
+                                    JsValue::String(JsString::from_str(&value)),
+                                    true,
+                                    true,
+                                    true,
+                                ),
+                            );
+                        if !unit.is_empty() {
+                            interp
+                                .get_object_cell_expect(part_obj_id)
+                                .borrow_mut()
+                                .insert_property(
+                                    "unit".to_string(),
+                                    PropertyDescriptor::data(
+                                        JsValue::String(JsString::from_str(&unit)),
+                                        true,
+                                        true,
+                                        true,
+                                    ),
+                                );
                         }
-                        let id = part_obj.borrow().id.unwrap();
+                        let id = part_obj_id;
                         JsValue::Object(crate::types::JsObject { id })
                     })
                     .collect();
@@ -1242,7 +1260,7 @@ impl Interpreter {
                 Completion::Normal(interp.create_array(js_parts))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("formatToParts".to_string(), format_to_parts_fn);
 
@@ -1256,9 +1274,12 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let result = interp.create_object();
+                let result_id = interp.create_object_id();
                 if let Some(op_id) = interp.realm().object_prototype {
-                    result.borrow_mut().prototype_id = Some(op_id);
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .prototype_id = Some(op_id);
                 }
 
                 let mut props: Vec<(&str, JsValue)> = vec![
@@ -1340,26 +1361,29 @@ impl Interpreter {
                 }
 
                 for (key, val) in props {
-                    result.borrow_mut().insert_property(
-                        key.to_string(),
-                        PropertyDescriptor::data(val, true, true, true),
-                    );
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .insert_property(
+                            key.to_string(),
+                            PropertyDescriptor::data(val, true, true, true),
+                        );
                 }
 
-                let result_id = result.borrow().id.unwrap();
+                let result_id = result_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_duration_format_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().intl_duration_format_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_id = proto.borrow().id.unwrap();
+        let proto_id = proto_id;
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone_id = proto.borrow().id.unwrap();
+        let proto_clone_id = proto_id;
 
         let duration_format_ctor = self.create_function(JsFunction::constructor(
             "DurationFormat".to_string(),
@@ -1684,37 +1708,44 @@ impl Interpreter {
                     Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
-                let obj = interp.create_object();
-                obj.borrow_mut().prototype_id = Some(proto);
-                obj.borrow_mut().class_name = "Intl.DurationFormat".to_string();
-                obj.borrow_mut().intl_data = Some(IntlData::DurationFormat {
-                    locale,
-                    numbering_system,
-                    style,
-                    years: unit_styles[0].0.clone(),
-                    years_display: unit_styles[0].1.clone(),
-                    months: unit_styles[1].0.clone(),
-                    months_display: unit_styles[1].1.clone(),
-                    weeks: unit_styles[2].0.clone(),
-                    weeks_display: unit_styles[2].1.clone(),
-                    days: unit_styles[3].0.clone(),
-                    days_display: unit_styles[3].1.clone(),
-                    hours: unit_styles[4].0.clone(),
-                    hours_display: unit_styles[4].1.clone(),
-                    minutes: unit_styles[5].0.clone(),
-                    minutes_display: unit_styles[5].1.clone(),
-                    seconds: unit_styles[6].0.clone(),
-                    seconds_display: unit_styles[6].1.clone(),
-                    milliseconds: unit_styles[7].0.clone(),
-                    milliseconds_display: unit_styles[7].1.clone(),
-                    microseconds: unit_styles[8].0.clone(),
-                    microseconds_display: unit_styles[8].1.clone(),
-                    nanoseconds: unit_styles[9].0.clone(),
-                    nanoseconds_display: unit_styles[9].1.clone(),
-                    fractional_digits,
-                });
+                let obj_id = interp.create_object_id();
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .prototype_id = Some(proto);
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .class_name = "Intl.DurationFormat".to_string();
+                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
+                    Some(IntlData::DurationFormat {
+                        locale,
+                        numbering_system,
+                        style,
+                        years: unit_styles[0].0.clone(),
+                        years_display: unit_styles[0].1.clone(),
+                        months: unit_styles[1].0.clone(),
+                        months_display: unit_styles[1].1.clone(),
+                        weeks: unit_styles[2].0.clone(),
+                        weeks_display: unit_styles[2].1.clone(),
+                        days: unit_styles[3].0.clone(),
+                        days_display: unit_styles[3].1.clone(),
+                        hours: unit_styles[4].0.clone(),
+                        hours_display: unit_styles[4].1.clone(),
+                        minutes: unit_styles[5].0.clone(),
+                        minutes_display: unit_styles[5].1.clone(),
+                        seconds: unit_styles[6].0.clone(),
+                        seconds_display: unit_styles[6].1.clone(),
+                        milliseconds: unit_styles[7].0.clone(),
+                        milliseconds_display: unit_styles[7].1.clone(),
+                        microseconds: unit_styles[8].0.clone(),
+                        microseconds_display: unit_styles[8].1.clone(),
+                        nanoseconds: unit_styles[9].0.clone(),
+                        nanoseconds_display: unit_styles[9].1.clone(),
+                        fractional_digits,
+                    });
 
-                let obj_id = obj.borrow().id.unwrap();
+                let obj_id = obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },
         ));
@@ -1750,10 +1781,12 @@ impl Interpreter {
         }
 
         // Set constructor on prototype
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(duration_format_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(duration_format_ctor.clone(), true, false, true),
+            );
 
         // Save built-in constructor for internal use (e.g. Duration.toLocaleString)
         self.realm_mut().intl_duration_format_ctor = Some(duration_format_ctor.clone());

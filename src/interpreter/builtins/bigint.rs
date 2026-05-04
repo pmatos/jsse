@@ -32,8 +32,10 @@ pub fn f64_to_bigint(n: f64) -> num_bigint::BigInt {
 
 impl Interpreter {
     pub(crate) fn setup_bigint_prototype(&mut self) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "BigInt".to_string();
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "BigInt".to_string();
 
         fn this_bigint_value(interp: &Interpreter, this: &JsValue) -> Option<num_bigint::BigInt> {
             match this {
@@ -128,22 +130,26 @@ impl Interpreter {
         for (name, arity, func) in methods {
             let fn_val =
                 self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
-            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
         }
 
         // @@toStringTag
         let tag_key = self
             .get_symbol_key("toStringTag")
             .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
-        proto.borrow_mut().insert_property(
-            tag_key,
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("BigInt")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                tag_key,
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("BigInt")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
         // BigInt() — is a constructor but throws TypeError when called with new
         self.register_global_fn(
@@ -306,9 +312,7 @@ impl Interpreter {
             && let JsValue::Object(o) = &bigint_val
             && let Some(bigint_obj) = self.get_object(o.id)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject {
-                id: proto.borrow().id.unwrap(),
-            });
+            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             bigint_obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
@@ -323,13 +327,15 @@ impl Interpreter {
 
         // Set constructor property on prototype
         if let Some(bigint_val) = self.get_global_var("BigInt") {
-            proto.borrow_mut().insert_property(
-                "constructor".to_string(),
-                PropertyDescriptor::data(bigint_val, true, false, true),
-            );
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    "constructor".to_string(),
+                    PropertyDescriptor::data(bigint_val, true, false, true),
+                );
         }
 
-        self.realm_mut().bigint_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().bigint_prototype = Some(proto_id);
     }
 }
 

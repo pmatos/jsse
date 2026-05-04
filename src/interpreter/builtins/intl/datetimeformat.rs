@@ -4711,24 +4711,30 @@ fn date_fields_to_epoch_ms(
 
 impl Interpreter {
     pub(crate) fn setup_intl_date_time_format(&mut self, intl_obj_id: u64) {
-        let proto = self.create_object();
+        let proto_id = self.create_object_id();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype_id = Some(op_id);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .prototype_id = Some(op_id);
         }
-        proto.borrow_mut().class_name = "Intl.DateTimeFormat".to_string();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Intl.DateTimeFormat".to_string();
 
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Intl.DateTimeFormat"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor {
+                    value: Some(JsValue::String(JsString::from_str("Intl.DateTimeFormat"))),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                    get: None,
+                    set: None,
+                },
+            );
 
         // format getter (returns a bound function, like Collator.compare)
         let format_getter = self.create_function(JsFunction::native(
@@ -4866,10 +4872,12 @@ impl Interpreter {
                 ))
             },
         ));
-        proto.borrow_mut().insert_property(
-            "format".to_string(),
-            PropertyDescriptor::accessor(Some(format_getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "format".to_string(),
+                PropertyDescriptor::accessor(Some(format_getter), None, false, true),
+            );
 
         // formatToParts(date)
         let format_to_parts_fn = self.create_function(JsFunction::native(
@@ -4915,29 +4923,38 @@ impl Interpreter {
                 let js_parts: Vec<JsValue> = parts
                     .into_iter()
                     .map(|(ptype, value)| {
-                        let part_obj = interp.create_object();
+                        let part_obj_id = interp.create_object_id();
                         if let Some(op_id) = interp.realm().object_prototype {
-                            part_obj.borrow_mut().prototype_id = Some(op_id);
+                            interp
+                                .get_object_cell_expect(part_obj_id)
+                                .borrow_mut()
+                                .prototype_id = Some(op_id);
                         }
-                        part_obj.borrow_mut().insert_property(
-                            "type".to_string(),
-                            PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&ptype)),
-                                true,
-                                true,
-                                true,
-                            ),
-                        );
-                        part_obj.borrow_mut().insert_property(
-                            "value".to_string(),
-                            PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&value)),
-                                true,
-                                true,
-                                true,
-                            ),
-                        );
-                        let id = part_obj.borrow().id.unwrap();
+                        interp
+                            .get_object_cell_expect(part_obj_id)
+                            .borrow_mut()
+                            .insert_property(
+                                "type".to_string(),
+                                PropertyDescriptor::data(
+                                    JsValue::String(JsString::from_str(&ptype)),
+                                    true,
+                                    true,
+                                    true,
+                                ),
+                            );
+                        interp
+                            .get_object_cell_expect(part_obj_id)
+                            .borrow_mut()
+                            .insert_property(
+                                "value".to_string(),
+                                PropertyDescriptor::data(
+                                    JsValue::String(JsString::from_str(&value)),
+                                    true,
+                                    true,
+                                    true,
+                                ),
+                            );
+                        let id = part_obj_id;
                         JsValue::Object(crate::types::JsObject { id })
                     })
                     .collect();
@@ -4945,7 +4962,7 @@ impl Interpreter {
                 Completion::Normal(interp.create_array(js_parts))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("formatToParts".to_string(), format_to_parts_fn);
 
@@ -5054,7 +5071,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("formatRange".to_string(), format_range_fn);
 
@@ -5155,11 +5172,11 @@ impl Interpreter {
                 let js_parts: Vec<JsValue> = all_parts
                     .into_iter()
                     .map(|(ptype, value, source)| {
-                        let part_obj = interp.create_object();
+                        let part_obj_id = interp.create_object_id();
                         if let Some(op_id) = interp.realm().object_prototype {
-                            part_obj.borrow_mut().prototype_id = Some(op_id);
+                            interp.get_object_cell_expect(part_obj_id).borrow_mut().prototype_id = Some(op_id);
                         }
-                        part_obj.borrow_mut().insert_property(
+                        interp.get_object_cell_expect(part_obj_id).borrow_mut().insert_property(
                             "type".to_string(),
                             PropertyDescriptor::data(
                                 JsValue::String(JsString::from_str(&ptype)),
@@ -5168,7 +5185,7 @@ impl Interpreter {
                                 true,
                             ),
                         );
-                        part_obj.borrow_mut().insert_property(
+                        interp.get_object_cell_expect(part_obj_id).borrow_mut().insert_property(
                             "value".to_string(),
                             PropertyDescriptor::data(
                                 JsValue::String(JsString::from_str(&value)),
@@ -5177,7 +5194,7 @@ impl Interpreter {
                                 true,
                             ),
                         );
-                        part_obj.borrow_mut().insert_property(
+                        interp.get_object_cell_expect(part_obj_id).borrow_mut().insert_property(
                             "source".to_string(),
                             PropertyDescriptor::data(
                                 JsValue::String(JsString::from_str(&source)),
@@ -5186,7 +5203,7 @@ impl Interpreter {
                                 true,
                             ),
                         );
-                        let id = part_obj.borrow().id.unwrap();
+                        let id = part_obj_id;
                         JsValue::Object(crate::types::JsObject { id })
                     })
                     .collect();
@@ -5194,7 +5211,7 @@ impl Interpreter {
                 Completion::Normal(interp.create_array(js_parts))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("formatRangeToParts".to_string(), format_range_to_parts_fn);
 
@@ -5208,9 +5225,12 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let result = interp.create_object();
+                let result_id = interp.create_object_id();
                 if let Some(op_id) = interp.realm().object_prototype {
-                    result.borrow_mut().prototype_id = Some(op_id);
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .prototype_id = Some(op_id);
                 }
 
                 // Properties in spec order
@@ -5280,26 +5300,29 @@ impl Interpreter {
                 }
 
                 for (key, val) in props {
-                    result.borrow_mut().insert_property(
-                        key.to_string(),
-                        PropertyDescriptor::data(val, true, true, true),
-                    );
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .insert_property(
+                            key.to_string(),
+                            PropertyDescriptor::data(val, true, true, true),
+                        );
                 }
 
-                let result_id = result.borrow().id.unwrap();
+                let result_id = result_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_date_time_format_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().intl_date_time_format_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_id = proto.borrow().id.unwrap();
+        let proto_id = proto_id;
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone_id = proto.borrow().id.unwrap();
+        let proto_clone_id = proto_id;
 
         let dtf_ctor = self.create_function(JsFunction::constructor(
             "DateTimeFormat".to_string(),
@@ -5678,33 +5701,40 @@ impl Interpreter {
                     Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
-                let obj = interp.create_object();
-                obj.borrow_mut().prototype_id = Some(proto);
-                obj.borrow_mut().class_name = "Intl.DateTimeFormat".to_string();
-                obj.borrow_mut().intl_data = Some(IntlData::DateTimeFormat {
-                    locale,
-                    calendar,
-                    numbering_system,
-                    time_zone,
-                    hour_cycle,
-                    hour12,
-                    weekday,
-                    era,
-                    year,
-                    month,
-                    day,
-                    day_period,
-                    hour: hour_opt,
-                    minute: minute_opt,
-                    second: second_opt,
-                    fractional_second_digits: fsd_opt,
-                    time_zone_name: tz_name,
-                    date_style,
-                    time_style,
-                    has_explicit_components: has_date_time_component || has_style,
-                });
+                let obj_id = interp.create_object_id();
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .prototype_id = Some(proto);
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .class_name = "Intl.DateTimeFormat".to_string();
+                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
+                    Some(IntlData::DateTimeFormat {
+                        locale,
+                        calendar,
+                        numbering_system,
+                        time_zone,
+                        hour_cycle,
+                        hour12,
+                        weekday,
+                        era,
+                        year,
+                        month,
+                        day,
+                        day_period,
+                        hour: hour_opt,
+                        minute: minute_opt,
+                        second: second_opt,
+                        fractional_second_digits: fsd_opt,
+                        time_zone_name: tz_name,
+                        date_style,
+                        time_style,
+                        has_explicit_components: has_date_time_component || has_style,
+                    });
 
-                let obj_id = obj.borrow().id.unwrap();
+                let obj_id = obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },
         ));
@@ -5740,10 +5770,12 @@ impl Interpreter {
         }
 
         // Set constructor on prototype
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(dtf_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(dtf_ctor.clone(), true, false, true),
+            );
 
         // Save built-in constructor for internal use (e.g. Date.toLocaleString)
         self.realm_mut().intl_date_time_format_ctor = Some(dtf_ctor.clone());

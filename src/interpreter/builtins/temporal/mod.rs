@@ -1613,8 +1613,8 @@ pub(crate) fn parse_overflow_option(
 
 impl Interpreter {
     pub(crate) fn setup_temporal(&mut self) {
-        let temporal_obj = self.create_object();
-        let temporal_id = temporal_obj.borrow().id.unwrap();
+        let temporal_obj_id = self.create_object_id();
+        let temporal_id = temporal_obj_id;
 
         // @@toStringTag = "Temporal"
         {
@@ -1627,11 +1627,17 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            temporal_obj.borrow_mut().property_order.push(key.clone());
-            temporal_obj.borrow_mut().properties.insert(key, desc);
+            self.get_object_cell_expect(temporal_obj_id)
+                .borrow_mut()
+                .property_order
+                .push(key.clone());
+            self.get_object_cell_expect(temporal_obj_id)
+                .borrow_mut()
+                .properties
+                .insert(key, desc);
         }
 
-        let temporal_obj_id = temporal_obj.borrow().id.unwrap();
+        let temporal_obj_id = temporal_obj_id;
         self.setup_temporal_duration(temporal_obj_id);
         self.setup_temporal_instant(temporal_obj_id);
         self.setup_temporal_plain_time(temporal_obj_id);

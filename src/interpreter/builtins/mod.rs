@@ -370,13 +370,15 @@ impl Interpreter {
         // Create a placeholder Function.prototype early so all functions created during
         // setup get the correct [[Prototype]]. It will be adopted by Function.prototype later.
         if self.realm().function_prototype.is_none() {
-            let fp = self.create_object();
-            fp.borrow_mut().prototype_id = self.realm().object_prototype;
-            fp.borrow_mut().callable = Some(JsFunction::native(String::new(), 0, |_, _, _| {
-                Completion::Normal(JsValue::Undefined)
-            }));
-            fp.borrow_mut().class_name = "Function".to_string();
-            self.realm_mut().function_prototype = Some(fp.borrow().id.unwrap());
+            let fp_id = self.create_object_id();
+            self.get_object_cell_expect(fp_id).borrow_mut().prototype_id =
+                self.realm().object_prototype;
+            self.get_object_cell_expect(fp_id).borrow_mut().callable =
+                Some(JsFunction::native(String::new(), 0, |_, _, _| {
+                    Completion::Normal(JsValue::Undefined)
+                }));
+            self.get_object_cell_expect(fp_id).borrow_mut().class_name = "Function".to_string();
+            self.realm_mut().function_prototype = Some(fp_id);
         }
 
         // Create %ThrowTypeError% intrinsic (§10.2.4) — must exist before anything uses it
@@ -404,8 +406,8 @@ impl Interpreter {
             self.realm_mut().throw_type_error = Some(thrower);
         }
 
-        let console = self.create_object();
-        let console_id = console.borrow().id.unwrap();
+        let console_id = self.create_object_id();
+        let console_id = console_id;
         {
             let log_fn = self.create_function(JsFunction::native(
                 "log".to_string(),
@@ -416,7 +418,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 },
             ));
-            console
+            self.get_object_cell_expect(console_id)
                 .borrow_mut()
                 .insert_builtin("log".to_string(), log_fn);
         }
@@ -516,12 +518,12 @@ impl Interpreter {
                         }
                         return Completion::Normal(this.clone());
                     }
-                    let obj = interp.create_object();
+                    let obj_id = interp.create_object_id();
                     {
-                        let mut o = obj.borrow_mut();
+                        let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                         init_error!(o);
                     }
-                    let id = obj.borrow().id.unwrap();
+                    let id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 }),
             );
@@ -668,9 +670,9 @@ impl Interpreter {
                             }
                             return Completion::Normal(this.clone());
                         }
-                        let obj = interp.create_object();
+                        let obj_id = interp.create_object_id();
                         {
-                            let mut o = obj.borrow_mut();
+                            let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                             o.class_name = "Test262Error".to_string();
                             if let Some(ref ep) = error_proto_clone {
                                 o.prototype_id = Some(ep.borrow().id.unwrap());
@@ -683,7 +685,7 @@ impl Interpreter {
                                 JsValue::String(JsString::from_str("Test262Error")),
                             );
                         }
-                        let id = obj.borrow().id.unwrap();
+                        let id = obj_id;
                         Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                     },
                 ),
@@ -702,21 +704,27 @@ impl Interpreter {
             let error_name = name.to_string();
 
             // Create per-type prototype inheriting from Error.prototype_id
-            let native_proto = self.create_object();
+            let native_proto_id = self.create_object_id();
             if let Some(ref ep) = error_prototype {
-                native_proto.borrow_mut().prototype_id = Some(ep.borrow().id.unwrap());
+                self.get_object_cell_expect(native_proto_id)
+                    .borrow_mut()
+                    .prototype_id = Some(ep.borrow().id.unwrap());
             }
-            native_proto.borrow_mut().insert_builtin(
-                "name".to_string(),
-                JsValue::String(JsString::from_str(name)),
-            );
-            native_proto.borrow_mut().insert_builtin(
-                "message".to_string(),
-                JsValue::String(JsString::from_str("")),
-            );
+            self.get_object_cell_expect(native_proto_id)
+                .borrow_mut()
+                .insert_builtin(
+                    "name".to_string(),
+                    JsValue::String(JsString::from_str(name)),
+                );
+            self.get_object_cell_expect(native_proto_id)
+                .borrow_mut()
+                .insert_builtin(
+                    "message".to_string(),
+                    JsValue::String(JsString::from_str("")),
+                );
 
             // Store native error prototype on realm
-            let native_proto_id = native_proto.borrow().id.unwrap();
+            let native_proto_id = native_proto_id;
             match name {
                 "SyntaxError" => self.realm_mut().syntax_error_prototype = Some(native_proto_id),
                 "TypeError" => self.realm_mut().type_error_prototype = Some(native_proto_id),
@@ -729,7 +737,7 @@ impl Interpreter {
                 _ => {}
             }
 
-            let native_proto_clone_id = native_proto.borrow().id.unwrap();
+            let native_proto_clone_id = native_proto_id;
             let error_name_clone = error_name.clone();
             self.register_global_fn(
                 name,
@@ -802,19 +810,19 @@ impl Interpreter {
                         }
                         return Completion::Normal(this.clone());
                     }
-                    let obj = interp.create_object();
+                    let obj_id = interp.create_object_id();
                     {
-                        let mut o = obj.borrow_mut();
+                        let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                         init_native_error!(o);
                     }
-                    let id = obj.borrow().id.unwrap();
+                    let id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 }),
             );
 
             // Set constructor on the per-type prototype
             if let Some(ctor_val) = self.get_global_var(name) {
-                native_proto
+                self.get_object_cell_expect(native_proto_id)
                     .borrow_mut()
                     .insert_builtin("constructor".to_string(), ctor_val.clone());
             }
@@ -824,7 +832,7 @@ impl Interpreter {
                     && let JsValue::Object(o) = &ctor_val
                     && let Some(ctor_obj) = self.get_object(o.id)
                 {
-                    let proto_id = native_proto.borrow().id.unwrap();
+                    let proto_id = native_proto_id;
                     ctor_obj.borrow_mut().insert_property(
                         "prototype".to_string(),
                         PropertyDescriptor::data(
@@ -841,21 +849,26 @@ impl Interpreter {
 
         // SuppressedError constructor
         {
-            let suppressed_proto = self.create_object();
+            let suppressed_proto_id = self.create_object_id();
             if let Some(ref ep) = error_prototype {
-                suppressed_proto.borrow_mut().prototype_id = Some(ep.borrow().id.unwrap());
+                self.get_object_cell_expect(suppressed_proto_id)
+                    .borrow_mut()
+                    .prototype_id = Some(ep.borrow().id.unwrap());
             }
-            suppressed_proto.borrow_mut().insert_builtin(
-                "name".to_string(),
-                JsValue::String(JsString::from_str("SuppressedError")),
-            );
-            suppressed_proto.borrow_mut().insert_builtin(
-                "message".to_string(),
-                JsValue::String(JsString::from_str("")),
-            );
+            self.get_object_cell_expect(suppressed_proto_id)
+                .borrow_mut()
+                .insert_builtin(
+                    "name".to_string(),
+                    JsValue::String(JsString::from_str("SuppressedError")),
+                );
+            self.get_object_cell_expect(suppressed_proto_id)
+                .borrow_mut()
+                .insert_builtin(
+                    "message".to_string(),
+                    JsValue::String(JsString::from_str("")),
+                );
 
-            self.realm_mut().suppressed_error_prototype =
-                Some(suppressed_proto.borrow().id.unwrap());
+            self.realm_mut().suppressed_error_prototype = Some(suppressed_proto_id);
 
             let suppressed_ctor = self.create_function(JsFunction::constructor(
                 "SuppressedError".to_string(),
@@ -872,19 +885,25 @@ impl Interpreter {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let obj = interp.create_object();
+                    // Extract msg_str BEFORE the mut borrow on obj's RefCell
+                    // (lifetime is tied to &interp; can't hold across &mut interp).
+                    let msg_str = if !matches!(msg_raw, JsValue::Undefined) {
+                        match interp.to_string_value(&msg_raw) {
+                            Ok(s) => Some(JsValue::String(JsString::from_str(&s))),
+                            Err(e) => return Completion::Throw(e),
+                        }
+                    } else {
+                        None
+                    };
+                    let obj_id = interp.create_object_id();
                     {
-                        let mut o = obj.borrow_mut();
+                        let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                         o.class_name = "SuppressedError".to_string();
                         if let Some(p) = proto {
                             o.prototype_id = Some(p);
                         }
                         // Per spec: message first, then error, then suppressed
-                        if !matches!(msg_raw, JsValue::Undefined) {
-                            let msg_str = match interp.to_string_value(&msg_raw) {
-                                Ok(s) => JsValue::String(JsString::from_str(&s)),
-                                Err(e) => return Completion::Throw(e),
-                            };
+                        if let Some(msg_str) = msg_str {
                             o.insert_builtin("message".to_string(), msg_str);
                         }
                         o.insert_builtin("error".to_string(), error_val.clone());
@@ -894,19 +913,19 @@ impl Interpreter {
                             JsValue::String(JsString::from_str("")),
                         );
                     }
-                    let id = obj.borrow().id.unwrap();
+                    let id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 },
             ));
 
-            suppressed_proto
+            self.get_object_cell_expect(suppressed_proto_id)
                 .borrow_mut()
                 .insert_builtin("constructor".to_string(), suppressed_ctor.clone());
 
             if let JsValue::Object(ref ctor_ref) = suppressed_ctor
                 && let Some(ctor_obj) = self.get_object(ctor_ref.id)
             {
-                let proto_id = suppressed_proto.borrow().id.unwrap();
+                let proto_id = suppressed_proto_id;
                 ctor_obj.borrow_mut().insert_property(
                     "prototype".to_string(),
                     PropertyDescriptor::data(
@@ -927,20 +946,26 @@ impl Interpreter {
 
         // AggregateError constructor
         {
-            let agg_proto = self.create_object();
+            let agg_proto_id = self.create_object_id();
             if let Some(ref ep) = error_prototype {
-                agg_proto.borrow_mut().prototype_id = Some(ep.borrow().id.unwrap());
+                self.get_object_cell_expect(agg_proto_id)
+                    .borrow_mut()
+                    .prototype_id = Some(ep.borrow().id.unwrap());
             }
-            agg_proto.borrow_mut().insert_builtin(
-                "name".to_string(),
-                JsValue::String(JsString::from_str("AggregateError")),
-            );
-            agg_proto.borrow_mut().insert_builtin(
-                "message".to_string(),
-                JsValue::String(JsString::from_str("")),
-            );
-            let agg_proto_clone_id = agg_proto.borrow().id.unwrap();
-            self.realm_mut().aggregate_error_prototype = Some(agg_proto.borrow().id.unwrap());
+            self.get_object_cell_expect(agg_proto_id)
+                .borrow_mut()
+                .insert_builtin(
+                    "name".to_string(),
+                    JsValue::String(JsString::from_str("AggregateError")),
+                );
+            self.get_object_cell_expect(agg_proto_id)
+                .borrow_mut()
+                .insert_builtin(
+                    "message".to_string(),
+                    JsValue::String(JsString::from_str("")),
+                );
+            let agg_proto_clone_id = agg_proto_id;
+            self.realm_mut().aggregate_error_prototype = Some(agg_proto_id);
             self.register_global_fn(
                 "AggregateError",
                 BindingKind::Var,
@@ -1017,19 +1042,19 @@ impl Interpreter {
                             }
                             return Completion::Normal(this.clone());
                         }
-                        let obj = interp.create_object();
+                        let obj_id = interp.create_object_id();
                         {
-                            let mut o = obj.borrow_mut();
+                            let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                             init_agg_error!(o);
                         }
-                        let id = obj.borrow().id.unwrap();
+                        let id = obj_id;
                         Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                     },
                 ),
             );
             {
                 if let Some(ctor_val) = self.get_global_var("AggregateError") {
-                    agg_proto
+                    self.get_object_cell_expect(agg_proto_id)
                         .borrow_mut()
                         .insert_builtin("constructor".to_string(), ctor_val);
                 }
@@ -1039,7 +1064,7 @@ impl Interpreter {
                     && let JsValue::Object(o) = &ctor_val
                     && let Some(ctor_obj) = self.get_object(o.id)
                 {
-                    let proto_id = agg_proto.borrow().id.unwrap();
+                    let proto_id = agg_proto_id;
                     ctor_obj.borrow_mut().insert_property(
                         "prototype".to_string(),
                         PropertyDescriptor::data(
@@ -1067,8 +1092,8 @@ impl Interpreter {
                     if !nt_is_object {
                         // OrdinaryCreateFromConstructor(NewTarget, "%Object.prototype%")
                         let default_proto = interp.realm().object_prototype;
-                        let new_obj_rc = interp.create_object();
-                        let no_id = new_obj_rc.borrow().id.unwrap();
+                        let new_obj_rc_id = interp.create_object_id();
+                        let no_id = new_obj_rc_id;
                         interp.apply_new_target_prototype(no_id, default_proto, |realm| realm.object_prototype);
                         let new_obj_val = JsValue::Object(crate::types::JsObject { id: no_id });
                         return Completion::Normal(new_obj_val);
@@ -1082,8 +1107,8 @@ impl Interpreter {
                         interp.to_object(val)
                     }
                     _ => {
-                        let obj = interp.create_object();
-                        let id = obj.borrow().id.unwrap();
+                        let obj_id = interp.create_object_id();
+                        let id = obj_id;
                         Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                     }
                 }
@@ -1918,10 +1943,10 @@ impl Interpreter {
         );
 
         // Math object
-        let math_obj = self.create_object();
-        let math_id = math_obj.borrow().id.unwrap();
+        let math_obj_id = self.create_object_id();
+        let math_id = math_obj_id;
         {
-            let mut m = math_obj.borrow_mut();
+            let mut m = self.get_object_cell_expect(math_obj_id).borrow_mut();
             m.class_name = "Math".to_string();
             let math_consts: &[(&str, f64)] = &[
                 ("PI", std::f64::consts::PI),
@@ -1979,7 +2004,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(op(x)))
                 },
             ));
-            math_obj
+            self.get_object_cell_expect(math_obj_id)
                 .borrow_mut()
                 .insert_builtin(name.to_string(), fn_val);
         }
@@ -2003,7 +2028,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(result))
             },
         ));
-        math_obj
+        self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("round".to_string(), round_fn);
         // Math.max, Math.min, Math.pow, Math.random, Math.atan2
@@ -2040,7 +2065,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(result))
             },
         ));
-        math_obj
+        self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("max".to_string(), max_fn);
         let min_fn = self.create_function(JsFunction::native(
@@ -2076,7 +2101,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(result))
             },
         ));
-        math_obj
+        self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("min".to_string(), min_fn);
         let pow_fn = self.create_function(JsFunction::native(
@@ -2088,7 +2113,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(number_ops::exponentiate(base, exp)))
             },
         ));
-        math_obj
+        self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("pow".to_string(), pow_fn);
         let random_fn = self.create_function(JsFunction::native(
@@ -2098,7 +2123,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(0.5)) // deterministic for testing
             },
         ));
-        math_obj
+        self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("random".to_string(), random_fn);
 
@@ -2112,7 +2137,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(y.atan2(x)))
             },
         ));
-        math_obj
+        self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("atan2".to_string(), atan2_fn);
 
@@ -2151,7 +2176,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(sum.sqrt()))
             },
         ));
-        math_obj
+        self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("hypot".to_string(), hypot_fn);
 
@@ -2164,7 +2189,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(x.log2()))
             },
         ));
-        math_obj
+        self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("log2".to_string(), log2_fn);
         let log10_fn = self.create_function(JsFunction::native(
@@ -2175,7 +2200,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(x.log10()))
             },
         ));
-        math_obj
+        self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("log10".to_string(), log10_fn);
 
@@ -2188,7 +2213,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number((x as f32) as f64))
             },
         ));
-        math_obj
+        self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("fround".to_string(), fround_fn);
 
@@ -2202,7 +2227,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(n.leading_zeros() as f64))
             },
         ));
-        math_obj
+        self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("clz32".to_string(), clz32_fn);
 
@@ -2218,7 +2243,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(ia.wrapping_mul(ib) as f64))
             },
         ));
-        math_obj
+        self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("imul".to_string(), imul_fn);
 
@@ -2243,7 +2268,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(op(x)))
                 },
             ));
-            math_obj
+            self.get_object_cell_expect(math_obj_id)
                 .borrow_mut()
                 .insert_builtin(name.to_string(), fn_val);
         }
@@ -2261,7 +2286,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(f64_to_f16_to_f64(n)))
             },
         ));
-        math_obj
+        self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("f16round".to_string(), f16round_fn);
 
@@ -2336,7 +2361,7 @@ impl Interpreter {
                 }
             },
         ));
-        math_obj
+        self.get_object_cell_expect(math_obj_id)
             .borrow_mut()
             .insert_builtin("sumPrecise".to_string(), sum_precise_fn);
 
@@ -2351,8 +2376,14 @@ impl Interpreter {
                 set: None,
             };
             let key = "Symbol(Symbol.toStringTag)".to_string();
-            math_obj.borrow_mut().property_order.push(key.clone());
-            math_obj.borrow_mut().properties.insert(key, desc);
+            self.get_object_cell_expect(math_obj_id)
+                .borrow_mut()
+                .property_order
+                .push(key.clone());
+            self.get_object_cell_expect(math_obj_id)
+                .borrow_mut()
+                .properties
+                .insert(key, desc);
         }
 
         let math_val = JsValue::Object(crate::types::JsObject { id: math_id });
@@ -2958,8 +2989,10 @@ impl Interpreter {
         // %AsyncFunction.prototype%
         // Per spec, this should inherit from Function.prototype_id
         {
-            let af_proto = self.create_object();
-            af_proto.borrow_mut().class_name = "AsyncFunction".to_string();
+            let af_proto_id = self.create_object_id();
+            self.get_object_cell_expect(af_proto_id)
+                .borrow_mut()
+                .class_name = "AsyncFunction".to_string();
 
             // [[Prototype]] = Function.prototype_id
             if let Some(func_val) = self.get_global_var("Function")
@@ -2968,21 +3001,25 @@ impl Interpreter {
                     self.get_property_on_id(func_obj.id, "prototype")
                 && let Some(func_proto) = self.get_object(func_proto_obj.id)
             {
-                af_proto.borrow_mut().prototype_id = Some(func_proto.borrow().id.unwrap());
+                self.get_object_cell_expect(af_proto_id)
+                    .borrow_mut()
+                    .prototype_id = Some(func_proto.borrow().id.unwrap());
             }
 
             // Symbol.toStringTag = "AsyncFunction"
-            af_proto.borrow_mut().insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("AsyncFunction")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+            self.get_object_cell_expect(af_proto_id)
+                .borrow_mut()
+                .insert_property(
+                    "Symbol(Symbol.toStringTag)".to_string(),
+                    PropertyDescriptor::data(
+                        JsValue::String(JsString::from_str("AsyncFunction")),
+                        false,
+                        false,
+                        true,
+                    ),
+                );
 
-            self.realm_mut().async_function_prototype = Some(af_proto.borrow().id.unwrap());
+            self.realm_mut().async_function_prototype = Some(af_proto_id);
         }
 
         // AsyncFunction constructor (not a global per spec)
@@ -3541,9 +3578,10 @@ impl Interpreter {
                     let (result, smap) = json_parse_value_with_source(interp, &s);
                     match result {
                         Completion::Normal(parsed) => {
-                            let wrapper = interp.create_object();
-                            let wrapper_id = wrapper.borrow().id.unwrap();
-                            wrapper
+                            let wrapper_id = interp.create_object_id();
+                            let wrapper_id = wrapper_id;
+                            interp
+                                .get_object_cell_expect(wrapper_id)
                                 .borrow_mut()
                                 .insert_value("".to_string(), parsed.clone());
                             // Store source text for top-level primitive
@@ -3609,10 +3647,13 @@ impl Interpreter {
                 if let Completion::Throw(e) = json_parse_value(interp, &text) {
                     return Completion::Throw(e);
                 }
-                let obj = interp.create_object();
-                obj.borrow_mut().prototype_id = None;
+                let obj_id = interp.create_object_id();
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .prototype_id = None;
                 {
-                    let mut o = obj.borrow_mut();
+                    let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                     let desc = PropertyDescriptor::data(
                         JsValue::String(JsString::from_str(&text)),
                         false,
@@ -3622,9 +3663,15 @@ impl Interpreter {
                     o.property_order.push("rawJSON".to_string());
                     o.properties.insert("rawJSON".to_string(), desc);
                 }
-                obj.borrow_mut().extensible = false;
-                obj.borrow_mut().is_raw_json = true;
-                let id = obj.borrow().id.unwrap();
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .extensible = false;
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .is_raw_json = true;
+                let id = obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             },
         ));
@@ -5159,17 +5206,23 @@ impl Interpreter {
                             ),
                         );
                     }
-                    let new_obj = interp.create_object();
+                    let new_obj_id = interp.create_object_id();
                     match &proto_arg {
                         JsValue::Object(o) => {
-                            new_obj.borrow_mut().prototype_id = Some(o.id);
+                            interp
+                                .get_object_cell_expect(new_obj_id)
+                                .borrow_mut()
+                                .prototype_id = Some(o.id);
                         }
                         JsValue::Null => {
-                            new_obj.borrow_mut().prototype_id = None;
+                            interp
+                                .get_object_cell_expect(new_obj_id)
+                                .borrow_mut()
+                                .prototype_id = None;
                         }
                         _ => unreachable!(),
                     }
-                    let id = new_obj.borrow().id.unwrap();
+                    let id = new_obj_id;
                     let target = JsValue::Object(crate::types::JsObject { id });
 
                     let props_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -5617,9 +5670,9 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let result_obj = interp.create_object();
-                    result_obj.borrow_mut().prototype_id = None;
-                    let result_id = result_obj.borrow().id.unwrap();
+                    let result_obj_id = interp.create_object_id();
+                    interp.get_object_cell_expect(result_obj_id).borrow_mut().prototype_id = None;
+                    let result_id = result_obj_id;
                     let result_val = JsValue::Object(crate::types::JsObject { id: result_id });
                     let mut k: u64 = 0;
                     loop {
@@ -6513,7 +6566,7 @@ impl Interpreter {
                         for k in sym_keys {
                             keys.push(k);
                         }
-                        let result = interp.create_object();
+                        let result_id = interp.create_object_id();
                         for key in keys {
                             // Use proxy_get_own_property_descriptor to invoke trap
                             let desc_val =
@@ -6528,15 +6581,18 @@ impl Interpreter {
                                 } else {
                                     key.clone()
                                 };
-                                result.borrow_mut().insert_value(key_str, desc_val);
+                                interp
+                                    .get_object_cell_expect(result_id)
+                                    .borrow_mut()
+                                    .insert_value(key_str, desc_val);
                             }
                         }
-                        let id = result.borrow().id.unwrap();
+                        let id = result_id;
                         return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
                     }
                     // Primitive wrapped to object with no own properties
-                    let result = interp.create_object();
-                    let id = result.borrow().id.unwrap();
+                    let result_id = interp.create_object_id();
+                    let id = result_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 },
             ));
@@ -6550,8 +6606,8 @@ impl Interpreter {
                 1,
                 |interp, _this, args| {
                     let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let obj = interp.create_object();
-                    let obj_id = obj.borrow().id.unwrap();
+                    let obj_id = interp.create_object_id();
+                    let obj_id = obj_id;
                     let obj_val = JsValue::Object(crate::types::JsObject { id: obj_id });
                     let iterator = match interp.get_iterator(&iterable) {
                         Ok(v) => v,
@@ -6638,11 +6694,14 @@ impl Interpreter {
     }
 
     pub(crate) fn create_iter_result_object(&mut self, value: JsValue, done: bool) -> JsValue {
-        let obj = self.create_object();
-        obj.borrow_mut().insert_value("value".to_string(), value);
-        obj.borrow_mut()
+        let obj_id = self.create_object_id();
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .insert_value("value".to_string(), value);
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
             .insert_value("done".to_string(), JsValue::Boolean(done));
-        let id = obj.borrow().id.unwrap();
+        let id = obj_id;
         JsValue::Object(crate::types::JsObject { id })
     }
 
@@ -6778,7 +6837,7 @@ impl Interpreter {
     }
 
     fn create_async_from_sync_iterator(&mut self, sync_iter: JsValue) -> JsValue {
-        let wrapper = self.create_object();
+        let wrapper_id = self.create_object_id();
         let cached_next = if let JsValue::Object(io) = &sync_iter {
             if let Some(cached) = self.iterator_next_cache.get(&io.id).cloned() {
                 cached
@@ -6819,7 +6878,7 @@ impl Interpreter {
                 interp.async_from_sync_continuation(result, sync_for_next.clone(), true)
             },
         ));
-        wrapper
+        self.get_object_cell_expect(wrapper_id)
             .borrow_mut()
             .insert_builtin("next".to_string(), next_fn);
 
@@ -6883,7 +6942,7 @@ impl Interpreter {
                 }
             },
         ));
-        wrapper
+        self.get_object_cell_expect(wrapper_id)
             .borrow_mut()
             .insert_builtin("return".to_string(), return_fn);
 
@@ -6936,11 +6995,11 @@ impl Interpreter {
                 }
             },
         ));
-        wrapper
+        self.get_object_cell_expect(wrapper_id)
             .borrow_mut()
             .insert_builtin("throw".to_string(), throw_fn);
 
-        let id = wrapper.borrow().id.unwrap();
+        let id = wrapper_id;
         JsValue::Object(crate::types::JsObject { id })
     }
 
@@ -7289,8 +7348,8 @@ impl Interpreter {
     }
 
     fn setup_reflect(&mut self) {
-        let reflect_obj = self.create_object();
-        let reflect_id = reflect_obj.borrow().id.unwrap();
+        let reflect_obj_id = self.create_object_id();
+        let reflect_id = reflect_obj_id;
 
         // Reflect.apply(target, thisArg, argsList)
         let apply_fn = self.create_function(JsFunction::native(
@@ -7318,7 +7377,7 @@ impl Interpreter {
                 interp.call_function(&target, &this_arg, &call_args)
             },
         ));
-        reflect_obj
+        self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("apply".to_string(), apply_fn);
 
@@ -7353,7 +7412,7 @@ impl Interpreter {
                 interp.construct_with_new_target(&target, &call_args, new_target)
             },
         ));
-        reflect_obj
+        self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("construct".to_string(), construct_fn);
 
@@ -7449,7 +7508,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));
-        reflect_obj
+        self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("defineProperty".to_string(), def_prop_fn);
 
@@ -7521,7 +7580,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));
-        reflect_obj
+        self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("deleteProperty".to_string(), del_prop_fn);
 
@@ -7549,7 +7608,7 @@ impl Interpreter {
                 }
             },
         ));
-        reflect_obj
+        self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("get".to_string(), get_fn);
 
@@ -7642,7 +7701,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 },
             ));
-        reflect_obj
+        self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("getOwnPropertyDescriptor".to_string(), gopd_fn);
 
@@ -7677,7 +7736,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Null)
             },
         ));
-        reflect_obj
+        self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("getPrototypeOf".to_string(), gpo_fn);
 
@@ -7706,7 +7765,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));
-        reflect_obj
+        self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("has".to_string(), has_fn);
 
@@ -7739,7 +7798,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));
-        reflect_obj
+        self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("isExtensible".to_string(), is_ext_fn);
 
@@ -7882,7 +7941,7 @@ impl Interpreter {
                 Completion::Normal(interp.create_array(Vec::new()))
             },
         ));
-        reflect_obj
+        self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("ownKeys".to_string(), own_keys_fn);
 
@@ -7932,7 +7991,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(true))
             },
         ));
-        reflect_obj
+        self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("preventExtensions".to_string(), pe_fn);
 
@@ -8255,7 +8314,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));
-        reflect_obj
+        self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("set".to_string(), set_fn);
 
@@ -8351,7 +8410,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));
-        reflect_obj
+        self.get_object_cell_expect(reflect_obj_id)
             .borrow_mut()
             .insert_builtin("setPrototypeOf".to_string(), spo_fn);
 
@@ -8366,8 +8425,14 @@ impl Interpreter {
                 set: None,
             };
             let key = "Symbol(Symbol.toStringTag)".to_string();
-            reflect_obj.borrow_mut().property_order.push(key.clone());
-            reflect_obj.borrow_mut().properties.insert(key, desc);
+            self.get_object_cell_expect(reflect_obj_id)
+                .borrow_mut()
+                .property_order
+                .push(key.clone());
+            self.get_object_cell_expect(reflect_obj_id)
+                .borrow_mut()
+                .properties
+                .insert(key, desc);
         }
 
         // Register Reflect as global
@@ -8407,22 +8472,34 @@ impl Interpreter {
                             .create_type_error("Cannot create proxy with a non-object as handler"),
                     );
                 }
-                let proxy_obj = interp.create_object();
-                proxy_obj.borrow_mut().class_name = "Proxy".to_string();
+                let proxy_obj_id = interp.create_object_id();
+                interp
+                    .get_object_cell_expect(proxy_obj_id)
+                    .borrow_mut()
+                    .class_name = "Proxy".to_string();
                 if let JsValue::Object(ref t) = target
                     && let Some(target_rc) = interp.get_object(t.id)
                 {
                     // Copy callable if target is callable
                     let callable = target_rc.borrow().callable.clone();
                     if callable.is_some() {
-                        proxy_obj.borrow_mut().callable = callable;
+                        interp
+                            .get_object_cell_expect(proxy_obj_id)
+                            .borrow_mut()
+                            .callable = callable;
                     }
-                    proxy_obj.borrow_mut().proxy_target_id = Some(t.id);
+                    interp
+                        .get_object_cell_expect(proxy_obj_id)
+                        .borrow_mut()
+                        .proxy_target_id = Some(t.id);
                 }
                 if let JsValue::Object(ref h) = handler {
-                    proxy_obj.borrow_mut().proxy_handler_id = Some(h.id);
+                    interp
+                        .get_object_cell_expect(proxy_obj_id)
+                        .borrow_mut()
+                        .proxy_handler_id = Some(h.id);
                 }
-                let proxy_id = proxy_obj.borrow().id.unwrap();
+                let proxy_id = proxy_obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: proxy_id }))
             },
         ));
@@ -8459,21 +8536,33 @@ impl Interpreter {
                             "Cannot create proxy with a non-object as handler",
                         ));
                     }
-                    let proxy_obj = interp.create_object();
-                    proxy_obj.borrow_mut().class_name = "Proxy".to_string();
+                    let proxy_obj_id = interp.create_object_id();
+                    interp
+                        .get_object_cell_expect(proxy_obj_id)
+                        .borrow_mut()
+                        .class_name = "Proxy".to_string();
                     if let JsValue::Object(ref t) = target
                         && let Some(target_rc) = interp.get_object(t.id)
                     {
                         let callable = target_rc.borrow().callable.clone();
                         if callable.is_some() {
-                            proxy_obj.borrow_mut().callable = callable;
+                            interp
+                                .get_object_cell_expect(proxy_obj_id)
+                                .borrow_mut()
+                                .callable = callable;
                         }
-                        proxy_obj.borrow_mut().proxy_target_id = Some(t.id);
+                        interp
+                            .get_object_cell_expect(proxy_obj_id)
+                            .borrow_mut()
+                            .proxy_target_id = Some(t.id);
                     }
                     if let JsValue::Object(ref h) = handler {
-                        proxy_obj.borrow_mut().proxy_handler_id = Some(h.id);
+                        interp
+                            .get_object_cell_expect(proxy_obj_id)
+                            .borrow_mut()
+                            .proxy_handler_id = Some(h.id);
                     }
-                    let proxy_id = proxy_obj.borrow().id.unwrap();
+                    let proxy_id = proxy_obj_id;
                     let proxy_val = JsValue::Object(crate::types::JsObject { id: proxy_id });
 
                     // Create revoke function that captures proxy_id
@@ -8491,14 +8580,16 @@ impl Interpreter {
                         },
                     ));
 
-                    let result = interp.create_object();
-                    result
+                    let result_id = interp.create_object_id();
+                    interp
+                        .get_object_cell_expect(result_id)
                         .borrow_mut()
                         .insert_builtin("proxy".to_string(), proxy_val);
-                    result
+                    interp
+                        .get_object_cell_expect(result_id)
                         .borrow_mut()
                         .insert_builtin("revoke".to_string(), revoke_fn);
-                    let result_id = result.borrow().id.unwrap();
+                    let result_id = result_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
                 },
             ));
@@ -8831,10 +8922,10 @@ impl Interpreter {
 
     pub(crate) fn setup_shadow_realm(&mut self) {
         let my_realm_id = self.current_realm_id;
-        let proto = self.create_object();
+        let proto_id = self.create_object_id();
         let op = self.realm().object_prototype;
         {
-            let mut p = proto.borrow_mut();
+            let mut p = self.get_object_cell_expect(proto_id).borrow_mut();
             p.class_name = "ShadowRealm".to_string();
             p.prototype_id = op;
         }
@@ -8843,15 +8934,17 @@ impl Interpreter {
         let to_string_tag_key = self
             .get_symbol_key("toStringTag")
             .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
-        proto.borrow_mut().insert_property(
-            to_string_tag_key,
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("ShadowRealm")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                to_string_tag_key,
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("ShadowRealm")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
         // ShadowRealm.prototype.evaluate
         let evaluate_fn = self.create_function(JsFunction::native(
@@ -8886,7 +8979,7 @@ impl Interpreter {
                 interp.perform_realm_eval(&source_text, my_realm_id, eval_realm_id)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("evaluate".to_string(), evaluate_fn);
 
@@ -9012,11 +9105,11 @@ impl Interpreter {
                 }
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("importValue".to_string(), import_value_fn);
 
-        let proto_id = proto.borrow().id.unwrap();
+        let proto_id = proto_id;
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
         // ShadowRealm constructor
@@ -9033,18 +9126,16 @@ impl Interpreter {
 
                 let new_realm_id = interp.create_new_realm();
 
-                let obj = interp.create_object();
+                let obj_id = interp.create_object_id();
                 {
-                    let mut o = obj.borrow_mut();
+                    let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                     o.class_name = "ShadowRealm".to_string();
                     o.shadow_realm_id = Some(new_realm_id);
                     if let JsValue::Object(ref p) = proto_val_for_ctor {
                         o.prototype_id = Some(p.id);
                     }
                 }
-                Completion::Normal(JsValue::Object(crate::types::JsObject {
-                    id: obj.borrow().id.unwrap(),
-                }))
+                Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },
         ));
 

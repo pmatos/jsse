@@ -471,11 +471,12 @@ pub(crate) fn json_stringify_full(
         }
     }
 
-    let wrapper = interp.create_object();
-    wrapper
+    let wrapper_id = interp.create_object_id();
+    interp
+        .get_object_cell_expect(wrapper_id)
         .borrow_mut()
         .insert_value("".to_string(), val.clone());
-    let holder_id = wrapper.borrow().id.unwrap();
+    let holder_id = wrapper_id;
 
     json_stringify_internal(
         interp,
@@ -844,8 +845,8 @@ fn json_parse_value_inner(
             return Completion::Throw(err);
         }
         let pairs = json_split_items(inner);
-        let obj = interp.create_object();
-        let obj_id = obj.borrow().id.unwrap();
+        let obj_id = interp.create_object_id();
+        let obj_id = obj_id;
         for pair in &pairs {
             let pair = pair.trim();
             if pair.is_empty() {
@@ -879,7 +880,10 @@ fn json_parse_value_inner(
                     {
                         smap.insert((obj_id, key.clone()), val_src);
                     }
-                    obj.borrow_mut().insert_value(key, v);
+                    interp
+                        .get_object_cell_expect(obj_id)
+                        .borrow_mut()
+                        .insert_value(key, v);
                 }
                 other => return other,
             }
@@ -994,22 +998,24 @@ fn json_internalize_apply(
         } else {
             // CreateDataProperty via proxy defineProperty trap
             let key_val = JsValue::String(JsString::from_str(key));
-            let desc_obj = interp.create_object();
-            desc_obj
+            let desc_obj_id = interp.create_object_id();
+            interp
+                .get_object_cell_expect(desc_obj_id)
                 .borrow_mut()
                 .insert_value("value".to_string(), new_val.clone());
-            desc_obj
+            interp
+                .get_object_cell_expect(desc_obj_id)
                 .borrow_mut()
                 .insert_value("writable".to_string(), JsValue::Boolean(true));
-            desc_obj
+            interp
+                .get_object_cell_expect(desc_obj_id)
                 .borrow_mut()
                 .insert_value("enumerable".to_string(), JsValue::Boolean(true));
-            desc_obj
+            interp
+                .get_object_cell_expect(desc_obj_id)
                 .borrow_mut()
                 .insert_value("configurable".to_string(), JsValue::Boolean(true));
-            let desc_val = JsValue::Object(crate::types::JsObject {
-                id: desc_obj.borrow().id.unwrap(),
-            });
+            let desc_val = JsValue::Object(crate::types::JsObject { id: desc_obj_id });
             match interp.invoke_proxy_trap(
                 obj_id,
                 "defineProperty",
@@ -1135,7 +1141,7 @@ pub(crate) fn json_internalize(
 
     // Build context argument for reviver
     let context = {
-        let ctx = interp.create_object();
+        let ctx_id = interp.create_object_id();
         if is_json_primitive(&walked)
             && let Some(smap) = source_map
             && let JsValue::Object(o) = holder
@@ -1159,13 +1165,16 @@ pub(crate) fn json_internalize(
                 _ => false,
             };
             if source_matches {
-                ctx.borrow_mut().insert_value(
-                    "source".to_string(),
-                    JsValue::String(JsString::from_str(src)),
-                );
+                interp
+                    .get_object_cell_expect(ctx_id)
+                    .borrow_mut()
+                    .insert_value(
+                        "source".to_string(),
+                        JsValue::String(JsString::from_str(src)),
+                    );
             }
         }
-        let id = ctx.borrow().id.unwrap();
+        let id = ctx_id;
         JsValue::Object(crate::types::JsObject { id })
     };
     let key_val = JsValue::String(JsString::from_str(name));

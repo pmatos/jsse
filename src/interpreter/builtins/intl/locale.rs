@@ -152,13 +152,20 @@ fn build_intl_data_from_locale(locale: &IcuLocale) -> IntlData {
 }
 
 fn create_locale_object_from_icu(interp: &mut Interpreter, locale: &IcuLocale) -> JsValue {
-    let obj = interp.create_object();
+    let obj_id = interp.create_object_id();
     if let Some(proto_id) = interp.realm().intl_locale_prototype {
-        obj.borrow_mut().prototype_id = Some(proto_id);
+        interp
+            .get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .prototype_id = Some(proto_id);
     }
-    obj.borrow_mut().class_name = "Intl.Locale".to_string();
-    obj.borrow_mut().intl_data = Some(build_intl_data_from_locale(locale));
-    let obj_id = obj.borrow().id.unwrap();
+    interp
+        .get_object_cell_expect(obj_id)
+        .borrow_mut()
+        .class_name = "Intl.Locale".to_string();
+    interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
+        Some(build_intl_data_from_locale(locale));
+    let obj_id = obj_id;
     JsValue::Object(crate::types::JsObject { id: obj_id })
 }
 
@@ -187,24 +194,30 @@ where
 
 impl Interpreter {
     pub(crate) fn setup_intl_locale(&mut self, intl_obj_id: u64) {
-        let proto = self.create_object();
+        let proto_id = self.create_object_id();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype_id = Some(op_id);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .prototype_id = Some(op_id);
         }
-        proto.borrow_mut().class_name = "Intl.Locale".to_string();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Intl.Locale".to_string();
 
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Intl.Locale"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor {
+                    value: Some(JsValue::String(JsString::from_str("Intl.Locale"))),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                    get: None,
+                    set: None,
+                },
+            );
 
         // --- Getter accessors ---
 
@@ -242,10 +255,12 @@ impl Interpreter {
                 })
             },
         ));
-        proto.borrow_mut().insert_property(
-            "baseName".to_string(),
-            PropertyDescriptor::accessor(Some(getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "baseName".to_string(),
+                PropertyDescriptor::accessor(Some(getter), None, false, true),
+            );
 
         // calendar
         let getter = self.create_function(JsFunction::native(
@@ -264,10 +279,12 @@ impl Interpreter {
                 })
             },
         ));
-        proto.borrow_mut().insert_property(
-            "calendar".to_string(),
-            PropertyDescriptor::accessor(Some(getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "calendar".to_string(),
+                PropertyDescriptor::accessor(Some(getter), None, false, true),
+            );
 
         // caseFirst
         let getter = self.create_function(JsFunction::native(
@@ -286,10 +303,12 @@ impl Interpreter {
                 })
             },
         ));
-        proto.borrow_mut().insert_property(
-            "caseFirst".to_string(),
-            PropertyDescriptor::accessor(Some(getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "caseFirst".to_string(),
+                PropertyDescriptor::accessor(Some(getter), None, false, true),
+            );
 
         // collation
         let getter = self.create_function(JsFunction::native(
@@ -308,10 +327,12 @@ impl Interpreter {
                 })
             },
         ));
-        proto.borrow_mut().insert_property(
-            "collation".to_string(),
-            PropertyDescriptor::accessor(Some(getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "collation".to_string(),
+                PropertyDescriptor::accessor(Some(getter), None, false, true),
+            );
 
         // hourCycle
         let getter = self.create_function(JsFunction::native(
@@ -330,10 +351,12 @@ impl Interpreter {
                 })
             },
         ));
-        proto.borrow_mut().insert_property(
-            "hourCycle".to_string(),
-            PropertyDescriptor::accessor(Some(getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "hourCycle".to_string(),
+                PropertyDescriptor::accessor(Some(getter), None, false, true),
+            );
 
         // language
         let getter = self.create_function(JsFunction::native(
@@ -349,10 +372,12 @@ impl Interpreter {
                 })
             },
         ));
-        proto.borrow_mut().insert_property(
-            "language".to_string(),
-            PropertyDescriptor::accessor(Some(getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "language".to_string(),
+                PropertyDescriptor::accessor(Some(getter), None, false, true),
+            );
 
         // numberingSystem
         let getter = self.create_function(JsFunction::native(
@@ -374,10 +399,12 @@ impl Interpreter {
                 })
             },
         ));
-        proto.borrow_mut().insert_property(
-            "numberingSystem".to_string(),
-            PropertyDescriptor::accessor(Some(getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "numberingSystem".to_string(),
+                PropertyDescriptor::accessor(Some(getter), None, false, true),
+            );
 
         // numeric
         let getter = self.create_function(JsFunction::native(
@@ -393,10 +420,12 @@ impl Interpreter {
                 })
             },
         ));
-        proto.borrow_mut().insert_property(
-            "numeric".to_string(),
-            PropertyDescriptor::accessor(Some(getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "numeric".to_string(),
+                PropertyDescriptor::accessor(Some(getter), None, false, true),
+            );
 
         // region
         let getter = self.create_function(JsFunction::native(
@@ -415,10 +444,12 @@ impl Interpreter {
                 })
             },
         ));
-        proto.borrow_mut().insert_property(
-            "region".to_string(),
-            PropertyDescriptor::accessor(Some(getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "region".to_string(),
+                PropertyDescriptor::accessor(Some(getter), None, false, true),
+            );
 
         // script
         let getter = self.create_function(JsFunction::native(
@@ -437,10 +468,12 @@ impl Interpreter {
                 })
             },
         ));
-        proto.borrow_mut().insert_property(
-            "script".to_string(),
-            PropertyDescriptor::accessor(Some(getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "script".to_string(),
+                PropertyDescriptor::accessor(Some(getter), None, false, true),
+            );
 
         // variants
         let getter = self.create_function(JsFunction::native(
@@ -459,10 +492,12 @@ impl Interpreter {
                 })
             },
         ));
-        proto.borrow_mut().insert_property(
-            "variants".to_string(),
-            PropertyDescriptor::accessor(Some(getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "variants".to_string(),
+                PropertyDescriptor::accessor(Some(getter), None, false, true),
+            );
 
         // firstDayOfWeek
         let getter = self.create_function(JsFunction::native(
@@ -484,10 +519,12 @@ impl Interpreter {
                 })
             },
         ));
-        proto.borrow_mut().insert_property(
-            "firstDayOfWeek".to_string(),
-            PropertyDescriptor::accessor(Some(getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "firstDayOfWeek".to_string(),
+                PropertyDescriptor::accessor(Some(getter), None, false, true),
+            );
 
         // --- Prototype methods ---
 
@@ -505,7 +542,7 @@ impl Interpreter {
                 })
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toString".to_string(), to_string_fn);
 
@@ -523,7 +560,7 @@ impl Interpreter {
                 })
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toJSON".to_string(), to_json_fn);
 
@@ -568,7 +605,7 @@ impl Interpreter {
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("maximize".to_string(), maximize_fn);
 
@@ -611,7 +648,7 @@ impl Interpreter {
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("minimize".to_string(), minimize_fn);
 
@@ -647,7 +684,7 @@ impl Interpreter {
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("getCalendars".to_string(), get_calendars_fn);
 
@@ -687,7 +724,7 @@ impl Interpreter {
                 )
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("getCollations".to_string(), get_collations_fn);
 
@@ -734,7 +771,7 @@ impl Interpreter {
                 )
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("getHourCycles".to_string(), get_hour_cycles_fn);
 
@@ -774,7 +811,7 @@ impl Interpreter {
                 )
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("getNumberingSystems".to_string(), get_numbering_systems_fn);
 
@@ -808,20 +845,26 @@ impl Interpreter {
                         "ltr"
                     };
 
-                    let info_obj = interp.create_object();
+                    let info_obj_id = interp.create_object_id();
                     if let Some(op_id) = interp.realm().object_prototype {
-                        info_obj.borrow_mut().prototype_id = Some(op_id);
+                        interp
+                            .get_object_cell_expect(info_obj_id)
+                            .borrow_mut()
+                            .prototype_id = Some(op_id);
                     }
-                    info_obj.borrow_mut().insert_property(
-                        "direction".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str(direction)),
-                            true,
-                            true,
-                            true,
-                        ),
-                    );
-                    let info_id = info_obj.borrow().id.unwrap();
+                    interp
+                        .get_object_cell_expect(info_obj_id)
+                        .borrow_mut()
+                        .insert_property(
+                            "direction".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::String(JsString::from_str(direction)),
+                                true,
+                                true,
+                                true,
+                            ),
+                        );
+                    let info_id = info_obj_id;
                     return Completion::Normal(JsValue::Object(crate::types::JsObject {
                         id: info_id,
                     }));
@@ -831,7 +874,7 @@ impl Interpreter {
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("getTextInfo".to_string(), get_text_info_fn);
 
@@ -871,7 +914,7 @@ impl Interpreter {
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("getTimeZones".to_string(), get_time_zones_fn);
 
@@ -942,29 +985,38 @@ impl Interpreter {
                     }
                     weekend_days.sort();
 
-                    let info_obj = interp.create_object();
+                    let info_obj_id = interp.create_object_id();
                     if let Some(op_id) = interp.realm().object_prototype {
-                        info_obj.borrow_mut().prototype_id = Some(op_id);
+                        interp
+                            .get_object_cell_expect(info_obj_id)
+                            .borrow_mut()
+                            .prototype_id = Some(op_id);
                     }
-                    info_obj.borrow_mut().insert_property(
-                        "firstDay".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::Number(first_day as f64),
-                            true,
-                            true,
-                            true,
-                        ),
-                    );
+                    interp
+                        .get_object_cell_expect(info_obj_id)
+                        .borrow_mut()
+                        .insert_property(
+                            "firstDay".to_string(),
+                            PropertyDescriptor::data(
+                                JsValue::Number(first_day as f64),
+                                true,
+                                true,
+                                true,
+                            ),
+                        );
                     let weekend_values: Vec<JsValue> = weekend_days
                         .iter()
                         .map(|&d| JsValue::Number(d as f64))
                         .collect();
                     let weekend_arr = interp.create_array(weekend_values);
-                    info_obj.borrow_mut().insert_property(
-                        "weekend".to_string(),
-                        PropertyDescriptor::data(weekend_arr, true, true, true),
-                    );
-                    let info_id = info_obj.borrow().id.unwrap();
+                    interp
+                        .get_object_cell_expect(info_obj_id)
+                        .borrow_mut()
+                        .insert_property(
+                            "weekend".to_string(),
+                            PropertyDescriptor::data(weekend_arr, true, true, true),
+                        );
+                    let info_id = info_obj_id;
                     return Completion::Normal(JsValue::Object(crate::types::JsObject {
                         id: info_id,
                     }));
@@ -974,17 +1026,17 @@ impl Interpreter {
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("getWeekInfo".to_string(), get_week_info_fn);
 
         // Store the prototype
-        self.realm_mut().intl_locale_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().intl_locale_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_id = proto.borrow().id.unwrap();
+        let proto_id = proto_id;
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone_id = proto.borrow().id.unwrap();
+        let proto_clone_id = proto_id;
 
         let locale_ctor = self.create_function(JsFunction::constructor(
             "Locale".to_string(),
@@ -1340,25 +1392,32 @@ impl Interpreter {
                 };
 
                 if is_fallback_tag {
-                    let obj = interp.create_object();
-                    obj.borrow_mut().prototype_id = Some(locale_proto);
-                    obj.borrow_mut().class_name = "Intl.Locale".to_string();
+                    let obj_id = interp.create_object_id();
+                    interp
+                        .get_object_cell_expect(obj_id)
+                        .borrow_mut()
+                        .prototype_id = Some(locale_proto);
+                    interp
+                        .get_object_cell_expect(obj_id)
+                        .borrow_mut()
+                        .class_name = "Intl.Locale".to_string();
                     let lower_tag = tag_string.to_ascii_lowercase();
-                    obj.borrow_mut().intl_data = Some(IntlData::Locale {
-                        tag: lower_tag.clone(),
-                        language: lower_tag,
-                        script: None,
-                        region: None,
-                        variants: None,
-                        calendar: None,
-                        collation: None,
-                        hour_cycle: None,
-                        case_first: None,
-                        numeric: None,
-                        numbering_system: None,
-                        first_day_of_week: None,
-                    });
-                    let obj_id = obj.borrow().id.unwrap();
+                    interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
+                        Some(IntlData::Locale {
+                            tag: lower_tag.clone(),
+                            language: lower_tag,
+                            script: None,
+                            region: None,
+                            variants: None,
+                            calendar: None,
+                            collation: None,
+                            hour_cycle: None,
+                            case_first: None,
+                            numeric: None,
+                            numbering_system: None,
+                            first_day_of_week: None,
+                        });
+                    let obj_id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
                 } else {
                     // Canonicalize again after applying options
@@ -1366,11 +1425,18 @@ impl Interpreter {
                     canonicalizer.canonicalize(&mut locale);
                     canonicalize_unicode_keyword_values(&mut locale);
 
-                    let obj = interp.create_object();
-                    obj.borrow_mut().prototype_id = Some(locale_proto);
-                    obj.borrow_mut().class_name = "Intl.Locale".to_string();
-                    obj.borrow_mut().intl_data = Some(build_intl_data_from_locale(&locale));
-                    let obj_id = obj.borrow().id.unwrap();
+                    let obj_id = interp.create_object_id();
+                    interp
+                        .get_object_cell_expect(obj_id)
+                        .borrow_mut()
+                        .prototype_id = Some(locale_proto);
+                    interp
+                        .get_object_cell_expect(obj_id)
+                        .borrow_mut()
+                        .class_name = "Intl.Locale".to_string();
+                    interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
+                        Some(build_intl_data_from_locale(&locale));
+                    let obj_id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
                 }
             },
@@ -1407,10 +1473,12 @@ impl Interpreter {
         }
 
         // Set constructor on prototype
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(locale_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(locale_ctor.clone(), true, false, true),
+            );
 
         // Register Intl.Locale on the Intl namespace
         self.get_object_cell_expect(intl_obj_id)

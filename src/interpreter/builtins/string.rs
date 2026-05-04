@@ -133,9 +133,13 @@ fn utf16_substring(units: &[u16], from: usize, to: usize) -> String {
 
 impl Interpreter {
     pub(crate) fn setup_string_prototype(&mut self) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "String".to_string();
-        proto.borrow_mut().primitive_value = Some(JsValue::String(JsString::from_str("")));
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "String".to_string();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .primitive_value = Some(JsValue::String(JsString::from_str("")));
 
         #[allow(clippy::type_complexity)]
         let methods: Vec<(
@@ -1477,7 +1481,9 @@ impl Interpreter {
         for (name, arity, func) in methods {
             let fn_val =
                 self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
-            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
         }
 
         // toString and valueOf: realm-aware so cross-realm calls throw the right realm's TypeError
@@ -1508,7 +1514,7 @@ impl Interpreter {
                     )),
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("toString".to_string(), tostring_fn);
 
@@ -1537,7 +1543,7 @@ impl Interpreter {
                     )),
                 },
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("valueOf".to_string(), valueof_fn);
         }
@@ -1571,7 +1577,9 @@ impl Interpreter {
                 }),
                 false,
             ));
-            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
         }
 
         let html_one_arg: Vec<(&str, &str, &str, &str)> = vec![
@@ -1604,7 +1612,9 @@ impl Interpreter {
                 }),
                 false,
             ));
-            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
         }
 
         // Annex B: substr(start, length)
@@ -1650,19 +1660,19 @@ impl Interpreter {
                 }),
                 false,
             ));
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("substr".to_string(), fn_val);
         }
 
         // Aliases
-        let proto_id = proto.borrow().id.unwrap();
+        let proto_id = proto_id;
         let trim_start_fn = self.get_property_on_id(proto_id, "trimStart");
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("trimLeft".to_string(), trim_start_fn);
         let trim_end_fn = self.get_property_on_id(proto_id, "trimEnd");
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("trimRight".to_string(), trim_end_fn);
 
@@ -1687,10 +1697,12 @@ impl Interpreter {
             },
         ));
         if let Some(key) = self.get_symbol_iterator_key() {
-            proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(str_iter_fn, true, false, true),
-            );
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    key,
+                    PropertyDescriptor::data(str_iter_fn, true, false, true),
+                );
         }
 
         // Set String.prototype on the String constructor and wire constructor back
@@ -1698,19 +1710,17 @@ impl Interpreter {
             && let JsValue::Object(o) = &str_val
             && let Some(str_obj) = self.get_object(o.id)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject {
-                id: proto.borrow().id.unwrap(),
-            });
+            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             str_obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val.clone(), false, false, false),
             );
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("constructor".to_string(), str_val.clone());
         }
 
-        self.realm_mut().string_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().string_prototype = Some(proto_id);
     }
 }
 

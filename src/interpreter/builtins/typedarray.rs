@@ -46,9 +46,11 @@ impl Interpreter {
     }
 
     fn setup_arraybuffer(&mut self) {
-        let ab_proto = self.create_object();
-        ab_proto.borrow_mut().class_name = "ArrayBuffer".to_string();
-        self.realm_mut().arraybuffer_prototype = Some(ab_proto.borrow().id.unwrap());
+        let ab_proto_id = self.create_object_id();
+        self.get_object_cell_expect(ab_proto_id)
+            .borrow_mut()
+            .class_name = "ArrayBuffer".to_string();
+        self.realm_mut().arraybuffer_prototype = Some(ab_proto_id);
 
         // byteLength getter
         let byte_length_getter = self.create_function(JsFunction::native(
@@ -77,17 +79,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
             },
         ));
-        ab_proto.borrow_mut().insert_property(
-            "byteLength".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(byte_length_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(ab_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "byteLength".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(byte_length_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // detached getter
         let detached_getter = self.create_function(JsFunction::native(
@@ -114,17 +118,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
             },
         ));
-        ab_proto.borrow_mut().insert_property(
-            "detached".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(detached_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(ab_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "detached".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(detached_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // resizable getter
         let resizable_getter = self.create_function(JsFunction::native(
@@ -148,17 +154,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
             },
         ));
-        ab_proto.borrow_mut().insert_property(
-            "resizable".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(resizable_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(ab_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "resizable".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(resizable_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // immutable getter
         let immutable_getter = self.create_function(JsFunction::native(
@@ -183,17 +191,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
             },
         ));
-        ab_proto.borrow_mut().insert_property(
-            "immutable".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(immutable_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(ab_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "immutable".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(immutable_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // maxByteLength getter
         let max_byte_length_getter = self.create_function(JsFunction::native(
@@ -224,17 +234,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
             },
         ));
-        ab_proto.borrow_mut().insert_property(
-            "maxByteLength".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(max_byte_length_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(ab_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "maxByteLength".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(max_byte_length_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // slice
         let slice_fn =
@@ -400,7 +412,7 @@ impl Interpreter {
                     Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
                 },
             ));
-        ab_proto
+        self.get_object_cell_expect(ab_proto_id)
             .borrow_mut()
             .insert_builtin("slice".to_string(), slice_fn);
 
@@ -499,7 +511,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
             },
         ));
-        ab_proto
+        self.get_object_cell_expect(ab_proto_id)
             .borrow_mut()
             .insert_builtin("transfer".to_string(), transfer_fn);
 
@@ -582,7 +594,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
             },
         ));
-        ab_proto
+        self.get_object_cell_expect(ab_proto_id)
             .borrow_mut()
             .insert_builtin("transferToFixedLength".to_string(), transfer_fixed_fn);
 
@@ -670,7 +682,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
             },
         ));
-        ab_proto
+        self.get_object_cell_expect(ab_proto_id)
             .borrow_mut()
             .insert_builtin("transferToImmutable".to_string(), transfer_immutable_fn);
 
@@ -742,19 +754,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
             },
         ));
-        ab_proto
+        self.get_object_cell_expect(ab_proto_id)
             .borrow_mut()
             .insert_builtin("resize".to_string(), resize_fn);
 
         // @@toStringTag
         let tag = JsValue::String(JsString::from_str("ArrayBuffer"));
         let sym_key = "Symbol(Symbol.toStringTag)".to_string();
-        ab_proto
+        self.get_object_cell_expect(ab_proto_id)
             .borrow_mut()
             .insert_property(sym_key, PropertyDescriptor::data(tag, false, false, true));
 
         // ArrayBuffer constructor
-        let ab_proto_clone_id = ab_proto.borrow().id.unwrap();
+        let ab_proto_clone_id = ab_proto_id;
         let ctor = self.create_function(JsFunction::constructor(
             "ArrayBuffer".to_string(),
             1,
@@ -827,9 +839,9 @@ impl Interpreter {
                 let buf_len = buf.len();
                 let buf_rc = Rc::new(RefCell::new(BufferData::Owned(buf)));
                 let detached = Rc::new(Cell::new(false));
-                let obj = interp.create_object();
+                let obj_id = interp.create_object_id();
                 {
-                    let mut o = obj.borrow_mut();
+                    let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                     o.class_name = "ArrayBuffer".to_string();
                     o.prototype_id = proto;
                     o.arraybuffer_data = Some(buf_rc);
@@ -837,7 +849,7 @@ impl Interpreter {
                     o.arraybuffer_max_byte_length = max_byte_length;
                 }
                 interp.gc_track_external_bytes(buf_len);
-                let id = obj.borrow().id.unwrap();
+                let id = obj_id;
                 Completion::Normal(JsValue::Object(JsObject { id }))
             },
         ));
@@ -861,7 +873,7 @@ impl Interpreter {
         ));
         // Wire ArrayBuffer.prototype to the proto object with all the methods
         let ab_proto_val = {
-            let id = ab_proto.borrow().id.unwrap();
+            let id = ab_proto_id;
             JsValue::Object(crate::types::JsObject { id })
         };
         if let JsValue::Object(o) = &ctor
@@ -892,10 +904,12 @@ impl Interpreter {
                 },
             );
         }
-        ab_proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(ab_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(ctor.clone(), true, false, true),
+            );
 
         // Mark deferred_construct: ArrayBuffer validates args before OrdinaryCreateFromConstructor
         if let JsValue::Object(ref o) = ctor
@@ -924,11 +938,11 @@ impl Interpreter {
         let data_len = data.len();
         let buf_rc = Rc::new(RefCell::new(BufferData::Owned(data)));
         let detached = Rc::new(Cell::new(false));
-        let obj = self.create_object();
-        let obj_id = obj.borrow().id.unwrap();
+        let obj_id = self.create_object_id();
+        let obj_id = obj_id;
         let ab_proto = self.realm().arraybuffer_prototype;
         {
-            let mut o = obj.borrow_mut();
+            let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = "ArrayBuffer".to_string();
             o.prototype_id = ab_proto;
             o.arraybuffer_data = Some(buf_rc);
@@ -981,9 +995,11 @@ impl Interpreter {
     }
 
     fn setup_shared_arraybuffer(&mut self) {
-        let sab_proto = self.create_object();
-        sab_proto.borrow_mut().class_name = "SharedArrayBuffer".to_string();
-        self.realm_mut().shared_arraybuffer_prototype = Some(sab_proto.borrow().id.unwrap());
+        let sab_proto_id = self.create_object_id();
+        self.get_object_cell_expect(sab_proto_id)
+            .borrow_mut()
+            .class_name = "SharedArrayBuffer".to_string();
+        self.realm_mut().shared_arraybuffer_prototype = Some(sab_proto_id);
 
         // byteLength getter
         let byte_length_getter = self.create_function(JsFunction::native(
@@ -1003,17 +1019,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
             },
         ));
-        sab_proto.borrow_mut().insert_property(
-            "byteLength".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(byte_length_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(sab_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "byteLength".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(byte_length_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // maxByteLength getter
         let max_byte_length_getter = self.create_function(JsFunction::native(
@@ -1036,17 +1054,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
             },
         ));
-        sab_proto.borrow_mut().insert_property(
-            "maxByteLength".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(max_byte_length_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(sab_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "maxByteLength".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(max_byte_length_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // growable getter
         let growable_getter = self.create_function(JsFunction::native(
@@ -1066,17 +1086,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
             },
         ));
-        sab_proto.borrow_mut().insert_property(
-            "growable".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(growable_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(sab_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "growable".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(growable_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // grow(newLength)
         let grow_fn = self.create_function(JsFunction::native(
@@ -1131,7 +1153,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
             },
         ));
-        sab_proto
+        self.get_object_cell_expect(sab_proto_id)
             .borrow_mut()
             .insert_builtin("grow".to_string(), grow_fn);
 
@@ -1262,7 +1284,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
             },
         ));
-        sab_proto
+        self.get_object_cell_expect(sab_proto_id)
             .borrow_mut()
             .insert_builtin("slice".to_string(), slice_fn);
 
@@ -1271,12 +1293,18 @@ impl Interpreter {
             let tag = JsValue::String(JsString::from_str("SharedArrayBuffer"));
             let sym_key = "Symbol(Symbol.toStringTag)".to_string();
             let desc = PropertyDescriptor::data(tag, false, false, true);
-            sab_proto.borrow_mut().property_order.push(sym_key.clone());
-            sab_proto.borrow_mut().properties.insert(sym_key, desc);
+            self.get_object_cell_expect(sab_proto_id)
+                .borrow_mut()
+                .property_order
+                .push(sym_key.clone());
+            self.get_object_cell_expect(sab_proto_id)
+                .borrow_mut()
+                .properties
+                .insert(sym_key, desc);
         }
 
         // SharedArrayBuffer constructor
-        let sab_proto_clone_id = sab_proto.borrow().id.unwrap();
+        let sab_proto_clone_id = sab_proto_id;
         let ctor = self.create_function(JsFunction::constructor(
             "SharedArrayBuffer".to_string(),
             1,
@@ -1341,13 +1369,13 @@ impl Interpreter {
                     ));
                 }
                 let buf = vec![0u8; len];
-                let obj = interp.create_object();
+                let obj_id = interp.create_object_id();
                 {
                     use crate::interpreter::types::{SharedBufferInner, next_sab_id};
                     let sab_id = next_sab_id();
                     let inner = Arc::new(SharedBufferInner::new(buf, sab_id));
                     let buf_rc = Rc::new(RefCell::new(BufferData::Shared(inner.clone())));
-                    let mut o = obj.borrow_mut();
+                    let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                     o.class_name = "SharedArrayBuffer".to_string();
                     o.prototype_id = proto;
                     o.arraybuffer_data = Some(buf_rc);
@@ -1356,14 +1384,14 @@ impl Interpreter {
                     o.arraybuffer_is_shared = true;
                     o.sab_shared = Some(inner);
                 }
-                let id = obj.borrow().id.unwrap();
+                let id = obj_id;
                 Completion::Normal(JsValue::Object(JsObject { id }))
             },
         ));
 
         // Wire SharedArrayBuffer.prototype_id
         let sab_proto_val = {
-            let id = sab_proto.borrow().id.unwrap();
+            let id = sab_proto_id;
             JsValue::Object(crate::types::JsObject { id })
         };
         if let JsValue::Object(o) = &ctor
@@ -1392,10 +1420,12 @@ impl Interpreter {
                 },
             );
         }
-        sab_proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(sab_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(ctor.clone(), true, false, true),
+            );
 
         if let JsValue::Object(ref o) = ctor
             && let Some(func_obj) = self.get_object(o.id)
@@ -1412,9 +1442,11 @@ impl Interpreter {
     }
 
     fn setup_typed_array_base_prototype(&mut self) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "TypedArray".to_string();
-        self.realm_mut().typed_array_prototype = Some(proto.borrow().id.unwrap());
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "TypedArray".to_string();
+        self.realm_mut().typed_array_prototype = Some(proto_id);
 
         // byteOffset getter
         let byte_offset_getter = self.create_function(JsFunction::native(
@@ -1435,17 +1467,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto.borrow_mut().insert_property(
-            "byteOffset".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(byte_offset_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "byteOffset".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(byte_offset_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
         // byteLength getter
         let byte_length_getter = self.create_function(JsFunction::native(
             "get byteLength".to_string(),
@@ -1467,17 +1501,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto.borrow_mut().insert_property(
-            "byteLength".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(byte_length_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "byteLength".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(byte_length_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
         // length getter
         let length_getter = self.create_function(JsFunction::native(
             "get length".to_string(),
@@ -1497,17 +1533,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto.borrow_mut().insert_property(
-            "length".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(length_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "length".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(length_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // buffer getter (returns the ArrayBuffer object - we need to find it)
         let buffer_getter = self.create_function(JsFunction::native(
@@ -1527,20 +1565,22 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto.borrow_mut().insert_property(
-            "buffer".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(buffer_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "buffer".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(buffer_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // [Symbol.iterator] = values
-        let proto_id_for_iter = proto.borrow().id.unwrap();
+        let proto_id_for_iter = proto_id;
         self.setup_ta_values_method(proto_id_for_iter);
 
         // entries, keys, values
@@ -1585,7 +1625,9 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto.borrow_mut().insert_builtin("at".to_string(), at_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("at".to_string(), at_fn);
 
         // set
         let set_fn = self.create_function(JsFunction::native(
@@ -1745,7 +1787,9 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto.borrow_mut().insert_builtin("set".to_string(), set_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("set".to_string(), set_fn);
 
         // subarray
         let subarray_fn = self.create_function(JsFunction::native(
@@ -1829,7 +1873,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("subarray".to_string(), subarray_fn);
 
@@ -1966,7 +2010,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("slice".to_string(), slice_fn);
 
@@ -2069,7 +2113,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("copyWithin".to_string(), copy_within_fn);
 
@@ -2154,7 +2198,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("fill".to_string(), fill_fn);
 
@@ -2212,7 +2256,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("indexOf".to_string(), index_of_fn);
 
@@ -2271,7 +2315,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("lastIndexOf".to_string(), last_index_of_fn);
 
@@ -2325,13 +2369,13 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("includes".to_string(), includes_fn);
 
         // Higher-order methods: find, findIndex, findLast, findLastIndex, forEach, map, filter,
         // every, some, reduce, reduceRight
-        let proto_id_for_higher = proto.borrow().id.unwrap();
+        let proto_id_for_higher = proto_id;
         self.setup_ta_higher_order_methods(proto_id_for_higher);
 
         // reverse
@@ -2370,7 +2414,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("reverse".to_string(), reverse_fn);
 
@@ -2490,7 +2534,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("sort".to_string(), sort_fn);
 
@@ -2543,7 +2587,7 @@ impl Interpreter {
                 }
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("join".to_string(), join_fn);
 
@@ -2551,7 +2595,7 @@ impl Interpreter {
         {
             let array_proto_id = self.realm().array_prototype.unwrap();
             let tostring_val = self.get_property_on_id(array_proto_id, "toString");
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("toString".to_string(), tostring_val);
         }
@@ -2636,7 +2680,7 @@ impl Interpreter {
                 }
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toLocaleString".to_string(), to_locale_string_fn);
 
@@ -2680,17 +2724,17 @@ impl Interpreter {
                         let val = typed_array_get_index(&ta, len - 1 - i);
                         typed_array_set_index(&new_ta, i, &val);
                     }
-                    let ab_obj = interp.create_object();
+                    let ab_obj_id = interp.create_object_id();
                     let ab_proto = interp.realm().arraybuffer_prototype;
                     {
-                        let mut ab = ab_obj.borrow_mut();
+                        let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
                         ab.prototype_id = ab_proto;
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
                     interp.gc_track_external_bytes(buf_byte_len);
-                    let ab_id = ab_obj.borrow().id.unwrap();
+                    let ab_id = ab_obj_id;
                     let buf_val = JsValue::Object(JsObject { id: ab_id });
                     let id = interp.create_typed_array_object(new_ta, buf_val);
                     return Completion::Normal(JsValue::Object(JsObject { id }));
@@ -2698,7 +2742,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toReversed".to_string(), to_reversed_fn);
 
@@ -2822,17 +2866,17 @@ impl Interpreter {
                     for (i, val) in elems.iter().enumerate() {
                         typed_array_set_index(&new_ta, i, val);
                     }
-                    let ab_obj = interp.create_object();
+                    let ab_obj_id = interp.create_object_id();
                     let ab_proto = interp.realm().arraybuffer_prototype;
                     {
-                        let mut ab = ab_obj.borrow_mut();
+                        let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
                         ab.prototype_id = ab_proto;
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
                     interp.gc_track_external_bytes(buf_byte_len);
-                    let ab_id = ab_obj.borrow().id.unwrap();
+                    let ab_id = ab_obj_id;
                     let buf_val = JsValue::Object(JsObject { id: ab_id });
                     let id = interp.create_typed_array_object(new_ta, buf_val);
                     return Completion::Normal(JsValue::Object(JsObject { id }));
@@ -2840,7 +2884,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toSorted".to_string(), to_sorted_fn);
 
@@ -3042,17 +3086,17 @@ impl Interpreter {
                         };
                         typed_array_set_index(&new_ta, k, &elem);
                     }
-                    let ab_obj = interp.create_object();
+                    let ab_obj_id = interp.create_object_id();
                     let ab_proto = interp.realm().arraybuffer_prototype;
                     {
-                        let mut ab = ab_obj.borrow_mut();
+                        let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
                         ab.prototype_id = ab_proto;
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
                     interp.gc_track_external_bytes(buf_byte_len);
-                    let ab_id = ab_obj.borrow().id.unwrap();
+                    let ab_id = ab_obj_id;
                     let buf_val = JsValue::Object(JsObject { id: ab_id });
                     let id = interp.create_typed_array_object(new_ta, buf_val);
                     return Completion::Normal(JsValue::Object(JsObject { id }));
@@ -3060,7 +3104,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a TypedArray"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("with".to_string(), with_fn);
 
@@ -3082,17 +3126,19 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(to_string_tag_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(to_string_tag_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
     }
 
     fn setup_ta_values_method(&mut self, proto_id: u64) {
@@ -3972,9 +4018,9 @@ impl Interpreter {
             let ta_ctor_clone = ta_ctor.clone();
 
             // Create per-type prototype
-            let type_proto = self.create_object();
+            let type_proto_id = self.create_object_id();
             {
-                let mut p = type_proto.borrow_mut();
+                let mut p = self.get_object_cell_expect(type_proto_id).borrow_mut();
                 p.prototype_id = Some(ta_proto_clone_id);
                 p.class_name = name.clone();
                 p.insert_property(
@@ -3983,7 +4029,7 @@ impl Interpreter {
                 );
             }
 
-            let type_proto_clone_id = type_proto.borrow().id.unwrap();
+            let type_proto_clone_id = type_proto_id;
             let ctor = self.create_function(JsFunction::constructor(
                 name.clone(), 3,
                 move |interp, _this, args| {
@@ -4145,10 +4191,10 @@ impl Interpreter {
                                         let val = typed_array_get_index(&src_ta, i);
                                         typed_array_set_index(&new_ta, i, &val);
                                     }
-                                    let ab_obj = interp.create_object();
+                                    let ab_obj_id = interp.create_object_id();
                                     let ab_proto = interp.realm().arraybuffer_prototype;
                                     {
-                                        let mut ab = ab_obj.borrow_mut();
+                                        let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
                                         ab.class_name = "ArrayBuffer".to_string();
                                         ab.prototype_id = ab_proto;
                                         ab.arraybuffer_data = Some(new_buf_rc);
@@ -4159,7 +4205,7 @@ impl Interpreter {
                                         Ok(p) => p,
                                         Err(e) => return Completion::Throw(e),
                                     };
-                                    let ab_id = ab_obj.borrow().id.unwrap();
+                                    let ab_id = ab_obj_id;
                                     let buf_val = JsValue::Object(JsObject { id: ab_id });
                                     let id = interp.create_typed_array_object_with_proto(new_ta, buf_val, proto);
                                     return Completion::Normal(JsValue::Object(JsObject { id }));
@@ -4192,10 +4238,10 @@ impl Interpreter {
                                     };
                                     typed_array_set_index(&new_ta, i, &coerced);
                                 }
-                                let ab_obj = interp.create_object();
+                                let ab_obj_id = interp.create_object_id();
                                 let ab_proto = interp.realm().arraybuffer_prototype;
                                 {
-                                    let mut ab = ab_obj.borrow_mut();
+                                    let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
                                     ab.class_name = "ArrayBuffer".to_string();
                                     ab.prototype_id = ab_proto;
                                     ab.arraybuffer_data = Some(new_buf_rc);
@@ -4206,7 +4252,7 @@ impl Interpreter {
                                     Ok(p) => p,
                                     Err(e) => return Completion::Throw(e),
                                 };
-                                let ab_id = ab_obj.borrow().id.unwrap();
+                                let ab_id = ab_obj_id;
                                 let buf_val = JsValue::Object(JsObject { id: ab_id });
                                 let id = interp.create_typed_array_object_with_proto(new_ta, buf_val, proto);
                                 return Completion::Normal(JsValue::Object(JsObject { id }));
@@ -4248,7 +4294,7 @@ impl Interpreter {
                     PropertyDescriptor::data(JsValue::Number(bpe as f64), false, false, false),
                 );
                 // Set prototype property
-                let proto_id = type_proto.borrow().id.unwrap();
+                let proto_id = type_proto_id;
                 obj.borrow_mut().insert_property(
                     "prototype".to_string(),
                     PropertyDescriptor::data(
@@ -4267,13 +4313,15 @@ impl Interpreter {
             }
 
             // Set constructor on prototype
-            type_proto.borrow_mut().insert_property(
-                "constructor".to_string(),
-                PropertyDescriptor::data(ctor.clone(), true, false, true),
-            );
+            self.get_object_cell_expect(type_proto_id)
+                .borrow_mut()
+                .insert_property(
+                    "constructor".to_string(),
+                    PropertyDescriptor::data(ctor.clone(), true, false, true),
+                );
 
             // Store prototype for this kind
-            let type_proto_id = type_proto.borrow().id.unwrap();
+            let type_proto_id = type_proto_id;
             match kind {
                 TypedArrayKind::Int8 => self.realm_mut().int8array_prototype = Some(type_proto_id),
                 TypedArrayKind::Uint8 => {
@@ -4646,17 +4694,17 @@ impl Interpreter {
             is_detached: detached.clone(),
             is_length_tracking: false,
         };
-        let ab_obj = self.create_object();
+        let ab_obj_id = self.create_object_id();
         let ab_proto = self.realm().arraybuffer_prototype;
         {
-            let mut ab = ab_obj.borrow_mut();
+            let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
             ab.class_name = "ArrayBuffer".to_string();
             ab.prototype_id = ab_proto;
             ab.arraybuffer_data = Some(buf_rc);
             ab.arraybuffer_detached = Some(detached);
         }
         self.gc_track_external_bytes(buf_byte_len);
-        let ab_id = ab_obj.borrow().id.unwrap();
+        let ab_id = ab_obj_id;
         let buf_val = JsValue::Object(JsObject { id: ab_id });
         let id = self.create_typed_array_object_with_proto(ta_info, buf_val, type_proto_id);
         Completion::Normal(JsValue::Object(JsObject { id }))
@@ -4668,10 +4716,10 @@ impl Interpreter {
         buf_val: JsValue,
     ) -> u64 {
         let proto = self.get_typed_array_prototype(info.kind);
-        let obj = self.create_object();
-        let obj_id = obj.borrow().id.unwrap();
+        let obj_id = self.create_object_id();
+        let obj_id = obj_id;
         {
-            let mut o = obj.borrow_mut();
+            let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = info.kind.name().to_string();
             o.prototype_id = proto;
             if let JsValue::Object(ref bobj) = buf_val {
@@ -4688,10 +4736,10 @@ impl Interpreter {
         buf_val: JsValue,
         proto_id: u64,
     ) -> u64 {
-        let obj = self.create_object();
-        let obj_id = obj.borrow().id.unwrap();
+        let obj_id = self.create_object_id();
+        let obj_id = obj_id;
         {
-            let mut o = obj.borrow_mut();
+            let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = info.kind.name().to_string();
             o.prototype_id = Some(proto_id);
             if let JsValue::Object(ref bobj) = buf_val {
@@ -4776,26 +4824,26 @@ impl Interpreter {
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
                     };
-                    let ab_obj = self.create_object();
+                    let ab_obj_id = self.create_object_id();
                     let ab_proto = self.realm().arraybuffer_prototype;
                     {
-                        let mut ab = ab_obj.borrow_mut();
+                        let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
                         ab.prototype_id = ab_proto;
                         ab.arraybuffer_data = Some(new_buf_rc);
                         ab.arraybuffer_detached = Some(new_detached);
                     }
                     self.gc_track_external_bytes(buf_byte_len);
-                    let ab_id = ab_obj.borrow().id.unwrap();
-                    let result = self.create_object();
+                    let ab_id = ab_obj_id;
+                    let result_id = self.create_object_id();
                     {
-                        let mut r = result.borrow_mut();
+                        let mut r = self.get_object_cell_expect(result_id).borrow_mut();
                         r.class_name = kind.name().to_string();
                         r.prototype_id = proto;
                         r.view_buffer_object_id = Some(ab_id);
                         r.typed_array_info = Some(ta);
                     }
-                    let id = result.borrow().id.unwrap();
+                    let id = result_id;
                     return Completion::Normal(JsValue::Object(JsObject { id }));
                 }
             }
@@ -5004,9 +5052,11 @@ impl Interpreter {
     }
 
     fn setup_dataview(&mut self) {
-        let dv_proto = self.create_object();
-        dv_proto.borrow_mut().class_name = "DataView".to_string();
-        self.realm_mut().dataview_prototype = Some(dv_proto.borrow().id.unwrap());
+        let dv_proto_id = self.create_object_id();
+        self.get_object_cell_expect(dv_proto_id)
+            .borrow_mut()
+            .class_name = "DataView".to_string();
+        self.realm_mut().dataview_prototype = Some(dv_proto_id);
 
         // Getters: buffer, byteOffset, byteLength
         let buffer_getter = self.create_function(JsFunction::native(
@@ -5027,17 +5077,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a DataView"))
             },
         ));
-        dv_proto.borrow_mut().insert_property(
-            "buffer".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(buffer_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(dv_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "buffer".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(buffer_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // byteOffset getter
         let dv_byte_offset_getter = self.create_function(JsFunction::native(
@@ -5072,17 +5124,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a DataView"))
             },
         ));
-        dv_proto.borrow_mut().insert_property(
-            "byteOffset".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(dv_byte_offset_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(dv_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "byteOffset".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(dv_byte_offset_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
         // byteLength getter
         let dv_byte_length_getter = self.create_function(JsFunction::native(
             "get byteLength".to_string(),
@@ -5121,17 +5175,19 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("not a DataView"))
             },
         ));
-        dv_proto.borrow_mut().insert_property(
-            "byteLength".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(dv_byte_length_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(dv_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "byteLength".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(dv_byte_length_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // DataView get/set methods
         // Spec ordering for GetViewValue:
@@ -5209,7 +5265,7 @@ impl Interpreter {
                         Completion::Throw(interp.create_type_error("not a DataView"))
                     },
                 ));
-                dv_proto
+                self.get_object_cell_expect(dv_proto_id)
                     .borrow_mut()
                     .insert_builtin($method_name.to_string(), getter);
             }};
@@ -5399,7 +5455,7 @@ impl Interpreter {
                         Completion::Throw(interp.create_type_error("not a DataView"))
                     },
                 ));
-                dv_proto
+                self.get_object_cell_expect(dv_proto_id)
                     .borrow_mut()
                     .insert_builtin($method_name.to_string(), setter);
             }};
@@ -5489,7 +5545,7 @@ impl Interpreter {
                         Completion::Throw(interp.create_type_error("not a DataView"))
                     },
                 ));
-                dv_proto
+                self.get_object_cell_expect(dv_proto_id)
                     .borrow_mut()
                     .insert_builtin($method_name.to_string(), setter);
             }};
@@ -5598,13 +5654,15 @@ impl Interpreter {
 
         // @@toStringTag
         let tag = JsValue::String(JsString::from_str("DataView"));
-        dv_proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(tag, false, false, true),
-        );
+        self.get_object_cell_expect(dv_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(tag, false, false, true),
+            );
 
         // DataView constructor
-        let dv_proto_clone_id = dv_proto.borrow().id.unwrap();
+        let dv_proto_clone_id = dv_proto_id;
         let ctor = self.create_function(JsFunction::constructor(
             "DataView".to_string(),
             1,
@@ -5723,9 +5781,9 @@ impl Interpreter {
                             );
                         }
                     }
-                    let result = interp.create_object();
+                    let result_id = interp.create_object_id();
                     {
-                        let mut r = result.borrow_mut();
+                        let mut r = interp.get_object_cell_expect(result_id).borrow_mut();
                         r.class_name = "DataView".to_string();
                         r.prototype_id = Some(dv_proto);
                         if let JsValue::Object(ref bobj) = buf_arg {
@@ -5733,7 +5791,7 @@ impl Interpreter {
                         }
                         r.data_view_info = Some(dv_info);
                     }
-                    let id = result.borrow().id.unwrap();
+                    let id = result_id;
                     return Completion::Normal(JsValue::Object(JsObject { id }));
                 }
                 Completion::Throw(interp.create_type_error(
@@ -5744,7 +5802,7 @@ impl Interpreter {
 
         // Wire DataView.prototype to the proto object with all the methods
         let dv_proto_val = {
-            let id = dv_proto.borrow().id.unwrap();
+            let id = dv_proto_id;
             JsValue::Object(crate::types::JsObject { id })
         };
         if let JsValue::Object(o) = &ctor
@@ -5755,10 +5813,12 @@ impl Interpreter {
                 PropertyDescriptor::data(dv_proto_val, false, false, false),
             );
         }
-        dv_proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(dv_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(ctor.clone(), true, false, true),
+            );
 
         if let JsValue::Object(ref o) = ctor
             && let Some(func_obj) = self.get_object(o.id)
@@ -6573,17 +6633,17 @@ fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Compl
         is_detached: detached.clone(),
         is_length_tracking: false,
     };
-    let ab_obj = interp.create_object();
+    let ab_obj_id = interp.create_object_id();
     let ab_proto = interp.realm().arraybuffer_prototype;
     {
-        let mut ab = ab_obj.borrow_mut();
+        let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
         ab.class_name = "ArrayBuffer".to_string();
         ab.prototype_id = ab_proto;
         ab.arraybuffer_data = Some(buf_rc);
         ab.arraybuffer_detached = Some(detached);
     }
     interp.gc_track_external_bytes(len);
-    let ab_id = ab_obj.borrow().id.unwrap();
+    let ab_id = ab_obj_id;
     let buf_val = JsValue::Object(JsObject { id: ab_id });
 
     let proto_id = interp.realm().uint8array_prototype.unwrap();
@@ -6592,11 +6652,15 @@ fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Compl
 }
 
 fn make_read_written_result(interp: &mut Interpreter, read: usize, written: usize) -> Completion {
-    let obj = interp.create_object();
-    obj.borrow_mut()
+    let obj_id = interp.create_object_id();
+    interp
+        .get_object_cell_expect(obj_id)
+        .borrow_mut()
         .set_property_value("read", JsValue::Number(read as f64));
-    obj.borrow_mut()
+    interp
+        .get_object_cell_expect(obj_id)
+        .borrow_mut()
         .set_property_value("written", JsValue::Number(written as f64));
-    let id = obj.borrow().id.unwrap();
+    let id = obj_id;
     Completion::Normal(JsValue::Object(JsObject { id }))
 }

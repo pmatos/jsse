@@ -878,11 +878,11 @@ impl Interpreter {
         let old_realm = self.current_realm_id;
         self.current_realm_id = caller_realm_id;
 
-        let func_obj = self.create_object();
-        let func_id = func_obj.borrow().id.unwrap();
+        let func_obj_id = self.create_object_id();
+        let func_id = func_obj_id;
         let fp_id = self.realms[caller_realm_id].function_prototype;
         {
-            let mut o = func_obj.borrow_mut();
+            let mut o = self.get_object_cell_expect(func_obj_id).borrow_mut();
             o.prototype_id = fp_id;
             o.class_name = "Function".to_string();
             o.callable = Some(JsFunction::native("".to_string(), 0, |_, _, _| {

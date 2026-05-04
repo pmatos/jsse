@@ -195,15 +195,15 @@ pub(crate) fn create_data_property_or_throw(
             && obj.borrow().is_proxy()
         {
             // Build descriptor object for proxy trap
-            let desc_obj = interp.create_object();
+            let desc_obj_id = interp.create_object_id();
             {
-                let mut borrow = desc_obj.borrow_mut();
+                let mut borrow = interp.get_object_cell_expect(desc_obj_id).borrow_mut();
                 borrow.set_property_value("value", value);
                 borrow.set_property_value("writable", JsValue::Boolean(true));
                 borrow.set_property_value("enumerable", JsValue::Boolean(true));
                 borrow.set_property_value("configurable", JsValue::Boolean(true));
             }
-            let desc_id = desc_obj.borrow().id.unwrap();
+            let desc_id = desc_obj_id;
             let desc_val = JsValue::Object(crate::types::JsObject { id: desc_id });
             return match interp.proxy_define_own_property(obj_ref.id, key.to_string(), &desc_val) {
                 Ok(true) => Ok(()),
@@ -890,13 +890,19 @@ fn array_species_create(
 
 impl Interpreter {
     pub(crate) fn setup_array_prototype(&mut self) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "Array".to_string();
-        proto.borrow_mut().array_elements = Some(Vec::new());
-        proto.borrow_mut().insert_property(
-            "length".to_string(),
-            PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
-        );
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Array".to_string();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .array_elements = Some(Vec::new());
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "length".to_string(),
+                PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
+            );
 
         // Array.prototype.push
         let push_fn = self.create_function(JsFunction::native(
@@ -927,7 +933,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(len as f64))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("push".to_string(), push_fn);
 
@@ -964,7 +970,9 @@ impl Interpreter {
                 Completion::Normal(val)
             },
         ));
-        proto.borrow_mut().insert_builtin("pop".to_string(), pop_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("pop".to_string(), pop_fn);
 
         // Array.prototype.shift
         let shift_fn = self.create_function(JsFunction::native(
@@ -1017,7 +1025,7 @@ impl Interpreter {
                 Completion::Normal(first)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("shift".to_string(), shift_fn);
 
@@ -1073,7 +1081,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(new_len as f64))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("unshift".to_string(), unshift_fn);
 
@@ -1130,7 +1138,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(-1.0))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("indexOf".to_string(), indexof_fn);
 
@@ -1187,7 +1195,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(-1.0))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("lastIndexOf".to_string(), lastindexof_fn);
 
@@ -1234,7 +1242,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("includes".to_string(), includes_fn);
 
@@ -1281,7 +1289,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&parts.join(&sep))))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("join".to_string(), join_fn);
 
@@ -1309,7 +1317,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str("[object Array]")))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toString".to_string(), tostring_fn);
 
@@ -1375,7 +1383,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&parts.join(separator))))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toLocaleString".to_string(), to_locale_string_fn);
 
@@ -1501,7 +1509,7 @@ impl Interpreter {
                 Completion::Normal(a)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("concat".to_string(), concat_fn);
 
@@ -1590,7 +1598,7 @@ impl Interpreter {
                 Completion::Normal(a)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("slice".to_string(), slice_fn);
 
@@ -1663,7 +1671,7 @@ impl Interpreter {
                 Completion::Normal(o)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("reverse".to_string(), reverse_fn);
 
@@ -1694,7 +1702,7 @@ impl Interpreter {
                 Completion::Normal(arr)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toReversed".to_string(), to_reversed_fn);
 
@@ -1740,7 +1748,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("forEach".to_string(), foreach_fn);
 
@@ -1811,7 +1819,9 @@ impl Interpreter {
                 Completion::Normal(a)
             },
         ));
-        proto.borrow_mut().insert_builtin("map".to_string(), map_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("map".to_string(), map_fn);
 
         // Array.prototype.filter
         let filter_fn = self.create_function(JsFunction::native(
@@ -1887,7 +1897,7 @@ impl Interpreter {
                 Completion::Normal(a)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("filter".to_string(), filter_fn);
 
@@ -1968,7 +1978,7 @@ impl Interpreter {
                 Completion::Normal(acc)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("reduce".to_string(), reduce_fn);
 
@@ -2048,7 +2058,7 @@ impl Interpreter {
                 Completion::Normal(acc)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("reduceRight".to_string(), reduce_right_fn);
 
@@ -2100,7 +2110,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(false))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("some".to_string(), some_fn);
 
@@ -2152,7 +2162,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(true))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("every".to_string(), every_fn);
 
@@ -2197,7 +2207,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("find".to_string(), find_fn);
 
@@ -2242,7 +2252,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(-1.0))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("findIndex".to_string(), findindex_fn);
 
@@ -2287,7 +2297,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("findLast".to_string(), findlast_fn);
 
@@ -2334,7 +2344,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(-1.0))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("findLastIndex".to_string(), findlastidx_fn);
 
@@ -2507,7 +2517,7 @@ impl Interpreter {
                 Completion::Normal(a)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("splice".to_string(), splice_fn);
 
@@ -2578,7 +2588,7 @@ impl Interpreter {
                 Completion::Normal(interp.create_array(result))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toSpliced".to_string(), to_spliced_fn);
 
@@ -2634,7 +2644,7 @@ impl Interpreter {
                 Completion::Normal(o)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("fill".to_string(), fill_fn);
 
@@ -2755,7 +2765,7 @@ impl Interpreter {
                 Completion::Normal(o)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("sort".to_string(), sort_fn);
 
@@ -2862,7 +2872,7 @@ impl Interpreter {
                 Completion::Normal(interp.create_array(items))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toSorted".to_string(), to_sorted_fn);
 
@@ -2962,7 +2972,7 @@ impl Interpreter {
                 Completion::Normal(a)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("flat".to_string(), flat_fn);
 
@@ -3090,7 +3100,7 @@ impl Interpreter {
                 Completion::Normal(a)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("flatMap".to_string(), flatmap_fn);
 
@@ -3185,7 +3195,7 @@ impl Interpreter {
                 Completion::Normal(o)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("copyWithin".to_string(), copywithin_fn);
 
@@ -3224,7 +3234,9 @@ impl Interpreter {
                 }
             },
         ));
-        proto.borrow_mut().insert_builtin("at".to_string(), at_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("at".to_string(), at_fn);
 
         // Array.prototype.with
         let with_fn = self.create_function(JsFunction::native(
@@ -3273,7 +3285,7 @@ impl Interpreter {
                 Completion::Normal(interp.create_array(result))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("with".to_string(), with_fn);
 
@@ -3550,7 +3562,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("entries called on non-object"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("entries".to_string(), entries_fn);
 
@@ -3571,7 +3583,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("keys called on non-object"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("keys".to_string(), keys_fn);
 
@@ -3592,13 +3604,13 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("values called on non-object"))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("values".to_string(), values_fn.clone());
 
         // Array.prototype[@@iterator] is the same function as Array.prototype.values (spec §23.1.3.35)
         if let Some(key) = self.get_symbol_iterator_key() {
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_property(key, PropertyDescriptor::data(values_fn, true, false, true));
         }
@@ -3829,9 +3841,7 @@ impl Interpreter {
             obj.borrow_mut().insert_builtin("of".to_string(), array_of);
             obj.borrow_mut()
                 .insert_builtin("fromAsync".to_string(), from_async_fn);
-            let proto_val = JsValue::Object(crate::types::JsObject {
-                id: proto.borrow().id.unwrap(),
-            });
+            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
@@ -3856,15 +3866,17 @@ impl Interpreter {
             );
 
             // Array.prototype.constructor = Array
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_builtin("constructor".to_string(), array_val);
         }
 
         // Array.prototype[@@unscopables] (§23.1.3.38)
         {
-            let unscopables_obj = self.create_object();
-            unscopables_obj.borrow_mut().prototype_id = None;
+            let unscopables_obj_id = self.create_object_id();
+            self.get_object_cell_expect(unscopables_obj_id)
+                .borrow_mut()
+                .prototype_id = None;
             let names = [
                 "at",
                 "copyWithin",
@@ -3884,19 +3896,21 @@ impl Interpreter {
                 "values",
             ];
             for name in names {
-                unscopables_obj
+                self.get_object_cell_expect(unscopables_obj_id)
                     .borrow_mut()
                     .insert_value(name.to_string(), JsValue::Boolean(true));
             }
-            let unscopables_id = unscopables_obj.borrow().id.unwrap();
+            let unscopables_id = unscopables_obj_id;
             let unscopables_val = JsValue::Object(crate::types::JsObject { id: unscopables_id });
-            proto.borrow_mut().insert_property(
-                "Symbol(Symbol.unscopables)".to_string(),
-                PropertyDescriptor::data(unscopables_val, false, false, true),
-            );
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    "Symbol(Symbol.unscopables)".to_string(),
+                    PropertyDescriptor::data(unscopables_val, false, false, true),
+                );
         }
 
-        self.realm_mut().array_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().array_prototype = Some(proto_id);
     }
 
     pub(crate) fn create_array(&mut self, values: Vec<JsValue>) -> JsValue {

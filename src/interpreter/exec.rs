@@ -1479,15 +1479,17 @@ impl Interpreter {
                             }
                         }
                         ObjectPatternProperty::Rest(pat) => {
-                            let rest_obj = self.create_object();
+                            let rest_obj_id = self.create_object_id();
                             if let JsValue::Object(o) = &obj_val {
                                 let pairs =
                                     self.copy_data_properties(o.id, &obj_val, &excluded_keys)?;
                                 for (k, v) in pairs {
-                                    rest_obj.borrow_mut().insert_value(k, v);
+                                    self.get_object_cell_expect(rest_obj_id)
+                                        .borrow_mut()
+                                        .insert_value(k, v);
                                 }
                             }
-                            let rest_id = rest_obj.borrow().id.unwrap();
+                            let rest_id = rest_obj_id;
                             let rest_val = JsValue::Object(crate::types::JsObject { id: rest_id });
                             self.bind_pattern(pat, rest_val, kind, env)?;
                         }
@@ -2553,16 +2555,18 @@ impl Interpreter {
     ) -> Completion {
         let ctor = self.env_get(env, name);
         if let Some(ctor_val) = ctor {
-            let new_obj = self.create_object();
+            let new_obj_id = self.create_object_id();
             if let JsValue::Object(ref o) = ctor_val
                 && let Some(func_obj) = self.get_object(o.id)
             {
                 let proto = func_obj.borrow().get_property_value("prototype");
                 if let Some(JsValue::Object(proto_obj)) = proto {
-                    new_obj.borrow_mut().prototype_id = Some(proto_obj.id);
+                    self.get_object_cell_expect(new_obj_id)
+                        .borrow_mut()
+                        .prototype_id = Some(proto_obj.id);
                 }
             }
-            let new_obj_id = new_obj.borrow().id.unwrap();
+            let new_obj_id = new_obj_id;
             let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
             let prev_new_target = self.new_target.take();
             self.new_target = Some(ctor_val.clone());

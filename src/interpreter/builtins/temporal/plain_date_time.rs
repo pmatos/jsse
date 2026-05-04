@@ -21,12 +21,21 @@ pub(super) fn create_plain_date_time_result(
     ns: u16,
     cal: &str,
 ) -> Completion {
-    let obj = interp.create_object();
-    obj.borrow_mut().class_name = "Temporal.PlainDateTime".to_string();
+    let obj_id = interp.create_object_id();
+    interp
+        .get_object_cell_expect(obj_id)
+        .borrow_mut()
+        .class_name = "Temporal.PlainDateTime".to_string();
     if let Some(proto_id) = interp.realm().temporal_plain_date_time_prototype {
-        obj.borrow_mut().prototype_id = Some(proto_id);
+        interp
+            .get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .prototype_id = Some(proto_id);
     }
-    obj.borrow_mut().temporal_data = Some(TemporalData::PlainDateTime {
+    interp
+        .get_object_cell_expect(obj_id)
+        .borrow_mut()
+        .temporal_data = Some(TemporalData::PlainDateTime {
         iso_year: y,
         iso_month: m,
         iso_day: d,
@@ -38,7 +47,7 @@ pub(super) fn create_plain_date_time_result(
         nanosecond: ns,
         calendar: cal.to_string(),
     });
-    let id = obj.borrow().id.unwrap();
+    let id = obj_id;
     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
 }
 
@@ -541,8 +550,10 @@ fn format_plain_date_time(
 
 impl Interpreter {
     pub(crate) fn setup_temporal_plain_date_time(&mut self, temporal_obj_id: u64) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "Temporal.PlainDateTime".to_string();
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Temporal.PlainDateTime".to_string();
         {
             let key = "Symbol(Symbol.toStringTag)".to_string();
             let desc = PropertyDescriptor {
@@ -555,8 +566,14 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            proto.borrow_mut().property_order.push(key.clone());
-            proto.borrow_mut().properties.insert(key, desc);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .property_order
+                .push(key.clone());
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .properties
+                .insert(key, desc);
         }
 
         // Getter: calendarId
@@ -572,17 +589,19 @@ impl Interpreter {
                     Completion::Normal(JsValue::String(JsString::from_str(&cal)))
                 },
             ));
-            proto.borrow_mut().insert_property(
-                "calendarId".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: Some(getter),
-                    set: None,
-                },
-            );
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    "calendarId".to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                        get: Some(getter),
+                        set: None,
+                    },
+                );
         }
 
         // Date getters: year, month, day + calendar computed
@@ -613,17 +632,19 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(val))
                 },
             ));
-            proto.borrow_mut().insert_property(
-                name.to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: Some(getter),
-                    set: None,
-                },
-            );
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    name.to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                        get: Some(getter),
+                        set: None,
+                    },
+                );
         }
 
         // Time getters: hour, minute, second, millisecond, microsecond, nanosecond
@@ -654,17 +675,19 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(val))
                 },
             ));
-            proto.borrow_mut().insert_property(
-                name.to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: Some(getter),
-                    set: None,
-                },
-            );
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    name.to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                        get: Some(getter),
+                        set: None,
+                    },
+                );
         }
 
         // monthCode
@@ -687,17 +710,19 @@ impl Interpreter {
                     Completion::Normal(JsValue::String(JsString::from_str(&iso_month_code(m))))
                 },
             ));
-            proto.borrow_mut().insert_property(
-                "monthCode".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: Some(getter),
-                    set: None,
-                },
-            );
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    "monthCode".to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                        get: Some(getter),
+                        set: None,
+                    },
+                );
         }
 
         // Computed date getters
@@ -758,17 +783,19 @@ impl Interpreter {
                     Completion::Normal(val)
                 },
             ));
-            proto.borrow_mut().insert_property(
-                name.to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: Some(getter),
-                    set: None,
-                },
-            );
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    name.to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                        get: Some(getter),
+                        set: None,
+                    },
+                );
         }
 
         // era / eraYear
@@ -799,17 +826,19 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 },
             ));
-            proto.borrow_mut().insert_property(
-                name.to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: Some(getter),
-                    set: None,
-                },
-            );
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    name.to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                        get: Some(getter),
+                        set: None,
+                    },
+                );
         }
 
         // with(temporalDateTimeLike, options?)
@@ -1124,7 +1153,7 @@ impl Interpreter {
                 }
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("with".to_string(), with_fn);
 
@@ -1154,7 +1183,7 @@ impl Interpreter {
                 create_plain_date_time_result(interp, y, m, d, h, mi, s, ms, us, ns, &cal)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("withPlainTime".to_string(), with_time_fn);
 
@@ -1180,7 +1209,7 @@ impl Interpreter {
                 create_plain_date_time_result(interp, y, m, d, h, mi, s, ms, us, ns, &cal)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("withCalendar".to_string(), with_cal_fn);
 
@@ -1261,7 +1290,9 @@ impl Interpreter {
                     )
                 },
             ));
-            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
         }
 
         // until(other, options?) / since(other, options?)
@@ -1565,7 +1596,9 @@ impl Interpreter {
                     )
                 },
             ));
-            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
         }
 
         // round(options)
@@ -1704,7 +1737,7 @@ impl Interpreter {
                 create_plain_date_time_result(interp, ry, rm, rd, nh, nmi, nse, nms, nus, nns, &cal)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("round".to_string(), round_fn);
 
@@ -1735,7 +1768,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(eq))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("equals".to_string(), equals_fn);
 
@@ -1924,7 +1957,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toString".to_string(), to_string_fn);
 
@@ -1942,7 +1975,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toJSON".to_string(), to_json_fn);
 
@@ -1978,7 +2011,7 @@ impl Interpreter {
                 super::temporal_format_with_dtf(interp, &dtf_instance, this)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toLocaleString".to_string(), to_locale_fn);
 
@@ -1992,7 +2025,7 @@ impl Interpreter {
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("valueOf".to_string(), value_of_fn);
 
@@ -2008,7 +2041,7 @@ impl Interpreter {
                 super::plain_date::create_plain_date_result(interp, y, m, d, &cal)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toPlainDate".to_string(), to_pd_fn);
 
@@ -2024,7 +2057,7 @@ impl Interpreter {
                 super::plain_time::create_plain_time_result(interp, h, mi, s, ms, us, ns)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toPlainTime".to_string(), to_pt_fn);
 
@@ -2093,11 +2126,11 @@ impl Interpreter {
                 super::zoned_date_time::create_zdt_pub(interp, epoch_ns, tz, cal)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toZonedDateTime".to_string(), to_zdt_fn);
 
-        self.realm_mut().temporal_plain_date_time_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().temporal_plain_date_time_prototype = Some(proto_id);
 
         // Constructor
         let constructor = self.create_function(JsFunction::constructor(
@@ -2200,18 +2233,18 @@ impl Interpreter {
         if let JsValue::Object(ref o) = constructor
             && let Some(obj) = self.get_object(o.id)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject {
-                id: proto.borrow().id.unwrap(),
-            });
+            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
             );
         }
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(constructor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(constructor.clone(), true, false, true),
+            );
 
         // PlainDateTime.from(item, options?)
         let from_fn = self.create_function(JsFunction::native(
