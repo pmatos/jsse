@@ -606,3 +606,337 @@ fn prototype_chain_survives_gc() {
     );
     assert_eq!(global_string(&interp, "result"), "deep|deep");
 }
+
+// -- Phase 1: shape-id infrastructure (issue #71) -----------------------------
+// Whitebox tests for the per-object shape_id counter that backs the inline
+// caches added in Phases 2 & 3. Each structural mutation must advance the
+// counter; pure value re-assignment must not.
+
+#[test]
+fn alloc_seeds_unique_shape_ids() {
+    let mut interp = Interpreter::new();
+    let id_a = interp.alloc_object(JsObjectData::new());
+    let id_b = interp.alloc_object(JsObjectData::new());
+    let shape_a = interp.get_object(id_a).unwrap().borrow().shape_id;
+    let shape_b = interp.get_object(id_b).unwrap().borrow().shape_id;
+    assert_ne!(shape_a, 0, "shape_id must be non-zero after alloc");
+    assert_ne!(shape_b, 0, "shape_id must be non-zero after alloc");
+    assert_ne!(shape_a, shape_b, "fresh allocations get distinct shape ids");
+}
+
+#[test]
+fn mutate_object_shape_bumps_shape_id() {
+    let mut interp = Interpreter::new();
+    let id = interp.alloc_object(JsObjectData::new());
+    let before = interp.get_object(id).unwrap().borrow().shape_id;
+    let returned = interp.mutate_object_shape(id, |obj| {
+        // helper must bump regardless of what closure does (or doesn't do).
+        obj.extensible = false;
+        42_u32
+    });
+    assert_eq!(returned, 42, "closure return value must be propagated");
+    let after = interp.get_object(id).unwrap().borrow().shape_id;
+    assert!(after > before, "mutate_object_shape must advance shape_id");
+}
+
+#[test]
+fn mutate_object_shape_bumps_even_on_noop_closure() {
+    let mut interp = Interpreter::new();
+    let id = interp.alloc_object(JsObjectData::new());
+    let before = interp.get_object(id).unwrap().borrow().shape_id;
+    interp.mutate_object_shape(id, |_obj| {});
+    let after = interp.get_object(id).unwrap().borrow().shape_id;
+    assert!(
+        after > before,
+        "mutate_object_shape bumps unconditionally — \
+         a no-op closure still produces a fresh shape id (per Step 4 of the plan)"
+    );
+}
+
+#[test]
+fn set_property_value_add_bumps_shape() {
+    let mut interp = Interpreter::new();
+    let id = interp.alloc_object(JsObjectData::new());
+    let before = interp.get_object(id).unwrap().borrow().shape_id;
+    let ok = interp
+        .get_object(id)
+        .unwrap()
+        .borrow_mut()
+        .set_property_value("x", JsValue::Number(1.0));
+    assert!(
+        ok,
+        "set_property_value should succeed on extensible empty obj"
+    );
+    let after = interp.get_object(id).unwrap().borrow().shape_id;
+    assert!(
+        after > before,
+        "adding a new property is a structural mutation; shape_id must advance \
+         (before={before}, after={after})"
+    );
+}
+
+#[test]
+fn set_property_value_update_existing_does_not_bump_shape() {
+    let mut interp = Interpreter::new();
+    let id = interp.alloc_object(JsObjectData::new());
+    interp
+        .get_object(id)
+        .unwrap()
+        .borrow_mut()
+        .set_property_value("x", JsValue::Number(1.0));
+    let before = interp.get_object(id).unwrap().borrow().shape_id;
+    interp
+        .get_object(id)
+        .unwrap()
+        .borrow_mut()
+        .set_property_value("x", JsValue::Number(2.0));
+    let after = interp.get_object(id).unwrap().borrow().shape_id;
+    assert_eq!(
+        after, before,
+        "reassigning an existing data property's value is NOT a structural \
+         mutation; shape_id must remain stable so IC slots stay live"
+    );
+}
+
+#[test]
+fn define_own_property_bumps_shape_on_attribute_change() {
+    let mut interp = Interpreter::new();
+    let id = interp.alloc_object(JsObjectData::new());
+    // Seed an existing property so we can flip its attributes.
+    interp
+        .get_object(id)
+        .unwrap()
+        .borrow_mut()
+        .set_property_value("x", JsValue::Number(1.0));
+    let before = interp.get_object(id).unwrap().borrow().shape_id;
+    let ok = interp
+        .get_object(id)
+        .unwrap()
+        .borrow_mut()
+        .define_own_property(
+            "x".to_string(),
+            PropertyDescriptor {
+                value: Some(JsValue::Number(1.0)),
+                writable: Some(false),
+                enumerable: Some(true),
+                configurable: Some(true),
+                get: None,
+                set: None,
+            },
+        );
+    assert!(ok, "defineProperty should succeed");
+    let after = interp.get_object(id).unwrap().borrow().shape_id;
+    assert!(
+        after > before,
+        "flipping writable from default to false IS a structural mutation \
+         (an attribute changed); shape_id must advance"
+    );
+}
+
+#[test]
+fn set_prototype_via_chokepoint_bumps_shape() {
+    let mut interp = Interpreter::new();
+    let proto_id = interp.alloc_object(JsObjectData::new());
+    let id = interp.alloc_object(JsObjectData::new());
+    let before = interp.get_object(id).unwrap().borrow().shape_id;
+    interp.mutate_object_shape(id, |obj| {
+        obj.prototype_id = Some(proto_id);
+    });
+    let after = interp.get_object(id).unwrap().borrow().shape_id;
+    assert!(
+        after > before,
+        "prototype mutation routed via mutate_object_shape must bump shape_id"
+    );
+}
+
+#[test]
+fn proxy_install_via_chokepoint_bumps_shape() {
+    let mut interp = Interpreter::new();
+    let target_id = interp.alloc_object(JsObjectData::new());
+    let handler_id = interp.alloc_object(JsObjectData::new());
+    let proxy_id = interp.alloc_object(JsObjectData::new());
+    let before = interp.get_object(proxy_id).unwrap().borrow().shape_id;
+    interp.mutate_object_shape(proxy_id, |obj| {
+        obj.proxy_target_id = Some(target_id);
+        obj.proxy_handler_id = Some(handler_id);
+    });
+    let after = interp.get_object(proxy_id).unwrap().borrow().shape_id;
+    assert!(
+        after > before,
+        "proxy install routed via mutate_object_shape must bump shape_id"
+    );
+}
+
+#[test]
+fn ic_records_after_repeated_dot_access() {
+    // Hot loop reads o.x 100 times. After warmup the IC slot must be hitting,
+    // not falling to the slow path on every read. This is the Phase-2 tracer
+    // bullet: it asserts both correctness (sum=4200) and that the IC counter
+    // advanced (proves the probe fired on cache hits, not just misses).
+    let interp = run_script(
+        r#"
+        var o = {x: 42};
+        var sum = 0;
+        for (var i = 0; i < 100; i++) {
+            sum += o.x;
+        }
+        "#,
+    );
+    let env = interp.realm().global_env.borrow();
+    match env.get("sum").unwrap_or(JsValue::Undefined) {
+        JsValue::Number(n) => assert_eq!(n, 4200.0, "behavioral correctness"),
+        other => panic!("expected sum=4200, got {other:?}"),
+    }
+    assert!(
+        interp.ic_hit_count() > 0,
+        "expected IC hits after 100-iteration hot loop on o.x; got 0 \
+         (the probe never recognised the cached shape)"
+    );
+}
+
+#[test]
+fn ic_invalidates_on_define_property_attribute_flip() {
+    // Read o.x (populates IC as OwnData), then defineProperty flips it to a
+    // getter; the next read must observe the getter. If the IC ignored the
+    // shape change, this would return the stale data value.
+    let interp = run_script(
+        r#"
+        var o = {x: 1};
+        var pre = o.x;
+        Object.defineProperty(o, 'x', { get: function() { return 99; }, configurable: true });
+        var post = o.x;
+        var result = pre + "|" + post;
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "1|99");
+}
+
+#[test]
+fn ic_invalidates_on_delete_property() {
+    // Populate IC by reading o.x repeatedly, then delete it. Subsequent reads
+    // must return undefined (and continue working without panicking on a
+    // stale OwnData slot).
+    let interp = run_script(
+        r#"
+        var o = {x: 7};
+        var sum = 0;
+        for (var i = 0; i < 10; i++) sum += o.x;       // populate IC
+        delete o.x;
+        var post = (typeof o.x === "undefined") ? "gone" : "still:" + o.x;
+        var result = sum + "|" + post;
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "70|gone");
+}
+
+#[test]
+fn call_ic_records_after_repeated_call() {
+    // Phase 3 tracer: the call site `f()` repeatedly invokes the same plain
+    // user function. After the first call, the IC slot must be Mono and
+    // subsequent iterations must register as hits.
+    let interp = run_script(
+        r#"
+        function f() { return 42; }
+        var sum = 0;
+        for (var i = 0; i < 100; i++) sum += f();
+        "#,
+    );
+    let env = interp.realm().global_env.borrow();
+    match env.get("sum").unwrap_or(JsValue::Undefined) {
+        JsValue::Number(n) => assert_eq!(n, 4200.0, "behavioral correctness"),
+        other => panic!("expected sum=4200, got {other:?}"),
+    }
+    assert!(
+        interp.call_ic_hit_count() > 0,
+        "expected call-IC hits after 100-iteration hot loop on f(); got 0"
+    );
+}
+
+#[test]
+fn call_ic_invalidates_on_function_replacement() {
+    // Reassign `f` to a different function — second hot loop must observe
+    // the new behavior, not the cached resolution.
+    let interp = run_script(
+        r#"
+        function a() { return 1; }
+        function b() { return 100; }
+        var f = a;
+        var s1 = 0; for (var i = 0; i < 5; i++) s1 += f();
+        f = b;
+        var s2 = 0; for (var i = 0; i < 5; i++) s2 += f();
+        var result = s1 + "|" + s2;
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "5|500");
+}
+
+#[test]
+fn ic_megamorphic_after_distinct_objects_at_same_site() {
+    // Same call site sees two different objects; the second access shape
+    // mismatches and transitions to Megamorphic. Behavioural correctness
+    // must still hold.
+    let interp = run_script(
+        r#"
+        var a = {x: 1};
+        var b = {x: 2};
+        function read(o) { return o.x; }
+        var v1 = read(a);
+        var v2 = read(b);
+        var v3 = read(a);
+        var result = v1 + "|" + v2 + "|" + v3;
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "1|2|1");
+}
+
+#[test]
+fn behavioral_engine_passes_property_value_round_trip() {
+    // Behavioral cross-check: even with shape bumps in place, basic
+    // assignment/read round-trips still work via the public engine.
+    let interp = run_script(
+        r#"
+        var o = {};
+        o.x = 42;
+        o.x = 43;
+        var a = [1,2,3];
+        a[10] = 99;
+        a.length = 1;
+        var result = o.x + "|" + a.length + "|" + (a[0] || "?");
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "43|1|1");
+}
+
+#[test]
+fn define_own_property_bumps_shape_on_data_to_accessor_swap() {
+    let mut interp = Interpreter::new();
+    let id = interp.alloc_object(JsObjectData::new());
+    interp
+        .get_object(id)
+        .unwrap()
+        .borrow_mut()
+        .set_property_value("x", JsValue::Number(1.0));
+    let before = interp.get_object(id).unwrap().borrow().shape_id;
+    // Swap data → accessor by defining a getter.
+    let ok = interp
+        .get_object(id)
+        .unwrap()
+        .borrow_mut()
+        .define_own_property(
+            "x".to_string(),
+            PropertyDescriptor {
+                value: None,
+                writable: None,
+                get: Some(JsValue::Undefined), // sentinel — real getter not needed for this test
+                set: None,
+                enumerable: Some(true),
+                configurable: Some(true),
+            },
+        );
+    assert!(ok, "data→accessor swap should succeed");
+    let after = interp.get_object(id).unwrap().borrow().shape_id;
+    assert!(
+        after > before,
+        "data→accessor swap is the canonical IC-invalidating shape change"
+    );
+}

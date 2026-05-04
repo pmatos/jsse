@@ -502,21 +502,21 @@ fn analyze_expression(
             analyze_expression(alternate, analysis, ctx, true);
         }
 
-        Expression::Call(callee, args) => {
+        Expression::Call(callee, args, _) => {
             analyze_expression(callee, analysis, ctx, true);
             for arg in args {
                 analyze_expression(arg, analysis, ctx, true);
             }
         }
 
-        Expression::New(callee, args) => {
+        Expression::New(callee, args, _) => {
             analyze_expression(callee, analysis, ctx, true);
             for arg in args {
                 analyze_expression(arg, analysis, ctx, true);
             }
         }
 
-        Expression::Member(object, prop) => {
+        Expression::Member(object, prop, _) => {
             analyze_expression(object, analysis, ctx, true);
             if let MemberProperty::Computed(key) = prop {
                 analyze_expression(key, analysis, ctx, true);
@@ -722,10 +722,10 @@ pub fn expr_contains_yield(expr: &Expression) -> bool {
         Expression::Conditional(t, c, a) => {
             expr_contains_yield(t) || expr_contains_yield(c) || expr_contains_yield(a)
         }
-        Expression::Call(callee, args) | Expression::New(callee, args) => {
+        Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
             expr_contains_yield(callee) || args.iter().any(expr_contains_yield)
         }
-        Expression::Member(obj, prop) => {
+        Expression::Member(obj, prop, _) => {
             expr_contains_yield(obj)
                 || matches!(prop, MemberProperty::Computed(e) if expr_contains_yield(e))
         }
@@ -778,10 +778,10 @@ pub fn expr_contains_suspension(expr: &Expression) -> bool {
                 || expr_contains_suspension(c)
                 || expr_contains_suspension(a)
         }
-        Expression::Call(callee, args) | Expression::New(callee, args) => {
+        Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
             expr_contains_suspension(callee) || args.iter().any(expr_contains_suspension)
         }
-        Expression::Member(obj, prop) => {
+        Expression::Member(obj, prop, _) => {
             expr_contains_suspension(obj)
                 || matches!(prop, MemberProperty::Computed(e) if expr_contains_suspension(e))
         }

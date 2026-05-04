@@ -1,4 +1,5 @@
 use super::*;
+use crate::interpreter::ic::{fresh_call_ic_cell, fresh_prop_ic_cell};
 
 fn validate_regexp_literal(pattern: &str, flags: &str) -> Result<(), ParseError> {
     let valid_flags = "dgimsuyv";
@@ -70,7 +71,10 @@ impl<'a> Parser<'a> {
     }
 
     fn is_simple_assignment_target(expr: &Expression) -> bool {
-        matches!(expr, Expression::Identifier(_) | Expression::Member(_, _))
+        matches!(
+            expr,
+            Expression::Identifier(_) | Expression::Member(_, _, _)
+        )
     }
 
     fn validate_assignment_target(
@@ -95,7 +99,7 @@ impl<'a> Parser<'a> {
             }
             return Ok(());
         }
-        if allow_call && !self.strict && matches!(expr, Expression::Call(_, _)) {
+        if allow_call && !self.strict && matches!(expr, Expression::Call(_, _, _)) {
             return Ok(());
         }
         Err(self.error("Invalid left-hand side in assignment"))
@@ -535,7 +539,7 @@ impl<'a> Parser<'a> {
                 if self.strict && matches!(&expr, Expression::Identifier(_)) {
                     return Err(self.error("Delete of an unqualified identifier in strict mode"));
                 }
-                if matches!(&expr, Expression::Member(_, MemberProperty::Private(_))) {
+                if matches!(&expr, Expression::Member(_, MemberProperty::Private(_), _)) {
                     return Err(self
                         .error("Applying the 'delete' operator to a private name is not allowed"));
                 }
@@ -686,7 +690,7 @@ impl<'a> Parser<'a> {
                     {
                         return Err(self.error("Private fields are not accessible on 'super'"));
                     }
-                    expr = Expression::Member(Box::new(expr), prop);
+                    expr = Expression::Member(Box::new(expr), prop, fresh_prop_ic_cell());
                 }
                 Token::LeftBracket => {
                     self.advance()?;
@@ -695,11 +699,12 @@ impl<'a> Parser<'a> {
                     expr = Expression::Member(
                         Box::new(expr),
                         MemberProperty::Computed(Box::new(prop)),
+                        fresh_prop_ic_cell(),
                     );
                 }
                 Token::LeftParen => {
                     let args = self.parse_arguments()?;
-                    expr = Expression::Call(Box::new(expr), args);
+                    expr = Expression::Call(Box::new(expr), args, fresh_call_ic_cell());
                 }
                 Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                     let tmpl = self.parse_template_literal_expr(true)?;
@@ -709,7 +714,11 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let mut prop = if self.current == Token::LeftParen {
                         let args = self.parse_arguments()?;
-                        Expression::Call(Box::new(Expression::Identifier("".into())), args)
+                        Expression::Call(
+                            Box::new(Expression::Identifier("".into())),
+                            args,
+                            fresh_call_ic_cell(),
+                        )
                     } else if self.current == Token::LeftBracket {
                         self.advance()?;
                         let p = self.parse_expression()?;
@@ -717,6 +726,7 @@ impl<'a> Parser<'a> {
                         Expression::Member(
                             Box::new(Expression::Identifier("".into())),
                             MemberProperty::Computed(Box::new(p)),
+                            fresh_prop_ic_cell(),
                         )
                     } else if let Token::PrivateName(name) = &self.current {
                         let name = name.clone();
@@ -725,6 +735,7 @@ impl<'a> Parser<'a> {
                         Expression::Member(
                             Box::new(Expression::Identifier("".into())),
                             MemberProperty::Private(name),
+                            fresh_prop_ic_cell(),
                         )
                     } else {
                         let name = match &self.current {
@@ -740,7 +751,7 @@ impl<'a> Parser<'a> {
                             Token::Dot => {
                                 self.advance()?;
                                 let mp = self.parse_dot_member_property()?;
-                                prop = Expression::Member(Box::new(prop), mp);
+                                prop = Expression::Member(Box::new(prop), mp, fresh_prop_ic_cell());
                             }
                             Token::LeftBracket => {
                                 self.advance()?;
@@ -749,11 +760,12 @@ impl<'a> Parser<'a> {
                                 prop = Expression::Member(
                                     Box::new(prop),
                                     MemberProperty::Computed(Box::new(p)),
+                                    fresh_prop_ic_cell(),
                                 );
                             }
                             Token::LeftParen => {
                                 let args = self.parse_arguments()?;
-                                prop = Expression::Call(Box::new(prop), args);
+                                prop = Expression::Call(Box::new(prop), args, fresh_call_ic_cell());
                             }
                             Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                                 return Err(self
@@ -795,7 +807,11 @@ impl<'a> Parser<'a> {
         }
         if self.current == Token::Keyword(Keyword::New) {
             let inner = self.parse_new_expression()?;
-            return Ok(Expression::New(Box::new(inner), Vec::new()));
+            return Ok(Expression::New(
+                Box::new(inner),
+                Vec::new(),
+                fresh_call_ic_cell(),
+            ));
         }
         // `new import(...)` is a syntax error (ImportCall is CallExpression, not MemberExpression)
         // but `new (import(...))` is valid — parens make it a CoveredParenthesizedExpression
@@ -819,7 +835,7 @@ impl<'a> Parser<'a> {
                 Token::Dot => {
                     self.advance()?;
                     let prop = self.parse_dot_member_property()?;
-                    callee = Expression::Member(Box::new(callee), prop);
+                    callee = Expression::Member(Box::new(callee), prop, fresh_prop_ic_cell());
                 }
                 Token::LeftBracket => {
                     self.advance()?;
@@ -828,6 +844,7 @@ impl<'a> Parser<'a> {
                     callee = Expression::Member(
                         Box::new(callee),
                         MemberProperty::Computed(Box::new(prop)),
+                        fresh_prop_ic_cell(),
                     );
                 }
                 Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
@@ -842,7 +859,11 @@ impl<'a> Parser<'a> {
         } else {
             Vec::new()
         };
-        Ok(Expression::New(Box::new(callee), args))
+        Ok(Expression::New(
+            Box::new(callee),
+            args,
+            fresh_call_ic_cell(),
+        ))
     }
 
     fn parse_arguments(&mut self) -> Result<Vec<Expression>, ParseError> {
@@ -2127,6 +2148,7 @@ impl<'a> Parser<'a> {
             return Ok(Expression::Call(
                 Box::new(Expression::Identifier("async".to_string())),
                 Vec::new(),
+                fresh_call_ic_cell(),
             ));
         }
         if self.current == Token::Ellipsis {
@@ -2221,6 +2243,7 @@ impl<'a> Parser<'a> {
             return Ok(Expression::Call(
                 Box::new(Expression::Identifier("async".to_string())),
                 exprs,
+                fresh_call_ic_cell(),
             ));
         }
         self.eat(&Token::RightParen)?;
@@ -2228,6 +2251,7 @@ impl<'a> Parser<'a> {
         Ok(Expression::Call(
             Box::new(Expression::Identifier("async".to_string())),
             vec![expr],
+            fresh_call_ic_cell(),
         ))
     }
 

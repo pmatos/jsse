@@ -322,6 +322,7 @@ impl Interpreter {
                 vec![Expression::Spread(Box::new(Expression::Identifier(
                     "args".into(),
                 )))],
+                crate::interpreter::ic::fresh_call_ic_cell(),
             ))];
             let uses_args = stmts_use_arguments(&default_body);
             JsFunction::User {

@@ -1,8 +1,11 @@
 /// AST node types for ECMAScript.
 /// Each node represents a syntactic element from the spec.
+use std::cell::Cell;
 use std::fmt;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+use crate::interpreter::ic::{CallIcSlot, PropIcSlot};
 
 static NEXT_TEMPLATE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -190,9 +193,26 @@ pub enum Expression {
     Update(UpdateOp, bool, Box<Expression>), // op, prefix, argument
     Assign(AssignOp, Box<Expression>, Box<Expression>),
     Conditional(Box<Expression>, Box<Expression>, Box<Expression>),
-    Call(Box<Expression>, Vec<Expression>),
-    New(Box<Expression>, Vec<Expression>),
-    Member(Box<Expression>, MemberProperty),
+    /// Function call `f(args)` / `obj.method(args)`. Third field is a
+    /// per-site call IC slot (issue #71, Phase 3).
+    Call(Box<Expression>, Vec<Expression>, Cell<CallIcSlot>),
+    /// Constructor invocation `new F(args)`. Carries its own call IC slot —
+    /// the slot is allocated for forward compatibility but is not yet read
+    /// in Phase-3 v1 (constructor invocation is statistically rarer than
+    /// regular calls; probe wiring lands in a follow-up cycle).
+    New(
+        Box<Expression>,
+        Vec<Expression>,
+        #[allow(dead_code)] Cell<CallIcSlot>,
+    ),
+    /// Property access `obj.x` / `obj[key]`. The third field is a per-site
+    /// inline-cache slot (issue #71). `Cell<PropIcSlot>` works because
+    /// `PropIcSlot` is `Copy`. At parse time the slot is `Empty`; the
+    /// `eval_member` probe and `get_object_property` slow path mutate it
+    /// through `Cell::get`/`Cell::set`. Slot state is per-AST-node, not
+    /// per-execution; generator/async replay is safe because the slot is
+    /// shape-keyed and re-fetches on every hit.
+    Member(Box<Expression>, MemberProperty, Cell<PropIcSlot>),
     OptionalChain(Box<Expression>, Box<Expression>),
     #[allow(dead_code)]
     Comma(Vec<Expression>),
@@ -637,15 +657,15 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
         Expression::Conditional(t, c, a) => {
             expr_uses_arguments(t) || expr_uses_arguments(c) || expr_uses_arguments(a)
         }
-        Expression::Call(callee, args) => {
+        Expression::Call(callee, args, _) => {
             matches!(&**callee, Expression::Identifier(name) if name == "eval")
                 || expr_uses_arguments(callee)
                 || args.iter().any(expr_uses_arguments)
         }
-        Expression::New(callee, args) => {
+        Expression::New(callee, args, _) => {
             expr_uses_arguments(callee) || args.iter().any(expr_uses_arguments)
         }
-        Expression::Member(obj, prop) => {
+        Expression::Member(obj, prop, _) => {
             expr_uses_arguments(obj)
                 || matches!(prop, MemberProperty::Computed(e) if expr_uses_arguments(e))
         }
