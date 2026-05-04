@@ -9,7 +9,7 @@ fn date_to_locale_string(
 ) -> Completion {
     fn this_time_value_locale(interp: &Interpreter, this: &JsValue) -> Option<f64> {
         if let JsValue::Object(o) = this
-            && let Some(obj) = interp.get_object(o.id)
+            && let Some(obj) = interp.get_object_cell(o.id)
         {
             let b = obj.borrow();
             if b.class_name == "Date"
@@ -43,7 +43,7 @@ fn date_to_locale_string(
         match interp.to_object(&options_arg) {
             Completion::Normal(v) => {
                 if let JsValue::Object(o) = &v {
-                    if let Some(src) = interp.get_object(o.id) {
+                    if let Some(src) = interp.get_object_cell(o.id) {
                         let pds: Vec<(String, PropertyDescriptor)> = src
                             .borrow()
                             .properties
@@ -213,7 +213,7 @@ impl Interpreter {
 
         fn this_time_value(interp: &Interpreter, this: &JsValue) -> Option<f64> {
             if let JsValue::Object(o) = this
-                && let Some(obj) = interp.get_object(o.id)
+                && let Some(obj) = interp.get_object_cell(o.id)
             {
                 let b = obj.borrow();
                 if b.class_name == "Date"
@@ -227,7 +227,7 @@ impl Interpreter {
 
         fn set_date_value(interp: &Interpreter, this: &JsValue, v: f64) {
             if let JsValue::Object(o) = this
-                && let Some(obj) = interp.get_object(o.id)
+                && let Some(obj) = interp.get_object_cell(o.id)
             {
                 obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
             }
@@ -1153,7 +1153,7 @@ impl Interpreter {
                             Completion::Normal(func) => {
                                 if let JsValue::Object(fo) = &func
                                     && interp
-                                        .get_object(fo.id)
+                                        .get_object_cell(fo.id)
                                         .map(|obj| obj.borrow().callable.is_some())
                                         .unwrap_or(false)
                                 {
@@ -1284,7 +1284,7 @@ impl Interpreter {
                     };
                     if let JsValue::Object(fo) = &method_val
                         && interp
-                            .get_object(fo.id)
+                            .get_object_cell(fo.id)
                             .map(|o| o.borrow().callable.is_some())
                             .unwrap_or(false)
                     {
@@ -1332,7 +1332,7 @@ impl Interpreter {
                 } else if args.len() == 1 {
                     let v = &args[0];
                     if let JsValue::Object(o) = v
-                        && let Some(obj) = interp.get_object(o.id)
+                        && let Some(obj) = interp.get_object_cell(o.id)
                         && obj.borrow().class_name == "Date"
                         && obj.borrow().primitive_value.is_some()
                     {
@@ -1419,7 +1419,7 @@ impl Interpreter {
                 };
 
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && interp.get_object_cell(o.id).is_some()
                 {
                     // OrdinaryCreateFromConstructor — realm-aware prototype
                     let proto = match interp
@@ -1428,7 +1428,7 @@ impl Interpreter {
                         Ok(p) => p.unwrap_or(date_proto_clone_id),
                         Err(e) => return Completion::Throw(e),
                     };
-                    let mut b = obj.borrow_mut();
+                    let mut b = interp.get_object_cell_expect(o.id).borrow_mut();
                     b.class_name = "Date".to_string();
                     b.primitive_value = Some(JsValue::Number(time_val));
                     b.prototype_id = Some(proto);
@@ -1438,19 +1438,24 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(o) = &date_ctor
-            && let Some(obj) = self.get_object(o.id)
+            && self.get_object_cell(o.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "length".to_string(),
-                PropertyDescriptor::data(JsValue::Number(7.0), false, false, true),
-            );
+            let date_ctor_id = o.id;
+            self.get_object_cell_expect(date_ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "length".to_string(),
+                    PropertyDescriptor::data(JsValue::Number(7.0), false, false, true),
+                );
 
             let now_fn = self.create_function(JsFunction::native(
                 "now".to_string(),
                 0,
                 |_interp, _this, _args| Completion::Normal(JsValue::Number(now_ms().floor())),
             ));
-            obj.borrow_mut().insert_builtin("now".to_string(), now_fn);
+            self.get_object_cell_expect(date_ctor_id)
+                .borrow_mut()
+                .insert_builtin("now".to_string(), now_fn);
 
             let parse_fn = self.create_function(JsFunction::native(
                 "parse".to_string(),
@@ -1466,7 +1471,8 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(parse_date_string(&s)))
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(date_ctor_id)
+                .borrow_mut()
                 .insert_builtin("parse".to_string(), parse_fn);
 
             let utc_fn = self.create_function(JsFunction::native(
@@ -1537,13 +1543,17 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(time_clip(make_date(d, time))))
                 },
             ));
-            obj.borrow_mut().insert_builtin("UTC".to_string(), utc_fn);
+            self.get_object_cell_expect(date_ctor_id)
+                .borrow_mut()
+                .insert_builtin("UTC".to_string(), utc_fn);
 
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val, false, false, false),
-            );
+            self.get_object_cell_expect(date_ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val, false, false, false),
+                );
         }
 
         self.get_object_cell_expect(proto_id)
