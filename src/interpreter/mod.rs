@@ -144,6 +144,9 @@ pub struct Interpreter {
     pub(crate) call_ic_hit_count: std::cell::Cell<u64>,
     /// Call-site IC slow-path counter (Phase 3). Issue #71.
     pub(crate) call_ic_slow_path_count: std::cell::Cell<u64>,
+    /// Counter for the call_function_inner fast-dispatch path (skips
+    /// proxy/wrapped/class-ctor checks). Issue #71 Phase-3 follow-up.
+    pub(crate) call_ic_fast_dispatch_count: std::cell::Cell<u64>,
 }
 
 pub(crate) struct CallFrame {
@@ -297,6 +300,7 @@ impl Interpreter {
             ic_slow_path_count: std::cell::Cell::new(0),
             call_ic_hit_count: std::cell::Cell::new(0),
             call_ic_slow_path_count: std::cell::Cell::new(0),
+            call_ic_fast_dispatch_count: std::cell::Cell::new(0),
         };
         interp.setup_globals();
         interp
@@ -1206,6 +1210,13 @@ impl Interpreter {
     #[allow(dead_code)]
     pub(crate) fn call_ic_slow_path_count(&self) -> u64 {
         self.call_ic_slow_path_count.get()
+    }
+
+    /// Total dispatches that skipped proxy/wrapped/class-ctor entry checks
+    /// because an IC hit had pre-validated the callable. Phase-3 follow-up.
+    #[allow(dead_code)]
+    pub(crate) fn call_ic_fast_dispatch_count(&self) -> u64 {
+        self.call_ic_fast_dispatch_count.get()
     }
 
     /// Single chokepoint for any structural mutation of `JsObjectData`:

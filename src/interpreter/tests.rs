@@ -853,6 +853,80 @@ fn call_ic_records_after_repeated_call() {
 }
 
 #[test]
+fn call_ic_fast_dispatch_actually_skips_entry_checks() {
+    // Phase-3 follow-up tracer: a hot loop should drive IC hits AND the
+    // fast-dispatch counter — proves call_function_ic_validated is the
+    // path being taken, not the slow call_function. Without the fast
+    // path wired up, fast_dispatch_count would stay at 0 even though
+    // hit_count advanced.
+    let interp = run_script(
+        r#"
+        function f() { return 7; }
+        var sum = 0;
+        for (var i = 0; i < 100; i++) sum += f();
+        "#,
+    );
+    let env = interp.realm().global_env.borrow();
+    match env.get("sum").unwrap_or(JsValue::Undefined) {
+        JsValue::Number(n) => assert_eq!(n, 700.0, "behavioral correctness"),
+        other => panic!("expected sum=700, got {other:?}"),
+    }
+    assert!(
+        interp.call_ic_fast_dispatch_count() > 0,
+        "expected fast-dispatch path to fire on IC hits; got 0 \
+         (IC hits = {})",
+        interp.call_ic_hit_count()
+    );
+}
+
+#[test]
+fn call_ic_does_not_cache_proxy_callable() {
+    // Proxy with apply trap MUST always invoke the trap. classify_for_call_ic
+    // returns None for proxies, so the IC slot stays Empty / Megamorphic
+    // forever — every call goes through the slow entry checks. The trap
+    // counter proves this.
+    let interp = run_script(
+        r#"
+        var apply_count = 0;
+        var target = function() { return 1; };
+        var p = new Proxy(target, {
+            apply: function(t, thisArg, args) { apply_count++; return 99; }
+        });
+        var sum = 0;
+        for (var i = 0; i < 5; i++) sum += p();
+        var result = sum + "|" + apply_count;
+        "#,
+    );
+    assert_eq!(
+        global_string(&interp, "result"),
+        "495|5",
+        "proxy apply trap must fire on every call regardless of IC"
+    );
+}
+
+#[test]
+fn call_ic_does_not_cache_class_ctor_without_new() {
+    // Calling a class constructor without `new` must throw TypeError on
+    // every call, even after a hot loop. The classifier excludes class
+    // ctors, so the slow path always runs the is_class_ctor check.
+    let interp = run_script(
+        r#"
+        class C { constructor() { this.x = 1; } }
+        var threw_count = 0;
+        for (var i = 0; i < 5; i++) {
+            try { C(); } catch (e) { if (e instanceof TypeError) threw_count++; }
+        }
+        var result = threw_count;
+        "#,
+    );
+    let env = interp.realm().global_env.borrow();
+    match env.get("result").unwrap_or(JsValue::Undefined) {
+        JsValue::Number(n) => assert_eq!(n, 5.0, "expected 5 TypeErrors"),
+        other => panic!("expected 5, got {other:?}"),
+    }
+}
+
+#[test]
 fn call_ic_invalidates_on_function_replacement() {
     // Reassign `f` to a different function — second hot loop must observe
     // the new behavior, not the cached resolution.

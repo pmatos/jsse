@@ -5299,7 +5299,15 @@ impl Interpreter {
                 self.call_ic_slow_path_count
                     .set(self.call_ic_slow_path_count.get() + 1);
             }
-            let result = self.call_function(&func_val, &this_val, &evaluated_args);
+            // Phase-3 follow-up: route IC hits through the fast dispatch
+            // entry that skips proxy/wrapped/class-ctor checks. Misses use
+            // the slow path so the entry checks correctly classify novel
+            // callables (proxies, bound, class ctors) before IC recording.
+            let result = if probe_hit {
+                self.call_function_ic_validated(&func_val, &this_val, &evaluated_args)
+            } else {
+                self.call_function(&func_val, &this_val, &evaluated_args)
+            };
             // Record only on success to avoid caching error-paths.
             if !probe_hit && matches!(result, Completion::Normal(_)) {
                 let new_slot = self.classify_for_call_ic(o.id);
@@ -11803,7 +11811,7 @@ impl Interpreter {
         this_val: &JsValue,
         args: &[JsValue],
     ) -> Completion {
-        let mut result = self.call_function_inner(func_val, this_val, args);
+        let mut result = self.call_function_inner(func_val, this_val, args, false);
         loop {
             match result {
                 Completion::TailCall {
@@ -11811,7 +11819,34 @@ impl Interpreter {
                     this,
                     args: tc_args,
                 } => {
-                    result = self.call_function_inner(&func, &this, &tc_args);
+                    result = self.call_function_inner(&func, &this, &tc_args, false);
+                }
+                other => return other,
+            }
+        }
+    }
+
+    /// Issue #71 Phase-3 follow-up: call_function variant for IC-validated
+    /// hits. The first dispatch skips the proxy/wrapped/class-ctor entry
+    /// checks (the IC's `Mono` state guarantees the callable is a plain
+    /// native or user function). Tail-call recursion falls back to the
+    /// slow path because the tail-called function is a different callable
+    /// not validated by the originating IC slot.
+    pub(crate) fn call_function_ic_validated(
+        &mut self,
+        func_val: &JsValue,
+        this_val: &JsValue,
+        args: &[JsValue],
+    ) -> Completion {
+        let mut result = self.call_function_inner(func_val, this_val, args, true);
+        loop {
+            match result {
+                Completion::TailCall {
+                    func,
+                    this,
+                    args: tc_args,
+                } => {
+                    result = self.call_function_inner(&func, &this, &tc_args, false);
                 }
                 other => return other,
             }
@@ -11823,12 +11858,19 @@ impl Interpreter {
         func_val: &JsValue,
         _this_val: &JsValue,
         args: &[JsValue],
+        skip_entry_checks: bool,
     ) -> Completion {
         if let JsValue::Object(o) = func_val
             && let Some(obj) = self.get_object(o.id)
         {
-            // Single borrow to check proxy/wrapped/class-ctor status
-            let (is_proxy_or_revoked, has_wrapped_target, is_class_ctor) = {
+            // Single borrow to check proxy/wrapped/class-ctor status. Skipped
+            // when an IC hit already validated the callable category — see
+            // `call_function_ic_validated`.
+            let (is_proxy_or_revoked, has_wrapped_target, is_class_ctor) = if skip_entry_checks {
+                self.call_ic_fast_dispatch_count
+                    .set(self.call_ic_fast_dispatch_count.get() + 1);
+                (false, false, false)
+            } else {
                 let b = obj.borrow();
                 (
                     b.is_proxy() || b.proxy_revoked,
