@@ -1175,6 +1175,13 @@ impl Interpreter {
         func_val
     }
 
+    /// Get a fresh `Rc::clone` of the slot's `Rc<RefCell<…>>` if live.
+    /// New callers should prefer `get_object_cell` / `get_object_cell_expect`
+    /// (returns `&RefCell<…>`) to avoid the per-call `Rc::clone`; this
+    /// function remains for the (large) set of legacy callers that
+    /// pattern-match `if let Some(obj) = interp.get_object(id) { obj.borrow*() }`
+    /// and need a value-type binding outliving any inner `&mut self`
+    /// callback (proxy traps, getter dispatch, error allocation).
     pub(crate) fn get_object(&self, id: u64) -> Option<Rc<RefCell<JsObjectData>>> {
         self.objects.get(id)
     }
@@ -1241,19 +1248,9 @@ impl Interpreter {
         result
     }
 
-    /// Like `get_object` but panics if the id is dead. Matches the pattern
-    /// `self.objects[id as usize].as_ref().unwrap().clone()` used at most
-    /// call sites where the id is known live (held by a live JsValue).
-    pub(crate) fn get_object_expect(&self, id: u64) -> Rc<RefCell<JsObjectData>> {
-        self.objects.get_expect(id)
-    }
-
-    /// Borrow the object's `RefCell` directly without bumping the slot's
-    /// `Rc`. Lifetime tied to `&self`; drop the borrow before any
-    /// `&mut self` call. Use this at new sites to avoid the per-call
-    /// `Rc::clone`; existing `get_object{,_expect}` callers can migrate
-    /// gradually.
-    #[allow(dead_code)] // get_object_cell isn't yet used; get_object_cell_expect is
+    /// Borrow the slot's `RefCell` if live, else `None`. Lifetime tied
+    /// to `&self`; drop the borrow before any `&mut self` call.
+    #[allow(dead_code)] // get_object_cell isn't yet hot; get_object_cell_expect is
     pub(crate) fn get_object_cell(&self, id: u64) -> Option<&RefCell<JsObjectData>> {
         self.objects.get_cell(id)
     }

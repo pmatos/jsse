@@ -51,21 +51,17 @@ impl ObjectArena {
         (id, was_reuse)
     }
 
-    /// Return a fresh `Rc::clone` of the slot if live, else `None`.
+    /// Return a fresh `Rc::clone` of the slot's `Rc<RefCell<…>>` if live.
+    /// Used by the legacy `Interpreter::get_object` API; new callers should
+    /// use `get_cell` / `get_cell_expect` instead.
     pub(crate) fn get(&self, id: u64) -> Option<Rc<RefCell<JsObjectData>>> {
         self.slot_at(id).and_then(|s| s.clone())
     }
 
-    /// Like `get`, but panics for dead ids.
-    pub(crate) fn get_expect(&self, id: u64) -> Rc<RefCell<JsObjectData>> {
-        self.get(id).expect("dead object id")
-    }
-
-    /// Return a borrow of the slot's `RefCell` if live, else `None`. Lifetime
-    /// is tied to `&self`; callers must drop the borrow before any
-    /// `&mut self` call. Forward-compatible with the eventual PR 2b.2.final
-    /// API flip that drops the slot's `Rc` wrapper entirely.
-    #[allow(dead_code)] // get_cell isn't yet used; get_cell_expect is
+    /// Borrow the slot's `RefCell` if live, else `None`. Lifetime is
+    /// tied to `&self`; callers must drop the borrow before any
+    /// `&mut self` call.
+    #[allow(dead_code)] // get_cell isn't yet hot; get_cell_expect is
     pub(crate) fn get_cell(&self, id: u64) -> Option<&RefCell<JsObjectData>> {
         self.slot_at(id)
             .and_then(|s| s.as_ref().map(|rc| rc.as_ref()))
