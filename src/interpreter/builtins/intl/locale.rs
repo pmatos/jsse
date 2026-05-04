@@ -165,7 +165,6 @@ fn create_locale_object_from_icu(interp: &mut Interpreter, locale: &IcuLocale) -
         .class_name = "Intl.Locale".to_string();
     interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
         Some(build_intl_data_from_locale(locale));
-    let obj_id = obj_id;
     JsValue::Object(crate::types::JsObject { id: obj_id })
 }
 
@@ -1034,7 +1033,6 @@ impl Interpreter {
         self.realm_mut().intl_locale_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_id = proto_id;
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
         let proto_clone_id = proto_id;
 
@@ -1417,7 +1415,6 @@ impl Interpreter {
                             numbering_system: None,
                             first_day_of_week: None,
                         });
-                    let obj_id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
                 } else {
                     // Canonicalize again after applying options
@@ -1436,7 +1433,6 @@ impl Interpreter {
                         .class_name = "Intl.Locale".to_string();
                     interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
                         Some(build_intl_data_from_locale(&locale));
-                    let obj_id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
                 }
             },

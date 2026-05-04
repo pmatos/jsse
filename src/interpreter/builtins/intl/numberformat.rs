@@ -3639,7 +3639,6 @@ impl Interpreter {
                                 );
                         }
 
-                        let result_id = result_id;
                         return Completion::Normal(JsValue::Object(crate::types::JsObject {
                             id: result_id,
                         }));
@@ -3657,7 +3656,6 @@ impl Interpreter {
         self.realm_mut().intl_number_format_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_id = proto_id;
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
         let proto_clone_id = proto_id;
 
@@ -4384,7 +4382,6 @@ impl Interpreter {
                     trailing_zero_display,
                 });
 
-                let obj_id = obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },
         ));

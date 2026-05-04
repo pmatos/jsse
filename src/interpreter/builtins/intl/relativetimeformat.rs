@@ -440,9 +440,9 @@ fn extract_rtf_data(
     this: &JsValue,
 ) -> Result<(String, String, String, String), JsValue> {
     if let JsValue::Object(o) = this
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(cell) = interp.get_object_cell(o.id)
     {
-        let b = obj.borrow();
+        let b = cell.borrow();
         if let Some(IntlData::RelativeTimeFormat {
             ref locale,
             ref style,
@@ -680,7 +680,6 @@ impl Interpreter {
                         );
                 }
 
-                let result_id = result_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
             },
         ));
@@ -691,7 +690,6 @@ impl Interpreter {
         self.realm_mut().intl_relative_time_format_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_id = proto_id;
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
         let proto_clone_id = proto_id;
 
@@ -869,19 +867,21 @@ impl Interpreter {
                         numbering_system,
                     });
 
-                let obj_id = obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },
         ));
 
         // Set RelativeTimeFormat.prototype on constructor
         if let JsValue::Object(ctor_ref) = &rtf_ctor
-            && let Some(obj) = self.get_object(ctor_ref.id)
+            && self.get_object_cell(ctor_ref.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), false, false, false),
-            );
+            let ctor_id = ctor_ref.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
+                );
 
             // supportedLocalesOf static method
             let slof = self.create_function(JsFunction::native(
@@ -900,7 +900,8 @@ impl Interpreter {
                     }
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
                 .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 

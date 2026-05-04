@@ -289,8 +289,6 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("supportedValuesOf".to_string(), svo_fn);
 
-        let intl_obj_id = intl_obj_id;
-
         // Intl.Locale
         self.setup_intl_locale(intl_obj_id);
 
@@ -469,9 +467,9 @@ impl Interpreter {
 
         // Check if locales is an Intl.Locale object itself (treat as single-element list)
         if let JsValue::Object(o) = locales
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(cell) = self.get_object_cell(o.id)
         {
-            let b = obj.borrow();
+            let b = cell.borrow();
             if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
                 let tag_clone = tag.clone();
                 drop(b);
@@ -543,14 +541,15 @@ impl Interpreter {
 
             // Step 7c.iii-iv: If kValue has [[InitializedLocale]], use [[Locale]] directly
             let tag = if let JsValue::Object(o) = &k_value {
-                if let Some(obj_data) = self.get_object(o.id) {
-                    let b = obj_data.borrow();
-                    if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
-                        tag.clone()
+                let cached = self.get_object_cell(o.id).and_then(|cell| {
+                    if let Some(IntlData::Locale { ref tag, .. }) = cell.borrow().intl_data {
+                        Some(tag.clone())
                     } else {
-                        drop(b);
-                        self.to_string_value(&k_value)?
+                        None
                     }
+                });
+                if let Some(tag) = cached {
+                    tag
                 } else {
                     self.to_string_value(&k_value)?
                 }
