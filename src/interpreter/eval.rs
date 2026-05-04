@@ -115,7 +115,7 @@ impl Interpreter {
             return Ok(());
         };
         let instance_field_defs = if let JsValue::Object(ref o) = new_target_val
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj.borrow().class_instance_field_defs.clone()
         } else {
@@ -130,7 +130,7 @@ impl Interpreter {
         // Use the class constructor's closure (class_env) so the class name binding
         // is accessible in field initializers (spec §15.7.14 step 28.e.i).
         let (ctor_closure, class_pn) = if let JsValue::Object(ref o) = new_target_val
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
                 let cls_env = closure.borrow();
@@ -174,7 +174,7 @@ impl Interpreter {
         for idef in &instance_field_defs {
             match idef {
                 InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
-                    if let Some(obj) = self.get_object(this_obj_id) {
+                    if let Some(obj) = self.get_object_cell(this_obj_id) {
                         if !obj.borrow().extensible {
                             return Err(self.create_type_error(
                                 "Cannot define private method on non-extensible object",
@@ -191,7 +191,7 @@ impl Interpreter {
                     }
                 }
                 InstanceFieldDef::Private(PrivateFieldDef::Accessor { name, get, set }) => {
-                    if let Some(obj) = self.get_object(this_obj_id) {
+                    if let Some(obj) = self.get_object_cell(this_obj_id) {
                         if !obj.borrow().extensible {
                             return Err(self.create_type_error(
                                 "Cannot define private accessor on non-extensible object",
@@ -233,7 +233,7 @@ impl Interpreter {
                     } else {
                         JsValue::Undefined
                     };
-                    if let Some(obj) = self.get_object(this_obj_id) {
+                    if let Some(obj) = self.get_object_cell(this_obj_id) {
                         if !obj.borrow().extensible {
                             return Err(self.create_type_error(
                                 "Cannot define private field on non-extensible object",
@@ -278,7 +278,7 @@ impl Interpreter {
                     } else {
                         JsValue::Undefined
                     };
-                    if let Some(obj) = self.get_object(this_obj_id) {
+                    if let Some(obj) = self.get_object_cell(this_obj_id) {
                         obj.borrow_mut()
                             .private_fields
                             .insert(slot_name.clone(), PrivateElement::Field(val));
@@ -341,7 +341,7 @@ impl Interpreter {
                     };
                     return match &rval {
                             JsValue::Object(o) => {
-                                if let Some(obj) = self.get_object(o.id) {
+                                if let Some(obj) = self.get_object_cell(o.id) {
                                     Completion::Normal(JsValue::Boolean(
                                         obj.borrow().private_fields.contains_key(&branded),
                                     ))
@@ -625,7 +625,7 @@ impl Interpreter {
                             _ => return Completion::Normal(JsValue::Boolean(true)),
                         }
                     };
-                    if let Some(obj) = self.get_object(obj_ref.id) {
+                    if let Some(obj) = self.get_object_cell(obj_ref.id) {
                         // Proxy deleteProperty trap
                         if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
                             match self.proxy_delete_property(obj_ref.id, &key) {
@@ -781,7 +781,7 @@ impl Interpreter {
                     // At global level — check global object property descriptor
                     let global_id = self.realm().global_env.borrow().global_object_id;
                     if let Some(gid) = global_id
-                        && let Some(global) = self.get_object(gid)
+                        && let Some(global) = self.get_object_cell(gid)
                     {
                         let gb = global.borrow();
                         if let Some(desc) = gb.properties.get(name) {
@@ -1484,7 +1484,7 @@ impl Interpreter {
                 if !matches!(exotic_to_prim, JsValue::Undefined | JsValue::Null) {
                     if let JsValue::Object(fo) = &exotic_to_prim
                         && self
-                            .get_object(fo.id)
+                            .get_object_cell(fo.id)
                             .map(|o| o.borrow().callable.is_some())
                             .unwrap_or(false)
                     {
@@ -1521,7 +1521,7 @@ impl Interpreter {
                     };
                     if let JsValue::Object(fo) = &method_val
                         && self
-                            .get_object(fo.id)
+                            .get_object_cell(fo.id)
                             .map(|o| o.borrow().callable.is_some())
                             .unwrap_or(false)
                     {
@@ -2632,7 +2632,7 @@ impl Interpreter {
                     let branded = self.resolve_private_name(name, env);
                     return match &obj_val {
                         JsValue::Object(o) => {
-                            if let Some(obj) = self.get_object(o.id) {
+                            if let Some(obj) = self.get_object_cell(o.id) {
                                 let elem = obj.borrow().private_fields.get(&branded).cloned();
                                 match elem {
                                     Some(PrivateElement::Field(_)) => {
@@ -3394,7 +3394,7 @@ impl Interpreter {
                                         "Cannot assign to read only property 'length'",
                                     ));
                                 }
-                                let obj_rc = self.get_object(o.id).unwrap();
+                                let obj_rc = self.get_object_cell(o.id).unwrap();
                                 let len_val = obj_rc
                                     .borrow()
                                     .properties
@@ -3455,7 +3455,7 @@ impl Interpreter {
                         };
                     }
                     // Check for proxy in prototype chain
-                    if let Some(obj) = self.get_object(o.id) {
+                    if let Some(obj) = self.get_object_cell(o.id) {
                         let mut proto_opt = obj.borrow().prototype_id;
                         while let Some(proto_rc) = proto_opt {
                             let proto_id = proto_rc;
@@ -3613,7 +3613,7 @@ impl Interpreter {
                 };
                 let lval = match &obj_val {
                     JsValue::Object(o) => {
-                        if let Some(obj) = self.get_object(o.id) {
+                        if let Some(obj) = self.get_object_cell(o.id) {
                             let elem = obj.borrow().private_fields.get(&branded).cloned();
                             match elem {
                                 Some(PrivateElement::Field(v)) => v,
@@ -3659,7 +3659,7 @@ impl Interpreter {
                 };
                 match &obj_val {
                     JsValue::Object(o) => {
-                        if let Some(obj) = self.get_object(o.id) {
+                        if let Some(obj) = self.get_object_cell(o.id) {
                             let elem = obj.borrow().private_fields.get(&branded).cloned();
                             match elem {
                                 Some(PrivateElement::Field(_)) => {
@@ -3822,7 +3822,7 @@ impl Interpreter {
                 };
                 // Write back (boxed_obj is already the ToObject result)
                 if let JsValue::Object(ref o) = boxed_obj
-                    && let Some(obj) = self.get_object(o.id)
+                    && let Some(obj) = self.get_object_cell(o.id)
                 {
                     if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
                         let receiver = boxed_obj.clone();
@@ -3902,7 +3902,7 @@ impl Interpreter {
                                         "Cannot assign to read only property 'length'",
                                     ));
                                 }
-                                let obj_rc = self.get_object(o.id).unwrap();
+                                let obj_rc = self.get_object_cell(o.id).unwrap();
                                 let len_val = obj_rc
                                     .borrow()
                                     .properties
@@ -4274,7 +4274,7 @@ impl Interpreter {
         let branded = self.resolve_private_name(name, env);
         match obj_val {
             JsValue::Object(o) => {
-                if let Some(obj) = self.get_object(o.id) {
+                if let Some(obj) = self.get_object_cell(o.id) {
                     let elem = obj.borrow().private_fields.get(&branded).cloned();
                     match elem {
                         Some(PrivateElement::Field(_)) => {
@@ -5003,7 +5003,7 @@ impl Interpreter {
             // §13.3.7.2 GetSuperConstructor: dynamically resolve via activeFunction.__proto__
             let super_ctor = if let Some(ctor_func) = env.borrow().get("__constructor_func__") {
                 if let JsValue::Object(o) = &ctor_func {
-                    if let Some(obj_rc) = self.get_object(o.id) {
+                    if let Some(obj_rc) = self.get_object_cell(o.id) {
                         if let Some(proto) = &obj_rc.borrow().prototype_id {
                             if let Some(id) = Some(*proto) {
                                 JsValue::Object(crate::types::JsObject { id })
@@ -5084,7 +5084,7 @@ impl Interpreter {
                     MemberProperty::Private(name) => {
                         let branded = self.resolve_private_name(name, env);
                         if let JsValue::Object(ref o) = obj_val
-                            && let Some(obj) = self.get_object(o.id)
+                            && let Some(obj) = self.get_object_cell(o.id)
                         {
                             let elem = obj.borrow().private_fields.get(&branded).cloned();
                             let func_val = match elem {
@@ -5152,7 +5152,7 @@ impl Interpreter {
                     let home = env.borrow().get("__home_object__");
                     if let Some(JsValue::Object(ref ho)) = home {
                         let proto_id = self
-                            .get_object(ho.id)
+                            .get_object_cell(ho.id)
                             .and_then(|ho_obj| ho_obj.borrow().prototype_id.as_ref().copied());
                         if let Some(pid) = proto_id {
                             let method = self.get_property_on_id(pid, &key);
@@ -7819,7 +7819,7 @@ impl Interpreter {
         };
 
         // Check generator state before mutating the queue
-        let is_executing = if let Some(obj_rc) = self.get_object(gen_id) {
+        let is_executing = if let Some(obj_rc) = self.get_object_cell(gen_id) {
             matches!(
                 obj_rc.borrow().iterator_state,
                 Some(IteratorState::StateMachineAsyncGenerator {
@@ -8270,7 +8270,7 @@ impl Interpreter {
                             ));
                         }
                         Some(PromiseState::Pending) => {
-                            if let Some(obj) = self.get_object(unwrap_id) {
+                            if let Some(obj) = self.get_object_cell(unwrap_id) {
                                 let mut ob = obj.borrow_mut();
                                 if let Some(ref mut pd) = ob.promise_data {
                                     pd.is_handled = true;
@@ -9939,7 +9939,7 @@ impl Interpreter {
                                 ));
                             }
                             Some(PromiseState::Pending) => {
-                                if let Some(obj) = self.get_object(wrapped_id) {
+                                if let Some(obj) = self.get_object_cell(wrapped_id) {
                                     let mut ob = obj.borrow_mut();
                                     if let Some(ref mut pd) = ob.promise_data {
                                         pd.is_handled = true;
@@ -10056,7 +10056,7 @@ impl Interpreter {
                             },
                         ));
 
-                        if let Some(obj) = self.get_object(wrapped_id) {
+                        if let Some(obj) = self.get_object_cell(wrapped_id) {
                             let mut ob = obj.borrow_mut();
                             if let Some(ref mut pd) = ob.promise_data {
                                 pd.is_handled = true;
@@ -11218,7 +11218,7 @@ impl Interpreter {
         reject_fn: &JsValue,
         gen_id: u64,
     ) {
-        let Some(obj_rc) = self.get_object(gen_id) else {
+        let Some(obj_rc) = self.get_object_cell(gen_id) else {
             return;
         };
 
@@ -11234,7 +11234,7 @@ impl Interpreter {
 
         if is_reject {
             // Set pending_exception so the executor routes through try_stack
-            if let Some(obj) = self.get_object(gen_id) {
+            if let Some(obj) = self.get_object_cell(gen_id) {
                 let mut o = obj.borrow_mut();
                 if let Some(IteratorState::StateMachineAsyncGenerator {
                     ref mut pending_exception,
@@ -11913,7 +11913,7 @@ impl Interpreter {
         skip_entry_checks: bool,
     ) -> Completion {
         if let JsValue::Object(o) = func_val
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             // Single borrow to check proxy/wrapped/class-ctor status. Skipped
             // when an IC hit already validated the callable category — see
@@ -12121,7 +12121,7 @@ impl Interpreter {
                             // §14.5.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
                             let gen_obj_id = self.create_object_id();
                             let mut proto_set = false;
-                            if let Some(func_obj_rc) = self.get_object(o.id) {
+                            if let Some(func_obj_rc) = self.get_object_cell(o.id) {
                                 let proto_val =
                                     func_obj_rc.borrow().get_property_value("prototype");
                                 if let Some(JsValue::Object(ref p)) = proto_val {
@@ -12212,7 +12212,7 @@ impl Interpreter {
                                 pending_return: None,
                             });
                             let gen_id = gen_obj_id;
-                            if let Some(obj_rc) = self.get_object(gen_id) {
+                            if let Some(obj_rc) = self.get_object_cell(gen_id) {
                                 obj_rc.borrow_mut().generator_realm_id =
                                     Some(self.current_realm_id);
                             }
@@ -12320,7 +12320,7 @@ impl Interpreter {
                             // §14.4.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
                             let gen_obj_id = self.create_object_id();
                             let mut proto_set = false;
-                            if let Some(func_obj_rc) = self.get_object(o.id) {
+                            if let Some(func_obj_rc) = self.get_object_cell(o.id) {
                                 let proto_val =
                                     func_obj_rc.borrow().get_property_value("prototype");
                                 if let Some(JsValue::Object(ref p)) = proto_val {
@@ -12411,7 +12411,7 @@ impl Interpreter {
                                 pending_return: None,
                             });
                             let gen_id = gen_obj_id;
-                            if let Some(obj_rc) = self.get_object(gen_id) {
+                            if let Some(obj_rc) = self.get_object_cell(gen_id) {
                                 obj_rc.borrow_mut().generator_realm_id =
                                     Some(self.current_realm_id);
                             }
@@ -12614,7 +12614,7 @@ impl Interpreter {
                 format!("\"{}\" is not a function", preview)
             }
             JsValue::Object(o) => {
-                if let Some(obj) = self.get_object(o.id) {
+                if let Some(obj) = self.get_object_cell(o.id) {
                     let class = obj.borrow().class_name.clone();
                     let has_callable = obj.borrow().callable.is_some();
                     let keys: Vec<String> = obj
@@ -13224,7 +13224,7 @@ impl Interpreter {
                     .cloned()
                     .collect();
                 let global_id = var_env.borrow().global_object_id;
-                let global_obj = global_id.and_then(|id| self.get_object(id));
+                let global_obj = global_id.and_then(|id| self.get_object_cell(id));
                 let env_b = var_env.borrow();
                 for name in &all_names {
                     if let Some(binding) = env_b.bindings.get(name)
@@ -13525,7 +13525,7 @@ impl Interpreter {
         // Check if callee is a constructor
         if let JsValue::Object(ref co) = callee_val {
             let is_proxy = self.get_proxy_info(co.id).is_some();
-            if !is_proxy && let Some(func_obj) = self.get_object(co.id) {
+            if !is_proxy && let Some(func_obj) = self.get_object_cell(co.id) {
                 let b = func_obj.borrow();
                 let is_ctor = match &b.callable {
                     Some(JsFunction::User {
@@ -13591,7 +13591,7 @@ impl Interpreter {
         }
         // Bound functions: delegate to construct_with_new_target which handles new_target resolution
         if let JsValue::Object(ref co) = callee_val
-            && let Some(func_obj) = self.get_object(co.id)
+            && let Some(func_obj) = self.get_object_cell(co.id)
             && func_obj.borrow().bound_target_function.is_some()
         {
             self.gc_unroot_frame(gc_frame);
@@ -13603,7 +13603,7 @@ impl Interpreter {
         }
         // Check if this is a derived class constructor
         let is_derived = if let JsValue::Object(o) = &callee_val
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj.borrow().is_derived_class_constructor
         } else {
@@ -13614,7 +13614,7 @@ impl Interpreter {
         // invoking Symbol.iterator on the rest parameter (spec §15.7.14).
         if is_derived {
             let is_default_derived = if let JsValue::Object(o) = &callee_val
-                && let Some(func_obj) = self.get_object(o.id)
+                && let Some(func_obj) = self.get_object_cell(o.id)
             {
                 func_obj.borrow().is_default_derived_constructor
             } else {
@@ -13623,7 +13623,7 @@ impl Interpreter {
             if is_default_derived {
                 // Use dynamic [[Prototype]] lookup so setPrototypeOf takes effect
                 let super_ctor = if let JsValue::Object(o) = &callee_val
-                    && let Some(func_obj) = self.get_object(o.id)
+                    && let Some(func_obj) = self.get_object_cell(o.id)
                 {
                     if let Some(id) = func_obj.borrow().prototype_id {
                         JsValue::Object(crate::types::JsObject { id })
@@ -13695,7 +13695,7 @@ impl Interpreter {
             // Base constructor: create this object as before
             let new_obj_id = self.create_object_id();
             if let JsValue::Object(o) = &callee_val
-                && let Some(func_obj) = self.get_object(o.id)
+                && let Some(func_obj) = self.get_object_cell(o.id)
             {
                 let proto = func_obj.borrow().get_property_value("prototype");
                 if let Some(JsValue::Object(proto_obj)) = proto {
@@ -13705,7 +13705,7 @@ impl Interpreter {
                 }
             }
             let instance_field_defs = if let JsValue::Object(o) = &callee_val
-                && let Some(func_obj) = self.get_object(o.id)
+                && let Some(func_obj) = self.get_object_cell(o.id)
             {
                 func_obj.borrow().class_instance_field_defs.clone()
             } else {
@@ -13715,7 +13715,7 @@ impl Interpreter {
             // Use constructor's closure (class_env) so the class name binding
             // is accessible in field initializers (spec §15.7.14 step 28.e.i).
             let init_parent = if let JsValue::Object(o) = &callee_val
-                && let Some(func_obj) = self.get_object(o.id)
+                && let Some(func_obj) = self.get_object_cell(o.id)
                 && let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable
             {
                 closure.clone()
@@ -13729,7 +13729,7 @@ impl Interpreter {
                 .initialize_binding("this", this_val.clone());
             init_env.borrow_mut().is_field_initializer = true;
             if let JsValue::Object(o) = &callee_val
-                && let Some(func_obj) = self.get_object(o.id)
+                && let Some(func_obj) = self.get_object_cell(o.id)
             {
                 if let Some(JsFunction::User { ref closure, .. }) = func_obj.borrow().callable {
                     let cls_env = closure.borrow();
@@ -13756,7 +13756,7 @@ impl Interpreter {
             for idef in &instance_field_defs {
                 match idef {
                     InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
-                        if let Some(obj) = self.get_object(new_obj_id) {
+                        if let Some(obj) = self.get_object_cell(new_obj_id) {
                             if !obj.borrow().extensible {
                                 return Completion::Throw(self.create_type_error(
                                     "Cannot define private method on non-extensible object",
@@ -13773,7 +13773,7 @@ impl Interpreter {
                         }
                     }
                     InstanceFieldDef::Private(PrivateFieldDef::Accessor { name, get, set }) => {
-                        if let Some(obj) = self.get_object(new_obj_id) {
+                        if let Some(obj) = self.get_object_cell(new_obj_id) {
                             if !obj.borrow().extensible {
                                 return Completion::Throw(self.create_type_error(
                                     "Cannot define private accessor on non-extensible object",
@@ -13815,7 +13815,7 @@ impl Interpreter {
                         } else {
                             JsValue::Undefined
                         };
-                        if let Some(obj) = self.get_object(new_obj_id) {
+                        if let Some(obj) = self.get_object_cell(new_obj_id) {
                             if !obj.borrow().extensible {
                                 return Completion::Throw(self.create_type_error(
                                     "Cannot define private field on non-extensible object",
@@ -13861,7 +13861,7 @@ impl Interpreter {
                         } else {
                             JsValue::Undefined
                         };
-                        if let Some(obj) = self.get_object(new_obj_id) {
+                        if let Some(obj) = self.get_object_cell(new_obj_id) {
                             obj.borrow_mut()
                                 .private_fields
                                 .insert(slot_name.clone(), PrivateElement::Field(val));
@@ -13935,7 +13935,7 @@ impl Interpreter {
         }
 
         // Bound function [[Construct]]: resolve newTarget through bound chain
-        if let Some(func_obj) = self.get_object(co.id) {
+        if let Some(func_obj) = self.get_object_cell(co.id) {
             let b = func_obj.borrow();
             if let Some(target) = b.bound_target_function.clone() {
                 let ba = b.bound_args.clone().unwrap_or_default();
@@ -13952,7 +13952,7 @@ impl Interpreter {
         }
 
         // Check is_constructor
-        if let Some(func_obj) = self.get_object(co.id) {
+        if let Some(func_obj) = self.get_object_cell(co.id) {
             let b = func_obj.borrow();
             let is_ctor = match &b.callable {
                 Some(JsFunction::User {
@@ -13970,7 +13970,7 @@ impl Interpreter {
             }
         }
 
-        let is_derived = if let Some(func_obj) = self.get_object(co.id) {
+        let is_derived = if let Some(func_obj) = self.get_object_cell(co.id) {
             func_obj.borrow().is_derived_class_constructor
         } else {
             false
@@ -14015,7 +14015,7 @@ impl Interpreter {
             // Constructors with deferred_construct skip the early prototype access
             // to let their body run pre-construction checks first (e.g., Promise checks
             // executor callable before OrdinaryCreateFromConstructor).
-            let deferred = if let Some(func_obj) = self.get_object(co.id) {
+            let deferred = if let Some(func_obj) = self.get_object_cell(co.id) {
                 func_obj.borrow().deferred_construct
             } else {
                 false
@@ -14059,7 +14059,7 @@ impl Interpreter {
 
             // Initialize instance fields from the constructor's class_instance_field_defs.
             let instance_field_defs = if let JsValue::Object(co) = constructor
-                && let Some(func_obj) = self.get_object(co.id)
+                && let Some(func_obj) = self.get_object_cell(co.id)
             {
                 func_obj.borrow().class_instance_field_defs.clone()
             } else {
@@ -14067,7 +14067,7 @@ impl Interpreter {
             };
             if !instance_field_defs.is_empty() {
                 let (class_pn, proto_val, outer_env) = if let JsValue::Object(co) = constructor
-                    && let Some(func_obj) = self.get_object(co.id)
+                    && let Some(func_obj) = self.get_object_cell(co.id)
                 {
                     let (pn, oe) = if let Some(JsFunction::User { ref closure, .. }) =
                         func_obj.borrow().callable
@@ -14107,14 +14107,14 @@ impl Interpreter {
                 for idef in &instance_field_defs {
                     match idef {
                         InstanceFieldDef::Private(PrivateFieldDef::Method { name, value }) => {
-                            if let Some(obj) = self.get_object(new_obj_id) {
+                            if let Some(obj) = self.get_object_cell(new_obj_id) {
                                 obj.borrow_mut()
                                     .private_fields
                                     .insert(name.clone(), PrivateElement::Method(value.clone()));
                             }
                         }
                         InstanceFieldDef::Private(PrivateFieldDef::Accessor { name, get, set }) => {
-                            if let Some(obj) = self.get_object(new_obj_id) {
+                            if let Some(obj) = self.get_object_cell(new_obj_id) {
                                 obj.borrow_mut().private_fields.insert(
                                     name.clone(),
                                     PrivateElement::Accessor {
@@ -14146,7 +14146,7 @@ impl Interpreter {
                             } else {
                                 JsValue::Undefined
                             };
-                            if let Some(obj) = self.get_object(new_obj_id) {
+                            if let Some(obj) = self.get_object_cell(new_obj_id) {
                                 obj.borrow_mut()
                                     .private_fields
                                     .insert(name.clone(), PrivateElement::Field(val));
@@ -14166,7 +14166,7 @@ impl Interpreter {
                             } else {
                                 JsValue::Undefined
                             };
-                            if let Some(obj) = self.get_object(new_obj_id) {
+                            if let Some(obj) = self.get_object_cell(new_obj_id) {
                                 obj.borrow_mut().insert_value(key.clone(), val);
                             }
                         }
@@ -14179,7 +14179,7 @@ impl Interpreter {
                             } else {
                                 JsValue::Undefined
                             };
-                            if let Some(obj) = self.get_object(new_obj_id) {
+                            if let Some(obj) = self.get_object_cell(new_obj_id) {
                                 obj.borrow_mut()
                                     .private_fields
                                     .insert(slot_name.clone(), PrivateElement::Field(val));
@@ -14224,7 +14224,7 @@ impl Interpreter {
         if let Some(ref nt) = self.new_target.clone()
             && let JsValue::Object(nt_o) = nt
         {
-            let nt_proto_id = if let Some(nt_obj) = self.get_object(nt_o.id) {
+            let nt_proto_id = if let Some(nt_obj) = self.get_object_cell(nt_o.id) {
                 nt_obj.borrow().id
             } else {
                 None
@@ -14241,7 +14241,7 @@ impl Interpreter {
                     _ => return,
                 };
                 if let JsValue::Object(po) = proto_val
-                    && let Some(obj_rc) = self.get_object(obj_id)
+                    && let Some(obj_rc) = self.get_object_cell(obj_id)
                 {
                     obj_rc.borrow_mut().prototype_id = Some(po.id);
                 } else {
@@ -14253,7 +14253,7 @@ impl Interpreter {
                     };
                     let fallback_id = realm_fallback(&self.realms[nt_realm_id]);
                     if let Some(proto_rc) = fallback_id
-                        && let Some(obj_rc) = self.get_object(obj_id)
+                        && let Some(obj_rc) = self.get_object_cell(obj_id)
                     {
                         obj_rc.borrow_mut().prototype_id = Some(proto_rc);
                     }
@@ -14263,7 +14263,7 @@ impl Interpreter {
     }
 
     pub(crate) fn get_proxy_info(&self, obj_id: u64) -> Option<(bool, Option<u64>, Option<u64>)> {
-        if let Some(obj) = self.get_object(obj_id) {
+        if let Some(obj) = self.get_object_cell(obj_id) {
             let b = obj.borrow();
             if b.is_proxy() || b.proxy_revoked {
                 let target_id = b.proxy_target_id;
@@ -14317,7 +14317,7 @@ impl Interpreter {
     }
 
     pub(crate) fn get_proxy_target_val(&self, proxy_id: u64) -> JsValue {
-        if let Some(obj) = self.get_object(proxy_id)
+        if let Some(obj) = self.get_object_cell(proxy_id)
             && let Some(tid) = obj.borrow().proxy_target_id
         {
             return JsValue::Object(crate::types::JsObject { id: tid });
@@ -14357,7 +14357,7 @@ impl Interpreter {
         };
 
         if let JsValue::Object(t) = target_val
-            && let Some(tobj) = self.get_object(t.id)
+            && let Some(tobj) = self.get_object_cell(t.id)
         {
             let target_extensible = tobj.borrow().extensible;
             let (target_nonconfig, target_config): (Vec<String>, Vec<String>) = {
@@ -14476,7 +14476,7 @@ impl Interpreter {
         let JsValue::Object(lhs) = obj else {
             return Completion::Normal(JsValue::Boolean(false));
         };
-        let Some(_inst_obj) = self.get_object(lhs.id) else {
+        let Some(_inst_obj) = self.get_object_cell(lhs.id) else {
             return Completion::Normal(JsValue::Boolean(false));
         };
         let ctor_obj_ref = match ctor {
@@ -14533,7 +14533,7 @@ impl Interpreter {
                     (true, None)
                 } else if let Some(gid) = e.global_object_id {
                     let own = self
-                        .get_object(gid)
+                        .get_object_cell(gid)
                         .is_some_and(|g| g.borrow().properties.contains_key(name));
                     (own, if !own { Some(gid) } else { None })
                 } else {
@@ -14767,7 +14767,7 @@ impl Interpreter {
                 {
                     // Check own property first
                     let own_prop = self
-                        .get_object(gid)
+                        .get_object_cell(gid)
                         .and_then(|o| o.borrow().get_own_property(name));
                     if let Some(ref desc) = own_prop {
                         if desc.get.is_some() {
@@ -14819,7 +14819,7 @@ impl Interpreter {
                 drop(env_borrow);
                 // Check own property first (fast path)
                 let own_prop = self
-                    .get_object(gid)
+                    .get_object_cell(gid)
                     .and_then(|o| o.borrow().get_own_property(name));
                 if let Some(ref desc) = own_prop {
                     if desc.get.is_some() {
@@ -15038,7 +15038,7 @@ impl Interpreter {
             if let JsValue::Object(recv_o) = receiver {
                 let recv_id = recv_o.id;
                 let is_proxy_recv = self
-                    .get_object(recv_id)
+                    .get_object_cell(recv_id)
                     .is_some_and(|o| o.borrow().is_proxy() || o.borrow().proxy_revoked);
                 if is_proxy_recv {
                     let existing = self.proxy_get_own_property_descriptor(recv_id, key)?;
@@ -15078,7 +15078,7 @@ impl Interpreter {
                         return self.proxy_define_own_property(recv_id, key.to_string(), &desc_val);
                     }
                 }
-                if let Some(recv_obj) = self.get_object(recv_id) {
+                if let Some(recv_obj) = self.get_object_cell(recv_id) {
                     return Ok(recv_obj.borrow_mut().set_property_value(key, value));
                 }
             }
@@ -15094,7 +15094,7 @@ impl Interpreter {
             if self.get_proxy_info(id).is_some() {
                 return true;
             }
-            let Some(obj) = self.get_object(id) else {
+            let Some(obj) = self.get_object_cell(id) else {
                 return false;
             };
             let b = obj.borrow();
@@ -15121,7 +15121,7 @@ impl Interpreter {
                     let trap_result = self.to_boolean_val(&v);
                     if trap_result
                         && let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object(t.id)
+                        && let Some(tobj) = self.get_object_cell(t.id)
                     {
                         let target_desc = tobj.borrow().get_own_property(key);
                         if let Some(ref desc) = target_desc {
@@ -15147,7 +15147,7 @@ impl Interpreter {
                 }
                 Err(e) => Err(e),
             }
-        } else if let Some(obj) = self.get_object(obj_id) {
+        } else if let Some(obj) = self.get_object_cell(obj_id) {
             // String exotic [[Delete]]: "length" and valid indices are non-configurable
             {
                 let borrow = obj.borrow();
@@ -15262,7 +15262,7 @@ impl Interpreter {
         use crate::interpreter::types::{canonical_numeric_index_string, is_valid_integer_index};
 
         let (is_ta, is_bigint) = {
-            if let Some(obj) = self.get_object(obj_id) {
+            if let Some(obj) = self.get_object_cell(obj_id) {
                 let b = obj.borrow();
                 if let Some(ref ta) = b.typed_array_info {
                     (true, ta.kind.is_bigint())
@@ -15285,7 +15285,7 @@ impl Interpreter {
 
         // §10.4.5.6 step 3b.i: if not a valid integer index, return false
         {
-            let valid = if let Some(obj) = self.get_object(obj_id) {
+            let valid = if let Some(obj) = self.get_object_cell(obj_id) {
                 let b = obj.borrow();
                 b.typed_array_info
                     .as_ref()
@@ -15325,7 +15325,7 @@ impl Interpreter {
                 JsValue::Number(self.to_number_value(value)?)
             };
             // After conversion, re-read ta info (buffer may have been detached during conversion)
-            if let Some(obj) = self.get_object(obj_id) {
+            if let Some(obj) = self.get_object_cell(obj_id) {
                 let b = obj.borrow();
                 if let Some(ref ta) = b.typed_array_info
                     && is_valid_integer_index(ta, index)
@@ -15365,7 +15365,7 @@ impl Interpreter {
                         return Ok(false);
                     }
                     if let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object(t.id)
+                        && let Some(tobj) = self.get_object_cell(t.id)
                     {
                         let target_desc = tobj.borrow().get_own_property(&key);
                         let target_extensible = tobj.borrow().extensible;
@@ -15424,7 +15424,7 @@ impl Interpreter {
                 }
                 Err(e) => Err(e),
             }
-        } else if let Some(obj) = self.get_object(obj_id) {
+        } else if let Some(obj) = self.get_object_cell(obj_id) {
             // Deferred namespace: trigger evaluation on [[DefineOwnProperty]] with non-symbol-like key
             {
                 let is_deferred_ns = obj
@@ -15476,7 +15476,7 @@ impl Interpreter {
                         ));
                     }
                     if let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object(t.id)
+                        && let Some(tobj) = self.get_object_cell(t.id)
                     {
                         let target_desc = tobj.borrow().get_own_property(key);
                         let target_extensible = tobj.borrow().extensible;
@@ -15703,7 +15703,7 @@ impl Interpreter {
                 }
                 Err(e) => Err(e),
             }
-        } else if let Some(obj) = self.get_object(obj_id) {
+        } else if let Some(obj) = self.get_object_cell(obj_id) {
             // Deferred namespace: trigger evaluation on [[OwnPropertyKeys]]
             {
                 let is_deferred_ns = obj
@@ -15882,7 +15882,7 @@ impl Interpreter {
                 }
                 Err(e) => Err(e),
             }
-        } else if let Some(obj) = self.get_object(obj_id) {
+        } else if let Some(obj) = self.get_object_cell(obj_id) {
             if let Some(id) = obj.borrow().prototype_id {
                 Ok(JsValue::Object(crate::types::JsObject { id }))
             } else {
@@ -15943,7 +15943,7 @@ impl Interpreter {
                 }
                 Err(e) => Err(e),
             }
-        } else if let Some(obj) = self.get_object(obj_id) {
+        } else if let Some(obj) = self.get_object_cell(obj_id) {
             // OrdinarySetPrototypeOf
             let current_proto_id = obj.borrow().prototype_id;
             let new_proto_id = if let JsValue::Object(p) = proto {
@@ -15967,7 +15967,7 @@ impl Interpreter {
                         return Ok(false);
                     }
                     check_id = self
-                        .get_object(cid)
+                        .get_object_cell(cid)
                         .and_then(|o| o.borrow().prototype_id.as_ref().copied());
                 }
             }
@@ -15976,7 +15976,7 @@ impl Interpreter {
                     obj.borrow_mut().prototype_id = None;
                 }
                 JsValue::Object(p) => {
-                    if let Some(po) = self.get_object(p.id) {
+                    if let Some(po) = self.get_object_cell(p.id) {
                         obj.borrow_mut().prototype_id = Some(po.borrow().id.unwrap());
                     }
                 }
@@ -15996,7 +15996,7 @@ impl Interpreter {
                 Ok(Some(v)) => {
                     let trap_result = self.to_boolean_val(&v);
                     if let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object(t.id)
+                        && let Some(tobj) = self.get_object_cell(t.id)
                     {
                         let target_extensible = tobj.borrow().extensible;
                         if trap_result != target_extensible {
@@ -16015,7 +16015,7 @@ impl Interpreter {
                 }
                 Err(e) => Err(e),
             }
-        } else if let Some(obj) = self.get_object(obj_id) {
+        } else if let Some(obj) = self.get_object_cell(obj_id) {
             Ok(obj.borrow().extensible)
         } else {
             Ok(false)
@@ -16031,7 +16031,7 @@ impl Interpreter {
                     let trap_result = self.to_boolean_val(&v);
                     if trap_result
                         && let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object(t.id)
+                        && let Some(tobj) = self.get_object_cell(t.id)
                         && tobj.borrow().extensible
                     {
                         return Err(self.create_type_error(
@@ -16048,7 +16048,7 @@ impl Interpreter {
                 }
                 Err(e) => Err(e),
             }
-        } else if let Some(obj) = self.get_object(obj_id) {
+        } else if let Some(obj) = self.get_object_cell(obj_id) {
             obj.borrow_mut().extensible = false;
             Ok(true)
         } else {
@@ -16062,7 +16062,7 @@ impl Interpreter {
     fn get_super_base_id(&self, env: &EnvRef) -> Option<u64> {
         let home = env.borrow().get("__home_object__");
         if let Some(JsValue::Object(ref ho)) = home
-            && let Some(home_obj) = self.get_object(ho.id)
+            && let Some(home_obj) = self.get_object_cell(ho.id)
         {
             return home_obj.borrow().prototype_id;
         }
@@ -16105,7 +16105,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 }
             }
-            if let Some(obj) = self.get_object(id) {
+            if let Some(obj) = self.get_object_cell(id) {
                 desc = obj.borrow().get_own_property_full(key);
                 if desc.is_some() {
                     break;
@@ -16146,7 +16146,7 @@ impl Interpreter {
             _ => {
                 // §10.1.9.2 OrdinarySetWithOwnDescriptor: set on Receiver
                 if let JsValue::Object(o) = receiver
-                    && let Some(obj) = self.get_object(o.id)
+                    && let Some(obj) = self.get_object_cell(o.id)
                 {
                     let existing = obj.borrow().get_own_property_full(key);
                     match &existing {
@@ -17296,7 +17296,7 @@ impl Interpreter {
                     },
                 ));
 
-                if let Some(obj) = self.get_object(promise_id) {
+                if let Some(obj) = self.get_object_cell(promise_id) {
                     let mut ob = obj.borrow_mut();
                     if let Some(ref mut pd) = ob.promise_data {
                         pd.is_handled = true;
@@ -17325,7 +17325,7 @@ impl Interpreter {
         if let JsValue::Object(o) = obj_val {
             let mut current_id = Some(o.id);
             while let Some(id) = current_id {
-                if let Some(obj) = self.get_object(id) {
+                if let Some(obj) = self.get_object_cell(id) {
                     let b = obj.borrow();
                     if let Some(desc) = b.properties.get(key) {
                         if let Some(ref getter) = desc.get {
@@ -17428,7 +17428,7 @@ impl Interpreter {
                     },
                 ));
 
-                if let Some(obj) = self.get_object(promise_id) {
+                if let Some(obj) = self.get_object_cell(promise_id) {
                     let mut o = obj.borrow_mut();
                     if let Some(ref mut pd) = o.promise_data {
                         pd.is_handled = true;

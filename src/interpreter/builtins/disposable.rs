@@ -571,7 +571,7 @@ impl Interpreter {
                             hint: DisposeHint::Async,
                             dispose_method: JsValue::Undefined,
                         };
-                        if let Some(obj2) = interp.get_object(o.id)
+                        if let Some(obj2) = interp.get_object_cell(o.id)
                             && let Some(ds) = &mut obj2.borrow_mut().disposable_stack
                         {
                             ds.stack.push(resource);

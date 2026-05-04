@@ -399,7 +399,7 @@ impl Interpreter {
                         };
                         // Copy data
                         if new_len > 0 {
-                            let new_obj = interp.get_object(new_id).unwrap();
+                            let new_obj = interp.get_object_cell(new_id).unwrap();
                             let new_ref = new_obj.borrow();
                             let new_buf = new_ref.arraybuffer_data.as_ref().unwrap();
                             with_buffer_write(new_buf, |new_buf_ref| {
@@ -861,7 +861,7 @@ impl Interpreter {
             |interp, _this, args| {
                 let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = &arg
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
                     if obj_ref.typed_array_info.is_some() || obj_ref.data_view_info.is_some() {
@@ -913,7 +913,7 @@ impl Interpreter {
 
         // Mark deferred_construct: ArrayBuffer validates args before OrdinaryCreateFromConstructor
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj.borrow_mut().deferred_construct = true;
         }
@@ -954,7 +954,7 @@ impl Interpreter {
 
     pub(crate) fn detach_arraybuffer(&mut self, ab_val: &JsValue) -> Completion {
         if let JsValue::Object(o) = ab_val
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             let old_len;
             {
@@ -1006,7 +1006,7 @@ impl Interpreter {
             0,
             |interp, this_val, _args| {
                 if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
                     if obj_ref.arraybuffer_is_shared
@@ -1038,7 +1038,7 @@ impl Interpreter {
             0,
             |interp, this_val, _args| {
                 if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
                     if obj_ref.arraybuffer_is_shared
@@ -1270,7 +1270,7 @@ impl Interpreter {
                             let obj_ref = obj.borrow();
                             buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
                         };
-                        let new_obj = interp.get_object(new_id).unwrap();
+                        let new_obj = interp.get_object_cell(new_id).unwrap();
                         let new_ref = new_obj.borrow();
                         let new_buf = new_ref.arraybuffer_data.as_ref().unwrap();
                         with_buffer_write(new_buf, |new_buf_ref| {
@@ -1427,7 +1427,7 @@ impl Interpreter {
             );
 
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj.borrow_mut().deferred_construct = true;
         }
@@ -1453,7 +1453,7 @@ impl Interpreter {
             0,
             |interp, this_val, _args| {
                 if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
                     if let Some(ref ta) = obj_ref.typed_array_info {
@@ -1485,7 +1485,7 @@ impl Interpreter {
             0,
             |interp, this_val, _args| {
                 if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
                     if let Some(ref ta) = obj_ref.typed_array_info {
@@ -1519,7 +1519,7 @@ impl Interpreter {
             0,
             |interp, this_val, _args| {
                 if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
                     if let Some(ref ta) = obj_ref.typed_array_info {
@@ -1673,7 +1673,7 @@ impl Interpreter {
 
                     // Check if source is a TypedArray
                     if let JsValue::Object(src_o) = &source
-                        && let Some(src_obj) = interp.get_object(src_o.id)
+                        && let Some(src_obj) = interp.get_object_cell(src_o.id)
                     {
                         let is_ta = src_obj.borrow().typed_array_info.is_some();
                         if is_ta {
@@ -2444,7 +2444,7 @@ impl Interpreter {
                     {
                         let is_callable = if let JsValue::Object(co) = cmp {
                             interp
-                                .get_object(co.id)
+                                .get_object_cell(co.id)
                                 .is_some_and(|obj| obj.borrow().callable.is_some())
                         } else {
                             false
@@ -2772,7 +2772,7 @@ impl Interpreter {
                     {
                         let is_callable = if let JsValue::Object(co) = cmp {
                             interp
-                                .get_object(co.id)
+                                .get_object_cell(co.id)
                                 .is_some_and(|obj| obj.borrow().callable.is_some())
                         } else {
                             false
@@ -3422,7 +3422,7 @@ impl Interpreter {
                 interp.gc_root_value(&new_ta_val);
 
                 let new_ta = if let JsValue::Object(o) = &new_ta_val
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     obj.borrow().typed_array_info.as_ref().unwrap().clone()
                 } else {
@@ -3487,7 +3487,7 @@ impl Interpreter {
                 };
 
                 if let JsValue::Object(o) = &new_ta_val
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let new_ta = obj.borrow().typed_array_info.as_ref().unwrap().clone();
                     for (i, val) in kept.iter().enumerate() {
@@ -3694,7 +3694,7 @@ impl Interpreter {
 
                 // Step 2: IsConstructor(C)
                 let is_ctor = matches!(this_val, JsValue::Object(o) if {
-                    interp.get_object(o.id).is_some_and(|obj| obj.borrow().callable.is_some())
+                    interp.get_object_cell(o.id).is_some_and(|obj| obj.borrow().callable.is_some())
                 });
                 if !is_ctor {
                     return Completion::Throw(
@@ -3707,7 +3707,7 @@ impl Interpreter {
                     && !matches!(mf, JsValue::Undefined)
                 {
                     let is_callable = matches!(mf, JsValue::Object(o) if {
-                        interp.get_object(o.id).is_some_and(|obj| obj.borrow().callable.is_some())
+                        interp.get_object_cell(o.id).is_some_and(|obj| obj.borrow().callable.is_some())
                     });
                     if !is_callable {
                         return Completion::Throw(
@@ -3774,7 +3774,7 @@ impl Interpreter {
                         other => return other,
                     };
                     let ta_kind = if let JsValue::Object(ref o) = target_obj {
-                        interp.get_object(o.id).and_then(|obj| {
+                        interp.get_object_cell(o.id).and_then(|obj| {
                             obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind)
                         })
                     } else {
@@ -3809,7 +3809,7 @@ impl Interpreter {
                         };
                         let key = k.to_string();
                         if let JsValue::Object(ref o) = target_obj
-                            && let Some(obj) = interp.get_object(o.id)
+                            && let Some(obj) = interp.get_object_cell(o.id)
                         {
                             obj.borrow_mut().set_property_value(&key, coerced);
                         }
@@ -3854,7 +3854,7 @@ impl Interpreter {
                         other => return other,
                     };
                     let ta_kind = if let JsValue::Object(ref o) = target_obj {
-                        interp.get_object(o.id).and_then(|obj| {
+                        interp.get_object_cell(o.id).and_then(|obj| {
                             obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind)
                         })
                     } else {
@@ -3899,7 +3899,7 @@ impl Interpreter {
                         };
                         let key = k.to_string();
                         if let JsValue::Object(ref o) = target_obj
-                            && let Some(obj) = interp.get_object(o.id)
+                            && let Some(obj) = interp.get_object_cell(o.id)
                         {
                             obj.borrow_mut().set_property_value(&key, coerced);
                         }
@@ -3909,7 +3909,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(o) = &ta_ctor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut()
                 .insert_builtin("from".to_string(), ta_from_fn);
@@ -3928,7 +3928,7 @@ impl Interpreter {
                 // Get ta_kind for coercion
                 let ta_kind = if let JsValue::Object(ref o) = new_obj {
                     interp
-                        .get_object(o.id)
+                        .get_object_cell(o.id)
                         .and_then(|obj| obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind))
                 } else {
                     None
@@ -3949,7 +3949,7 @@ impl Interpreter {
                     };
                     let key = k.to_string();
                     if let JsValue::Object(ref o) = new_obj
-                        && let Some(obj) = interp.get_object(o.id)
+                        && let Some(obj) = interp.get_object_cell(o.id)
                     {
                         obj.borrow_mut().set_property_value(&key, coerced);
                     }
@@ -3958,14 +3958,14 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(o) = &ta_ctor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut().insert_builtin("of".to_string(), ta_of_fn);
         }
 
         // Set %TypedArray%.prototype → %TypedArray.prototype%
         if let JsValue::Object(o) = &ta_ctor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
@@ -3993,7 +3993,7 @@ impl Interpreter {
             |_interp, this_val, _args| Completion::Normal(this_val.clone()),
         ));
         if let JsValue::Object(o) = &ta_ctor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut().insert_property(
                 "Symbol(Symbol.species)".to_string(),
@@ -4069,7 +4069,7 @@ impl Interpreter {
                     let first = &args[0];
                     match first {
                         JsValue::Object(o) => {
-                            if let Some(src_obj) = interp.get_object(o.id) {
+                            if let Some(src_obj) = interp.get_object_cell(o.id) {
                                 let src_ref = src_obj.borrow();
                                 // Case: new XArray(arraybuffer, byteOffset?, length?)
                                 if let Some(ref ab_data) = src_ref.arraybuffer_data {
@@ -4279,14 +4279,14 @@ impl Interpreter {
             // Set deferred_construct so construct_with_new_target doesn't access
             // newTarget.prototype before the constructor body runs (spec ordering)
             if let JsValue::Object(o) = &ctor
-                && let Some(obj) = self.get_object(o.id)
+                && let Some(obj) = self.get_object_cell(o.id)
             {
                 obj.borrow_mut().deferred_construct = true;
             }
 
             // Set BYTES_PER_ELEMENT on constructor
             if let JsValue::Object(o) = &ctor
-                && let Some(obj) = self.get_object(o.id)
+                && let Some(obj) = self.get_object_cell(o.id)
             {
                 obj.borrow_mut().insert_property(
                     "BYTES_PER_ELEMENT".to_string(),
@@ -4305,7 +4305,7 @@ impl Interpreter {
                 );
                 // Set __proto__ to %TypedArray% so from/of are inherited
                 if let JsValue::Object(ta_o) = &ta_ctor_clone
-                    && let Some(ta_obj) = self.get_object(ta_o.id)
+                    && let Some(ta_obj) = self.get_object_cell(ta_o.id)
                 {
                     obj.borrow_mut().prototype_id = Some(ta_obj.borrow().id.unwrap());
                 }
@@ -4422,7 +4422,7 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(o) = &uint8_ctor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut()
                 .insert_builtin("fromBase64".to_string(), from_base64_fn);
@@ -4768,7 +4768,7 @@ impl Interpreter {
     fn typed_array_create(&mut self, ctor: &JsValue, len: usize) -> Completion {
         // Fast path for known built-in TypedArray constructors
         if let JsValue::Object(o) = ctor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             let name = {
                 let obj_ref = obj.borrow();
@@ -4854,7 +4854,7 @@ impl Interpreter {
             other => return other,
         };
         if let JsValue::Object(ref o) = new_obj
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             let ta_len = obj
                 .borrow()
@@ -4949,7 +4949,7 @@ impl Interpreter {
         val: &JsValue,
     ) -> Result<Vec<JsValue>, Completion> {
         if let JsValue::Object(o) = val
-            && let Some(_obj) = self.get_object(o.id)
+            && let Some(_obj) = self.get_object_cell(o.id)
         {
             // Step 5: Let usingIterator be ? GetMethod(object, @@iterator).
             let iter_fn = match self.get_object_property(o.id, "Symbol(Symbol.iterator)", val) {
@@ -5802,7 +5802,7 @@ impl Interpreter {
             JsValue::Object(crate::types::JsObject { id })
         };
         if let JsValue::Object(o) = &ctor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
@@ -5857,7 +5857,7 @@ fn extract_ta_and_callback(
         let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
         let is_callable = if let JsValue::Object(co) = &callback {
             interp
-                .get_object(co.id)
+                .get_object_cell(co.id)
                 .is_some_and(|obj| obj.borrow().callable.is_some())
         } else {
             false

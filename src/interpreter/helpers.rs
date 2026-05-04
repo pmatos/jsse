@@ -299,7 +299,7 @@ pub(crate) fn enumerable_own_keys(
     interp: &mut Interpreter,
     obj_id: u64,
 ) -> Result<Vec<String>, JsValue> {
-    if let Some(obj) = interp.get_object(obj_id) {
+    if let Some(obj) = interp.get_object_cell(obj_id) {
         if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
             let target_val = interp.get_proxy_target_val(obj_id);
             match interp.invoke_proxy_trap(obj_id, "ownKeys", vec![target_val.clone()]) {
@@ -341,7 +341,7 @@ pub(crate) fn enumerable_own_keys(
                                     }
                                     Ok(None) => {
                                         if let JsValue::Object(ref t) = target_val
-                                            && let Some(tobj) = interp.get_object(t.id)
+                                            && let Some(tobj) = interp.get_object_cell(t.id)
                                             && let Some(d) = tobj.borrow().properties.get(&key_str)
                                             && d.enumerable != Some(false)
                                         {
@@ -419,7 +419,7 @@ pub(crate) fn json_stringify_full(
 
     if let Some(rep) = replacer
         && let JsValue::Object(o) = rep
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(obj) = interp.get_object_cell(o.id)
     {
         if obj.borrow().callable.is_some() {
             replacer_fn = Some(rep.clone());
@@ -445,7 +445,7 @@ pub(crate) fn json_stringify_full(
                     JsValue::String(s) => Some(s.to_rust_string()),
                     JsValue::Number(n) => Some(number_ops::to_string(*n)),
                     JsValue::Object(oo) => {
-                        if let Some(inner) = interp.get_object(oo.id) {
+                        if let Some(inner) = interp.get_object_cell(oo.id) {
                             let cn = inner.borrow().class_name.clone();
                             if cn == "String" || cn == "Number" {
                                 match interp.to_string_value(&item) {
@@ -533,7 +533,7 @@ fn json_stringify_internal(
             JsValue::Undefined
         };
         if let JsValue::Object(fobj) = &to_json
-            && let Some(fdata) = interp.get_object(fobj.id)
+            && let Some(fdata) = interp.get_object_cell(fobj.id)
             && fdata.borrow().callable.is_some()
         {
             let key_val = JsValue::String(JsString::from_str(key));
@@ -605,7 +605,7 @@ fn json_stringify_internal(
             Err(interp.create_error("TypeError", "Do not know how to serialize a BigInt"))
         }
         JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object(o.id) {
+            if let Some(obj) = interp.get_object_cell(o.id) {
                 if obj.borrow().is_raw_json
                     && let Some(raw) = obj.borrow().get_property_value("rawJSON")
                 {
@@ -986,7 +986,7 @@ fn json_internalize_apply(
                 Ok(None) => {
                     // No trap, delete on target directly
                     if let JsValue::Object(t) = &interp.get_proxy_target_val(obj_id)
-                        && let Some(tobj) = interp.get_object(t.id)
+                        && let Some(tobj) = interp.get_object_cell(t.id)
                     {
                         tobj.borrow_mut().properties.remove(key);
                         tobj.borrow_mut().property_order.retain(|k| k != key);
@@ -1030,7 +1030,7 @@ fn json_internalize_apply(
                 Ok(None) => {
                     // No trap, define on target directly
                     if let JsValue::Object(t) = &interp.get_proxy_target_val(obj_id)
-                        && let Some(tobj) = interp.get_object(t.id)
+                        && let Some(tobj) = interp.get_object_cell(t.id)
                     {
                         tobj.borrow_mut().insert_value(key.to_string(), new_val);
                     }

@@ -414,7 +414,7 @@ fn get_iterator_flattenable(
         // Has @@iterator - check it's callable and call it
         if let JsValue::Object(mo) = &method {
             if !interp
-                .get_object(mo.id)
+                .get_object_cell(mo.id)
                 .map(|od| od.borrow().callable.is_some())
                 .unwrap_or(false)
             {
@@ -632,13 +632,13 @@ impl Interpreter {
                     let prop_key = tst_key_for_setter
                         .clone()
                         .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
-                    let has_own = if let Some(od) = interp.get_object(this_id) {
+                    let has_own = if let Some(od) = interp.get_object_cell(this_id) {
                         od.borrow().properties.contains_key(&prop_key)
                     } else {
                         false
                     };
                     if !has_own {
-                        if let Some(od) = interp.get_object(this_id) {
+                        if let Some(od) = interp.get_object_cell(this_id) {
                             let frozen = !od.borrow().extensible;
                             if frozen {
                                 let err = interp.create_type_error(
@@ -651,7 +651,7 @@ impl Interpreter {
                                 PropertyDescriptor::data(v, true, true, true),
                             );
                         }
-                    } else if let Some(od) = interp.get_object(this_id)
+                    } else if let Some(od) = interp.get_object_cell(this_id)
                         && !od.borrow_mut().set_property_value(&prop_key, v)
                     {
                         let err = interp.create_type_error("Cannot set property");
@@ -682,7 +682,7 @@ impl Interpreter {
             |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     let return_method = interp.get_property_on_id(o.id, "return");
-                    if matches!(&return_method, JsValue::Object(ro) if interp.get_object(ro.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                    if matches!(&return_method, JsValue::Object(ro) if interp.get_object_cell(ro.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                     {
                         return interp.call_function(&return_method, this, &[]);
                     }
@@ -749,7 +749,7 @@ impl Interpreter {
 
         // Set Iterator.prototype_id
         if let JsValue::Object(ctor_obj) = &iterator_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
@@ -792,14 +792,14 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
                     // Step 3: Check if this has own "constructor" property
-                    let has_own = if let Some(od) = interp.get_object(this_id) {
+                    let has_own = if let Some(od) = interp.get_object_cell(this_id) {
                         od.borrow().properties.contains_key("constructor")
                     } else {
                         false
                     };
                     if !has_own {
                         // CreateDataPropertyOrThrow(this, "constructor", v)
-                        if let Some(od) = interp.get_object(this_id) {
+                        if let Some(od) = interp.get_object_cell(this_id) {
                             let frozen = !od.borrow().extensible;
                             if frozen {
                                 let err = interp.create_type_error(
@@ -814,7 +814,7 @@ impl Interpreter {
                         }
                     } else {
                         // Set(this, "constructor", v, true)
-                        if let Some(od) = interp.get_object(this_id)
+                        if let Some(od) = interp.get_object_cell(this_id)
                             && !od.borrow_mut().set_property_value("constructor", v)
                         {
                             let err = interp.create_type_error("Cannot set property constructor");
@@ -882,7 +882,7 @@ impl Interpreter {
                                 );
                             }
                             let is_proxy = interp
-                                .get_object(array_id)
+                                .get_object_cell(array_id)
                                 .is_some_and(|o| o.borrow().is_proxy());
                             if is_proxy {
                                 let arr_val =
@@ -895,7 +895,7 @@ impl Interpreter {
                                     c => return c,
                                 };
                                 if index >= len {
-                                    if let Some(obj) = interp.get_object(o.id) {
+                                    if let Some(obj) = interp.get_object_cell(o.id) {
                                         obj.borrow_mut().iterator_state =
                                             Some(IteratorState::ArrayIterator {
                                                 array_id,
@@ -1216,7 +1216,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                    if let Some(obj) = interp.get_object_cell(o.id) {
                         let state = obj.borrow().iterator_state.clone();
                         if let Some(IteratorState::StringIterator {
                             ref string,
@@ -1487,7 +1487,7 @@ impl Interpreter {
 
     fn set_helper_gc_roots(&mut self, helper: &JsValue, roots: Vec<JsValue>) {
         if let JsValue::Object(ho) = helper
-            && let Some(obj) = self.get_object(ho.id)
+            && let Some(obj) = self.get_object_cell(ho.id)
         {
             obj.borrow_mut().gc_native_roots = Some(roots);
         }
@@ -1534,7 +1534,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&callback, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&callback, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("callback is not a function");
@@ -1579,7 +1579,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&predicate, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
@@ -1634,7 +1634,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&predicate, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
@@ -1688,7 +1688,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&predicate, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
@@ -1742,7 +1742,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let reducer = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&reducer, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&reducer, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("reducer is not a function");
@@ -1821,7 +1821,7 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
                 let mapper = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&mapper, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&mapper, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("mapper is not a function");
@@ -1950,7 +1950,7 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&predicate, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
@@ -2407,7 +2407,7 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
                 let mapper = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&mapper, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&mapper, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("mapper is not a function");
@@ -2650,7 +2650,7 @@ impl Interpreter {
                     }
                 };
                 let record = interp
-                    .get_object(this_id)
+                    .get_object_cell(this_id)
                     .and_then(|o| o.borrow().wrap_iter_record.clone());
                 let (iter, next_method) = match record {
                     Some(r) => r,
@@ -2678,7 +2678,7 @@ impl Interpreter {
                     }
                 };
                 let record = interp
-                    .get_object(this_id)
+                    .get_object_cell(this_id)
                     .and_then(|o| o.borrow().wrap_iter_record.clone());
                 let (iter, _next_method) = match record {
                     Some(r) => r,
@@ -2756,7 +2756,7 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ctor_obj) = iterator_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
         }
@@ -2792,7 +2792,7 @@ impl Interpreter {
                         // Verify it's callable
                         let is_callable = if let JsValue::Object(fo) = &iter_fn {
                             interp
-                                .get_object(fo.id)
+                                .get_object_cell(fo.id)
                                 .map(|od| od.borrow().callable.is_some())
                                 .unwrap_or(false)
                         } else {
@@ -2972,7 +2972,7 @@ impl Interpreter {
 
         // Fix concat.length to 0 (spec says rest parameter = length 0)
         if let JsValue::Object(concat_obj) = &concat_fn
-            && let Some(obj) = self.get_object(concat_obj.id)
+            && let Some(obj) = self.get_object_cell(concat_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "length".to_string(),
@@ -2981,7 +2981,7 @@ impl Interpreter {
         }
 
         if let JsValue::Object(ctor_obj) = iterator_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut()
                 .insert_builtin("concat".to_string(), concat_fn);
@@ -3280,7 +3280,7 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ctor_obj) = iterator_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_builtin("zip".to_string(), zip_fn);
         }
@@ -3602,7 +3602,7 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ctor_obj) = iterator_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut()
                 .insert_builtin("zipKeyed".to_string(), zip_keyed_fn);
@@ -3683,7 +3683,7 @@ impl Interpreter {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 // Check which variant we have
                 if let JsValue::Object(o) = this
-                    && let Some(obj_rc) = interp.get_object(o.id)
+                    && let Some(obj_rc) = interp.get_object_cell(o.id)
                 {
                     let is_state_machine = matches!(
                         obj_rc.borrow().iterator_state,
@@ -3711,7 +3711,7 @@ impl Interpreter {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 // Check which variant we have
                 if let JsValue::Object(o) = this
-                    && let Some(obj_rc) = interp.get_object(o.id)
+                    && let Some(obj_rc) = interp.get_object_cell(o.id)
                 {
                     let is_state_machine = matches!(
                         obj_rc.borrow().iterator_state,
@@ -3739,7 +3739,7 @@ impl Interpreter {
                 let exception = args.first().cloned().unwrap_or(JsValue::Undefined);
                 // Check which variant we have
                 if let JsValue::Object(o) = this
-                    && let Some(obj_rc) = interp.get_object(o.id)
+                    && let Some(obj_rc) = interp.get_object_cell(o.id)
                 {
                     let is_state_machine = matches!(
                         obj_rc.borrow().iterator_state,
@@ -3788,7 +3788,7 @@ impl Interpreter {
             && let JsValue::Object(func_obj) = func_val
             && let JsValue::Object(func_proto_obj) =
                 self.get_property_on_id(func_obj.id, "prototype")
-            && let Some(func_proto) = self.get_object(func_proto_obj.id)
+            && let Some(func_proto) = self.get_object_cell(func_proto_obj.id)
         {
             self.get_object_cell_expect(gf_proto_id)
                 .borrow_mut()
@@ -3965,7 +3965,7 @@ impl Interpreter {
 
                 let fulfill_reaction2 = fulfill_reaction.clone();
                 let reject_reaction2 = reject_reaction.clone();
-                let state = if let Some(obj) = interp.get_object(wrapper_id) {
+                let state = if let Some(obj) = interp.get_object_cell(wrapper_id) {
                     let mut o = obj.borrow_mut();
                     if let Some(ref mut pd) = o.promise_data {
                         pd.is_handled = true;

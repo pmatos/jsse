@@ -6217,7 +6217,7 @@ fn bytes_regex_captures_at(
 
 fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(String, String, u64)> {
     if let JsValue::Object(o) = this_val
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(obj) = interp.get_object_cell(o.id)
     {
         let b = obj.borrow();
         let source = if let Some(ref s) = b.regexp_original_source {
@@ -6240,7 +6240,7 @@ fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(Str
 /// Fast path: read flags directly from internal slots for pristine RegExp objects.
 /// Returns None if the object isn't a RegExp with internal flags set.
 fn get_flags_fast(interp: &Interpreter, rx_id: u64) -> Option<String> {
-    if let Some(obj) = interp.get_object(rx_id) {
+    if let Some(obj) = interp.get_object_cell(rx_id) {
         let b = obj.borrow();
         if b.class_name == "RegExp"
             && let Some(ref flags) = b.regexp_original_flags
@@ -6254,7 +6254,7 @@ fn get_flags_fast(interp: &Interpreter, rx_id: u64) -> Option<String> {
 /// Check if a RegExp object is "pristine": standard prototype, exec not overridden.
 /// Used to enable fast paths in Symbol.match/replace that bypass JS-level dispatch.
 fn is_pristine_regexp(interp: &Interpreter, rx_id: u64) -> bool {
-    let Some(obj) = interp.get_object(rx_id) else {
+    let Some(obj) = interp.get_object_cell(rx_id) else {
         return false;
     };
     let b = obj.borrow();
@@ -6277,7 +6277,7 @@ fn is_pristine_regexp(interp: &Interpreter, rx_id: u64) -> bool {
     let Some(builtin_exec_id) = interp.realm().builtin_regexp_exec_id else {
         return false;
     };
-    let Some(realm_proto) = interp.get_object(realm_proto_id) else {
+    let Some(realm_proto) = interp.get_object_cell(realm_proto_id) else {
         return false;
     };
     let bp = realm_proto.borrow();
@@ -6298,7 +6298,7 @@ fn spec_set(
     throw: bool,
 ) -> Result<(), JsValue> {
     let obj_val = JsValue::Object(crate::types::JsObject { id: obj_id });
-    if let Some(obj) = interp.get_object(obj_id) {
+    if let Some(obj) = interp.get_object_cell(obj_id) {
         // Proxy set trap
         if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
             let receiver = obj_val.clone();
@@ -6384,7 +6384,7 @@ fn regexp_exec_abstract(
         }
     } else {
         // If R does not have a [[RegExpMatcher]] internal slot, throw TypeError
-        let is_regexp = if let Some(obj) = interp.get_object(rx_id) {
+        let is_regexp = if let Some(obj) = interp.get_object_cell(rx_id) {
             obj.borrow().class_name == "RegExp"
         } else {
             false
@@ -6394,7 +6394,7 @@ fn regexp_exec_abstract(
                 "RegExp.prototype.exec requires that 'this' be a RegExp object",
             ));
         }
-        let (source, flags) = if let Some(obj) = interp.get_object(rx_id) {
+        let (source, flags) = if let Some(obj) = interp.get_object_cell(rx_id) {
             let b = obj.borrow();
             let src = if let Some(ref s) = b.regexp_original_source {
                 js_string_to_regex_input(&s.code_units)
@@ -6644,7 +6644,7 @@ fn regexp_exec_raw(
 
     // Re-read source/flags from internal slots (may have changed via compile() side effect)
     let (source_owned, flags_owned) = {
-        if let Some(obj) = interp.get_object(this_id) {
+        if let Some(obj) = interp.get_object_cell(this_id) {
             let b = obj.borrow();
             let src = b
                 .regexp_original_source
@@ -6898,7 +6898,7 @@ fn regexp_exec_raw(
                         .insert_value(name.clone(), val);
                 }
                 if let JsValue::Object(ref io) = indices_arr
-                    && let Some(iobj) = interp.get_object(io.id)
+                    && let Some(iobj) = interp.get_object_cell(io.id)
                 {
                     iobj.borrow_mut().insert_value(
                         "groups".to_string(),
@@ -6906,7 +6906,7 @@ fn regexp_exec_raw(
                     );
                 }
             } else if let JsValue::Object(ref io) = indices_arr
-                && let Some(iobj) = interp.get_object(io.id)
+                && let Some(iobj) = interp.get_object_cell(io.id)
             {
                 iobj.borrow_mut()
                     .insert_value("groups".to_string(), JsValue::Undefined);
@@ -6945,7 +6945,7 @@ impl Interpreter {
                         ));
                     }
                 };
-                if let Some(obj) = interp.get_object(obj_id)
+                if let Some(obj) = interp.get_object_cell(obj_id)
                     && obj.borrow().class_name != "RegExp"
                 {
                     return Completion::Throw(interp.create_type_error(
@@ -7058,7 +7058,7 @@ impl Interpreter {
                     }
                 };
                 // 2. Perform ? RequireInternalSlot(O, [[RegExpMatcher]]).
-                if let Some(obj) = interp.get_object(obj_id) {
+                if let Some(obj) = interp.get_object_cell(obj_id) {
                     if obj.borrow().class_name != "RegExp" {
                         return Completion::Throw(interp.create_type_error(
                             "RegExp.prototype.compile requires that 'this' be a RegExp object",
@@ -7086,7 +7086,7 @@ impl Interpreter {
                 // 3. If pattern is a RegExp object
                 let pattern_is_regexp = if let JsValue::Object(po) = &pattern_arg {
                     interp
-                        .get_object(po.id)
+                        .get_object_cell(po.id)
                         .map(|o| o.borrow().class_name == "RegExp")
                         .unwrap_or(false)
                 } else {
@@ -7107,7 +7107,7 @@ impl Interpreter {
                     } else {
                         unreachable!()
                     };
-                    if let Some(pobj) = interp.get_object(po_id) {
+                    if let Some(pobj) = interp.get_object_cell(po_id) {
                         let b = pobj.borrow();
                         pattern_str = if let Some(ref s) = b.regexp_original_source {
                             js_string_to_regex_input(&s.code_units)
@@ -7182,7 +7182,7 @@ impl Interpreter {
                 };
 
                 // 5. Return ? RegExpInitialize(O, P, F).
-                if let Some(obj) = interp.get_object(obj_id) {
+                if let Some(obj) = interp.get_object_cell(obj_id) {
                     let mut b = obj.borrow_mut();
                     b.regexp_original_source = Some(source_js);
                     b.regexp_original_flags = Some(JsString::from_str(&flags_str));
@@ -7250,7 +7250,7 @@ impl Interpreter {
                 // Fast path: for pristine RegExp, bypass JS dispatch and use regex directly
                 if is_pristine_regexp(interp, rx_id) {
                     let (source, flags_owned) = {
-                        let obj = interp.get_object(rx_id).unwrap();
+                        let obj = interp.get_object_cell(rx_id).unwrap();
                         let b = obj.borrow();
                         let src = js_string_to_regex_input(
                             &b.regexp_original_source.as_ref().unwrap().code_units,
@@ -7571,7 +7571,7 @@ impl Interpreter {
                 // bypass JS dispatch and build replacement directly from regex matches
                 if global && !functional_replace && is_pristine_regexp(interp, rx_id) {
                     let (source, flags_owned) = {
-                        let obj = interp.get_object(rx_id).unwrap();
+                        let obj = interp.get_object_cell(rx_id).unwrap();
                         let b = obj.borrow();
                         let src = js_string_to_regex_input(
                             &b.regexp_original_source.as_ref().unwrap().code_units,
@@ -8516,7 +8516,7 @@ impl Interpreter {
                         ));
                     }
                 };
-                let obj = match interp.get_object(o.id) {
+                let obj = match interp.get_object_cell(o.id) {
                     Some(obj) => obj,
                     None => {
                         return Completion::Throw(interp.create_type_error(
@@ -8570,7 +8570,7 @@ impl Interpreter {
                     };
 
                     if matches!(result_val, JsValue::Null) {
-                        if let Some(obj2) = interp.get_object(o.id) {
+                        if let Some(obj2) = interp.get_object_cell(o.id) {
                             obj2.borrow_mut().iterator_state =
                                 Some(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
@@ -8583,7 +8583,7 @@ impl Interpreter {
                     }
 
                     if !global {
-                        if let Some(obj2) = interp.get_object(o.id) {
+                        if let Some(obj2) = interp.get_object_cell(o.id) {
                             obj2.borrow_mut().iterator_state =
                                 Some(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
@@ -8599,7 +8599,7 @@ impl Interpreter {
                     let result_id = if let JsValue::Object(ro) = &result_val {
                         ro.id
                     } else {
-                        if let Some(obj2) = interp.get_object(o.id) {
+                        if let Some(obj2) = interp.get_object_cell(o.id) {
                             obj2.borrow_mut().iterator_state =
                                 Some(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
@@ -8648,7 +8648,7 @@ impl Interpreter {
                         }
                     }
 
-                    if let Some(obj2) = interp.get_object(o.id) {
+                    if let Some(obj2) = interp.get_object_cell(o.id) {
                         obj2.borrow_mut().iterator_state =
                             Some(IteratorState::RegExpStringIterator {
                                 source, flags, string, global,
@@ -8664,7 +8664,7 @@ impl Interpreter {
                 let re = match build_regex(&source, &flags) {
                     Ok(r) => r,
                     Err(_) => {
-                        if let Some(obj2) = interp.get_object(o.id) {
+                        if let Some(obj2) = interp.get_object_cell(o.id) {
                             obj2.borrow_mut().iterator_state =
                                 Some(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
@@ -8678,7 +8678,7 @@ impl Interpreter {
                 };
 
                 if last_index > string.len() {
-                    if let Some(obj2) = interp.get_object(o.id) {
+                    if let Some(obj2) = interp.get_object_cell(o.id) {
                         obj2.borrow_mut().iterator_state =
                             Some(IteratorState::RegExpStringIterator {
                                 source, flags, string, global,
@@ -8692,7 +8692,7 @@ impl Interpreter {
 
                 match regex_captures(&re, &string[last_index..]) {
                     None => {
-                        if let Some(obj2) = interp.get_object(o.id) {
+                        if let Some(obj2) = interp.get_object_cell(o.id) {
                             obj2.borrow_mut().iterator_state =
                                 Some(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
@@ -8721,7 +8721,7 @@ impl Interpreter {
 
                         let result_arr = interp.create_array(elements);
                         if let JsValue::Object(ref ro) = result_arr
-                            && let Some(robj) = interp.get_object(ro.id)
+                            && let Some(robj) = interp.get_object_cell(ro.id)
                         {
                             robj.borrow_mut().insert_value(
                                 "index".to_string(),
@@ -8744,7 +8744,7 @@ impl Interpreter {
                         };
                         let new_done = !global;
 
-                        if let Some(obj2) = interp.get_object(o.id) {
+                        if let Some(obj2) = interp.get_object_cell(o.id) {
                             obj2.borrow_mut().iterator_state =
                                 Some(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
@@ -8798,7 +8798,7 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
                 };
-                if interp.get_object(obj_id).is_none() {
+                if interp.get_object_cell(obj_id).is_none() {
                     let err = interp.create_type_error(
                         "RegExp.prototype.flags requires that 'this' be an Object",
                     );
@@ -8872,7 +8872,7 @@ impl Interpreter {
                             ));
                         }
                     };
-                    let obj = match interp.get_object(obj_ref.id) {
+                    let obj = match interp.get_object_cell(obj_ref.id) {
                         Some(o) => o,
                         None => return Completion::Normal(JsValue::Undefined),
                     };
@@ -8927,7 +8927,7 @@ impl Interpreter {
                         ));
                     }
                 };
-                let obj = match interp.get_object(obj_ref.id) {
+                let obj = match interp.get_object_cell(obj_ref.id) {
                     Some(o) => o,
                     None => return Completion::Normal(JsValue::Undefined),
                 };
@@ -8987,13 +8987,13 @@ impl Interpreter {
                             interp.to_boolean_val(&matcher)
                         } else {
                             // Symbol.match is undefined, check [[RegExpMatcher]]
-                            if let Some(obj) = interp.get_object(o.id) {
+                            if let Some(obj) = interp.get_object_cell(o.id) {
                                 obj.borrow().class_name == "RegExp"
                             } else {
                                 false
                             }
                         }
-                    } else if let Some(obj) = interp.get_object(o.id) {
+                    } else if let Some(obj) = interp.get_object_cell(o.id) {
                         obj.borrow().class_name == "RegExp"
                     } else {
                         false
@@ -9028,7 +9028,7 @@ impl Interpreter {
                 // but flags ToString is deferred until after RegExpAlloc (step 5).
                 let has_regexp_matcher = if let JsValue::Object(ref o) = pattern_arg {
                     interp
-                        .get_object(o.id)
+                        .get_object_cell(o.id)
                         .is_some_and(|obj| obj.borrow().class_name == "RegExp")
                 } else {
                     false
@@ -9042,14 +9042,14 @@ impl Interpreter {
                 let (pattern_js, pattern_str, raw_flags) =
                     if has_regexp_matcher && let JsValue::Object(ref o) = pattern_arg {
                         let src_js = interp
-                            .get_object(o.id)
+                            .get_object_cell(o.id)
                             .and_then(|obj| obj.borrow().regexp_original_source.clone())
                             .unwrap_or_else(|| JsString::from_str(""));
                         let src = js_string_to_regex_input(&src_js.code_units);
                         let flg = if matches!(flags_arg, JsValue::Undefined) {
                             RawFlags::Resolved(
                                 interp
-                                    .get_object(o.id)
+                                    .get_object_cell(o.id)
                                     .and_then(|obj| {
                                         obj.borrow()
                                             .regexp_original_flags

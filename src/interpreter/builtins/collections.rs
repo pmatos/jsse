@@ -142,7 +142,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                     && {
                         let b = obj.borrow();
                         b.map_data.is_some() && b.class_name == "Map"
@@ -175,7 +175,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                     && {
                         let b = obj.borrow();
                         b.map_data.is_some() && b.class_name == "Map"
@@ -201,7 +201,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                     && {
                         let b = obj.borrow();
                         b.map_data.is_some() && b.class_name == "Map"
@@ -227,7 +227,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let borrowed = obj.borrow();
                     let is_map = borrowed.map_data.is_some() && borrowed.class_name == "Map";
@@ -261,7 +261,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_map = {
                         let b = obj.borrow();
@@ -303,7 +303,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let borrowed = obj.borrow();
                     let is_map = borrowed.map_data.is_some() && borrowed.class_name == "Map";
@@ -337,7 +337,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_map = {
                         let b = obj.borrow();
@@ -372,7 +372,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_map = {
                         let b = obj.borrow();
@@ -437,7 +437,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let borrowed = obj.borrow();
                     let is_map = borrowed.map_data.is_some() && borrowed.class_name == "Map";
@@ -476,7 +476,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_map = {
                         let borrowed = obj.borrow();
@@ -523,7 +523,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_map = {
                         let borrowed = obj.borrow();
@@ -533,7 +533,7 @@ impl Interpreter {
                         let mut key = args.first().cloned().unwrap_or(JsValue::Undefined);
                         let callbackfn = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                         // Step 3: IsCallable check BEFORE anything else
-                        if !matches!(&callbackfn, JsValue::Object(co) if interp.get_object(co.id).is_some_and(|o| o.borrow().callable.is_some())) {
+                        if !matches!(&callbackfn, JsValue::Object(co) if interp.get_object_cell(co.id).is_some_and(|o| o.borrow().callable.is_some())) {
                             let err = interp.create_type_error("callbackfn is not a function");
                             return Completion::Throw(err);
                         }
@@ -559,7 +559,7 @@ impl Interpreter {
                         };
                         // Step 7: Re-check if key was inserted by callback
                         {
-                            let obj = interp.get_object(o.id).unwrap();
+                            let obj = interp.get_object_cell(o.id).unwrap();
                             let mut borrowed = obj.borrow_mut();
                             let entries = borrowed.map_data.as_mut().unwrap();
                             for entry in entries.iter_mut().flatten() {
@@ -629,7 +629,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
+                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object_cell(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("Map.prototype.set is not a function");
                         return Completion::Throw(err);
                     }
@@ -701,7 +701,7 @@ impl Interpreter {
 
         // Set Map.prototype on ctor, ctor on prototype
         if let JsValue::Object(ctor_obj) = &map_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
@@ -750,7 +750,7 @@ impl Interpreter {
                     let callback = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
                     // 1. Validate callback is callable
-                    if !matches!(&callback, JsValue::Object(o) if interp.get_object(o.id)
+                    if !matches!(&callback, JsValue::Object(o) if interp.get_object_cell(o.id)
                         .map(|obj| obj.borrow().callable.is_some()).unwrap_or(false))
                     {
                         return Completion::Throw(
@@ -817,7 +817,7 @@ impl Interpreter {
                         };
 
                         // Add value to the group for this key (using Map's SameValueZero semantics)
-                        if let Some(map_obj) = interp.get_object(result_id) {
+                        if let Some(map_obj) = interp.get_object_cell(result_id) {
                             let mut borrowed = map_obj.borrow_mut();
                             let entries = borrowed.map_data.as_mut().unwrap();
 
@@ -851,7 +851,7 @@ impl Interpreter {
                                 // Create new array and add entry
                                 drop(borrowed);
                                 let new_arr = interp.create_array(vec![value]);
-                                if let Some(map_obj) = interp.get_object(result_id) {
+                                if let Some(map_obj) = interp.get_object_cell(result_id) {
                                     let mut borrowed = map_obj.borrow_mut();
                                     let entries = borrowed.map_data.as_mut().unwrap();
                                     entries.push(Some((key_val, new_arr)));
@@ -1017,7 +1017,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                     && {
                         let b = obj.borrow();
                         b.set_data.is_some() && b.class_name != "WeakSet"
@@ -1055,7 +1055,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                     && {
                         let b = obj.borrow();
                         b.set_data.is_some() && b.class_name != "WeakSet"
@@ -1081,7 +1081,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_set = {
                         let b = obj.borrow();
@@ -1120,7 +1120,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let (is_set, set_data) = {
                         let b = obj.borrow();
@@ -1153,7 +1153,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_set = {
                         let b = obj.borrow();
@@ -1188,7 +1188,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_set = {
                         let b = obj.borrow();
@@ -1253,7 +1253,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let (has_set, set_data) = {
                         let b = obj.borrow();
@@ -1914,7 +1914,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         c => return c,
                     };
-                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
+                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object_cell(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("Set.prototype.add is not a function");
                         return Completion::Throw(err);
                     }
@@ -1982,7 +1982,7 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ctor_obj) = &set_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
@@ -2044,7 +2044,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_weakmap = obj.borrow().class_name == "WeakMap";
                     let map_data = obj.borrow().map_data.clone();
@@ -2075,7 +2075,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_map = obj.borrow().map_data.is_some();
                     if has_map && obj.borrow().class_name == "WeakMap" {
@@ -2112,7 +2112,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_weakmap = obj.borrow().class_name == "WeakMap";
                     let map_data = obj.borrow().map_data.clone();
@@ -2143,7 +2143,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_weakmap = obj.borrow().class_name == "WeakMap";
                     let has_map = obj.borrow().map_data.is_some();
@@ -2179,7 +2179,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = &this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_weakmap =
                         obj.borrow().map_data.is_some() && obj.borrow().class_name == "WeakMap";
@@ -2221,7 +2221,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = &this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_weakmap = obj.borrow().map_data.is_some()
                         && obj.borrow().class_name == "WeakMap";
@@ -2234,7 +2234,7 @@ impl Interpreter {
                             return Completion::Throw(err);
                         }
                         let is_callable = matches!(&callbackfn, JsValue::Object(co)
-                            if interp.get_object(co.id).is_some_and(|ob| ob.borrow().callable.is_some()));
+                            if interp.get_object_cell(co.id).is_some_and(|ob| ob.borrow().callable.is_some()));
                         if !is_callable {
                             let err = interp
                                 .create_type_error("callbackfn is not a function");
@@ -2257,7 +2257,7 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let obj = interp.get_object(o.id).unwrap();
+                        let obj = interp.get_object_cell(o.id).unwrap();
                         let mut borrowed = obj.borrow_mut();
                         let entries = borrowed.map_data.as_mut().unwrap();
                         for entry in entries.iter_mut().flatten() {
@@ -2326,7 +2326,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         c => return c,
                     };
-                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
+                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object_cell(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("WeakMap.prototype.set is not a function");
                         return Completion::Throw(err);
                     }
@@ -2429,7 +2429,7 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ctor_obj) = &weakmap_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
@@ -2468,7 +2468,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_set =
                         obj.borrow().set_data.is_some() && obj.borrow().class_name == "WeakSet";
@@ -2503,7 +2503,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_weakset = obj.borrow().class_name == "WeakSet";
                     let set_data = obj.borrow().set_data.clone();
@@ -2534,7 +2534,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_weakset = obj.borrow().class_name == "WeakSet";
                     let has_set = obj.borrow().set_data.is_some();
@@ -2610,7 +2610,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         c => return c,
                     };
-                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
+                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object_cell(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("WeakSet.prototype.add is not a function");
                         return Completion::Throw(err);
                     }
@@ -2686,7 +2686,7 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ctor_obj) = &weakset_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
@@ -2727,7 +2727,7 @@ impl Interpreter {
                 // Require this to be an object with [[WeakRefTarget]] internal slot
                 // (indicated by class_name == "WeakRef" AND primitive_value.is_some())
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let b = obj.borrow();
                     if b.class_name == "WeakRef" && b.primitive_value.is_some() {
@@ -2809,7 +2809,7 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ref ctor_obj) = weakref_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
@@ -2854,7 +2854,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     // Check [[Cells]] internal slot: class_name + map_data.is_some()
                     let has_cells = {
@@ -2890,7 +2890,7 @@ impl Interpreter {
                         } else {
                             Some(unregister_token)
                         };
-                        if let Some(obj_rc) = interp.get_object(o.id) {
+                        if let Some(obj_rc) = interp.get_object_cell(o.id) {
                             let mut b = obj_rc.borrow_mut();
                             if let Some(ref mut cells) = b.map_data {
                                 cells.push(Some((target, held_value)));
@@ -2917,7 +2917,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_cells = {
                         let b = obj.borrow();
@@ -2932,7 +2932,7 @@ impl Interpreter {
                         }
                         // Remove cells whose unregisterToken matches
                         let mut removed = false;
-                        if let Some(obj_rc) = interp.get_object(o.id) {
+                        if let Some(obj_rc) = interp.get_object_cell(o.id) {
                             let mut b = obj_rc.borrow_mut();
                             let len = b.map_data.as_ref().map(|c| c.len()).unwrap_or(0);
                             for i in 0..len {
@@ -2972,7 +2972,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_cells = {
                         let b = obj.borrow();
@@ -3029,7 +3029,7 @@ impl Interpreter {
                     ));
                 }
                 if let JsValue::Object(ref o) = callback
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                     && obj.borrow().callable.is_none()
                 {
                     return Completion::Throw(interp.create_type_error(
@@ -3067,7 +3067,7 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ref ctor_obj) = fr_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
