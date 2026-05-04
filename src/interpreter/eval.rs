@@ -1341,7 +1341,7 @@ impl Interpreter {
     }
 
     // §7.1.14 ToPropertyKey
-    fn eval_unary(&mut self, op: UnaryOp, val: &JsValue) -> Completion {
+    pub(super) fn eval_unary(&mut self, op: UnaryOp, val: &JsValue) -> Completion {
         match op {
             UnaryOp::Minus => {
                 let numeric = match self.to_numeric(val) {

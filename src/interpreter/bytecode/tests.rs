@@ -191,6 +191,183 @@ fn compile_body_return_addition_of_literals() {
 }
 
 #[test]
+fn end_to_end_sub_mul_div_mod_pow_via_bytecode() {
+    let cases = [
+        ("(function(){ return 5 - 3; })()", 2.0),
+        ("(function(){ return 2 * 3; })()", 6.0),
+        ("(function(){ return 10 / 4; })()", 2.5),
+        ("(function(){ return 7 % 3; })()", 1.0),
+        ("(function(){ return 2 ** 8; })()", 256.0),
+    ];
+    for (expr, expected) in cases {
+        let source = format!("var __r = {expr};");
+        let (v, count) = eval_with_mode(&source, true);
+        assert!(count >= 1, "{expr}: bytecode path must run");
+        match v {
+            JsValue::Number(n) => assert_eq!(n, expected, "{expr}"),
+            other => panic!("{expr}: expected Number({expected}), got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn end_to_end_comparison_and_equality_ops_via_bytecode() {
+    let cases = [
+        ("(function(){ return 1 < 2; })()", true),
+        ("(function(){ return 2 < 1; })()", false),
+        ("(function(){ return 2 > 1; })()", true),
+        ("(function(){ return 1 <= 1; })()", true),
+        ("(function(){ return 1 >= 2; })()", false),
+        ("(function(){ return 1 == 1; })()", true),
+        ("(function(){ return 1 != 2; })()", true),
+        ("(function(){ return 1 === 1; })()", true),
+        ("(function(){ return 1 !== 2; })()", true),
+        ("(function(){ return '1' == 1; })()", true),
+        ("(function(){ return '1' === 1; })()", false),
+    ];
+    for (expr, expected) in cases {
+        let source = format!("var __r = {expr};");
+        let (v, count) = eval_with_mode(&source, true);
+        assert!(count >= 1, "{expr}: bytecode path must run");
+        match v {
+            JsValue::Boolean(b) => assert_eq!(b, expected, "{expr}"),
+            other => panic!("{expr}: expected Boolean({expected}), got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn end_to_end_bitwise_ops_via_bytecode() {
+    let cases = [
+        ("(function(){ return 0xff & 0x0f; })()", 0x0f),
+        ("(function(){ return 0xf0 | 0x0f; })()", 0xff),
+        ("(function(){ return 0xff ^ 0x0f; })()", 0xf0),
+        ("(function(){ return 1 << 4; })()", 16),
+        ("(function(){ return 32 >> 2; })()", 8),
+        ("(function(){ return 4294967295 >>> 28; })()", 15),
+    ];
+    for (expr, expected) in cases {
+        let source = format!("var __r = {expr};");
+        let (v, count) = eval_with_mode(&source, true);
+        assert!(count >= 1, "{expr}: bytecode path must run");
+        match v {
+            JsValue::Number(n) => assert_eq!(n as i64, expected as i64, "{expr}"),
+            other => panic!("{expr}: expected Number, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn end_to_end_unary_ops_via_bytecode() {
+    let cases: &[(&str, JsValue)] = &[
+        ("(function(){ return -5; })()", JsValue::Number(-5.0)),
+        ("(function(){ return +'3'; })()", JsValue::Number(3.0)),
+        ("(function(){ return !true; })()", JsValue::Boolean(false)),
+        ("(function(){ return !0; })()", JsValue::Boolean(true)),
+        ("(function(){ return ~5; })()", JsValue::Number(-6.0)),
+        ("(function(){ return void 0; })()", JsValue::Undefined),
+        (
+            "(function(){ return void 'anything'; })()",
+            JsValue::Undefined,
+        ),
+    ];
+    for (expr, expected) in cases {
+        let source = format!("var __r = {expr};");
+        let (v, count) = eval_with_mode(&source, true);
+        assert!(count >= 1, "{expr}: bytecode path must run");
+        match (&v, expected) {
+            (JsValue::Number(n), JsValue::Number(e)) => assert_eq!(n, e, "{expr}"),
+            (JsValue::Boolean(b), JsValue::Boolean(e)) => assert_eq!(b, e, "{expr}"),
+            (JsValue::Undefined, JsValue::Undefined) => {}
+            _ => panic!("{expr}: expected {expected:?}, got {v:?}"),
+        }
+    }
+}
+
+#[test]
+fn end_to_end_ternary_conditional_via_bytecode() {
+    let cases: &[(&str, JsValue)] = &[
+        (
+            "(function(){ return true ? 1 : 2; })()",
+            JsValue::Number(1.0),
+        ),
+        (
+            "(function(){ return false ? 1 : 2; })()",
+            JsValue::Number(2.0),
+        ),
+        ("(function(){ return 0 ? 1 : 2; })()", JsValue::Number(2.0)),
+        (
+            "(function(){ return 1 ? 'yes' : 'no'; })()",
+            JsValue::Number(0.0), /* placeholder */
+        ),
+        (
+            "(function(){ return null ? 1 : 2; })()",
+            JsValue::Number(2.0),
+        ),
+    ];
+    for (i, (expr, expected)) in cases.iter().enumerate() {
+        let source = format!("var __r = {expr};");
+        let (v, count) = eval_with_mode(&source, true);
+        assert!(count >= 1, "{expr}: bytecode path must run");
+        if i == 3 {
+            // String case — check separately
+            match v {
+                JsValue::String(ref s) => assert_eq!(s.to_rust_string(), "yes", "{expr}"),
+                _ => panic!("{expr}: expected String 'yes', got {v:?}"),
+            }
+            continue;
+        }
+        match (&v, expected) {
+            (JsValue::Number(n), JsValue::Number(e)) => assert_eq!(n, e, "{expr}"),
+            _ => panic!("{expr}: expected {expected:?}, got {v:?}"),
+        }
+    }
+}
+
+#[test]
+fn end_to_end_logical_short_circuit_via_bytecode() {
+    // && returns lhs if falsy, else rhs
+    // || returns lhs if truthy, else rhs
+    // ?? returns lhs if non-nullish, else rhs
+    let cases: &[(&str, JsValue)] = &[
+        ("(function(){ return true && 5; })()", JsValue::Number(5.0)),
+        (
+            "(function(){ return false && 5; })()",
+            JsValue::Boolean(false),
+        ),
+        ("(function(){ return 0 && 5; })()", JsValue::Number(0.0)),
+        ("(function(){ return 1 && 2; })()", JsValue::Number(2.0)),
+        ("(function(){ return false || 5; })()", JsValue::Number(5.0)),
+        ("(function(){ return 7 || 5; })()", JsValue::Number(7.0)),
+        ("(function(){ return 0 || 5; })()", JsValue::Number(5.0)),
+        ("(function(){ return null ?? 5; })()", JsValue::Number(5.0)),
+        ("(function(){ return 0 ?? 5; })()", JsValue::Number(0.0)),
+        (
+            "(function(){ return 'x' ?? 5; })()",
+            JsValue::Number(0.0), /* placeholder */
+        ),
+    ];
+    for (i, (expr, expected)) in cases.iter().enumerate() {
+        let source = format!("var __r = {expr};");
+        let (v, count) = eval_with_mode(&source, true);
+        assert!(count >= 1, "{expr}: bytecode path must run");
+        if i == 9 {
+            // 'x' ?? 5 → 'x'
+            match v {
+                JsValue::String(ref s) => assert_eq!(s.to_rust_string(), "x", "{expr}"),
+                _ => panic!("{expr}: expected String 'x', got {v:?}"),
+            }
+            continue;
+        }
+        match (&v, expected) {
+            (JsValue::Number(n), JsValue::Number(e)) => assert_eq!(n, e, "{expr}"),
+            (JsValue::Boolean(b), JsValue::Boolean(e)) => assert_eq!(b, e, "{expr}"),
+            _ => panic!("{expr}: expected {expected:?}, got {v:?}"),
+        }
+    }
+}
+
+#[test]
 fn add_string_and_number_falls_through_to_string_concat() {
     // Bytecode for `return "x" + 1;`  → "x1"
     let chunk = Chunk {

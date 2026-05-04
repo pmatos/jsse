@@ -1,6 +1,6 @@
 use super::chunk::{Chunk, Constant};
 use super::op::Op;
-use crate::ast::{BinaryOp, Expression, Literal, Statement};
+use crate::ast::{BinaryOp, Expression, Literal, LogicalOp, Statement, UnaryOp};
 
 #[derive(Debug)]
 pub(crate) enum CompileError {
@@ -42,6 +42,31 @@ impl Compiler {
         self.code.push((n >> 8) as u8);
     }
 
+    /// Emit a forward jump with a placeholder offset; returns the patch site
+    /// (offset of the first operand byte). Caller must invoke `patch_jump`
+    /// once the target instruction has been emitted.
+    fn emit_jump(&mut self, op: Op) -> usize {
+        self.emit(op);
+        let patch = self.code.len();
+        self.code.push(0);
+        self.code.push(0);
+        patch
+    }
+
+    fn patch_jump(&mut self, patch: usize) -> Result<(), CompileError> {
+        // Offset is from the byte AFTER the 2-byte operand to the current code length.
+        let from = patch + 2;
+        let to = self.code.len();
+        let delta = to as isize - from as isize;
+        if !(i16::MIN as isize..=i16::MAX as isize).contains(&delta) {
+            return Err(CompileError::Unsupported("jump offset overflow"));
+        }
+        let off = delta as i16 as u16;
+        self.code[patch] = (off & 0xff) as u8;
+        self.code[patch + 1] = (off >> 8) as u8;
+        Ok(())
+    }
+
     fn push_n(&mut self, n: u16) {
         self.current_stack += n;
         if self.current_stack > self.max_stack {
@@ -57,11 +82,83 @@ impl Compiler {
     fn compile_expr(&mut self, expr: &Expression) -> Result<(), CompileError> {
         match expr {
             Expression::Literal(lit) => self.compile_literal(lit),
+            Expression::Unary(op, operand) => {
+                self.compile_expr(operand)?;
+                let bop = match op {
+                    UnaryOp::Minus => Op::Neg,
+                    UnaryOp::Plus => Op::Plus,
+                    UnaryOp::Not => Op::Not,
+                    UnaryOp::BitNot => Op::BitNot,
+                };
+                self.emit(bop);
+                // Stack height unchanged: pop one, push one.
+                Ok(())
+            }
+            Expression::Logical(op, lhs, rhs) => {
+                self.compile_expr(lhs)?;
+                // lhs stays on stack via *Keep variants
+                let short_circuit_op = match op {
+                    LogicalOp::And => Op::JumpIfFalsyKeep,
+                    LogicalOp::Or => Op::JumpIfTruthyKeep,
+                    LogicalOp::NullishCoalescing => Op::JumpIfNotNullishKeep,
+                };
+                let to_end = self.emit_jump(short_circuit_op);
+                // Short-circuit not taken: drop lhs and use rhs
+                self.emit(Op::Pop);
+                self.pop_n(1);
+                self.compile_expr(rhs)?;
+                self.pop_n(1);
+                self.patch_jump(to_end)?;
+                self.push_n(1);
+                Ok(())
+            }
+            Expression::Conditional(test, then_e, else_e) => {
+                self.compile_expr(test)?;
+                self.pop_n(1);
+                let to_else = self.emit_jump(Op::JumpIfFalse);
+                self.compile_expr(then_e)?;
+                self.pop_n(1); // value will be re-pushed at the merge point
+                let to_end = self.emit_jump(Op::Jump);
+                self.patch_jump(to_else)?;
+                self.compile_expr(else_e)?;
+                self.pop_n(1); // same — re-pushed at merge
+                self.patch_jump(to_end)?;
+                self.push_n(1);
+                Ok(())
+            }
+            Expression::Void(operand) => {
+                // Evaluate for side effects, discard, push undefined.
+                self.compile_expr(operand)?;
+                self.emit(Op::Pop);
+                self.pop_n(1);
+                self.emit(Op::LoadUndefined);
+                self.push_n(1);
+                Ok(())
+            }
             Expression::Binary(op, lhs, rhs) => {
                 self.compile_expr(lhs)?;
                 self.compile_expr(rhs)?;
                 let bytecode_op = match op {
                     BinaryOp::Add => Op::Add,
+                    BinaryOp::Sub => Op::Sub,
+                    BinaryOp::Mul => Op::Mul,
+                    BinaryOp::Div => Op::Div,
+                    BinaryOp::Mod => Op::Mod,
+                    BinaryOp::Exp => Op::Pow,
+                    BinaryOp::Eq => Op::Eq,
+                    BinaryOp::NotEq => Op::NotEq,
+                    BinaryOp::StrictEq => Op::StrictEq,
+                    BinaryOp::StrictNotEq => Op::StrictNotEq,
+                    BinaryOp::Lt => Op::Lt,
+                    BinaryOp::Gt => Op::Gt,
+                    BinaryOp::LtEq => Op::LtEq,
+                    BinaryOp::GtEq => Op::GtEq,
+                    BinaryOp::BitAnd => Op::BitAnd,
+                    BinaryOp::BitOr => Op::BitOr,
+                    BinaryOp::BitXor => Op::BitXor,
+                    BinaryOp::LShift => Op::Shl,
+                    BinaryOp::RShift => Op::Shr,
+                    BinaryOp::URShift => Op::UShr,
                     _ => return Err(CompileError::Unsupported("binary op")),
                 };
                 self.emit(bytecode_op);
@@ -79,6 +176,29 @@ impl Compiler {
                 let idx = self.add_constant(Constant::Number(*n))?;
                 self.emit(Op::LoadConst);
                 self.emit_u16(idx);
+                self.push_n(1);
+                Ok(())
+            }
+            Literal::String(units) => {
+                let s = String::from_utf16_lossy(units);
+                let idx = self.add_constant(Constant::String(s.into()))?;
+                self.emit(Op::LoadConst);
+                self.emit_u16(idx);
+                self.push_n(1);
+                Ok(())
+            }
+            Literal::Boolean(true) => {
+                self.emit(Op::LoadTrue);
+                self.push_n(1);
+                Ok(())
+            }
+            Literal::Boolean(false) => {
+                self.emit(Op::LoadFalse);
+                self.push_n(1);
+                Ok(())
+            }
+            Literal::Null => {
+                self.emit(Op::LoadNull);
                 self.push_n(1);
                 Ok(())
             }
