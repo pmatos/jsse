@@ -7233,8 +7233,20 @@ impl Interpreter {
                     return Completion::Throw(e);
                 }
 
-                // Fast path: for pristine RegExp, bypass JS dispatch and use regex directly
-                if is_pristine_regexp(interp, rx_id) {
+                // Fast path: for pristine RegExp, bypass JS dispatch and use regex directly.
+                // Only sound when accessor-visible flags equal internal [[OriginalFlags]];
+                // otherwise an override (e.g. own `global = true` on a non-global regex) would
+                // drive the loop from the accessor while the matcher runs off the internals.
+                let flags_match_internals = interp
+                    .get_object_cell(rx_id)
+                    .and_then(|o| {
+                        o.borrow()
+                            .regexp_original_flags
+                            .as_ref()
+                            .map(|f| f.to_rust_string())
+                    })
+                    .is_some_and(|fo| fo == flags_str);
+                if flags_match_internals && is_pristine_regexp(interp, rx_id) {
                     let (source, flags_owned) = {
                         let obj = interp.get_object_cell(rx_id).unwrap();
                         let b = obj.borrow();
@@ -7561,8 +7573,24 @@ impl Interpreter {
                 }
 
                 // Fast path: for pristine RegExp with global + string replacement,
-                // bypass JS dispatch and build replacement directly from regex matches
-                if global && !functional_replace && is_pristine_regexp(interp, rx_id) {
+                // bypass JS dispatch and build replacement directly from regex matches.
+                // Only sound when accessor-visible flags equal internal [[OriginalFlags]] —
+                // otherwise an override of `global`/`unicode`/etc. would drive the loop from
+                // the accessor while the matcher runs off the internals.
+                let flags_match_internals = interp
+                    .get_object_cell(rx_id)
+                    .and_then(|o| {
+                        o.borrow()
+                            .regexp_original_flags
+                            .as_ref()
+                            .map(|f| f.to_rust_string())
+                    })
+                    .is_some_and(|fo| fo == flags);
+                if global
+                    && !functional_replace
+                    && flags_match_internals
+                    && is_pristine_regexp(interp, rx_id)
+                {
                     let (source, flags_owned) = {
                         let obj = interp.get_object_cell(rx_id).unwrap();
                         let b = obj.borrow();
