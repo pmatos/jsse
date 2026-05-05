@@ -25,6 +25,10 @@ pub(crate) struct JobScheduler {
     /// Promise IDs whose resolution is blocked on a host-async worker thread
     /// (e.g. Atomics.waitAsync, $262.agent.getReportAsync).
     pending_async_promise_ids: Arc<Mutex<HashSet<u64>>>,
+    /// Host timer callbacks scheduled by setTimeout. These are intentionally
+    /// tracked separately from promise-backed host async jobs so detached
+    /// Atomics.waitAsync jobs do not keep the process alive.
+    pending_timer_jobs: Arc<AtomicUsize>,
 }
 
 impl JobScheduler {
@@ -108,6 +112,14 @@ impl JobScheduler {
 
     pub(crate) fn pending_async_promise_ids_lock(&self) -> MutexGuard<'_, HashSet<u64>> {
         self.pending_async_promise_ids.lock().unwrap()
+    }
+
+    pub(crate) fn pending_timer_jobs_handle(&self) -> Arc<AtomicUsize> {
+        Arc::clone(&self.pending_timer_jobs)
+    }
+
+    pub(crate) fn pending_timer_jobs_count(&self) -> usize {
+        self.pending_timer_jobs.load(Ordering::SeqCst)
     }
 
     #[cfg(test)]

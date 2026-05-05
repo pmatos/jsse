@@ -450,6 +450,65 @@ impl Interpreter {
             let _ = self.env_set(&env, "print", print_fn);
         }
 
+        // Host timer used by the test262 atomics harness.  This is not an
+        // ECMAScript intrinsic, but exposing it avoids the harness fallback
+        // that busy-polls timers through Promise microtasks.
+        self.register_global_fn(
+            "setTimeout",
+            BindingKind::Var,
+            JsFunction::native("setTimeout".to_string(), 2, |interp, _this, args| {
+                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+                if !interp.is_callable(&callback) {
+                    return Completion::Throw(
+                        interp.create_type_error("setTimeout callback must be callable"),
+                    );
+                }
+
+                let delay_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let delay_num = match interp.to_number_value(&delay_val) {
+                    Ok(n) => n,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let delay_ms = if delay_num.is_nan() || delay_num <= 0.0 {
+                    0
+                } else if delay_num.is_infinite() {
+                    u64::MAX
+                } else {
+                    delay_num.trunc().min(u64::MAX as f64) as u64
+                };
+
+                let timer_args: Vec<JsValue> = args.iter().skip(2).cloned().collect();
+                interp.gc_root_value(&callback);
+                for arg in &timer_args {
+                    interp.gc_root_value(arg);
+                }
+
+                let pending = interp.agent_async_completions.clone();
+                let pending_timer_jobs = interp.scheduler.pending_timer_jobs_handle();
+                pending_timer_jobs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::thread::spawn(move || {
+                    if delay_ms > 0 {
+                        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    }
+                    let (ref mtx, ref completion_cvar) = *pending;
+                    mtx.lock()
+                        .unwrap()
+                        .push(Box::new(move |interp: &mut Interpreter| {
+                            let _ =
+                                interp.call_function(&callback, &JsValue::Undefined, &timer_args);
+                            interp.gc_unroot_value(&callback);
+                            for arg in &timer_args {
+                                interp.gc_unroot_value(arg);
+                            }
+                            pending_timer_jobs.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+                        }));
+                    completion_cvar.notify_one();
+                });
+
+                Completion::Normal(JsValue::Number(0.0))
+            }),
+        );
+
         // Error constructor
         {
             let error_name = "Error".to_string();
@@ -3911,6 +3970,7 @@ impl Interpreter {
             "Atomics",
             "Temporal",
             "Intl",
+            "setTimeout",
             "escape",
             "unescape",
             "DisposableStack",

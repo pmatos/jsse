@@ -4450,7 +4450,10 @@ impl Interpreter {
                         let mut lock = self.agent_async_completions.0.lock().unwrap();
                         lock.drain(..).collect()
                     };
-                    if completions.is_empty() && self.has_awaited_pending_async() {
+                    if completions.is_empty()
+                        && (self.has_awaited_pending_async()
+                            || self.scheduler.pending_timer_jobs_count() != 0)
+                    {
                         let (ref mtx, ref cvar) = *self.agent_async_completions;
                         let lock = mtx.lock().unwrap();
                         if lock.is_empty() {
@@ -4494,14 +4497,14 @@ impl Interpreter {
     /// with no `.then` / `await`) does not block process exit.
     pub(crate) fn drain_microtasks_until_idle(&mut self) {
         self.drain_microtasks();
-        if !self.has_awaited_pending_async() {
+        if !self.has_awaited_pending_async() && self.scheduler.pending_timer_jobs_count() == 0 {
             return;
         }
 
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         loop {
             self.drain_microtasks();
-            if !self.has_awaited_pending_async() {
+            if !self.has_awaited_pending_async() && self.scheduler.pending_timer_jobs_count() == 0 {
                 break;
             }
             if std::time::Instant::now() >= deadline {
