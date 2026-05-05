@@ -6237,20 +6237,6 @@ fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(Str
     }
 }
 
-/// Fast path: read flags directly from internal slots for pristine RegExp objects.
-/// Returns None if the object isn't a RegExp with internal flags set.
-fn get_flags_fast(interp: &Interpreter, rx_id: u64) -> Option<String> {
-    if let Some(obj) = interp.get_object_cell(rx_id) {
-        let b = obj.borrow();
-        if b.class_name == "RegExp"
-            && let Some(ref flags) = b.regexp_original_flags
-        {
-            return Some(flags.to_rust_string());
-        }
-    }
-    None
-}
-
 /// Check if a RegExp object is "pristine": standard prototype, exec not overridden.
 /// Used to enable fast paths in Symbol.match/replace that bypass JS-level dispatch.
 fn is_pristine_regexp(interp: &Interpreter, rx_id: u64) -> bool {
@@ -7219,9 +7205,9 @@ impl Interpreter {
                 };
 
                 // 4. Let flags be ? ToString(? Get(rx, "flags")).
-                let flags_str = if let Some(f) = get_flags_fast(interp, rx_id) {
-                    f
-                } else {
+                // Per spec, must invoke the flags accessor chain so user overrides of
+                // `flags`/`global`/`unicode`/etc. on the instance or prototype take effect.
+                let flags_str = {
                     let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
                     let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
                         Completion::Normal(v) => v,
@@ -7247,8 +7233,20 @@ impl Interpreter {
                     return Completion::Throw(e);
                 }
 
-                // Fast path: for pristine RegExp, bypass JS dispatch and use regex directly
-                if is_pristine_regexp(interp, rx_id) {
+                // Fast path: for pristine RegExp, bypass JS dispatch and use regex directly.
+                // Only sound when accessor-visible flags equal internal [[OriginalFlags]];
+                // otherwise an override (e.g. own `global = true` on a non-global regex) would
+                // drive the loop from the accessor while the matcher runs off the internals.
+                let flags_match_internals = interp
+                    .get_object_cell(rx_id)
+                    .and_then(|o| {
+                        o.borrow()
+                            .regexp_original_flags
+                            .as_ref()
+                            .map(|f| f.to_rust_string())
+                    })
+                    .is_some_and(|fo| fo == flags_str);
+                if flags_match_internals && is_pristine_regexp(interp, rx_id) {
                     let (source, flags_owned) = {
                         let obj = interp.get_object_cell(rx_id).unwrap();
                         let b = obj.borrow();
@@ -7263,6 +7261,7 @@ impl Interpreter {
                         Err(_) => return Completion::Normal(JsValue::Null),
                     };
                     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
+                    let sticky = flags_owned.contains('y');
                     let non_unicode_input;
                     let unicode = flags_owned.contains('u') || flags_owned.contains('v');
                     let input = if is_bytes_mode {
@@ -7310,6 +7309,11 @@ impl Interpreter {
                         };
                         let Some(caps) = caps else { break };
                         let full_match = caps.get(0).unwrap();
+                        // Sticky: match must start exactly at lastIndex; otherwise terminate.
+                        // regex_captures_at finds the next match from `pos`, not at it.
+                        if sticky && full_match.start != last_index_byte {
+                            break;
+                        }
                         let match_text = &full_match.text;
                         let match_end_utf16 = if is_bytes_mode {
                             wtf8_byte_offset_to_utf16(&wtf8_bytes, full_match.end)
@@ -7325,8 +7329,11 @@ impl Interpreter {
                             } else {
                                 byte_offset_to_utf16(input, full_match.start)
                             };
+                            // AdvanceStringIndex per spec operates on the original S, not the
+                            // possibly-preprocessed `input` — full_unicode must be able to detect
+                            // real surrogate pairs in S even when the matcher runs on a split form.
                             last_index_utf16 =
-                                advance_string_index(input, match_start_utf16, full_unicode);
+                                advance_string_index(&s, match_start_utf16, full_unicode);
                         } else {
                             last_index_utf16 = match_end_utf16;
                         }
@@ -7538,9 +7545,7 @@ impl Interpreter {
                 };
 
                 // 7. Let flags be ? ToString(? Get(rx, "flags")).
-                let flags = if let Some(f) = get_flags_fast(interp, rx_id) {
-                    f
-                } else {
+                let flags = {
                     let rx_val = JsValue::Object(crate::types::JsObject { id: rx_id });
                     let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
                         Completion::Normal(v) => v,
@@ -7568,8 +7573,24 @@ impl Interpreter {
                 }
 
                 // Fast path: for pristine RegExp with global + string replacement,
-                // bypass JS dispatch and build replacement directly from regex matches
-                if global && !functional_replace && is_pristine_regexp(interp, rx_id) {
+                // bypass JS dispatch and build replacement directly from regex matches.
+                // Only sound when accessor-visible flags equal internal [[OriginalFlags]] —
+                // otherwise an override of `global`/`unicode`/etc. would drive the loop from
+                // the accessor while the matcher runs off the internals.
+                let flags_match_internals = interp
+                    .get_object_cell(rx_id)
+                    .and_then(|o| {
+                        o.borrow()
+                            .regexp_original_flags
+                            .as_ref()
+                            .map(|f| f.to_rust_string())
+                    })
+                    .is_some_and(|fo| fo == flags);
+                if global
+                    && !functional_replace
+                    && flags_match_internals
+                    && is_pristine_regexp(interp, rx_id)
+                {
                     let (source, flags_owned) = {
                         let obj = interp.get_object_cell(rx_id).unwrap();
                         let b = obj.borrow();
@@ -7588,6 +7609,7 @@ impl Interpreter {
                         }
                     };
                     let is_bytes_mode = matches!(cached.compiled, CompiledRegex::Bytes(_));
+                    let sticky = flags_owned.contains('y');
                     let unicode = flags_owned.contains('u') || flags_owned.contains('v');
                     let non_unicode_input;
                     let input = if is_bytes_mode {
@@ -7646,6 +7668,10 @@ impl Interpreter {
                                 None => break,
                             }
                         };
+                        // Sticky: match must start exactly at lastIndex; otherwise terminate.
+                        if sticky && caps.get(0).unwrap().start != last_index_byte {
+                            break;
+                        }
                         clear_stale_dup_captures(&mut caps, &cached.dup_map);
                         strip_renamed_qi_captures(&mut caps);
                         reset_quantifier_inner_captures(&mut caps, &source);
@@ -7769,10 +7795,11 @@ impl Interpreter {
                             next_source_position = tail_pos;
                         }
 
-                        // Advance past match
+                        // Advance past match — AdvanceStringIndex per spec operates on the
+                        // original S, not the possibly-preprocessed `input`.
                         if matched.is_empty() {
                             last_index_utf16 =
-                                advance_string_index(input, match_start_utf16, full_unicode);
+                                advance_string_index(&s, match_start_utf16, full_unicode);
                         } else {
                             last_index_utf16 = match_end_utf16;
                         }
@@ -8127,9 +8154,7 @@ impl Interpreter {
                 };
 
                 // 4. Let flags be ? ToString(? Get(rx, "flags")).
-                let flags_str = if let Some(f) = get_flags_fast(interp, rx_id) {
-                    f
-                } else {
+                let flags_str = {
                     let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
                         Completion::Normal(v) => v,
                         other => return other,
@@ -8367,9 +8392,7 @@ impl Interpreter {
                 };
 
                 // 4. Let flags be ? ToString(? Get(R, "flags")).
-                let flags = if let Some(f) = get_flags_fast(interp, rx_id) {
-                    f
-                } else {
+                let flags = {
                     let flags_val = match interp.get_object_property(rx_id, "flags", &rx_val) {
                         Completion::Normal(v) => v,
                         other => return other,
