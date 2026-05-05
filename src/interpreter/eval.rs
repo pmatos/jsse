@@ -15173,6 +15173,12 @@ impl Interpreter {
             }
             m.properties.remove(key);
             m.property_order.retain(|k| k != key);
+            if let Some(ref mut elems) = m.array_elements
+                && let Ok(idx) = key.parse::<usize>()
+                && idx < elems.len()
+            {
+                elems[idx] = JsValue::Undefined;
+            }
             Ok(true)
         } else {
             Ok(true)
@@ -15752,6 +15758,15 @@ impl Interpreter {
                     for i in 0..len {
                         int_keys_set.insert(i as u64, i.to_string());
                     }
+                }
+            }
+
+            if let Some(ref elems) = b.array_elements {
+                for (i, value) in elems.iter().enumerate() {
+                    if matches!(value, JsValue::Undefined) || i > 0xFFFF_FFFE {
+                        continue;
+                    }
+                    int_keys_set.insert(i as u64, i.to_string());
                 }
             }
 

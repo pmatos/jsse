@@ -5559,6 +5559,17 @@ impl Interpreter {
                             let mut int_keys: Vec<(u64, String)> = Vec::new();
                             let mut str_keys: Vec<String> = Vec::new();
                             let mut sym_keys: Vec<String> = Vec::new();
+                            if let Some(ref elems) = b.array_elements {
+                                for (i, value) in elems.iter().enumerate() {
+                                    if matches!(value, JsValue::Undefined) || i > 0xFFFF_FFFE {
+                                        continue;
+                                    }
+                                    let k = i.to_string();
+                                    if !b.properties.contains_key(&k) {
+                                        int_keys.push((i as u64, k));
+                                    }
+                                }
+                            }
                             for k in &b.property_order {
                                 if is_string_wrapper && k == "length" {
                                     continue;

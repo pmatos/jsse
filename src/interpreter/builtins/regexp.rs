@@ -5968,6 +5968,10 @@ fn build_regex_ex(
         return Ok(result);
     }
 
+    if let Ok(r) = regex::Regex::new(&tr.pattern) {
+        return Ok((CompiledRegex::Standard(r), dup_map, name_order));
+    }
+
     match fancy_regex::Regex::new(&tr.pattern) {
         Ok(r) => Ok((CompiledRegex::Fancy(r), dup_map, name_order)),
         Err(e) => {

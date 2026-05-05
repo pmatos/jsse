@@ -1827,6 +1827,20 @@ impl JsObjectData {
             }
             return Some(d);
         }
+        if let Some(ref elems) = self.array_elements
+            && let Some(idx) = parse_array_index(key)
+            && (idx as usize) < elems.len()
+            && !matches!(elems[idx as usize], JsValue::Undefined)
+        {
+            return Some(PropertyDescriptor {
+                value: Some(elems[idx as usize].clone()),
+                writable: Some(true),
+                enumerable: Some(true),
+                configurable: Some(true),
+                get: None,
+                set: None,
+            });
+        }
         // TypedArray: §10.4.5.1
         if let Some(ref ta) = self.typed_array_info
             && let Some(index) = canonical_numeric_index_string(key)
@@ -1877,6 +1891,13 @@ impl JsObjectData {
             return ns_data.export_names.contains(&key.to_string());
         }
         if self.properties.contains_key(key) {
+            return true;
+        }
+        if let Some(ref elems) = self.array_elements
+            && let Some(idx) = parse_array_index(key)
+            && (idx as usize) < elems.len()
+            && !matches!(elems[idx as usize], JsValue::Undefined)
+        {
             return true;
         }
         // TypedArray: §10.4.5.2
@@ -2349,6 +2370,57 @@ impl JsObjectData {
         {
             let _ = env_ref.borrow_mut().set(param_name, value.clone());
         }
+        if self.class_name == "Array"
+            && !matches!(value, JsValue::Undefined)
+            && !self.properties.contains_key(key)
+            && let Some(idx_u32) = parse_array_index(key)
+            && let Some(ref mut elements) = self.array_elements
+        {
+            let idx = idx_u32 as usize;
+            if idx <= elements.len() + 1024 {
+                let old_len = self
+                    .properties
+                    .get("length")
+                    .and_then(|d| d.value.as_ref())
+                    .and_then(|v| {
+                        if let JsValue::Number(n) = v {
+                            Some(*n as u32)
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(0);
+                let length_writable = self
+                    .properties
+                    .get("length")
+                    .map(|d| d.writable != Some(false))
+                    .unwrap_or(true);
+                let existed = idx < elements.len() && !matches!(elements[idx], JsValue::Undefined);
+                if !existed && !self.extensible {
+                    return false;
+                }
+                if idx_u32 >= old_len && !length_writable {
+                    return false;
+                }
+                if idx < elements.len() {
+                    elements[idx] = value;
+                } else {
+                    while elements.len() < idx {
+                        elements.push(JsValue::Undefined);
+                    }
+                    elements.push(value);
+                }
+                if idx_u32 >= old_len
+                    && let Some(len_desc) = self.properties.get_mut("length")
+                {
+                    len_desc.value = Some(JsValue::Number((idx_u32 + 1) as f64));
+                }
+                if !existed {
+                    self.shape_id = fresh_shape_id();
+                }
+                return true;
+            }
+        }
         // Keep array_elements in sync with properties for numeric indices
         if let Some(ref mut elements) = self.array_elements
             && let Ok(idx) = key.parse::<usize>()
@@ -2616,6 +2688,21 @@ impl JsObjectData {
             let len = ta.array_length;
             for i in 0..len {
                 let k = i.to_string();
+                if seen.insert(k.clone()) {
+                    index_keys.push((i as u32, k));
+                }
+            }
+        }
+
+        if let Some(ref elems) = self.array_elements {
+            for (i, value) in elems.iter().enumerate() {
+                if matches!(value, JsValue::Undefined) || i > 0xFFFF_FFFE {
+                    continue;
+                }
+                let k = i.to_string();
+                if self.properties.contains_key(&k) {
+                    continue;
+                }
                 if seen.insert(k.clone()) {
                     index_keys.push((i as u32, k));
                 }
