@@ -15,8 +15,8 @@ use icu::locale::LocaleCanonicalizer;
 
 impl Interpreter {
     pub(crate) fn setup_intl(&mut self) {
-        let intl_obj = self.create_object();
-        let intl_id = intl_obj.borrow().id.unwrap();
+        let intl_obj_id = self.create_object_id();
+        let intl_id = intl_obj_id;
 
         // @@toStringTag = "Intl" (per spec 8.1.1)
         {
@@ -29,8 +29,14 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            intl_obj.borrow_mut().property_order.push(key.clone());
-            intl_obj.borrow_mut().properties.insert(key, desc);
+            self.get_object_cell_expect(intl_obj_id)
+                .borrow_mut()
+                .property_order
+                .push(key.clone());
+            self.get_object_cell_expect(intl_obj_id)
+                .borrow_mut()
+                .properties
+                .insert(key, desc);
         }
 
         // Intl.getCanonicalLocales(locales)
@@ -51,7 +57,7 @@ impl Interpreter {
                 }
             },
         ));
-        intl_obj
+        self.get_object_cell_expect(intl_obj_id)
             .borrow_mut()
             .insert_builtin("getCanonicalLocales".to_string(), gcl_fn);
 
@@ -279,46 +285,47 @@ impl Interpreter {
                 Completion::Normal(interp.create_array(js_values))
             },
         ));
-        intl_obj
+        self.get_object_cell_expect(intl_obj_id)
             .borrow_mut()
             .insert_builtin("supportedValuesOf".to_string(), svo_fn);
 
         // Intl.Locale
-        self.setup_intl_locale(&intl_obj);
+        self.setup_intl_locale(intl_obj_id);
 
         // Intl.Collator
-        self.setup_intl_collator(&intl_obj);
+        self.setup_intl_collator(intl_obj_id);
 
         // Intl.NumberFormat
-        self.setup_intl_number_format(&intl_obj);
+        self.setup_intl_number_format(intl_obj_id);
 
         // Intl.PluralRules
-        self.setup_intl_plural_rules(&intl_obj);
+        self.setup_intl_plural_rules(intl_obj_id);
 
         // Intl.ListFormat
-        self.setup_intl_list_format(&intl_obj);
+        self.setup_intl_list_format(intl_obj_id);
 
         // Intl.RelativeTimeFormat
-        self.setup_intl_relative_time_format(&intl_obj);
+        self.setup_intl_relative_time_format(intl_obj_id);
 
         // Intl.Segmenter
-        self.setup_intl_segmenter(&intl_obj);
+        self.setup_intl_segmenter(intl_obj_id);
 
         // Intl.DisplayNames
-        self.setup_intl_display_names(&intl_obj);
+        self.setup_intl_display_names(intl_obj_id);
 
         // Intl.DateTimeFormat
-        self.setup_intl_date_time_format(&intl_obj);
+        self.setup_intl_date_time_format(intl_obj_id);
 
         // Intl.DurationFormat
-        self.setup_intl_duration_format(&intl_obj);
+        self.setup_intl_duration_format(intl_obj_id);
 
         let intl_val = JsValue::Object(crate::types::JsObject { id: intl_id });
         self.realm()
             .global_env
             .borrow_mut()
             .declare("Intl", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("Intl", intl_val);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "Intl", intl_val);
     }
 
     pub(crate) fn is_structurally_valid_language_tag(tag: &str) -> bool {
@@ -460,9 +467,9 @@ impl Interpreter {
 
         // Check if locales is an Intl.Locale object itself (treat as single-element list)
         if let JsValue::Object(o) = locales
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(cell) = self.get_object_cell(o.id)
         {
-            let b = obj.borrow();
+            let b = cell.borrow();
             if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
                 let tag_clone = tag.clone();
                 drop(b);
@@ -534,14 +541,15 @@ impl Interpreter {
 
             // Step 7c.iii-iv: If kValue has [[InitializedLocale]], use [[Locale]] directly
             let tag = if let JsValue::Object(o) = &k_value {
-                if let Some(obj_data) = self.get_object(o.id) {
-                    let b = obj_data.borrow();
-                    if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
-                        tag.clone()
+                let cached = self.get_object_cell(o.id).and_then(|cell| {
+                    if let Some(IntlData::Locale { ref tag, .. }) = cell.borrow().intl_data {
+                        Some(tag.clone())
                     } else {
-                        drop(b);
-                        self.to_string_value(&k_value)?
+                        None
                     }
+                });
+                if let Some(tag) = cached {
+                    tag
                 } else {
                     self.to_string_value(&k_value)?
                 }
@@ -582,17 +590,19 @@ impl Interpreter {
         options: &JsValue,
     ) -> Result<JsValue, JsValue> {
         if matches!(options, JsValue::Undefined) {
-            let obj = self.create_object();
-            obj.borrow_mut().prototype_id = None; // ObjectCreate(null)
-            let id = obj.borrow().id.unwrap();
+            let obj_id = self.create_object_id();
+            self.get_object_cell_expect(obj_id)
+                .borrow_mut()
+                .prototype_id = None; // ObjectCreate(null)
+            let id = obj_id;
             return Ok(JsValue::Object(crate::types::JsObject { id }));
         }
         match self.to_object(options) {
             Completion::Normal(v) => Ok(v),
             Completion::Throw(e) => Err(e),
             _ => {
-                let obj = self.create_object();
-                let id = obj.borrow().id.unwrap();
+                let obj_id = self.create_object_id();
+                let id = obj_id;
                 Ok(JsValue::Object(crate::types::JsObject { id }))
             }
         }
@@ -604,9 +614,11 @@ impl Interpreter {
         options: &JsValue,
     ) -> Result<JsValue, JsValue> {
         if matches!(options, JsValue::Undefined) {
-            let obj = self.create_object();
-            obj.borrow_mut().prototype_id = None;
-            let id = obj.borrow().id.unwrap();
+            let obj_id = self.create_object_id();
+            self.get_object_cell_expect(obj_id)
+                .borrow_mut()
+                .prototype_id = None;
+            let id = obj_id;
             return Ok(JsValue::Object(crate::types::JsObject { id }));
         }
         if matches!(options, JsValue::Object(_)) {

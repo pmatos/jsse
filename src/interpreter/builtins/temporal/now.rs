@@ -3,9 +3,9 @@ use num_bigint::BigInt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 impl Interpreter {
-    pub(crate) fn setup_temporal_now(&mut self, temporal_obj: &Rc<RefCell<JsObjectData>>) {
-        let now_obj = self.create_object();
-        let now_id = now_obj.borrow().id.unwrap();
+    pub(crate) fn setup_temporal_now(&mut self, temporal_obj_id: u64) {
+        let now_obj_id = self.create_object_id();
+        let now_id = now_obj_id;
 
         // @@toStringTag = "Temporal.Now"
         {
@@ -18,8 +18,14 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            now_obj.borrow_mut().property_order.push(key.clone());
-            now_obj.borrow_mut().properties.insert(key, desc);
+            self.get_object_cell_expect(now_obj_id)
+                .borrow_mut()
+                .property_order
+                .push(key.clone());
+            self.get_object_cell_expect(now_obj_id)
+                .borrow_mut()
+                .properties
+                .insert(key, desc);
         }
 
         // Temporal.Now.timeZoneId()
@@ -31,7 +37,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&tz)))
             },
         ));
-        now_obj
+        self.get_object_cell_expect(now_obj_id)
             .borrow_mut()
             .insert_builtin("timeZoneId".to_string(), tz_fn);
 
@@ -41,20 +47,28 @@ impl Interpreter {
             0,
             |interp, _this, _args| {
                 let ns = current_epoch_nanoseconds();
-                let obj = interp.create_object();
-                obj.borrow_mut().class_name = "Temporal.Instant".to_string();
+                let obj_id = interp.create_object_id();
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .class_name = "Temporal.Instant".to_string();
                 if let Some(proto_id) = interp.realm().temporal_instant_prototype {
-                    obj.borrow_mut().prototype_id =
-                        Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
+                    interp
+                        .get_object_cell_expect(obj_id)
+                        .borrow_mut()
+                        .prototype_id = Some(proto_id);
                 }
-                obj.borrow_mut().temporal_data = Some(TemporalData::Instant {
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .temporal_data = Some(TemporalData::Instant {
                     epoch_nanoseconds: ns,
                 });
-                let id = obj.borrow().id.unwrap();
+                let id = obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             },
         ));
-        now_obj
+        self.get_object_cell_expect(now_obj_id)
             .borrow_mut()
             .insert_builtin("instant".to_string(), instant_fn);
 
@@ -76,7 +90,7 @@ impl Interpreter {
                 )
             },
         ));
-        now_obj
+        self.get_object_cell_expect(now_obj_id)
             .borrow_mut()
             .insert_builtin("plainDateTimeISO".to_string(), pdt_fn);
 
@@ -95,7 +109,7 @@ impl Interpreter {
                 super::plain_date::create_plain_date_result(interp, y, m, d, "iso8601")
             },
         ));
-        now_obj
+        self.get_object_cell_expect(now_obj_id)
             .borrow_mut()
             .insert_builtin("plainDateISO".to_string(), pd_fn);
 
@@ -114,7 +128,7 @@ impl Interpreter {
                 super::plain_time::create_plain_time_result(interp, h, mi, s, ms, 0, 0)
             },
         ));
-        now_obj
+        self.get_object_cell_expect(now_obj_id)
             .borrow_mut()
             .insert_builtin("plainTimeISO".to_string(), pt_fn);
 
@@ -129,30 +143,40 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let ns = current_epoch_nanoseconds();
-                let obj = interp.create_object();
-                obj.borrow_mut().class_name = "Temporal.ZonedDateTime".to_string();
+                let obj_id = interp.create_object_id();
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .class_name = "Temporal.ZonedDateTime".to_string();
                 if let Some(proto_id) = interp.realm().temporal_zoned_date_time_prototype {
-                    obj.borrow_mut().prototype_id =
-                        Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
+                    interp
+                        .get_object_cell_expect(obj_id)
+                        .borrow_mut()
+                        .prototype_id = Some(proto_id);
                 }
-                obj.borrow_mut().temporal_data = Some(TemporalData::ZonedDateTime {
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .temporal_data = Some(TemporalData::ZonedDateTime {
                     epoch_nanoseconds: ns,
                     time_zone: tz,
                     calendar: "iso8601".to_string(),
                 });
-                let id = obj.borrow().id.unwrap();
+                let id = obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             },
         ));
-        now_obj
+        self.get_object_cell_expect(now_obj_id)
             .borrow_mut()
             .insert_builtin("zonedDateTimeISO".to_string(), zdt_fn);
 
         let now_val = JsValue::Object(crate::types::JsObject { id: now_id });
-        temporal_obj.borrow_mut().insert_property(
-            "Now".to_string(),
-            PropertyDescriptor::data(now_val, true, false, true),
-        );
+        self.get_object_cell_expect(temporal_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "Now".to_string(),
+                PropertyDescriptor::data(now_val, true, false, true),
+            );
     }
 }
 

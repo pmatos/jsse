@@ -113,7 +113,7 @@ impl Interpreter {
         if key.starts_with("Symbol(") {
             return Ok(());
         }
-        let ns_data = if let Some(obj) = self.get_object(obj_id) {
+        let ns_data = if let Some(obj) = self.get_object_cell(obj_id) {
             obj.borrow().module_namespace.clone()
         } else {
             None
@@ -173,7 +173,7 @@ impl Interpreter {
         &mut self,
         obj_id: u64,
     ) -> Result<(), JsValue> {
-        let (deferred, module_path) = if let Some(obj) = self.get_object(obj_id) {
+        let (deferred, module_path) = if let Some(obj) = self.get_object_cell(obj_id) {
             let b = obj.borrow();
             if let Some(ref ns) = b.module_namespace {
                 (ns.deferred, ns.module_path.clone())
@@ -203,7 +203,7 @@ impl Interpreter {
             if let Some(ref err) = module.borrow().error {
                 return Err(err.clone());
             }
-            if let Some(obj) = self.get_object(obj_id)
+            if let Some(obj) = self.get_object_cell(obj_id)
                 && let Some(ref mut ns) = obj.borrow_mut().module_namespace
             {
                 ns.deferred = false;
@@ -228,7 +228,7 @@ impl Interpreter {
 
         match result {
             Ok(_) => {
-                if let Some(obj) = self.get_object(obj_id)
+                if let Some(obj) = self.get_object_cell(obj_id)
                     && let Some(ref mut ns) = obj.borrow_mut().module_namespace
                 {
                     ns.deferred = false;
@@ -259,7 +259,7 @@ impl Interpreter {
         this_val: &JsValue,
     ) -> Completion {
         // Single-borrow fast path: classify object and check own property in one borrow
-        if let Some(obj) = self.get_object(obj_id) {
+        if let Some(obj) = self.get_object_cell(obj_id) {
             let b = obj.borrow();
             let is_proxy = b.proxy_target_id.is_some() || b.proxy_revoked;
             let has_module_ns = b.module_namespace.is_some();
@@ -334,7 +334,7 @@ impl Interpreter {
                 Ok(Some(v)) => {
                     // Invariant checks
                     if let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object(t.id)
+                        && let Some(tobj) = self.get_object_cell(t.id)
                     {
                         let target_desc = tobj.borrow().get_own_property(key);
                         if let Some(ref desc) = target_desc
@@ -380,7 +380,7 @@ impl Interpreter {
         // Module namespace: look up live binding from environment
         {
             let ns_data = self
-                .get_object(obj_id)
+                .get_object_cell(obj_id)
                 .and_then(|obj| obj.borrow().module_namespace.clone());
             if let Some(ns_data) = ns_data {
                 // Deferred namespace: IsSymbolLikeNamespaceKey check
@@ -413,7 +413,7 @@ impl Interpreter {
         }
 
         // Fallback: own property + prototype chain (for rare non-proxy, non-module cases)
-        let own_desc = if let Some(obj) = self.get_object(obj_id) {
+        let own_desc = if let Some(obj) = self.get_object_cell(obj_id) {
             obj.borrow().get_own_property_full(key)
         } else {
             None
@@ -426,7 +426,7 @@ impl Interpreter {
             Some(ref d) if d.get.is_some() => Completion::Normal(JsValue::Undefined),
             Some(ref d) => Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined)),
             None => {
-                let proto = if let Some(obj) = self.get_object(obj_id) {
+                let proto = if let Some(obj) = self.get_object_cell(obj_id) {
                     obj.borrow().prototype_id
                 } else {
                     None
@@ -451,7 +451,7 @@ impl Interpreter {
                     let trap_result = self.to_boolean_val(&v);
                     if !trap_result
                         && let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object(t.id)
+                        && let Some(tobj) = self.get_object_cell(t.id)
                     {
                         let target_desc = tobj.borrow().get_own_property(key);
                         if let Some(ref desc) = target_desc {
@@ -878,11 +878,11 @@ impl Interpreter {
         let old_realm = self.current_realm_id;
         self.current_realm_id = caller_realm_id;
 
-        let func_obj = self.create_object();
-        let func_id = func_obj.borrow().id.unwrap();
+        let func_obj_id = self.create_object_id();
+        let func_id = func_obj_id;
         let fp_id = self.realms[caller_realm_id].function_prototype;
         {
-            let mut o = func_obj.borrow_mut();
+            let mut o = self.get_object_cell_expect(func_obj_id).borrow_mut();
             o.prototype_id = fp_id;
             o.class_name = "Function".to_string();
             o.callable = Some(JsFunction::native("".to_string(), 0, |_, _, _| {
@@ -960,7 +960,7 @@ impl Interpreter {
             String::new()
         };
 
-        if let Some(obj) = self.get_object(func_id) {
+        if let Some(obj) = self.get_object_cell(func_id) {
             obj.borrow_mut().insert_property(
                 "length".to_string(),
                 PropertyDescriptor::data(JsValue::Number(computed_length), false, false, true),

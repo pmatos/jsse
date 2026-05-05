@@ -151,8 +151,7 @@ impl Interpreter {
     }
 
     /// §9.1.1.4.16 CanDeclareGlobalFunction
-    fn can_declare_global_function(global_obj: &Rc<RefCell<JsObjectData>>, name: &str) -> bool {
-        let gb = global_obj.borrow();
+    fn can_declare_global_function(gb: &JsObjectData, name: &str) -> bool {
         if let Some(desc) = gb.properties.get(name) {
             if desc.configurable == Some(true) {
                 return true;
@@ -168,8 +167,7 @@ impl Interpreter {
     }
 
     /// §9.1.1.4.15 CanDeclareGlobalVar
-    fn can_declare_global_var(global_obj: &Rc<RefCell<JsObjectData>>, name: &str) -> bool {
-        let gb = global_obj.borrow();
+    fn can_declare_global_var(gb: &JsObjectData, name: &str) -> bool {
         if gb.properties.contains_key(name) {
             return true;
         }
@@ -196,8 +194,7 @@ impl Interpreter {
     }
 
     /// §9.1.1.4.13 HasRestrictedGlobalProperty
-    fn has_restricted_global_property(global_obj: &Rc<RefCell<JsObjectData>>, name: &str) -> bool {
-        let gb = global_obj.borrow();
+    fn has_restricted_global_property(gb: &JsObjectData, name: &str) -> bool {
         if let Some(desc) = gb.properties.get(name) {
             desc.configurable == Some(false)
         } else {
@@ -213,7 +210,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Option<Completion> {
         let gid = env.borrow().global_object_id?;
-        let global_obj = self.get_object(gid)?;
+        let global_obj = self.get_object_cell(gid)?;
 
         // §16.1.7 step 3: Check lexical names
         let lex_names = Self::collect_lex_names(stmts);
@@ -231,7 +228,7 @@ impl Interpreter {
             // Step 3b-d: If HasRestrictedGlobalProperty(name) is true, throw SyntaxError
             // Non-eval var/function declarations create non-configurable global properties,
             // so this also catches var-lex collisions for non-eval declarations.
-            if Self::has_restricted_global_property(&global_obj, name) {
+            if Self::has_restricted_global_property(&global_obj.borrow(), name) {
                 let err = self.create_error(
                     "SyntaxError",
                     &format!("Identifier '{}' has already been declared", name),
@@ -271,7 +268,7 @@ impl Interpreter {
                     );
                     return Some(Completion::Throw(err));
                 }
-                if !Self::can_declare_global_function(&global_obj, &f.name) {
+                if !Self::can_declare_global_function(&global_obj.borrow(), &f.name) {
                     let err = self
                         .create_type_error(&format!("Cannot declare global function '{}'", f.name));
                     return Some(Completion::Throw(err));
@@ -283,7 +280,7 @@ impl Interpreter {
         // Collect var declaration names (step 12)
         for name in &var_names {
             if !declared_function_names.contains(name)
-                && !Self::can_declare_global_var(&global_obj, name)
+                && !Self::can_declare_global_var(&global_obj.borrow(), name)
             {
                 let err =
                     self.create_type_error(&format!("Cannot declare global variable '{}'", name));
@@ -316,7 +313,7 @@ impl Interpreter {
             self.env_declare_global_function_binding(env, &f.name, val, false);
         } else {
             env.borrow_mut().declare(&f.name, BindingKind::Var);
-            let _ = env.borrow_mut().set(&f.name, val);
+            let _ = self.env_set(env, &f.name, val);
         }
     }
 
@@ -941,7 +938,7 @@ impl Interpreter {
                     other => return other,
                 };
                 if let JsValue::Object(obj_ref) = &obj_val {
-                    if self.get_object(obj_ref.id).is_some() {
+                    if self.get_object_cell(obj_ref.id).is_some() {
                         let with_env = Rc::new(RefCell::new(Environment {
                             bindings: HashMap::new(),
                             parent: Some(env.clone()),
@@ -951,7 +948,6 @@ impl Interpreter {
                             with_object: Some(WithObject { obj_id: obj_ref.id }),
                             dispose_stack: None,
                             global_object_id: None,
-                            global_object_rc: None,
                             annexb_function_names: None,
                             class_private_names: None,
                             is_field_initializer: false,
@@ -1020,8 +1016,8 @@ impl Interpreter {
                                 cursor = cur_b.parent.clone();
                             }
                             if !blocked_by_intermediate {
-                                let val = env.borrow().get(&f.name).unwrap_or(JsValue::Undefined);
-                                let _ = var_scope.borrow_mut().set(&f.name, val);
+                                let val = self.env_get(env, &f.name).unwrap_or(JsValue::Undefined);
+                                let _ = self.env_set(&var_scope, &f.name, val);
                             }
                         }
                     }
@@ -1166,7 +1162,7 @@ impl Interpreter {
                         let vs = var_scope.borrow();
                         vs.bindings.contains_key(name)
                             || gid
-                                .and_then(|id| self.get_object(id))
+                                .and_then(|id| self.get_object_cell(id))
                                 .is_some_and(|g| g.borrow().properties.contains_key(name))
                     };
                     if !already_declared {
@@ -1369,7 +1365,7 @@ impl Interpreter {
                                 if !var_scope.borrow().bindings.contains_key(name) {
                                     var_scope.borrow_mut().declare(name, kind);
                                 }
-                                env.borrow_mut().set(name, v)?;
+                                self.env_set(env, name, v)?;
                             } else {
                                 env.borrow_mut().declare(name, kind);
                                 env.borrow_mut().initialize_binding(name, v);
@@ -1419,9 +1415,9 @@ impl Interpreter {
                                     let gid = var_scope.borrow().global_object_id;
                                     let vs = var_scope.borrow();
                                     vs.bindings.contains_key(binding_name)
-                                        || gid.and_then(|id| self.get_object(id)).is_some_and(|g| {
-                                            g.borrow().properties.contains_key(binding_name)
-                                        })
+                                        || gid.and_then(|id| self.get_object_cell(id)).is_some_and(
+                                            |g| g.borrow().properties.contains_key(binding_name),
+                                        )
                                 };
                                 if !already {
                                     var_scope.borrow_mut().declare(binding_name, kind);
@@ -1467,7 +1463,7 @@ impl Interpreter {
                                         v,
                                         strict,
                                     )?,
-                                    None => env.borrow_mut().set(binding_name, v)?,
+                                    None => self.env_set(env, binding_name, v)?,
                                 }
                             } else {
                                 let v = if let JsValue::Object(o) = &obj_val {
@@ -1483,15 +1479,17 @@ impl Interpreter {
                             }
                         }
                         ObjectPatternProperty::Rest(pat) => {
-                            let rest_obj = self.create_object();
+                            let rest_obj_id = self.create_object_id();
                             if let JsValue::Object(o) = &obj_val {
                                 let pairs =
                                     self.copy_data_properties(o.id, &obj_val, &excluded_keys)?;
                                 for (k, v) in pairs {
-                                    rest_obj.borrow_mut().insert_value(k, v);
+                                    self.get_object_cell_expect(rest_obj_id)
+                                        .borrow_mut()
+                                        .insert_value(k, v);
                                 }
                             }
-                            let rest_id = rest_obj.borrow().id.unwrap();
+                            let rest_id = rest_obj_id;
                             let rest_val = JsValue::Object(crate::types::JsObject { id: rest_id });
                             self.bind_pattern(pat, rest_val, kind, env)?;
                         }
@@ -1706,7 +1704,7 @@ impl Interpreter {
         let mut iter_env = if !per_iteration_bindings.is_empty() {
             let new_env = Environment::new(Some(env.clone()));
             for (name, kind) in &per_iteration_bindings {
-                let val = for_env.borrow().get(name).unwrap_or(JsValue::Undefined);
+                let val = self.env_get(&for_env, name).unwrap_or(JsValue::Undefined);
                 new_env.borrow_mut().declare(name, *kind);
                 new_env.borrow_mut().initialize_binding(name, val);
             }
@@ -1757,7 +1755,7 @@ impl Interpreter {
                 if !per_iteration_bindings.is_empty() {
                     let new_env = Environment::new(Some(env.clone()));
                     for (name, kind) in &per_iteration_bindings {
-                        let val = iter_env.borrow().get(name).unwrap_or(JsValue::Undefined);
+                        let val = self.env_get(&iter_env, name).unwrap_or(JsValue::Undefined);
                         new_env.borrow_mut().declare(name, *kind);
                         new_env.borrow_mut().initialize_binding(name, val);
                     }
@@ -1797,7 +1795,7 @@ impl Interpreter {
             };
             if let Pattern::Identifier(name) = &d.pattern {
                 self.set_function_name(&init_val, name);
-                let _ = env.borrow_mut().set(name, init_val);
+                let _ = self.env_set(env, name, init_val);
             }
         }
 
@@ -1847,7 +1845,7 @@ impl Interpreter {
                 let obj_id = o.id;
                 let keys = {
                     let needs_proxy_path = self
-                        .get_object(obj_id)
+                        .get_object_cell(obj_id)
                         .map(|obj| {
                             let b = obj.borrow();
                             b.is_proxy() || b.module_namespace.is_some()
@@ -1858,7 +1856,7 @@ impl Interpreter {
                             Ok(k) => k,
                             Err(e) => break 'unroot Completion::Throw(e),
                         }
-                    } else if self.get_object(obj_id).is_some() {
+                    } else if self.get_object_cell(obj_id).is_some() {
                         self.enumerable_keys_with_proto_on_id(obj_id)
                     } else {
                         break 'unroot Completion::Normal(JsValue::Undefined);
@@ -2304,7 +2302,7 @@ impl Interpreter {
                         uses_arguments: func_uses_arguments(&f.params, &f.body),
                     };
                     let val = self.create_function(func);
-                    let _ = switch_env.borrow_mut().set(&f.name, val);
+                    let _ = self.env_set(&switch_env, &f.name, val);
                 }
             }
         }
@@ -2555,18 +2553,19 @@ impl Interpreter {
         args: &[JsValue],
         env: &EnvRef,
     ) -> Completion {
-        let ctor = env.borrow().get(name);
+        let ctor = self.env_get(env, name);
         if let Some(ctor_val) = ctor {
-            let new_obj = self.create_object();
+            let new_obj_id = self.create_object_id();
             if let JsValue::Object(ref o) = ctor_val
-                && let Some(func_obj) = self.get_object(o.id)
+                && let Some(func_obj) = self.get_object_cell(o.id)
             {
                 let proto = func_obj.borrow().get_property_value("prototype");
                 if let Some(JsValue::Object(proto_obj)) = proto {
-                    new_obj.borrow_mut().prototype_id = Some(proto_obj.id);
+                    self.get_object_cell_expect(new_obj_id)
+                        .borrow_mut()
+                        .prototype_id = Some(proto_obj.id);
                 }
             }
-            let new_obj_id = new_obj.borrow().id.unwrap();
             let this_val = JsValue::Object(crate::types::JsObject { id: new_obj_id });
             let prev_new_target = self.new_target.take();
             self.new_target = Some(ctor_val.clone());

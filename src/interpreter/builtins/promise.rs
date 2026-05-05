@@ -162,7 +162,7 @@ impl Interpreter {
     ) -> Result<JsValue, JsValue> {
         // If value is a promise and its constructor matches C, return it
         if let JsValue::Object(o) = value
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
             && obj.borrow().promise_data.is_some()
         {
             let ctor_val = match self.get_object_property(o.id, "constructor", value) {
@@ -187,8 +187,8 @@ impl Interpreter {
     }
 
     pub(crate) fn setup_promise(&mut self) {
-        let proto = self.create_object();
-        self.realm_mut().promise_prototype = Some(proto.borrow().id.unwrap());
+        let proto_id = self.create_object_id();
+        self.realm_mut().promise_prototype = Some(proto_id);
 
         // Promise.prototype.then
         let then_fn = self.create_function(JsFunction::native(
@@ -200,7 +200,7 @@ impl Interpreter {
                 interp.promise_then(this, &on_fulfilled, &on_rejected)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("then".to_string(), then_fn);
 
@@ -230,7 +230,7 @@ impl Interpreter {
                 interp.call_function(&then_method, this, &[JsValue::Undefined, on_rejected])
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("catch".to_string(), catch_fn);
 
@@ -376,20 +376,22 @@ impl Interpreter {
                 interp.call_function(&then_method, this, &[then_finally, catch_finally])
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("finally".to_string(), finally_fn);
 
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("Promise")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("Promise")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
         // Promise constructor
         let _promise_proto = self.realm().promise_prototype;
@@ -419,7 +421,7 @@ impl Interpreter {
                 let promise = interp.create_promise_object();
                 if let Some(p) = proto
                     && let JsValue::Object(po) = &promise
-                    && let Some(pobj) = interp.get_object(po.id)
+                    && let Some(pobj) = interp.get_object_cell(po.id)
                 {
                     pobj.borrow_mut().prototype_id = Some(p);
                 }
@@ -447,25 +449,27 @@ impl Interpreter {
         // Mark Promise constructor as deferred_construct so construct_with_new_target
         // skips early prototype access (Promise checks callable before OrdinaryCreateFromConstructor).
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj.borrow_mut().deferred_construct = true;
         }
 
         // Set Promise.prototype on constructor
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && self.get_object_cell(o.id).is_some()
         {
-            let proto_id = proto.borrow().id.unwrap();
-            func_obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(
-                    JsValue::Object(crate::types::JsObject { id: proto_id }),
-                    false,
-                    false,
-                    false,
-                ),
-            );
+            let ctor_id = o.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(
+                        JsValue::Object(crate::types::JsObject { id: proto_id }),
+                        false,
+                        false,
+                        false,
+                    ),
+                );
 
             // Promise[Symbol.species] getter
             let species_getter = self.create_function(JsFunction::native(
@@ -473,24 +477,28 @@ impl Interpreter {
                 0,
                 |_interp, this_val, _args| Completion::Normal(this_val.clone()),
             ));
-            func_obj.borrow_mut().insert_property(
-                "Symbol(Symbol.species)".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(species_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "Symbol(Symbol.species)".to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: Some(species_getter),
+                        set: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                    },
+                );
         }
 
         // Set constructor on prototype
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(ctor.clone(), true, false, true),
+            );
 
         // Promise.resolve
         let resolve_fn = self.create_function(JsFunction::native(
@@ -510,7 +518,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj
                 .borrow_mut()
@@ -542,7 +550,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj
                 .borrow_mut()
@@ -559,7 +567,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj
                 .borrow_mut()
@@ -576,7 +584,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj
                 .borrow_mut()
@@ -593,7 +601,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj
                 .borrow_mut()
@@ -610,7 +618,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj
                 .borrow_mut()
@@ -623,24 +631,27 @@ impl Interpreter {
             0,
             |interp, this, _args| match interp.new_promise_capability(this) {
                 Ok(cap) => {
-                    let result = interp.create_object();
-                    result
+                    let result_id = interp.create_object_id();
+                    interp
+                        .get_object_cell_expect(result_id)
                         .borrow_mut()
                         .insert_value("promise".to_string(), cap.promise);
-                    result
+                    interp
+                        .get_object_cell_expect(result_id)
                         .borrow_mut()
                         .insert_value("resolve".to_string(), cap.resolve);
-                    result
+                    interp
+                        .get_object_cell_expect(result_id)
                         .borrow_mut()
                         .insert_value("reject".to_string(), cap.reject);
-                    let id = result.borrow().id.unwrap();
+                    let id = result_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 }
                 Err(e) => Completion::Throw(e),
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj
                 .borrow_mut()
@@ -693,7 +704,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj
                 .borrow_mut()
@@ -711,7 +722,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj
                 .borrow_mut()
@@ -729,7 +740,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj
                 .borrow_mut()
@@ -741,7 +752,8 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Promise", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("Promise", ctor);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "Promise", ctor);
     }
 
     pub(crate) fn create_promise_object(&mut self) -> JsValue {
@@ -847,7 +859,7 @@ impl Interpreter {
             let pin = JsValue::Object(crate::types::JsObject { id: promise_id });
             for fn_val in [&resolve_fn, &reject_fn] {
                 if let JsValue::Object(o) = fn_val
-                    && let Some(fn_obj) = self.get_object(o.id)
+                    && let Some(fn_obj) = self.get_object_cell(o.id)
                 {
                     let mut borrowed = fn_obj.borrow_mut();
                     borrowed
@@ -862,7 +874,7 @@ impl Interpreter {
     }
 
     pub(crate) fn fulfill_promise(&mut self, promise_id: u64, value: JsValue) {
-        let reactions = if let Some(obj) = self.get_object(promise_id) {
+        let reactions = if let Some(obj) = self.get_object_cell(promise_id) {
             let mut o = obj.borrow_mut();
             if let Some(ref mut pd) = o.promise_data {
                 if !matches!(pd.state, PromiseState::Pending) {
@@ -882,7 +894,7 @@ impl Interpreter {
     }
 
     pub(crate) fn reject_promise(&mut self, promise_id: u64, reason: JsValue) {
-        let reactions = if let Some(obj) = self.get_object(promise_id) {
+        let reactions = if let Some(obj) = self.get_object_cell(promise_id) {
             let mut o = obj.borrow_mut();
             if let Some(ref mut pd) = o.promise_data {
                 if !matches!(pd.state, PromiseState::Pending) {
@@ -1059,7 +1071,7 @@ impl Interpreter {
 
         let fulfill_reaction2 = fulfill_reaction.clone();
         let reject_reaction2 = reject_reaction.clone();
-        let state = if let Some(obj) = self.get_object(promise_id) {
+        let state = if let Some(obj) = self.get_object_cell(promise_id) {
             let mut o = obj.borrow_mut();
             if let Some(ref mut pd) = o.promise_data {
                 pd.is_handled = true;
@@ -1097,7 +1109,7 @@ impl Interpreter {
         on_rejected: &JsValue,
     ) -> Completion {
         let promise_id = if let JsValue::Object(o) = promise_val {
-            if let Some(obj) = self.get_object(o.id) {
+            if let Some(obj) = self.get_object_cell(o.id) {
                 if obj.borrow().promise_data.is_some() {
                     o.id
                 } else {
@@ -1162,7 +1174,7 @@ impl Interpreter {
 
         let fulfill_reaction2 = fulfill_reaction.clone();
         let reject_reaction2 = reject_reaction.clone();
-        let state = if let Some(obj) = self.get_object(promise_id) {
+        let state = if let Some(obj) = self.get_object_cell(promise_id) {
             let mut o = obj.borrow_mut();
             if let Some(ref mut pd) = o.promise_data {
                 pd.is_handled = true;
@@ -1196,7 +1208,7 @@ impl Interpreter {
     pub(crate) fn promise_resolve_value(&mut self, value: &JsValue) -> JsValue {
         // §27.2.4.7.1 PromiseResolve(C, x): if IsPromise(x), check x.constructor === C
         if let JsValue::Object(o) = value
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
             && obj.borrow().promise_data.is_some()
         {
             match self.get_object_property(o.id, "constructor", value) {
@@ -1475,16 +1487,16 @@ impl Interpreter {
                     }
                     ac_f.set(true);
                     let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let obj = interp.create_object();
+                    let obj_id = interp.create_object_id();
                     {
-                        let mut o = obj.borrow_mut();
+                        let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                         o.insert_value(
                             "status".to_string(),
                             JsValue::String(JsString::from_str("fulfilled")),
                         );
                         o.insert_value("value".to_string(), val);
                     }
-                    let oid = obj.borrow().id.unwrap();
+                    let oid = obj_id;
                     results_f.borrow_mut()[i] = JsValue::Object(crate::types::JsObject { id: oid });
                     let r = remaining_f.get() - 1;
                     remaining_f.set(r);
@@ -1510,16 +1522,16 @@ impl Interpreter {
                     }
                     ac_r.set(true);
                     let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let obj = interp.create_object();
+                    let obj_id = interp.create_object_id();
                     {
-                        let mut o = obj.borrow_mut();
+                        let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                         o.insert_value(
                             "status".to_string(),
                             JsValue::String(JsString::from_str("rejected")),
                         );
                         o.insert_value("reason".to_string(), val);
                     }
-                    let oid = obj.borrow().id.unwrap();
+                    let oid = obj_id;
                     results_r.borrow_mut()[i] = JsValue::Object(crate::types::JsObject { id: oid });
                     let r = remaining_r.get() - 1;
                     remaining_r.set(r);
@@ -1761,12 +1773,12 @@ impl Interpreter {
     }
 
     fn create_aggregate_error(&mut self, errors: Vec<JsValue>, message: &str) -> JsValue {
-        let obj = self.create_object();
+        let obj_id = self.create_object_id();
         {
-            let mut o = obj.borrow_mut();
+            let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = "AggregateError".to_string();
             if let Some(proto_id) = self.realm().aggregate_error_prototype {
-                o.prototype_id = Some(self.get_object_expect(proto_id).borrow().id.unwrap());
+                o.prototype_id = Some(proto_id);
             }
             o.insert_builtin(
                 "message".to_string(),
@@ -1774,15 +1786,16 @@ impl Interpreter {
             );
         }
         let errors_arr = self.create_array(errors);
-        obj.borrow_mut()
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
             .insert_builtin("errors".to_string(), errors_arr);
-        let id = obj.borrow().id.unwrap();
+        let id = obj_id;
         JsValue::Object(crate::types::JsObject { id })
     }
 
     pub(crate) fn is_callable(&self, val: &JsValue) -> bool {
         if let JsValue::Object(o) = val
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             if obj.borrow().callable.is_some() {
                 return true;
@@ -1798,7 +1811,7 @@ impl Interpreter {
 
     pub(crate) fn is_constructor(&self, val: &JsValue) -> bool {
         if let JsValue::Object(o) = val
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             if let Some(ref func) = obj.borrow().callable {
                 return match func {
@@ -1823,7 +1836,7 @@ impl Interpreter {
 
     pub(crate) fn is_promise(&self, val: &JsValue) -> bool {
         if let JsValue::Object(o) = val
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             return obj.borrow().promise_data.is_some();
         }
@@ -1831,7 +1844,7 @@ impl Interpreter {
     }
 
     pub(crate) fn get_promise_state(&self, promise_id: u64) -> Option<PromiseState> {
-        if let Some(obj) = self.get_object(promise_id)
+        if let Some(obj) = self.get_object_cell(promise_id)
             && let Some(ref pd) = obj.borrow().promise_data
         {
             return Some(pd.state.clone());

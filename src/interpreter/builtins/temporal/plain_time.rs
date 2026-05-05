@@ -7,9 +7,11 @@ use crate::interpreter::builtins::temporal::{
 };
 
 impl Interpreter {
-    pub(crate) fn setup_temporal_plain_time(&mut self, temporal_obj: &Rc<RefCell<JsObjectData>>) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "Temporal.PlainTime".to_string();
+    pub(crate) fn setup_temporal_plain_time(&mut self, temporal_obj_id: u64) {
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Temporal.PlainTime".to_string();
         {
             let key = "Symbol(Symbol.toStringTag)".to_string();
             let desc = PropertyDescriptor {
@@ -20,8 +22,14 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            proto.borrow_mut().property_order.push(key.clone());
-            proto.borrow_mut().properties.insert(key, desc);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .property_order
+                .push(key.clone());
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .properties
+                .insert(key, desc);
         }
 
         // Getters
@@ -53,17 +61,19 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(val))
                 },
             ));
-            proto.borrow_mut().insert_property(
-                name.to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: Some(getter),
-                    set: None,
-                },
-            );
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    name.to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                        get: Some(getter),
+                        set: None,
+                    },
+                );
         }
 
         // with(temporalTimeLike)
@@ -151,7 +161,7 @@ impl Interpreter {
                 }
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("with".to_string(), with_fn);
 
@@ -187,7 +197,9 @@ impl Interpreter {
                     create_plain_time_result(interp, rh, rm, rs, rms, rus, rns)
                 },
             ));
-            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
         }
 
         // until(other, options?) / since(other, options?)
@@ -254,7 +266,9 @@ impl Interpreter {
                     )
                 },
             ));
-            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
         }
 
         // round(roundTo)
@@ -386,7 +400,7 @@ impl Interpreter {
                 create_plain_time_result(interp, rh, rm, rs, rms, rus, rns)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("round".to_string(), round_fn);
 
@@ -408,7 +422,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Boolean(eq))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("equals".to_string(), equals_fn);
 
@@ -456,7 +470,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toString".to_string(), to_string_fn);
 
@@ -473,7 +487,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toJSON".to_string(), to_json_fn);
 
@@ -509,7 +523,7 @@ impl Interpreter {
                 super::temporal_format_with_dtf(interp, &dtf_instance, this)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toLocaleString".to_string(), to_locale_fn);
 
@@ -524,11 +538,11 @@ impl Interpreter {
                     ))
                 },
             ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("valueOf".to_string(), value_of_fn);
 
-        self.realm_mut().temporal_plain_time_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().temporal_plain_time_prototype = Some(proto_id);
 
         // Constructor
         let constructor = self.create_function(JsFunction::constructor(
@@ -710,20 +724,20 @@ impl Interpreter {
 
         // Constructor.prototype_id
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject {
-                id: proto.borrow().id.unwrap(),
-            });
+            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
             );
         }
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(constructor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(constructor.clone(), true, false, true),
+            );
 
         // PlainTime.from(item, options?)
         let from_fn = self.create_function(JsFunction::native(
@@ -773,7 +787,7 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
         }
@@ -810,16 +824,18 @@ impl Interpreter {
             },
         ));
         if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut()
                 .insert_builtin("compare".to_string(), compare_fn);
         }
 
-        temporal_obj.borrow_mut().insert_property(
-            "PlainTime".to_string(),
-            PropertyDescriptor::data(constructor, true, false, true),
-        );
+        self.get_object_cell_expect(temporal_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "PlainTime".to_string(),
+                PropertyDescriptor::data(constructor, true, false, true),
+            );
     }
 }
 
@@ -827,38 +843,21 @@ fn get_plain_time_fields(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<(u8, u8, u8, u16, u16, u16), Completion> {
-    let obj = match this {
-        JsValue::Object(o) => match interp.get_object(o.id) {
-            Some(obj) => obj,
-            None => {
-                return Err(Completion::Throw(
-                    interp.create_type_error("invalid object"),
-                ));
-            }
-        },
-        _ => {
-            return Err(Completion::Throw(
-                interp.create_type_error("not a Temporal.PlainTime"),
-            ));
-        }
+    let snapshot = match this {
+        JsValue::Object(o) => interp
+            .get_object_cell(o.id)
+            .map(|cell| cell.borrow().temporal_data.clone()),
+        _ => None,
     };
-    let data = obj.borrow();
-    match &data.temporal_data {
-        Some(TemporalData::PlainTime {
+    match snapshot {
+        Some(Some(TemporalData::PlainTime {
             hour,
             minute,
             second,
             millisecond,
             microsecond,
             nanosecond,
-        }) => Ok((
-            *hour,
-            *minute,
-            *second,
-            *millisecond,
-            *microsecond,
-            *nanosecond,
-        )),
+        })) => Ok((hour, minute, second, millisecond, microsecond, nanosecond)),
         _ => Err(Completion::Throw(
             interp.create_type_error("not a Temporal.PlainTime"),
         )),
@@ -874,13 +873,21 @@ pub(super) fn create_plain_time_result(
     us: u16,
     ns: u16,
 ) -> Completion {
-    let obj = interp.create_object();
-    obj.borrow_mut().class_name = "Temporal.PlainTime".to_string();
+    let obj_id = interp.create_object_id();
+    interp
+        .get_object_cell_expect(obj_id)
+        .borrow_mut()
+        .class_name = "Temporal.PlainTime".to_string();
     if let Some(proto_id) = interp.realm().temporal_plain_time_prototype {
-        obj.borrow_mut().prototype_id =
-            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
+        interp
+            .get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .prototype_id = Some(proto_id);
     }
-    obj.borrow_mut().temporal_data = Some(TemporalData::PlainTime {
+    interp
+        .get_object_cell_expect(obj_id)
+        .borrow_mut()
+        .temporal_data = Some(TemporalData::PlainTime {
         hour: h,
         minute: m,
         second: s,
@@ -888,7 +895,7 @@ pub(super) fn create_plain_time_result(
         microsecond: us,
         nanosecond: ns,
     });
-    let id = obj.borrow().id.unwrap();
+    let id = obj_id;
     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
 }
 
@@ -941,7 +948,7 @@ fn to_temporal_plain_time_raw(
 ) -> Result<(u8, u8, u8, u16, u16, u16), Completion> {
     match &item {
         JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object(o.id) {
+            if let Some(obj) = interp.get_object_cell(o.id) {
                 let data = obj.borrow();
                 if let Some(TemporalData::PlainTime {
                     hour,

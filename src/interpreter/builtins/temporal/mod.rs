@@ -1293,7 +1293,7 @@ pub(crate) fn to_temporal_calendar_slot_value(
     match val {
         JsValue::Undefined => Ok("iso8601".to_string()),
         JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object(o.id) {
+            if let Some(obj) = interp.get_object_cell(o.id) {
                 let data = obj.borrow();
                 match &data.temporal_data {
                     Some(TemporalData::PlainDate { calendar, .. })
@@ -1372,7 +1372,7 @@ pub(crate) fn is_partial_temporal_object(
         }
     };
 
-    if let Some(obj) = interp.get_object(obj_ref.id) {
+    if let Some(obj) = interp.get_object_cell(obj_ref.id) {
         let td = obj.borrow().temporal_data.clone();
         if let Some(
             TemporalData::PlainDate { .. }
@@ -1613,8 +1613,8 @@ pub(crate) fn parse_overflow_option(
 
 impl Interpreter {
     pub(crate) fn setup_temporal(&mut self) {
-        let temporal_obj = self.create_object();
-        let temporal_id = temporal_obj.borrow().id.unwrap();
+        let temporal_obj_id = self.create_object_id();
+        let temporal_id = temporal_obj_id;
 
         // @@toStringTag = "Temporal"
         {
@@ -1627,19 +1627,25 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            temporal_obj.borrow_mut().property_order.push(key.clone());
-            temporal_obj.borrow_mut().properties.insert(key, desc);
+            self.get_object_cell_expect(temporal_obj_id)
+                .borrow_mut()
+                .property_order
+                .push(key.clone());
+            self.get_object_cell_expect(temporal_obj_id)
+                .borrow_mut()
+                .properties
+                .insert(key, desc);
         }
 
-        self.setup_temporal_duration(&temporal_obj);
-        self.setup_temporal_instant(&temporal_obj);
-        self.setup_temporal_plain_time(&temporal_obj);
-        self.setup_temporal_plain_date(&temporal_obj);
-        self.setup_temporal_plain_date_time(&temporal_obj);
-        self.setup_temporal_plain_year_month(&temporal_obj);
-        self.setup_temporal_plain_month_day(&temporal_obj);
-        self.setup_temporal_zoned_date_time(&temporal_obj);
-        self.setup_temporal_now(&temporal_obj);
+        self.setup_temporal_duration(temporal_obj_id);
+        self.setup_temporal_instant(temporal_obj_id);
+        self.setup_temporal_plain_time(temporal_obj_id);
+        self.setup_temporal_plain_date(temporal_obj_id);
+        self.setup_temporal_plain_date_time(temporal_obj_id);
+        self.setup_temporal_plain_year_month(temporal_obj_id);
+        self.setup_temporal_plain_month_day(temporal_obj_id);
+        self.setup_temporal_zoned_date_time(temporal_obj_id);
+        self.setup_temporal_now(temporal_obj_id);
 
         // Register Temporal as global (writable, not enumerable, configurable)
         let temporal_val = JsValue::Object(crate::types::JsObject { id: temporal_id });
@@ -1647,11 +1653,8 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Temporal", BindingKind::Var);
-        let _ = self
-            .realm()
-            .global_env
-            .borrow_mut()
-            .set("Temporal", temporal_val);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "Temporal", temporal_val);
     }
 }
 
@@ -2854,7 +2857,7 @@ pub(super) fn to_temporal_time_zone_identifier(
         }
         JsValue::Object(o) => {
             // If it's a Temporal.ZonedDateTime, extract timeZoneId
-            if let Some(obj) = interp.get_object(o.id) {
+            if let Some(obj) = interp.get_object_cell(o.id) {
                 let td = obj.borrow().temporal_data.clone();
                 if let Some(TemporalData::ZonedDateTime { time_zone, .. }) = td {
                     return Ok(time_zone);

@@ -2,23 +2,31 @@ use super::super::*;
 
 impl Interpreter {
     pub(crate) fn setup_map_prototype(&mut self) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "Map".to_string();
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Map".to_string();
 
         // Map iterator prototype
-        let map_iter_proto = self.create_object();
-        map_iter_proto.borrow_mut().prototype_id = self.realm().iterator_prototype;
-        map_iter_proto.borrow_mut().class_name = "Map Iterator".to_string();
+        let map_iter_proto_id = self.create_object_id();
+        self.get_object_cell_expect(map_iter_proto_id)
+            .borrow_mut()
+            .prototype_id = self.realm().iterator_prototype;
+        self.get_object_cell_expect(map_iter_proto_id)
+            .borrow_mut()
+            .class_name = "Map Iterator".to_string();
 
-        map_iter_proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("Map Iterator")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(map_iter_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("Map Iterator")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
         let map_iter_next = self.create_function(JsFunction::native(
             "next".to_string(),
@@ -85,7 +93,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        map_iter_proto
+        self.get_object_cell_expect(map_iter_proto_id)
             .borrow_mut()
             .insert_builtin("next".to_string(), map_iter_next);
 
@@ -95,13 +103,15 @@ impl Interpreter {
                 0,
                 |_interp, this, _args| Completion::Normal(this.clone()),
             ));
-            map_iter_proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(iter_self_fn, true, false, true),
-            );
+            self.get_object_cell_expect(map_iter_proto_id)
+                .borrow_mut()
+                .insert_property(
+                    key,
+                    PropertyDescriptor::data(iter_self_fn, true, false, true),
+                );
         }
 
-        self.realm_mut().map_iterator_prototype = Some(map_iter_proto.borrow().id.unwrap());
+        self.realm_mut().map_iterator_prototype = Some(map_iter_proto_id);
 
         // Helper to create map iterators
         fn create_map_iterator(
@@ -132,7 +142,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                     && {
                         let b = obj.borrow();
                         b.map_data.is_some() && b.class_name == "Map"
@@ -148,13 +158,13 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("entries".to_string(), entries_fn.clone());
 
         // Map.prototype[@@iterator] = entries
         if let Some(key) = self.get_symbol_iterator_key() {
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_property(key, PropertyDescriptor::data(entries_fn, true, false, true));
         }
@@ -165,7 +175,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                     && {
                         let b = obj.borrow();
                         b.map_data.is_some() && b.class_name == "Map"
@@ -181,7 +191,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("keys".to_string(), keys_fn);
 
@@ -191,7 +201,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                     && {
                         let b = obj.borrow();
                         b.map_data.is_some() && b.class_name == "Map"
@@ -207,7 +217,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("values".to_string(), values_fn);
 
@@ -217,7 +227,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let borrowed = obj.borrow();
                     let is_map = borrowed.map_data.is_some() && borrowed.class_name == "Map";
@@ -241,7 +251,9 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto.borrow_mut().insert_builtin("get".to_string(), get_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("get".to_string(), get_fn);
 
         // Map.prototype.set
         let set_fn = self.create_function(JsFunction::native(
@@ -249,7 +261,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_map = {
                         let b = obj.borrow();
@@ -281,7 +293,9 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto.borrow_mut().insert_builtin("set".to_string(), set_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("set".to_string(), set_fn);
 
         // Map.prototype.has
         let has_fn = self.create_function(JsFunction::native(
@@ -289,7 +303,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let borrowed = obj.borrow();
                     let is_map = borrowed.map_data.is_some() && borrowed.class_name == "Map";
@@ -313,7 +327,9 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto.borrow_mut().insert_builtin("has".to_string(), has_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("has".to_string(), has_fn);
 
         // Map.prototype.delete
         let delete_fn = self.create_function(JsFunction::native(
@@ -321,7 +337,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_map = {
                         let b = obj.borrow();
@@ -346,7 +362,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("delete".to_string(), delete_fn);
 
@@ -356,7 +372,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_map = {
                         let b = obj.borrow();
@@ -371,7 +387,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("clear".to_string(), clear_fn);
 
@@ -411,7 +427,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("forEach".to_string(), foreach_fn);
 
@@ -421,7 +437,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let borrowed = obj.borrow();
                     let is_map = borrowed.map_data.is_some() && borrowed.class_name == "Map";
@@ -440,17 +456,19 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto.borrow_mut().insert_property(
-            "size".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(size_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "size".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(size_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // Map.prototype.getOrInsert
         let get_or_insert_fn = self.create_function(JsFunction::native(
@@ -458,7 +476,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_map = {
                         let borrowed = obj.borrow();
@@ -495,7 +513,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("getOrInsert".to_string(), get_or_insert_fn);
 
@@ -505,7 +523,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_map = {
                         let borrowed = obj.borrow();
@@ -515,7 +533,7 @@ impl Interpreter {
                         let mut key = args.first().cloned().unwrap_or(JsValue::Undefined);
                         let callbackfn = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                         // Step 3: IsCallable check BEFORE anything else
-                        if !matches!(&callbackfn, JsValue::Object(co) if interp.get_object(co.id).is_some_and(|o| o.borrow().callable.is_some())) {
+                        if !matches!(&callbackfn, JsValue::Object(co) if interp.get_object_cell(co.id).is_some_and(|o| o.borrow().callable.is_some())) {
                             let err = interp.create_type_error("callbackfn is not a function");
                             return Completion::Throw(err);
                         }
@@ -541,7 +559,7 @@ impl Interpreter {
                         };
                         // Step 7: Re-check if key was inserted by callback
                         {
-                            let obj = interp.get_object(o.id).unwrap();
+                            let obj = interp.get_object_cell(o.id).unwrap();
                             let mut borrowed = obj.borrow_mut();
                             let entries = borrowed.map_data.as_mut().unwrap();
                             for entry in entries.iter_mut().flatten() {
@@ -560,27 +578,28 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("getOrInsertComputed".to_string(), get_or_insert_computed_fn);
 
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("Map")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("Map")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
         // constructor property
-        let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
         // Map constructor
-        let map_proto_clone_id = proto.borrow().id.unwrap();
+        let map_proto_clone_id = proto_id;
         let map_ctor = self.create_function(JsFunction::constructor(
             "Map".to_string(),
             0,
@@ -597,11 +616,10 @@ impl Interpreter {
                     Ok(p) => p.unwrap_or(map_proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
-                let obj = interp.create_object();
-                obj.borrow_mut().prototype_id = Some(proto);
-                obj.borrow_mut().class_name = "Map".to_string();
-                obj.borrow_mut().map_data = Some(Vec::new());
-                let obj_id = obj.borrow().id.unwrap();
+                let obj_id = interp.create_object_id();
+                interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
+                interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "Map".to_string();
+                interp.get_object_cell_expect(obj_id).borrow_mut().map_data = Some(Vec::new());
                 let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -611,7 +629,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
-                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
+                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object_cell(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("Map.prototype.set is not a function");
                         return Completion::Throw(err);
                     }
@@ -683,17 +701,19 @@ impl Interpreter {
 
         // Set Map.prototype on ctor, ctor on prototype
         if let JsValue::Object(ctor_obj) = &map_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val.clone(), false, false, false),
             );
         }
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(map_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(map_ctor.clone(), true, false, true),
+            );
 
         // Map[Symbol.species] getter
         if let JsValue::Object(ref ctor_ref) = map_ctor
@@ -721,7 +741,7 @@ impl Interpreter {
         if let JsValue::Object(ref ctor_ref) = map_ctor
             && let Some(ctor_obj) = self.get_object(ctor_ref.id)
         {
-            let map_proto_for_groupby = proto.clone();
+            let map_proto_for_groupby = proto_id;
             let group_by_fn = self.create_function(JsFunction::native(
                 "groupBy".to_string(),
                 2,
@@ -730,7 +750,7 @@ impl Interpreter {
                     let callback = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
                     // 1. Validate callback is callable
-                    if !matches!(&callback, JsValue::Object(o) if interp.get_object(o.id)
+                    if !matches!(&callback, JsValue::Object(o) if interp.get_object_cell(o.id)
                         .map(|obj| obj.borrow().callable.is_some()).unwrap_or(false))
                     {
                         return Completion::Throw(
@@ -745,12 +765,20 @@ impl Interpreter {
                     };
 
                     // 3. Create result Map
-                    let result_map = interp.create_object();
-                    result_map.borrow_mut().prototype_id =
-                        Some(map_proto_for_groupby.borrow().id.unwrap());
-                    result_map.borrow_mut().class_name = "Map".to_string();
-                    result_map.borrow_mut().map_data = Some(Vec::new());
-                    let result_id = result_map.borrow().id.unwrap();
+                    let result_map_id = interp.create_object_id();
+                    interp
+                        .get_object_cell_expect(result_map_id)
+                        .borrow_mut()
+                        .prototype_id = Some(map_proto_for_groupby);
+                    interp
+                        .get_object_cell_expect(result_map_id)
+                        .borrow_mut()
+                        .class_name = "Map".to_string();
+                    interp
+                        .get_object_cell_expect(result_map_id)
+                        .borrow_mut()
+                        .map_data = Some(Vec::new());
+                    let result_id = result_map_id;
                     let result_val = JsValue::Object(crate::types::JsObject { id: result_id });
 
                     // 4. Iterate and group
@@ -789,7 +817,7 @@ impl Interpreter {
                         };
 
                         // Add value to the group for this key (using Map's SameValueZero semantics)
-                        if let Some(map_obj) = interp.get_object(result_id) {
+                        if let Some(map_obj) = interp.get_object_cell(result_id) {
                             let mut borrowed = map_obj.borrow_mut();
                             let entries = borrowed.map_data.as_mut().unwrap();
 
@@ -823,7 +851,7 @@ impl Interpreter {
                                 // Create new array and add entry
                                 drop(borrowed);
                                 let new_arr = interp.create_array(vec![value]);
-                                if let Some(map_obj) = interp.get_object(result_id) {
+                                if let Some(map_obj) = interp.get_object_cell(result_id) {
                                     let mut borrowed = map_obj.borrow_mut();
                                     let entries = borrowed.map_data.as_mut().unwrap();
                                     entries.push(Some((key_val, new_arr)));
@@ -845,29 +873,38 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Map", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("Map", map_ctor);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "Map", map_ctor);
 
-        self.realm_mut().map_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().map_prototype = Some(proto_id);
     }
 
     pub(crate) fn setup_set_prototype(&mut self) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "Set".to_string();
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Set".to_string();
 
         // Set iterator prototype
-        let set_iter_proto = self.create_object();
-        set_iter_proto.borrow_mut().prototype_id = self.realm().iterator_prototype;
-        set_iter_proto.borrow_mut().class_name = "Set Iterator".to_string();
+        let set_iter_proto_id = self.create_object_id();
+        self.get_object_cell_expect(set_iter_proto_id)
+            .borrow_mut()
+            .prototype_id = self.realm().iterator_prototype;
+        self.get_object_cell_expect(set_iter_proto_id)
+            .borrow_mut()
+            .class_name = "Set Iterator".to_string();
 
-        set_iter_proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("Set Iterator")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(set_iter_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("Set Iterator")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
         let set_iter_next = self.create_function(JsFunction::native(
             "next".to_string(),
@@ -932,7 +969,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        set_iter_proto
+        self.get_object_cell_expect(set_iter_proto_id)
             .borrow_mut()
             .insert_builtin("next".to_string(), set_iter_next);
 
@@ -942,13 +979,15 @@ impl Interpreter {
                 0,
                 |_interp, this, _args| Completion::Normal(this.clone()),
             ));
-            set_iter_proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(iter_self_fn, true, false, true),
-            );
+            self.get_object_cell_expect(set_iter_proto_id)
+                .borrow_mut()
+                .insert_property(
+                    key,
+                    PropertyDescriptor::data(iter_self_fn, true, false, true),
+                );
         }
 
-        self.realm_mut().set_iterator_prototype = Some(set_iter_proto.borrow().id.unwrap());
+        self.realm_mut().set_iterator_prototype = Some(set_iter_proto_id);
 
         fn create_set_iterator(
             interp: &mut Interpreter,
@@ -978,7 +1017,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                     && {
                         let b = obj.borrow();
                         b.set_data.is_some() && b.class_name != "WeakSet"
@@ -994,18 +1033,18 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("values".to_string(), values_fn.clone());
 
         // Set.prototype.keys = Set.prototype.values
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("keys".to_string(), values_fn.clone());
 
         // Set.prototype[@@iterator] = values
         if let Some(key) = self.get_symbol_iterator_key() {
-            proto
+            self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_property(key, PropertyDescriptor::data(values_fn, true, false, true));
         }
@@ -1016,7 +1055,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                     && {
                         let b = obj.borrow();
                         b.set_data.is_some() && b.class_name != "WeakSet"
@@ -1032,7 +1071,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("entries".to_string(), entries_fn);
 
@@ -1042,7 +1081,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_set = {
                         let b = obj.borrow();
@@ -1071,7 +1110,9 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto.borrow_mut().insert_builtin("add".to_string(), add_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("add".to_string(), add_fn);
 
         // Set.prototype.has
         let has_fn = self.create_function(JsFunction::native(
@@ -1079,7 +1120,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let (is_set, set_data) = {
                         let b = obj.borrow();
@@ -1102,7 +1143,9 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto.borrow_mut().insert_builtin("has".to_string(), has_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("has".to_string(), has_fn);
 
         // Set.prototype.delete
         let delete_fn = self.create_function(JsFunction::native(
@@ -1110,7 +1153,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_set = {
                         let b = obj.borrow();
@@ -1135,7 +1178,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("delete".to_string(), delete_fn);
 
@@ -1145,7 +1188,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_set = {
                         let b = obj.borrow();
@@ -1160,7 +1203,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("clear".to_string(), clear_fn);
 
@@ -1200,7 +1243,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("forEach".to_string(), foreach_fn);
 
@@ -1210,7 +1253,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let (has_set, set_data) = {
                         let b = obj.borrow();
@@ -1228,17 +1271,19 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto.borrow_mut().insert_property(
-            "size".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(size_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "size".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(size_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
 
         // ES2025 Set methods
 
@@ -1368,11 +1413,20 @@ impl Interpreter {
         }
 
         fn make_result_set(interp: &mut Interpreter, entries: Vec<Option<JsValue>>) -> Completion {
-            let new_obj = interp.create_object();
-            new_obj.borrow_mut().prototype_id = interp.realm().set_prototype;
-            new_obj.borrow_mut().class_name = "Set".to_string();
-            new_obj.borrow_mut().set_data = Some(entries);
-            let id = new_obj.borrow().id.unwrap();
+            let new_obj_id = interp.create_object_id();
+            interp
+                .get_object_cell_expect(new_obj_id)
+                .borrow_mut()
+                .prototype_id = interp.realm().set_prototype;
+            interp
+                .get_object_cell_expect(new_obj_id)
+                .borrow_mut()
+                .class_name = "Set".to_string();
+            interp
+                .get_object_cell_expect(new_obj_id)
+                .borrow_mut()
+                .set_data = Some(entries);
+            let id = new_obj_id;
             Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
         }
 
@@ -1422,7 +1476,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("union".to_string(), union_fn);
 
@@ -1504,7 +1558,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("intersection".to_string(), intersection_fn);
 
@@ -1573,7 +1627,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("difference".to_string(), difference_fn);
 
@@ -1634,7 +1688,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("symmetricDifference".to_string(), sym_diff_fn);
 
@@ -1689,7 +1743,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("isSubsetOf".to_string(), is_subset_fn);
 
@@ -1738,7 +1792,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("isSupersetOf".to_string(), is_superset_fn);
 
@@ -1810,26 +1864,27 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("isDisjointFrom".to_string(), is_disjoint_fn);
 
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("Set")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("Set")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
-        let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
         // Set constructor
-        let set_proto_clone_id = proto.borrow().id.unwrap();
+        let set_proto_clone_id = proto_id;
         let set_ctor = self.create_function(JsFunction::constructor(
             "Set".to_string(),
             0,
@@ -1846,11 +1901,10 @@ impl Interpreter {
                     Ok(p) => p.unwrap_or(set_proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
-                let obj = interp.create_object();
-                obj.borrow_mut().prototype_id = Some(proto);
-                obj.borrow_mut().class_name = "Set".to_string();
-                obj.borrow_mut().set_data = Some(Vec::new());
-                let obj_id = obj.borrow().id.unwrap();
+                let obj_id = interp.create_object_id();
+                interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
+                interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "Set".to_string();
+                interp.get_object_cell_expect(obj_id).borrow_mut().set_data = Some(Vec::new());
                 let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -1860,7 +1914,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         c => return c,
                     };
-                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
+                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object_cell(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("Set.prototype.add is not a function");
                         return Completion::Throw(err);
                     }
@@ -1928,17 +1982,19 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ctor_obj) = &set_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val.clone(), false, false, false),
             );
         }
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(set_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(set_ctor.clone(), true, false, true),
+            );
 
         // Set[Symbol.species] getter
         if let JsValue::Object(ref ctor_ref) = set_ctor
@@ -1966,9 +2022,10 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Set", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("Set", set_ctor);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "Set", set_ctor);
 
-        self.realm_mut().set_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().set_prototype = Some(proto_id);
     }
 
     pub(crate) fn create_type_error(&mut self, msg: &str) -> JsValue {
@@ -1976,8 +2033,10 @@ impl Interpreter {
     }
 
     pub(crate) fn setup_weakmap_prototype(&mut self) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "WeakMap".to_string();
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "WeakMap".to_string();
 
         // WeakMap.prototype.get
         let get_fn = self.create_function(JsFunction::native(
@@ -1985,7 +2044,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_weakmap = obj.borrow().class_name == "WeakMap";
                     let map_data = obj.borrow().map_data.clone();
@@ -2006,7 +2065,9 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto.borrow_mut().insert_builtin("get".to_string(), get_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("get".to_string(), get_fn);
 
         // WeakMap.prototype.set
         let set_fn = self.create_function(JsFunction::native(
@@ -2014,7 +2075,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_map = obj.borrow().map_data.is_some();
                     if has_map && obj.borrow().class_name == "WeakMap" {
@@ -2041,7 +2102,9 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto.borrow_mut().insert_builtin("set".to_string(), set_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("set".to_string(), set_fn);
 
         // WeakMap.prototype.has
         let has_fn = self.create_function(JsFunction::native(
@@ -2049,7 +2112,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_weakmap = obj.borrow().class_name == "WeakMap";
                     let map_data = obj.borrow().map_data.clone();
@@ -2070,7 +2133,9 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto.borrow_mut().insert_builtin("has".to_string(), has_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("has".to_string(), has_fn);
 
         // WeakMap.prototype.delete
         let delete_fn = self.create_function(JsFunction::native(
@@ -2078,7 +2143,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_weakmap = obj.borrow().class_name == "WeakMap";
                     let has_map = obj.borrow().map_data.is_some();
@@ -2104,7 +2169,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("delete".to_string(), delete_fn);
 
@@ -2114,7 +2179,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = &this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_weakmap =
                         obj.borrow().map_data.is_some() && obj.borrow().class_name == "WeakMap";
@@ -2146,7 +2211,7 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("getOrInsert".to_string(), get_or_insert_fn);
 
@@ -2156,7 +2221,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = &this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_weakmap = obj.borrow().map_data.is_some()
                         && obj.borrow().class_name == "WeakMap";
@@ -2169,7 +2234,7 @@ impl Interpreter {
                             return Completion::Throw(err);
                         }
                         let is_callable = matches!(&callbackfn, JsValue::Object(co)
-                            if interp.get_object(co.id).is_some_and(|ob| ob.borrow().callable.is_some()));
+                            if interp.get_object_cell(co.id).is_some_and(|ob| ob.borrow().callable.is_some()));
                         if !is_callable {
                             let err = interp
                                 .create_type_error("callbackfn is not a function");
@@ -2192,7 +2257,7 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let obj = interp.get_object(o.id).unwrap();
+                        let obj = interp.get_object_cell(o.id).unwrap();
                         let mut borrowed = obj.borrow_mut();
                         let entries = borrowed.map_data.as_mut().unwrap();
                         for entry in entries.iter_mut().flatten() {
@@ -2211,26 +2276,27 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("getOrInsertComputed".to_string(), get_or_insert_computed_fn);
 
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("WeakMap")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("WeakMap")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
-        let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
         // WeakMap constructor
-        let weakmap_proto_clone_id = proto.borrow().id.unwrap();
+        let weakmap_proto_clone_id = proto_id;
         let weakmap_ctor = self.create_function(JsFunction::constructor(
             "WeakMap".to_string(),
             0,
@@ -2247,11 +2313,10 @@ impl Interpreter {
                     Ok(p) => p.unwrap_or(weakmap_proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
-                let obj = interp.create_object();
-                obj.borrow_mut().prototype_id = Some(proto);
-                obj.borrow_mut().class_name = "WeakMap".to_string();
-                obj.borrow_mut().map_data = Some(Vec::new());
-                let obj_id = obj.borrow().id.unwrap();
+                let obj_id = interp.create_object_id();
+                interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
+                interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "WeakMap".to_string();
+                interp.get_object_cell_expect(obj_id).borrow_mut().map_data = Some(Vec::new());
                 let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -2261,7 +2326,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         c => return c,
                     };
-                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
+                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object_cell(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("WeakMap.prototype.set is not a function");
                         return Completion::Throw(err);
                     }
@@ -2364,17 +2429,19 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ctor_obj) = &weakmap_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val.clone(), false, false, false),
             );
         }
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(weakmap_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(weakmap_ctor.clone(), true, false, true),
+            );
 
         self.realm()
             .global_env
@@ -2386,12 +2453,14 @@ impl Interpreter {
             .borrow_mut()
             .set("WeakMap", weakmap_ctor);
 
-        self.realm_mut().weakmap_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().weakmap_prototype = Some(proto_id);
     }
 
     pub(crate) fn setup_weakset_prototype(&mut self) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "WeakSet".to_string();
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "WeakSet".to_string();
 
         // WeakSet.prototype.add
         let add_fn = self.create_function(JsFunction::native(
@@ -2399,7 +2468,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_set =
                         obj.borrow().set_data.is_some() && obj.borrow().class_name == "WeakSet";
@@ -2424,7 +2493,9 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto.borrow_mut().insert_builtin("add".to_string(), add_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("add".to_string(), add_fn);
 
         // WeakSet.prototype.has
         let has_fn = self.create_function(JsFunction::native(
@@ -2432,7 +2503,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_weakset = obj.borrow().class_name == "WeakSet";
                     let set_data = obj.borrow().set_data.clone();
@@ -2453,7 +2524,9 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto.borrow_mut().insert_builtin("has".to_string(), has_fn);
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_builtin("has".to_string(), has_fn);
 
         // WeakSet.prototype.delete
         let delete_fn = self.create_function(JsFunction::native(
@@ -2461,7 +2534,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let is_weakset = obj.borrow().class_name == "WeakSet";
                     let has_set = obj.borrow().set_data.is_some();
@@ -2487,26 +2560,27 @@ impl Interpreter {
                 Completion::Throw(err)
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("delete".to_string(), delete_fn);
 
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("WeakSet")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("WeakSet")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
-        let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
         // WeakSet constructor
-        let weakset_proto_clone_id = proto.borrow().id.unwrap();
+        let weakset_proto_clone_id = proto_id;
         let weakset_ctor = self.create_function(JsFunction::constructor(
             "WeakSet".to_string(),
             0,
@@ -2523,11 +2597,10 @@ impl Interpreter {
                     Ok(p) => p.unwrap_or(weakset_proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
-                let obj = interp.create_object();
-                obj.borrow_mut().prototype_id = Some(proto);
-                obj.borrow_mut().class_name = "WeakSet".to_string();
-                obj.borrow_mut().set_data = Some(Vec::new());
-                let obj_id = obj.borrow().id.unwrap();
+                let obj_id = interp.create_object_id();
+                interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
+                interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "WeakSet".to_string();
+                interp.get_object_cell_expect(obj_id).borrow_mut().set_data = Some(Vec::new());
                 let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
 
                 let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -2537,7 +2610,7 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         c => return c,
                     };
-                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
+                    if !matches!(&adder, JsValue::Object(ao) if interp.get_object_cell(ao.id).is_some_and(|o| o.borrow().callable.is_some())) {
                         let err = interp.create_type_error("WeakSet.prototype.add is not a function");
                         return Completion::Throw(err);
                     }
@@ -2613,17 +2686,19 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ctor_obj) = &weakset_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val.clone(), false, false, false),
             );
         }
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(weakset_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(weakset_ctor.clone(), true, false, true),
+            );
 
         self.realm()
             .global_env
@@ -2635,12 +2710,14 @@ impl Interpreter {
             .borrow_mut()
             .set("WeakSet", weakset_ctor);
 
-        self.realm_mut().weakset_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().weakset_prototype = Some(proto_id);
     }
 
     pub(crate) fn setup_weakref(&mut self) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "WeakRef".to_string();
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "WeakRef".to_string();
 
         // WeakRef.prototype.deref
         let deref_fn = self.create_function(JsFunction::native(
@@ -2650,7 +2727,7 @@ impl Interpreter {
                 // Require this to be an object with [[WeakRefTarget]] internal slot
                 // (indicated by class_name == "WeakRef" AND primitive_value.is_some())
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let b = obj.borrow();
                     if b.class_name == "WeakRef" && b.primitive_value.is_some() {
@@ -2664,7 +2741,7 @@ impl Interpreter {
                 )
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("deref".to_string(), deref_fn);
 
@@ -2679,8 +2756,14 @@ impl Interpreter {
                 set: None,
             };
             let key = "Symbol(Symbol.toStringTag)".to_string();
-            proto.borrow_mut().property_order.push(key.clone());
-            proto.borrow_mut().properties.insert(key, desc);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .property_order
+                .push(key.clone());
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .properties
+                .insert(key, desc);
         }
 
         // WeakRef constructor
@@ -2705,26 +2788,33 @@ impl Interpreter {
                     Ok(p) => p,
                     Err(e) => return Completion::Throw(e),
                 };
-                let obj = interp.create_object();
-                obj.borrow_mut().class_name = "WeakRef".to_string();
+                let obj_id = interp.create_object_id();
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .class_name = "WeakRef".to_string();
                 if let Some(p) = proto {
-                    obj.borrow_mut().prototype_id = Some(p);
+                    interp
+                        .get_object_cell_expect(obj_id)
+                        .borrow_mut()
+                        .prototype_id = Some(p);
                 }
-                obj.borrow_mut().primitive_value = Some(target);
-                let id = obj.borrow().id.unwrap();
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .primitive_value = Some(target);
+                let id = obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             },
         ));
 
         if let JsValue::Object(ref ctor_obj) = weakref_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(
-                    JsValue::Object(crate::types::JsObject {
-                        id: proto.borrow().id.unwrap(),
-                    }),
+                    JsValue::Object(crate::types::JsObject { id: proto_id }),
                     false,
                     false,
                     false,
@@ -2732,10 +2822,12 @@ impl Interpreter {
             );
         }
 
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(weakref_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(weakref_ctor.clone(), true, false, true),
+            );
 
         self.realm()
             .global_env
@@ -2747,12 +2839,14 @@ impl Interpreter {
             .borrow_mut()
             .set("WeakRef", weakref_ctor);
 
-        self.realm_mut().weakref_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().weakref_prototype = Some(proto_id);
     }
 
     pub(crate) fn setup_finalization_registry(&mut self) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "FinalizationRegistry".to_string();
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "FinalizationRegistry".to_string();
 
         // FinalizationRegistry.prototype.register
         let register_fn = self.create_function(JsFunction::native(
@@ -2760,7 +2854,7 @@ impl Interpreter {
             2,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     // Check [[Cells]] internal slot: class_name + map_data.is_some()
                     let has_cells = {
@@ -2796,7 +2890,7 @@ impl Interpreter {
                         } else {
                             Some(unregister_token)
                         };
-                        if let Some(obj_rc) = interp.get_object(o.id) {
+                        if let Some(obj_rc) = interp.get_object_cell(o.id) {
                             let mut b = obj_rc.borrow_mut();
                             if let Some(ref mut cells) = b.map_data {
                                 cells.push(Some((target, held_value)));
@@ -2813,7 +2907,7 @@ impl Interpreter {
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("register".to_string(), register_fn);
 
@@ -2823,7 +2917,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_cells = {
                         let b = obj.borrow();
@@ -2838,7 +2932,7 @@ impl Interpreter {
                         }
                         // Remove cells whose unregisterToken matches
                         let mut removed = false;
-                        if let Some(obj_rc) = interp.get_object(o.id) {
+                        if let Some(obj_rc) = interp.get_object_cell(o.id) {
                             let mut b = obj_rc.borrow_mut();
                             let len = b.map_data.as_ref().map(|c| c.len()).unwrap_or(0);
                             for i in 0..len {
@@ -2868,7 +2962,7 @@ impl Interpreter {
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("unregister".to_string(), unregister_fn);
 
@@ -2878,7 +2972,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let has_cells = {
                         let b = obj.borrow();
@@ -2893,7 +2987,7 @@ impl Interpreter {
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("cleanupSome".to_string(), cleanup_fn);
 
@@ -2908,8 +3002,14 @@ impl Interpreter {
                 set: None,
             };
             let key = "Symbol(Symbol.toStringTag)".to_string();
-            proto.borrow_mut().property_order.push(key.clone());
-            proto.borrow_mut().properties.insert(key, desc);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .property_order
+                .push(key.clone());
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .properties
+                .insert(key, desc);
         }
 
         // FinalizationRegistry constructor
@@ -2929,7 +3029,7 @@ impl Interpreter {
                     ));
                 }
                 if let JsValue::Object(ref o) = callback
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                     && obj.borrow().callable.is_none()
                 {
                     return Completion::Throw(interp.create_type_error(
@@ -2943,29 +3043,36 @@ impl Interpreter {
                     Ok(p) => p,
                     Err(e) => return Completion::Throw(e),
                 };
-                let obj = interp.create_object();
-                obj.borrow_mut().class_name = "FinalizationRegistry".to_string();
+                let obj_id = interp.create_object_id();
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .class_name = "FinalizationRegistry".to_string();
                 if let Some(p) = proto {
-                    obj.borrow_mut().prototype_id = Some(p);
+                    interp
+                        .get_object_cell_expect(obj_id)
+                        .borrow_mut()
+                        .prototype_id = Some(p);
                 }
-                obj.borrow_mut().primitive_value = Some(callback);
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .primitive_value = Some(callback);
                 // Initialize [[Cells]] as empty - map_data for (target, heldValue), set_data for tokens
-                obj.borrow_mut().map_data = Some(Vec::new());
-                obj.borrow_mut().set_data = Some(Vec::new());
-                let id = obj.borrow().id.unwrap();
+                interp.get_object_cell_expect(obj_id).borrow_mut().map_data = Some(Vec::new());
+                interp.get_object_cell_expect(obj_id).borrow_mut().set_data = Some(Vec::new());
+                let id = obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             },
         ));
 
         if let JsValue::Object(ref ctor_obj) = fr_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(
-                    JsValue::Object(crate::types::JsObject {
-                        id: proto.borrow().id.unwrap(),
-                    }),
+                    JsValue::Object(crate::types::JsObject { id: proto_id }),
                     false,
                     false,
                     false,
@@ -2973,10 +3080,12 @@ impl Interpreter {
             );
         }
 
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(fr_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(fr_ctor.clone(), true, false, true),
+            );
 
         self.realm()
             .global_env
@@ -2988,6 +3097,6 @@ impl Interpreter {
             .borrow_mut()
             .set("FinalizationRegistry", fr_ctor);
 
-        self.realm_mut().finalization_registry_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().finalization_registry_prototype = Some(proto_id);
     }
 }

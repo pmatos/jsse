@@ -91,39 +91,54 @@ fn create_segment_object(
     input: &[u16],
     is_word_like: Option<bool>,
 ) -> JsValue {
-    let obj = interp.create_object();
+    let obj_id = interp.create_object_id();
     if let Some(op_id) = interp.realm().object_prototype {
-        obj.borrow_mut().prototype_id = Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+        interp
+            .get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .prototype_id = Some(op_id);
     }
-    obj.borrow_mut().insert_property(
-        "segment".to_string(),
-        PropertyDescriptor::data(
-            JsValue::String(JsString::from_vec(segment.to_vec())),
-            true,
-            true,
-            true,
-        ),
-    );
-    obj.borrow_mut().insert_property(
-        "index".to_string(),
-        PropertyDescriptor::data(JsValue::Number(index as f64), true, true, true),
-    );
-    obj.borrow_mut().insert_property(
-        "input".to_string(),
-        PropertyDescriptor::data(
-            JsValue::String(JsString::from_vec(input.to_vec())),
-            true,
-            true,
-            true,
-        ),
-    );
-    if let Some(wl) = is_word_like {
-        obj.borrow_mut().insert_property(
-            "isWordLike".to_string(),
-            PropertyDescriptor::data(JsValue::Boolean(wl), true, true, true),
+    interp
+        .get_object_cell_expect(obj_id)
+        .borrow_mut()
+        .insert_property(
+            "segment".to_string(),
+            PropertyDescriptor::data(
+                JsValue::String(JsString::from_vec(segment.to_vec())),
+                true,
+                true,
+                true,
+            ),
         );
+    interp
+        .get_object_cell_expect(obj_id)
+        .borrow_mut()
+        .insert_property(
+            "index".to_string(),
+            PropertyDescriptor::data(JsValue::Number(index as f64), true, true, true),
+        );
+    interp
+        .get_object_cell_expect(obj_id)
+        .borrow_mut()
+        .insert_property(
+            "input".to_string(),
+            PropertyDescriptor::data(
+                JsValue::String(JsString::from_vec(input.to_vec())),
+                true,
+                true,
+                true,
+            ),
+        );
+    if let Some(wl) = is_word_like {
+        interp
+            .get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .insert_property(
+                "isWordLike".to_string(),
+                PropertyDescriptor::data(JsValue::Boolean(wl), true, true, true),
+            );
     }
-    let id = obj.borrow().id.unwrap();
+    let id = obj_id;
     JsValue::Object(crate::types::JsObject { id })
 }
 
@@ -132,7 +147,7 @@ fn extract_segmenter_data(
     this: &JsValue,
 ) -> Result<(String, String), JsValue> {
     if let JsValue::Object(o) = this
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(obj) = interp.get_object_cell(o.id)
     {
         let b = obj.borrow();
         if let Some(IntlData::Segmenter {
@@ -147,26 +162,31 @@ fn extract_segmenter_data(
 }
 
 impl Interpreter {
-    pub(crate) fn setup_intl_segmenter(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
-        let proto = self.create_object();
+    pub(crate) fn setup_intl_segmenter(&mut self, intl_obj_id: u64) {
+        let proto_id = self.create_object_id();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype_id =
-                Some(self.get_object_expect(op_id).borrow().id.unwrap());
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .prototype_id = Some(op_id);
         }
-        proto.borrow_mut().class_name = "Intl.Segmenter".to_string();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Intl.Segmenter".to_string();
 
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Intl.Segmenter"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor {
+                    value: Some(JsValue::String(JsString::from_str("Intl.Segmenter"))),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                    get: None,
+                    set: None,
+                },
+            );
 
         // segment(string)
         let segment_fn = self.create_function(JsFunction::native(
@@ -187,43 +207,60 @@ impl Interpreter {
 
                 let breaks = compute_break_points_utf16(&input_u16, &granularity);
 
-                let segments_obj = interp.create_object();
+                let segments_obj_id = interp.create_object_id();
                 if let Some(op_id) = interp.realm().object_prototype {
-                    segments_obj.borrow_mut().prototype_id =
-                        Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                    interp
+                        .get_object_cell_expect(segments_obj_id)
+                        .borrow_mut()
+                        .prototype_id = Some(op_id);
                 }
-                segments_obj.borrow_mut().class_name = "Segmenter Segments".to_string();
+                interp
+                    .get_object_cell_expect(segments_obj_id)
+                    .borrow_mut()
+                    .class_name = "Segmenter Segments".to_string();
 
-                segments_obj.borrow_mut().insert_property(
-                    "[[SegmenterInput]]".to_string(),
-                    PropertyDescriptor::data(JsValue::String(input_js), false, false, false),
-                );
-                segments_obj.borrow_mut().insert_property(
-                    "[[SegmenterGranularity]]".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str(&granularity)),
-                        false,
-                        false,
-                        false,
-                    ),
-                );
-                segments_obj.borrow_mut().insert_property(
-                    "[[SegmenterLocale]]".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str(&locale)),
-                        false,
-                        false,
-                        false,
-                    ),
-                );
+                interp
+                    .get_object_cell_expect(segments_obj_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "[[SegmenterInput]]".to_string(),
+                        PropertyDescriptor::data(JsValue::String(input_js), false, false, false),
+                    );
+                interp
+                    .get_object_cell_expect(segments_obj_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "[[SegmenterGranularity]]".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::String(JsString::from_str(&granularity)),
+                            false,
+                            false,
+                            false,
+                        ),
+                    );
+                interp
+                    .get_object_cell_expect(segments_obj_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "[[SegmenterLocale]]".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::String(JsString::from_str(&locale)),
+                            false,
+                            false,
+                            false,
+                        ),
+                    );
 
                 let breaks_vals: Vec<JsValue> =
                     breaks.iter().map(|&b| JsValue::Number(b as f64)).collect();
                 let breaks_arr = interp.create_array(breaks_vals);
-                segments_obj.borrow_mut().insert_property(
-                    "[[SegmenterBreaks]]".to_string(),
-                    PropertyDescriptor::data(breaks_arr, false, false, false),
-                );
+                interp
+                    .get_object_cell_expect(segments_obj_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "[[SegmenterBreaks]]".to_string(),
+                        PropertyDescriptor::data(breaks_arr, false, false, false),
+                    );
 
                 // containing(index) method
                 let containing_fn = interp.create_function(JsFunction::native(
@@ -232,7 +269,7 @@ impl Interpreter {
                     |interp, this, args| {
                         // RequireInternalSlot(segments, [[SegmentsSegmenter]])
                         let is_segments = if let JsValue::Object(o) = this {
-                            if let Some(obj) = interp.get_object(o.id) {
+                            if let Some(obj) = interp.get_object_cell(o.id) {
                                 let b = obj.borrow();
                                 b.class_name == "Segmenter Segments"
                                     && b.properties.contains_key("[[SegmenterInput]]")
@@ -267,7 +304,7 @@ impl Interpreter {
                         let idx = idx as usize;
 
                         let (input_u16, granularity, breaks) = if let JsValue::Object(o) = this {
-                            if let Some(obj) = interp.get_object(o.id) {
+                            if let Some(obj) = interp.get_object_cell(o.id) {
                                 let b = obj.borrow();
                                 let input_u16 = b
                                     .properties
@@ -299,7 +336,7 @@ impl Interpreter {
 
                                 let mut break_points = Vec::new();
                                 if let Some(JsValue::Object(arr_obj)) = breaks_val
-                                    && let Some(arr) = interp.get_object(arr_obj.id)
+                                    && let Some(arr) = interp.get_object_cell(arr_obj.id)
                                 {
                                     let ab = arr.borrow();
                                     if let Some(elems) = &ab.array_elements {
@@ -356,7 +393,8 @@ impl Interpreter {
                         ))
                     },
                 ));
-                segments_obj
+                interp
+                    .get_object_cell_expect(segments_obj_id)
                     .borrow_mut()
                     .insert_builtin("containing".to_string(), containing_fn);
 
@@ -373,58 +411,99 @@ impl Interpreter {
                             .map(|s| (s.segment, s.index, s.is_word_like.unwrap_or(false)))
                             .collect();
 
-                        let iter_obj = interp.create_object();
+                        let iter_obj_id = interp.create_object_id();
                         if let Some(ip_id) = interp.realm().iterator_prototype {
-                            iter_obj.borrow_mut().prototype_id =
-                                Some(interp.get_object_expect(ip_id).borrow().id.unwrap());
+                            interp
+                                .get_object_cell_expect(iter_obj_id)
+                                .borrow_mut()
+                                .prototype_id = Some(ip_id);
                         }
-                        iter_obj.borrow_mut().class_name = "Segmenter String Iterator".to_string();
+                        interp
+                            .get_object_cell_expect(iter_obj_id)
+                            .borrow_mut()
+                            .class_name = "Segmenter String Iterator".to_string();
 
                         let has_word_like = granularity_clone == "word";
 
-                        iter_obj.borrow_mut().iterator_state =
-                            Some(IteratorState::SegmentIterator {
-                                segments: seg_data,
-                                input: std::rc::Rc::new(input_clone.as_ref().clone()),
-                                position: 0,
-                                done: false,
-                            });
+                        interp
+                            .get_object_cell_expect(iter_obj_id)
+                            .borrow_mut()
+                            .iterator_state = Some(IteratorState::SegmentIterator {
+                            segments: seg_data,
+                            input: std::rc::Rc::new(input_clone.as_ref().clone()),
+                            position: 0,
+                            done: false,
+                        });
 
-                        iter_obj.borrow_mut().insert_property(
-                            "[[HasWordLike]]".to_string(),
-                            PropertyDescriptor::data(
-                                JsValue::Boolean(has_word_like),
-                                false,
-                                false,
-                                false,
-                            ),
-                        );
+                        interp
+                            .get_object_cell_expect(iter_obj_id)
+                            .borrow_mut()
+                            .insert_property(
+                                "[[HasWordLike]]".to_string(),
+                                PropertyDescriptor::data(
+                                    JsValue::Boolean(has_word_like),
+                                    false,
+                                    false,
+                                    false,
+                                ),
+                            );
 
                         let next_fn = interp.create_function(JsFunction::native(
                             "next".to_string(),
                             0,
                             |interp, this, _args| {
                                 if let JsValue::Object(o) = this
-                                    && let Some(obj) = interp.get_object(o.id)
+                                    && interp.get_object_cell(o.id).is_some()
                                 {
-                                    let has_word_like = {
-                                        let b = obj.borrow();
-                                        b.properties
+                                    let iter_id = o.id;
+                                    enum Step {
+                                        Done,
+                                        Yield {
+                                            seg: Vec<u16>,
+                                            idx: usize,
+                                            input: std::rc::Rc<Vec<u16>>,
+                                            wl: bool,
+                                            has_word_like: bool,
+                                        },
+                                        NotIter,
+                                    }
+                                    let step = {
+                                        let cell = interp.get_object_cell_expect(iter_id);
+                                        let has_word_like = cell
+                                            .borrow()
+                                            .properties
                                             .get("[[HasWordLike]]")
                                             .and_then(|pd| pd.value.as_ref())
                                             .map(|v| matches!(v, JsValue::Boolean(true)))
-                                            .unwrap_or(false)
+                                            .unwrap_or(false);
+                                        let mut b = cell.borrow_mut();
+                                        if let Some(IteratorState::SegmentIterator {
+                                            ref mut segments,
+                                            ref input,
+                                            ref mut position,
+                                            ref mut done,
+                                        }) = b.iterator_state
+                                        {
+                                            if *done || *position >= segments.len() {
+                                                *done = true;
+                                                Step::Done
+                                            } else {
+                                                let (seg, idx, wl) = segments[*position].clone();
+                                                *position += 1;
+                                                Step::Yield {
+                                                    seg,
+                                                    idx,
+                                                    input: input.clone(),
+                                                    wl,
+                                                    has_word_like,
+                                                }
+                                            }
+                                        } else {
+                                            Step::NotIter
+                                        }
                                     };
-
-                                    if let Some(IteratorState::SegmentIterator {
-                                        ref mut segments,
-                                        ref input,
-                                        ref mut position,
-                                        ref mut done,
-                                    }) = obj.borrow_mut().iterator_state
-                                    {
-                                        if *done || *position >= segments.len() {
-                                            *done = true;
+                                    match step {
+                                        Step::Done => {
                                             return Completion::Normal(
                                                 interp.create_iter_result_object(
                                                     JsValue::Undefined,
@@ -432,23 +511,27 @@ impl Interpreter {
                                                 ),
                                             );
                                         }
-
-                                        let (seg, idx, wl) = segments[*position].clone();
-                                        *position += 1;
-
-                                        let is_word_like =
-                                            if has_word_like { Some(wl) } else { None };
-                                        let seg_obj = create_segment_object(
-                                            interp,
-                                            &seg,
+                                        Step::Yield {
+                                            seg,
                                             idx,
                                             input,
-                                            is_word_like,
-                                        );
-
-                                        return Completion::Normal(
-                                            interp.create_iter_result_object(seg_obj, false),
-                                        );
+                                            wl,
+                                            has_word_like,
+                                        } => {
+                                            let is_word_like =
+                                                if has_word_like { Some(wl) } else { None };
+                                            let seg_obj = create_segment_object(
+                                                interp,
+                                                &seg,
+                                                idx,
+                                                &input,
+                                                is_word_like,
+                                            );
+                                            return Completion::Normal(
+                                                interp.create_iter_result_object(seg_obj, false),
+                                            );
+                                        }
+                                        Step::NotIter => {}
                                     }
                                 }
                                 Completion::Normal(
@@ -456,25 +539,29 @@ impl Interpreter {
                                 )
                             },
                         ));
-                        iter_obj
+                        interp
+                            .get_object_cell_expect(iter_obj_id)
                             .borrow_mut()
                             .insert_builtin("next".to_string(), next_fn);
 
-                        let iter_id = iter_obj.borrow().id.unwrap();
+                        let iter_id = iter_obj_id;
                         Completion::Normal(JsValue::Object(crate::types::JsObject { id: iter_id }))
                     },
                 ));
 
-                segments_obj.borrow_mut().insert_property(
-                    "Symbol(Symbol.iterator)".to_string(),
-                    PropertyDescriptor::data(iter_fn, true, false, true),
-                );
+                interp
+                    .get_object_cell_expect(segments_obj_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "Symbol(Symbol.iterator)".to_string(),
+                        PropertyDescriptor::data(iter_fn, true, false, true),
+                    );
 
-                let segments_id = segments_obj.borrow().id.unwrap();
+                let segments_id = segments_obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: segments_id }))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("segment".to_string(), segment_fn);
 
@@ -488,10 +575,12 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let result = interp.create_object();
+                let result_id = interp.create_object_id();
                 if let Some(op_id) = interp.realm().object_prototype {
-                    result.borrow_mut().prototype_id =
-                        Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .prototype_id = Some(op_id);
                 }
 
                 let props = vec![
@@ -502,26 +591,27 @@ impl Interpreter {
                     ),
                 ];
                 for (key, val) in props {
-                    result.borrow_mut().insert_property(
-                        key.to_string(),
-                        PropertyDescriptor::data(val, true, true, true),
-                    );
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .insert_property(
+                            key.to_string(),
+                            PropertyDescriptor::data(val, true, true, true),
+                        );
                 }
 
-                let result_id = result.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_segmenter_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().intl_segmenter_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone_id = proto.borrow().id.unwrap();
+        let proto_clone_id = proto_id;
 
         let segmenter_ctor = self.create_function(JsFunction::constructor(
             "Segmenter".to_string(),
@@ -575,27 +665,36 @@ impl Interpreter {
                     Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
-                let obj = interp.create_object();
-                obj.borrow_mut().prototype_id = Some(proto);
-                obj.borrow_mut().class_name = "Intl.Segmenter".to_string();
-                obj.borrow_mut().intl_data = Some(IntlData::Segmenter {
-                    locale,
-                    granularity,
-                });
+                let obj_id = interp.create_object_id();
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .prototype_id = Some(proto);
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .class_name = "Intl.Segmenter".to_string();
+                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
+                    Some(IntlData::Segmenter {
+                        locale,
+                        granularity,
+                    });
 
-                let obj_id = obj.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },
         ));
 
         // Set Segmenter.prototype on constructor
         if let JsValue::Object(ctor_ref) = &segmenter_ctor
-            && let Some(obj) = self.get_object(ctor_ref.id)
+            && self.get_object_cell(ctor_ref.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), false, false, false),
-            );
+            let ctor_id = ctor_ref.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
+                );
 
             // supportedLocalesOf static method
             let slof = self.create_function(JsFunction::native(
@@ -614,20 +713,25 @@ impl Interpreter {
                     }
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
                 .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(segmenter_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(segmenter_ctor.clone(), true, false, true),
+            );
 
         // Register Intl.Segmenter on the Intl namespace
-        intl_obj.borrow_mut().insert_property(
-            "Segmenter".to_string(),
-            PropertyDescriptor::data(segmenter_ctor, true, false, true),
-        );
+        self.get_object_cell_expect(intl_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "Segmenter".to_string(),
+                PropertyDescriptor::data(segmenter_ctor, true, false, true),
+            );
     }
 }

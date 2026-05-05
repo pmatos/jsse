@@ -101,26 +101,31 @@ fn format_list_to_parts(formatter: &ListFormatter, elements: &[String]) -> Vec<(
 }
 
 impl Interpreter {
-    pub(crate) fn setup_intl_list_format(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
-        let proto = self.create_object();
+    pub(crate) fn setup_intl_list_format(&mut self, intl_obj_id: u64) {
+        let proto_id = self.create_object_id();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype_id =
-                Some(self.get_object_expect(op_id).borrow().id.unwrap());
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .prototype_id = Some(op_id);
         }
-        proto.borrow_mut().class_name = "Intl.ListFormat".to_string();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Intl.ListFormat".to_string();
 
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Intl.ListFormat"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor {
+                    value: Some(JsValue::String(JsString::from_str("Intl.ListFormat"))),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                    get: None,
+                    set: None,
+                },
+            );
 
         // format(list)
         let format_fn = self.create_function(JsFunction::native(
@@ -147,7 +152,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::String(JsString::from_str(&result)))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("format".to_string(), format_fn);
 
@@ -177,30 +182,38 @@ impl Interpreter {
                 let js_parts: Vec<JsValue> = parts
                     .into_iter()
                     .map(|(ptype, value)| {
-                        let part_obj = interp.create_object();
+                        let part_obj_id = interp.create_object_id();
                         if let Some(op_id) = interp.realm().object_prototype {
-                            part_obj.borrow_mut().prototype_id =
-                                Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                            interp
+                                .get_object_cell_expect(part_obj_id)
+                                .borrow_mut()
+                                .prototype_id = Some(op_id);
                         }
-                        part_obj.borrow_mut().insert_property(
-                            "type".to_string(),
-                            PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&ptype)),
-                                true,
-                                true,
-                                true,
-                            ),
-                        );
-                        part_obj.borrow_mut().insert_property(
-                            "value".to_string(),
-                            PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&value)),
-                                true,
-                                true,
-                                true,
-                            ),
-                        );
-                        let id = part_obj.borrow().id.unwrap();
+                        interp
+                            .get_object_cell_expect(part_obj_id)
+                            .borrow_mut()
+                            .insert_property(
+                                "type".to_string(),
+                                PropertyDescriptor::data(
+                                    JsValue::String(JsString::from_str(&ptype)),
+                                    true,
+                                    true,
+                                    true,
+                                ),
+                            );
+                        interp
+                            .get_object_cell_expect(part_obj_id)
+                            .borrow_mut()
+                            .insert_property(
+                                "value".to_string(),
+                                PropertyDescriptor::data(
+                                    JsValue::String(JsString::from_str(&value)),
+                                    true,
+                                    true,
+                                    true,
+                                ),
+                            );
+                        let id = part_obj_id;
                         JsValue::Object(crate::types::JsObject { id })
                     })
                     .collect();
@@ -208,7 +221,7 @@ impl Interpreter {
                 Completion::Normal(interp.create_array(js_parts))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("formatToParts".to_string(), format_to_parts_fn);
 
@@ -222,10 +235,12 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let result = interp.create_object();
+                let result_id = interp.create_object_id();
                 if let Some(op_id) = interp.realm().object_prototype {
-                    result.borrow_mut().prototype_id =
-                        Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .prototype_id = Some(op_id);
                 }
 
                 let props = vec![
@@ -234,26 +249,27 @@ impl Interpreter {
                     ("style", JsValue::String(JsString::from_str(&style))),
                 ];
                 for (key, val) in props {
-                    result.borrow_mut().insert_property(
-                        key.to_string(),
-                        PropertyDescriptor::data(val, true, true, true),
-                    );
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .insert_property(
+                            key.to_string(),
+                            PropertyDescriptor::data(val, true, true, true),
+                        );
                 }
 
-                let result_id = result.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_list_format_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().intl_list_format_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone_id = proto.borrow().id.unwrap();
+        let proto_clone_id = proto_id;
 
         let list_format_ctor = self.create_function(JsFunction::constructor(
             "ListFormat".to_string(),
@@ -318,28 +334,37 @@ impl Interpreter {
                     Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
-                let obj = interp.create_object();
-                obj.borrow_mut().prototype_id = Some(proto);
-                obj.borrow_mut().class_name = "Intl.ListFormat".to_string();
-                obj.borrow_mut().intl_data = Some(IntlData::ListFormat {
-                    locale,
-                    list_type,
-                    style,
-                });
+                let obj_id = interp.create_object_id();
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .prototype_id = Some(proto);
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .class_name = "Intl.ListFormat".to_string();
+                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
+                    Some(IntlData::ListFormat {
+                        locale,
+                        list_type,
+                        style,
+                    });
 
-                let obj_id = obj.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },
         ));
 
         // Set ListFormat.prototype on constructor
         if let JsValue::Object(ctor_ref) = &list_format_ctor
-            && let Some(obj) = self.get_object(ctor_ref.id)
+            && self.get_object_cell(ctor_ref.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), false, false, false),
-            );
+            let ctor_id = ctor_ref.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
+                );
 
             // supportedLocalesOf static method
             let slof = self.create_function(JsFunction::native(
@@ -358,21 +383,26 @@ impl Interpreter {
                     }
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
                 .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(list_format_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(list_format_ctor.clone(), true, false, true),
+            );
 
         // Register Intl.ListFormat on the Intl namespace
-        intl_obj.borrow_mut().insert_property(
-            "ListFormat".to_string(),
-            PropertyDescriptor::data(list_format_ctor, true, false, true),
-        );
+        self.get_object_cell_expect(intl_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "ListFormat".to_string(),
+                PropertyDescriptor::data(list_format_ctor, true, false, true),
+            );
     }
 }
 
@@ -381,9 +411,9 @@ fn extract_list_format_data(
     this: &JsValue,
 ) -> Result<(String, String, String), JsValue> {
     if let JsValue::Object(o) = this
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(cell) = interp.get_object_cell(o.id)
     {
-        let b = obj.borrow();
+        let b = cell.borrow();
         if let Some(IntlData::ListFormat {
             ref locale,
             ref list_type,

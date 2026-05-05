@@ -9,7 +9,7 @@ fn date_to_locale_string(
 ) -> Completion {
     fn this_time_value_locale(interp: &Interpreter, this: &JsValue) -> Option<f64> {
         if let JsValue::Object(o) = this
-            && let Some(obj) = interp.get_object(o.id)
+            && let Some(obj) = interp.get_object_cell(o.id)
         {
             let b = obj.borrow();
             if b.class_name == "Date"
@@ -37,40 +37,49 @@ fn date_to_locale_string(
     let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
     // ToDateTimeOptions(options, required, defaults)
-    let options_obj = if matches!(options_arg, JsValue::Undefined) {
-        interp.create_object()
+    let options_obj_id = if matches!(options_arg, JsValue::Undefined) {
+        interp.create_object_id()
     } else {
         match interp.to_object(&options_arg) {
             Completion::Normal(v) => {
                 if let JsValue::Object(o) = &v {
-                    if let Some(src) = interp.get_object(o.id) {
-                        let new_obj = interp.create_object();
-                        let src_b = src.borrow();
-                        for (k, pd) in src_b.properties.iter() {
-                            new_obj.borrow_mut().insert_property(k.clone(), pd.clone());
+                    if let Some(src) = interp.get_object_cell(o.id) {
+                        let pds: Vec<(String, PropertyDescriptor)> = src
+                            .borrow()
+                            .properties
+                            .iter()
+                            .map(|(k, pd)| (k.clone(), pd.clone()))
+                            .collect();
+                        let new_obj_id = interp.create_object_id();
+                        for (k, pd) in pds {
+                            interp
+                                .get_object_cell_expect(new_obj_id)
+                                .borrow_mut()
+                                .insert_property(k, pd);
                         }
-                        new_obj
+                        new_obj_id
                     } else {
-                        interp.create_object()
+                        interp.create_object_id()
                     }
                 } else {
-                    interp.create_object()
+                    interp.create_object_id()
                 }
             }
             Completion::Throw(e) => return Completion::Throw(e),
-            _ => interp.create_object(),
+            _ => interp.create_object_id(),
         }
     };
 
-    let has_prop = |obj: &Rc<RefCell<JsObjectData>>, name: &str| -> bool {
-        obj.borrow().properties.contains_key(name)
-    };
+    let has_prop = |obj: &JsObjectData, name: &str| -> bool { obj.properties.contains_key(name) };
 
     let mut need_defaults = true;
 
     if required == "date" || required == "any" {
         for prop in &["weekday", "year", "month", "day"] {
-            if has_prop(&options_obj, prop) {
+            if has_prop(
+                &interp.get_object_cell_expect(options_obj_id).borrow(),
+                prop,
+            ) {
                 need_defaults = false;
                 break;
             }
@@ -84,13 +93,23 @@ fn date_to_locale_string(
             "second",
             "fractionalSecondDigits",
         ] {
-            if has_prop(&options_obj, prop) {
+            if has_prop(
+                &interp.get_object_cell_expect(options_obj_id).borrow(),
+                prop,
+            ) {
                 need_defaults = false;
                 break;
             }
         }
     }
-    if need_defaults && (has_prop(&options_obj, "dateStyle") || has_prop(&options_obj, "timeStyle"))
+    if need_defaults
+        && (has_prop(
+            &interp.get_object_cell_expect(options_obj_id).borrow(),
+            "dateStyle",
+        ) || has_prop(
+            &interp.get_object_cell_expect(options_obj_id).borrow(),
+            "timeStyle",
+        ))
     {
         need_defaults = false;
     }
@@ -98,37 +117,54 @@ fn date_to_locale_string(
     if need_defaults {
         let numeric = JsValue::String(JsString::from_str("numeric"));
         if defaults == "date" || defaults == "all" {
-            options_obj.borrow_mut().insert_property(
-                "year".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            options_obj.borrow_mut().insert_property(
-                "month".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            options_obj.borrow_mut().insert_property(
-                "day".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
+            interp
+                .get_object_cell_expect(options_obj_id)
+                .borrow_mut()
+                .insert_property(
+                    "year".to_string(),
+                    PropertyDescriptor::data(numeric.clone(), true, true, true),
+                );
+            interp
+                .get_object_cell_expect(options_obj_id)
+                .borrow_mut()
+                .insert_property(
+                    "month".to_string(),
+                    PropertyDescriptor::data(numeric.clone(), true, true, true),
+                );
+            interp
+                .get_object_cell_expect(options_obj_id)
+                .borrow_mut()
+                .insert_property(
+                    "day".to_string(),
+                    PropertyDescriptor::data(numeric.clone(), true, true, true),
+                );
         }
         if defaults == "time" || defaults == "all" {
-            options_obj.borrow_mut().insert_property(
-                "hour".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            options_obj.borrow_mut().insert_property(
-                "minute".to_string(),
-                PropertyDescriptor::data(numeric.clone(), true, true, true),
-            );
-            options_obj.borrow_mut().insert_property(
-                "second".to_string(),
-                PropertyDescriptor::data(numeric, true, true, true),
-            );
+            interp
+                .get_object_cell_expect(options_obj_id)
+                .borrow_mut()
+                .insert_property(
+                    "hour".to_string(),
+                    PropertyDescriptor::data(numeric.clone(), true, true, true),
+                );
+            interp
+                .get_object_cell_expect(options_obj_id)
+                .borrow_mut()
+                .insert_property(
+                    "minute".to_string(),
+                    PropertyDescriptor::data(numeric.clone(), true, true, true),
+                );
+            interp
+                .get_object_cell_expect(options_obj_id)
+                .borrow_mut()
+                .insert_property(
+                    "second".to_string(),
+                    PropertyDescriptor::data(numeric, true, true, true),
+                );
         }
     }
 
-    let opt_id = options_obj.borrow().id.unwrap();
-    let opt_val = JsValue::Object(crate::types::JsObject { id: opt_id });
+    let opt_val = JsValue::Object(crate::types::JsObject { id: options_obj_id });
 
     // Use the built-in DateTimeFormat constructor directly (not through user-visible Intl property)
     let dtf_val = match interp.realm().intl_date_time_format_ctor.clone() {
@@ -169,13 +205,15 @@ fn date_to_locale_string(
 
 impl Interpreter {
     pub(crate) fn setup_date_builtin(&mut self) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "Date".to_string();
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Date".to_string();
         // Date.prototype does NOT have [[DateValue]] per spec
 
         fn this_time_value(interp: &Interpreter, this: &JsValue) -> Option<f64> {
             if let JsValue::Object(o) = this
-                && let Some(obj) = interp.get_object(o.id)
+                && let Some(obj) = interp.get_object_cell(o.id)
             {
                 let b = obj.borrow();
                 if b.class_name == "Date"
@@ -189,7 +227,7 @@ impl Interpreter {
 
         fn set_date_value(interp: &Interpreter, this: &JsValue, v: f64) {
             if let JsValue::Object(o) = this
-                && let Some(obj) = interp.get_object(o.id)
+                && let Some(obj) = interp.get_object_cell(o.id)
             {
                 obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
             }
@@ -1115,7 +1153,7 @@ impl Interpreter {
                             Completion::Normal(func) => {
                                 if let JsValue::Object(fo) = &func
                                     && interp
-                                        .get_object(fo.id)
+                                        .get_object_cell(fo.id)
                                         .map(|obj| obj.borrow().callable.is_some())
                                         .unwrap_or(false)
                                 {
@@ -1173,17 +1211,24 @@ impl Interpreter {
                     }
                     let ms = num_bigint::BigInt::from(t as i64);
                     let ns = ms * num_bigint::BigInt::from(1_000_000i64);
-                    let obj = interp.create_object();
-                    obj.borrow_mut().class_name = "Temporal.Instant".to_string();
+                    let obj_id = interp.create_object_id();
+                    interp
+                        .get_object_cell_expect(obj_id)
+                        .borrow_mut()
+                        .class_name = "Temporal.Instant".to_string();
                     if let Some(proto_id) = interp.realm().temporal_instant_prototype {
-                        obj.borrow_mut().prototype_id =
-                            Some(interp.get_object_expect(proto_id).borrow().id.unwrap());
+                        interp
+                            .get_object_cell_expect(obj_id)
+                            .borrow_mut()
+                            .prototype_id = Some(proto_id);
                     }
-                    obj.borrow_mut().temporal_data =
-                        Some(crate::interpreter::types::TemporalData::Instant {
-                            epoch_nanoseconds: ns,
-                        });
-                    let id = obj.borrow().id.unwrap();
+                    interp
+                        .get_object_cell_expect(obj_id)
+                        .borrow_mut()
+                        .temporal_data = Some(crate::interpreter::types::TemporalData::Instant {
+                        epoch_nanoseconds: ns,
+                    });
+                    let id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 }),
             ),
@@ -1192,7 +1237,9 @@ impl Interpreter {
         for (name, arity, func) in methods {
             let fn_val =
                 self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
-            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
         }
 
         // Symbol.toPrimitive per spec:
@@ -1237,7 +1284,7 @@ impl Interpreter {
                     };
                     if let JsValue::Object(fo) = &method_val
                         && interp
-                            .get_object(fo.id)
+                            .get_object_cell(fo.id)
                             .map(|o| o.borrow().callable.is_some())
                             .unwrap_or(false)
                     {
@@ -1259,14 +1306,16 @@ impl Interpreter {
             && let JsValue::Object(sym_obj) = &sym_val
         {
             let tp_key = to_js_string(&self.get_property_on_id(sym_obj.id, "toPrimitive"));
-            proto.borrow_mut().insert_property(
-                tp_key,
-                PropertyDescriptor::data(to_prim_fn, false, false, true),
-            );
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    tp_key,
+                    PropertyDescriptor::data(to_prim_fn, false, false, true),
+                );
         }
 
         // Date constructor
-        let date_proto_clone_id = proto.borrow().id.unwrap();
+        let date_proto_clone_id = proto_id;
         let date_ctor = self.create_function(JsFunction::constructor(
             "Date".to_string(),
             7,
@@ -1283,7 +1332,7 @@ impl Interpreter {
                 } else if args.len() == 1 {
                     let v = &args[0];
                     if let JsValue::Object(o) = v
-                        && let Some(obj) = interp.get_object(o.id)
+                        && let Some(obj) = interp.get_object_cell(o.id)
                         && obj.borrow().class_name == "Date"
                         && obj.borrow().primitive_value.is_some()
                     {
@@ -1370,7 +1419,7 @@ impl Interpreter {
                 };
 
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && interp.get_object_cell(o.id).is_some()
                 {
                     // OrdinaryCreateFromConstructor — realm-aware prototype
                     let proto = match interp
@@ -1379,7 +1428,7 @@ impl Interpreter {
                         Ok(p) => p.unwrap_or(date_proto_clone_id),
                         Err(e) => return Completion::Throw(e),
                     };
-                    let mut b = obj.borrow_mut();
+                    let mut b = interp.get_object_cell_expect(o.id).borrow_mut();
                     b.class_name = "Date".to_string();
                     b.primitive_value = Some(JsValue::Number(time_val));
                     b.prototype_id = Some(proto);
@@ -1389,19 +1438,24 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(o) = &date_ctor
-            && let Some(obj) = self.get_object(o.id)
+            && self.get_object_cell(o.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "length".to_string(),
-                PropertyDescriptor::data(JsValue::Number(7.0), false, false, true),
-            );
+            let date_ctor_id = o.id;
+            self.get_object_cell_expect(date_ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "length".to_string(),
+                    PropertyDescriptor::data(JsValue::Number(7.0), false, false, true),
+                );
 
             let now_fn = self.create_function(JsFunction::native(
                 "now".to_string(),
                 0,
                 |_interp, _this, _args| Completion::Normal(JsValue::Number(now_ms().floor())),
             ));
-            obj.borrow_mut().insert_builtin("now".to_string(), now_fn);
+            self.get_object_cell_expect(date_ctor_id)
+                .borrow_mut()
+                .insert_builtin("now".to_string(), now_fn);
 
             let parse_fn = self.create_function(JsFunction::native(
                 "parse".to_string(),
@@ -1417,7 +1471,8 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(parse_date_string(&s)))
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(date_ctor_id)
+                .borrow_mut()
                 .insert_builtin("parse".to_string(), parse_fn);
 
             let utc_fn = self.create_function(JsFunction::native(
@@ -1488,18 +1543,20 @@ impl Interpreter {
                     Completion::Normal(JsValue::Number(time_clip(make_date(d, time))))
                 },
             ));
-            obj.borrow_mut().insert_builtin("UTC".to_string(), utc_fn);
+            self.get_object_cell_expect(date_ctor_id)
+                .borrow_mut()
+                .insert_builtin("UTC".to_string(), utc_fn);
 
-            let proto_val = JsValue::Object(crate::types::JsObject {
-                id: proto.borrow().id.unwrap(),
-            });
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val, false, false, false),
-            );
+            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            self.get_object_cell_expect(date_ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val, false, false, false),
+                );
         }
 
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("constructor".to_string(), date_ctor.clone());
 
@@ -1507,7 +1564,8 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Date", BindingKind::Var);
-        let _ = self.realm().global_env.borrow_mut().set("Date", date_ctor);
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "Date", date_ctor);
 
         // Annex B: getYear()
         let get_year_fn = self.create_function(JsFunction::Native(
@@ -1526,7 +1584,7 @@ impl Interpreter {
             }),
             false,
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("getYear".to_string(), get_year_fn);
 
@@ -1564,18 +1622,17 @@ impl Interpreter {
             }),
             false,
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("setYear".to_string(), set_year_fn);
 
         // Annex B: toGMTString() -- alias for toUTCString()
-        let proto_id = proto.borrow().id.unwrap();
         let to_gmt = self.get_property_on_id(proto_id, "toUTCString");
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("toGMTString".to_string(), to_gmt);
 
-        self.realm_mut().date_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().date_prototype = Some(proto_id);
     }
 
     pub(crate) fn create_range_error(&mut self, msg: &str) -> JsValue {
@@ -1600,9 +1657,9 @@ impl Interpreter {
                 None
             }
         });
-        let obj = self.create_object();
+        let obj_id = self.create_object_id();
         {
-            let mut o = obj.borrow_mut();
+            let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = name.to_string();
             if let Some(proto_id) = error_proto_id {
                 o.prototype_id = Some(proto_id);
@@ -1617,7 +1674,7 @@ impl Interpreter {
             );
             o.insert_builtin("stack".to_string(), JsValue::String(JsString::from_str("")));
         }
-        let id = obj.borrow().id.unwrap();
+        let id = obj_id;
         JsValue::Object(crate::types::JsObject { id })
     }
 }

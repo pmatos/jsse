@@ -279,15 +279,21 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
     }
 
     // Create null-prototype result object with key-value pairs
-    let result_obj = interp.create_object();
-    result_obj.borrow_mut().prototype_id = None;
+    let result_obj_id = interp.create_object_id();
+    interp
+        .get_object_cell_expect(result_obj_id)
+        .borrow_mut()
+        .prototype_id = None;
     for (key, val) in &values {
-        result_obj.borrow_mut().insert_property(
-            key.clone(),
-            PropertyDescriptor::data(val.clone(), true, true, true),
-        );
+        interp
+            .get_object_cell_expect(result_obj_id)
+            .borrow_mut()
+            .insert_property(
+                key.clone(),
+                PropertyDescriptor::data(val.clone(), true, true, true),
+            );
     }
-    let result_id = result_obj.borrow().id.unwrap();
+    let result_id = result_obj_id;
     let result_val = JsValue::Object(crate::types::JsObject { id: result_id });
     Completion::Normal(interp.create_iter_result_object(result_val, false))
 }
@@ -408,7 +414,7 @@ fn get_iterator_flattenable(
         // Has @@iterator - check it's callable and call it
         if let JsValue::Object(mo) = &method {
             if !interp
-                .get_object(mo.id)
+                .get_object_cell(mo.id)
                 .map(|od| od.borrow().callable.is_some())
                 .unwrap_or(false)
             {
@@ -575,8 +581,10 @@ fn iterator_close_all(
 impl Interpreter {
     pub(crate) fn setup_iterator_prototypes(&mut self) {
         // %IteratorPrototype% (§27.1.2)
-        let iter_proto = self.create_object();
-        iter_proto.borrow_mut().class_name = "Iterator".to_string();
+        let iter_proto_id = self.create_object_id();
+        self.get_object_cell_expect(iter_proto_id)
+            .borrow_mut()
+            .class_name = "Iterator".to_string();
 
         // %IteratorPrototype%[@@iterator]() returns this
         let iter_self_fn = self.create_function(JsFunction::native(
@@ -585,14 +593,15 @@ impl Interpreter {
             |_interp, this, _args| Completion::Normal(this.clone()),
         ));
         if let Some(key) = self.get_symbol_iterator_key() {
-            iter_proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(iter_self_fn, true, false, true),
-            );
+            self.get_object_cell_expect(iter_proto_id)
+                .borrow_mut()
+                .insert_property(
+                    key,
+                    PropertyDescriptor::data(iter_self_fn, true, false, true),
+                );
         }
         // @@toStringTag on %IteratorPrototype% — accessor property per spec
         {
-            let iter_proto_id = iter_proto.borrow().id.unwrap();
             let tst_getter = self.create_function(JsFunction::native(
                 "get [Symbol.toStringTag]".to_string(),
                 0,
@@ -623,13 +632,13 @@ impl Interpreter {
                     let prop_key = tst_key_for_setter
                         .clone()
                         .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
-                    let has_own = if let Some(od) = interp.get_object(this_id) {
+                    let has_own = if let Some(od) = interp.get_object_cell(this_id) {
                         od.borrow().properties.contains_key(&prop_key)
                     } else {
                         false
                     };
                     if !has_own {
-                        if let Some(od) = interp.get_object(this_id) {
+                        if let Some(od) = interp.get_object_cell(this_id) {
                             let frozen = !od.borrow().extensible;
                             if frozen {
                                 let err = interp.create_type_error(
@@ -642,7 +651,7 @@ impl Interpreter {
                                 PropertyDescriptor::data(v, true, true, true),
                             );
                         }
-                    } else if let Some(od) = interp.get_object(this_id)
+                    } else if let Some(od) = interp.get_object_cell(this_id)
                         && !od.borrow_mut().set_property_value(&prop_key, v)
                     {
                         let err = interp.create_type_error("Cannot set property");
@@ -651,17 +660,19 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 },
             ));
-            iter_proto.borrow_mut().insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(tst_getter),
-                    set: Some(tst_setter),
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            self.get_object_cell_expect(iter_proto_id)
+                .borrow_mut()
+                .insert_property(
+                    "Symbol(Symbol.toStringTag)".to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: Some(tst_getter),
+                        set: Some(tst_setter),
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                    },
+                );
         }
 
         // [Symbol.dispose]() — calls this.return() if it exists
@@ -671,7 +682,7 @@ impl Interpreter {
             |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     let return_method = interp.get_property_on_id(o.id, "return");
-                    if matches!(&return_method, JsValue::Object(ro) if interp.get_object(ro.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                    if matches!(&return_method, JsValue::Object(ro) if interp.get_object_cell(ro.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                     {
                         return interp.call_function(&return_method, this, &[]);
                     }
@@ -680,12 +691,12 @@ impl Interpreter {
             },
         ));
         if let Some(key) = self.get_symbol_key("dispose") {
-            iter_proto
+            self.get_object_cell_expect(iter_proto_id)
                 .borrow_mut()
                 .insert_property(key, PropertyDescriptor::data(dispose_fn, true, false, true));
         }
 
-        self.realm_mut().iterator_prototype = Some(iter_proto.borrow().id.unwrap());
+        self.realm_mut().iterator_prototype = Some(iter_proto_id);
 
         // Iterator constructor (abstract — throws TypeError when called directly)
         let iterator_ctor = self.create_function(JsFunction::constructor(
@@ -738,14 +749,12 @@ impl Interpreter {
 
         // Set Iterator.prototype_id
         if let JsValue::Object(ctor_obj) = &iterator_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(
-                    JsValue::Object(crate::types::JsObject {
-                        id: iter_proto.borrow().id.unwrap(),
-                    }),
+                    JsValue::Object(crate::types::JsObject { id: iter_proto_id }),
                     false,
                     false,
                     false,
@@ -756,7 +765,6 @@ impl Interpreter {
         // Set %IteratorPrototype%.constructor as accessor property per spec
         // Getter returns Iterator, setter implements SetterThatIgnoresPrototypeProperties
         {
-            let iter_proto_id = iter_proto.borrow().id.unwrap();
             let ctor_val = iterator_ctor.clone();
             let getter = self.create_function(JsFunction::native(
                 "get constructor".to_string(),
@@ -784,14 +792,14 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
                     // Step 3: Check if this has own "constructor" property
-                    let has_own = if let Some(od) = interp.get_object(this_id) {
+                    let has_own = if let Some(od) = interp.get_object_cell(this_id) {
                         od.borrow().properties.contains_key("constructor")
                     } else {
                         false
                     };
                     if !has_own {
                         // CreateDataPropertyOrThrow(this, "constructor", v)
-                        if let Some(od) = interp.get_object(this_id) {
+                        if let Some(od) = interp.get_object_cell(this_id) {
                             let frozen = !od.borrow().extensible;
                             if frozen {
                                 let err = interp.create_type_error(
@@ -806,7 +814,7 @@ impl Interpreter {
                         }
                     } else {
                         // Set(this, "constructor", v, true)
-                        if let Some(od) = interp.get_object(this_id)
+                        if let Some(od) = interp.get_object_cell(this_id)
                             && !od.borrow_mut().set_property_value("constructor", v)
                         {
                             let err = interp.create_type_error("Cannot set property constructor");
@@ -816,17 +824,19 @@ impl Interpreter {
                     Completion::Normal(JsValue::Undefined)
                 },
             ));
-            iter_proto.borrow_mut().insert_property(
-                "constructor".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(getter),
-                    set: Some(setter),
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            self.get_object_cell_expect(iter_proto_id)
+                .borrow_mut()
+                .insert_property(
+                    "constructor".to_string(),
+                    PropertyDescriptor {
+                        value: None,
+                        writable: None,
+                        get: Some(getter),
+                        set: Some(setter),
+                        enumerable: Some(false),
+                        configurable: Some(true),
+                    },
+                );
         }
 
         // Register Iterator as global
@@ -834,22 +844,23 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .declare("Iterator", BindingKind::Var);
-        let _ = self
-            .realm()
-            .global_env
-            .borrow_mut()
-            .set("Iterator", iterator_ctor.clone());
+        let env = self.realm().global_env.clone();
+        let _ = self.env_set(&env, "Iterator", iterator_ctor.clone());
 
         // Setup consuming and lazy helper methods on %IteratorPrototype%
-        self.setup_iterator_helper_methods(&iter_proto);
+        self.setup_iterator_helper_methods(iter_proto_id);
 
         // Setup static methods on Iterator constructor
         self.setup_iterator_static_methods(&iterator_ctor);
 
         // %ArrayIteratorPrototype% (§23.1.5.1)
-        let arr_iter_proto = self.create_object();
-        arr_iter_proto.borrow_mut().prototype_id = Some(iter_proto.borrow().id.unwrap());
-        arr_iter_proto.borrow_mut().class_name = "Array Iterator".to_string();
+        let arr_iter_proto_id = self.create_object_id();
+        self.get_object_cell_expect(arr_iter_proto_id)
+            .borrow_mut()
+            .prototype_id = Some(iter_proto_id);
+        self.get_object_cell_expect(arr_iter_proto_id)
+            .borrow_mut()
+            .class_name = "Array Iterator".to_string();
 
         let arr_iter_next = self.create_function(JsFunction::native(
             "next".to_string(),
@@ -871,7 +882,7 @@ impl Interpreter {
                                 );
                             }
                             let is_proxy = interp
-                                .get_object(array_id)
+                                .get_object_cell(array_id)
                                 .is_some_and(|o| o.borrow().is_proxy());
                             if is_proxy {
                                 let arr_val =
@@ -884,7 +895,7 @@ impl Interpreter {
                                     c => return c,
                                 };
                                 if index >= len {
-                                    if let Some(obj) = interp.get_object(o.id) {
+                                    if let Some(obj) = interp.get_object_cell(o.id) {
                                         obj.borrow_mut().iterator_state =
                                             Some(IteratorState::ArrayIterator {
                                                 array_id,
@@ -1172,34 +1183,40 @@ impl Interpreter {
                 }
             },
         ));
-        arr_iter_proto
+        self.get_object_cell_expect(arr_iter_proto_id)
             .borrow_mut()
             .insert_builtin("next".to_string(), arr_iter_next);
 
         // Set @@toStringTag
-        arr_iter_proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("Array Iterator")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(arr_iter_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("Array Iterator")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
-        self.realm_mut().array_iterator_prototype = Some(arr_iter_proto.borrow().id.unwrap());
+        self.realm_mut().array_iterator_prototype = Some(arr_iter_proto_id);
 
         // %StringIteratorPrototype% (§22.1.5.1)
-        let str_iter_proto = self.create_object();
-        str_iter_proto.borrow_mut().prototype_id = Some(iter_proto.borrow().id.unwrap());
-        str_iter_proto.borrow_mut().class_name = "String Iterator".to_string();
+        let str_iter_proto_id = self.create_object_id();
+        self.get_object_cell_expect(str_iter_proto_id)
+            .borrow_mut()
+            .prototype_id = Some(iter_proto_id);
+        self.get_object_cell_expect(str_iter_proto_id)
+            .borrow_mut()
+            .class_name = "String Iterator".to_string();
 
         let str_iter_next = self.create_function(JsFunction::native(
             "next".to_string(),
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                    if let Some(obj) = interp.get_object_cell(o.id) {
                         let state = obj.borrow().iterator_state.clone();
                         if let Some(IteratorState::StringIterator {
                             ref string,
@@ -1257,30 +1274,36 @@ impl Interpreter {
                 }
             },
         ));
-        str_iter_proto
+        self.get_object_cell_expect(str_iter_proto_id)
             .borrow_mut()
             .insert_builtin("next".to_string(), str_iter_next);
 
-        str_iter_proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("String Iterator")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(str_iter_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("String Iterator")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
-        self.realm_mut().string_iterator_prototype = Some(str_iter_proto.borrow().id.unwrap());
+        self.realm_mut().string_iterator_prototype = Some(str_iter_proto_id);
     }
 
     fn ensure_iterator_helper_prototype(&mut self) {
         if self.realm().iterator_helper_prototype.is_some() {
             return;
         }
-        let proto = self.create_object();
-        proto.borrow_mut().prototype_id = self.realm().iterator_prototype;
-        proto.borrow_mut().class_name = "Iterator Helper".to_string();
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .prototype_id = self.realm().iterator_prototype;
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Iterator Helper".to_string();
 
         // next() — reads helper_next_closure and helper_gen_state from this
         let next_fn = self.create_function(JsFunction::native(
@@ -1344,7 +1367,7 @@ impl Interpreter {
                 result
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("next".to_string(), next_fn);
 
@@ -1402,7 +1425,7 @@ impl Interpreter {
                 result
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("return".to_string(), return_fn);
 
@@ -1413,50 +1436,64 @@ impl Interpreter {
             |_interp, this, _args| Completion::Normal(this.clone()),
         ));
         if let Some(key) = self.get_symbol_iterator_key() {
-            proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(iter_self_fn, true, false, true),
-            );
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    key,
+                    PropertyDescriptor::data(iter_self_fn, true, false, true),
+                );
         }
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("Iterator Helper")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("Iterator Helper")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
-        self.realm_mut().iterator_helper_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().iterator_helper_prototype = Some(proto_id);
     }
 
     fn create_iterator_helper_object(&mut self, next_fn: JsValue, return_fn: JsValue) -> JsValue {
         self.ensure_iterator_helper_prototype();
         let state = Rc::new(std::cell::Cell::new(0u8));
 
-        let obj = self.create_object();
-        obj.borrow_mut().prototype_id = self.realm().iterator_helper_prototype;
-        obj.borrow_mut().class_name = "Iterator Helper".to_string();
-        obj.borrow_mut().helper_next_closure = Some(next_fn.clone());
-        obj.borrow_mut().helper_return_closure = Some(return_fn.clone());
-        obj.borrow_mut().helper_gen_state = Some(state);
-        obj.borrow_mut().gc_native_roots = Some(vec![next_fn, return_fn]);
+        let obj_id = self.create_object_id();
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .prototype_id = self.realm().iterator_helper_prototype;
+        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Iterator Helper".to_string();
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .helper_next_closure = Some(next_fn.clone());
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .helper_return_closure = Some(return_fn.clone());
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .helper_gen_state = Some(state);
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .gc_native_roots = Some(vec![next_fn, return_fn]);
 
-        let id = obj.borrow().id.unwrap();
+        let id = obj_id;
         JsValue::Object(crate::types::JsObject { id })
     }
 
     fn set_helper_gc_roots(&mut self, helper: &JsValue, roots: Vec<JsValue>) {
         if let JsValue::Object(ho) = helper
-            && let Some(obj) = self.get_object(ho.id)
+            && let Some(obj) = self.get_object_cell(ho.id)
         {
             obj.borrow_mut().gc_native_roots = Some(roots);
         }
     }
 
-    fn setup_iterator_helper_methods(&mut self, iter_proto: &Rc<RefCell<JsObjectData>>) {
+    fn setup_iterator_helper_methods(&mut self, iter_proto_id: u64) {
         // toArray()
         let to_array_fn = self.create_function(JsFunction::native(
             "toArray".to_string(),
@@ -1487,7 +1524,7 @@ impl Interpreter {
                 Completion::Normal(arr)
             },
         ));
-        iter_proto
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("toArray".to_string(), to_array_fn);
 
@@ -1497,7 +1534,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&callback, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&callback, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("callback is not a function");
@@ -1532,7 +1569,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        iter_proto
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("forEach".to_string(), for_each_fn);
 
@@ -1542,7 +1579,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&predicate, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
@@ -1587,7 +1624,7 @@ impl Interpreter {
                 }
             },
         ));
-        iter_proto
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("some".to_string(), some_fn);
 
@@ -1597,7 +1634,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&predicate, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
@@ -1641,7 +1678,7 @@ impl Interpreter {
                 }
             },
         ));
-        iter_proto
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("every".to_string(), every_fn);
 
@@ -1651,7 +1688,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&predicate, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
@@ -1695,7 +1732,7 @@ impl Interpreter {
                 }
             },
         ));
-        iter_proto
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("find".to_string(), find_fn);
 
@@ -1705,7 +1742,7 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 let reducer = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&reducer, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&reducer, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("reducer is not a function");
@@ -1764,15 +1801,15 @@ impl Interpreter {
                 }
             },
         ));
-        iter_proto
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("reduce".to_string(), reduce_fn);
 
         // Lazy helpers: map, filter, take, drop, flatMap
-        self.setup_iterator_lazy_helpers(iter_proto);
+        self.setup_iterator_lazy_helpers(iter_proto_id);
     }
 
-    fn setup_iterator_lazy_helpers(&mut self, iter_proto: &Rc<RefCell<JsObjectData>>) {
+    fn setup_iterator_lazy_helpers(&mut self, iter_proto_id: u64) {
         // map(mapper)
         let map_fn = self.create_function(JsFunction::native(
             "map".to_string(),
@@ -1784,7 +1821,7 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
                 let mapper = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&mapper, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&mapper, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("mapper is not a function");
@@ -1899,7 +1936,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        iter_proto
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("map".to_string(), map_fn);
 
@@ -1913,7 +1950,7 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
                 let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&predicate, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&predicate, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
@@ -2037,7 +2074,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        iter_proto
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("filter".to_string(), filter_fn);
 
@@ -2191,7 +2228,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        iter_proto
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("take".to_string(), take_fn);
 
@@ -2356,7 +2393,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        iter_proto
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("drop".to_string(), drop_fn);
 
@@ -2370,7 +2407,7 @@ impl Interpreter {
                     return Completion::Throw(err);
                 }
                 let mapper = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&mapper, JsValue::Object(o) if interp.get_object(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
+                if !matches!(&mapper, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
                 {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("mapper is not a function");
@@ -2588,7 +2625,7 @@ impl Interpreter {
                 Completion::Normal(helper)
             },
         ));
-        iter_proto
+        self.get_object_cell_expect(iter_proto_id)
             .borrow_mut()
             .insert_builtin("flatMap".to_string(), flat_map_fn);
     }
@@ -2596,8 +2633,10 @@ impl Interpreter {
     fn setup_iterator_static_methods(&mut self, iterator_ctor: &JsValue) {
         // Iterator.from(obj) — per spec §27.1.4.2
         // Create shared WrapForValidIteratorPrototype
-        let wrap_valid_proto = self.create_object();
-        wrap_valid_proto.borrow_mut().prototype_id = self.realm().iterator_prototype;
+        let wrap_valid_proto_id = self.create_object_id();
+        self.get_object_cell_expect(wrap_valid_proto_id)
+            .borrow_mut()
+            .prototype_id = self.realm().iterator_prototype;
 
         let wrap_next_fn = self.create_function(JsFunction::native(
             "next".to_string(),
@@ -2611,7 +2650,7 @@ impl Interpreter {
                     }
                 };
                 let record = interp
-                    .get_object(this_id)
+                    .get_object_cell(this_id)
                     .and_then(|o| o.borrow().wrap_iter_record.clone());
                 let (iter, next_method) = match record {
                     Some(r) => r,
@@ -2623,7 +2662,7 @@ impl Interpreter {
                 interp.call_function(&next_method, &iter, &[])
             },
         ));
-        wrap_valid_proto
+        self.get_object_cell_expect(wrap_valid_proto_id)
             .borrow_mut()
             .insert_builtin("next".to_string(), wrap_next_fn);
 
@@ -2639,7 +2678,7 @@ impl Interpreter {
                     }
                 };
                 let record = interp
-                    .get_object(this_id)
+                    .get_object_cell(this_id)
                     .and_then(|o| o.borrow().wrap_iter_record.clone());
                 let (iter, _next_method) = match record {
                     Some(r) => r,
@@ -2665,11 +2704,9 @@ impl Interpreter {
                 }
             },
         ));
-        wrap_valid_proto
+        self.get_object_cell_expect(wrap_valid_proto_id)
             .borrow_mut()
             .insert_builtin("return".to_string(), wrap_return_fn);
-
-        let wrap_valid_proto_id = wrap_valid_proto.borrow().id.unwrap();
 
         let wvp_for_from: Option<u64> = Some(wrap_valid_proto_id);
         let iterator_ctor_for_from = iterator_ctor.clone();
@@ -2696,20 +2733,30 @@ impl Interpreter {
                 }
 
                 // Create wrapper with shared WrapForValidIteratorPrototype
-                let wrapper = interp.create_object();
-                wrapper.borrow_mut().prototype_id = wvp_for_from;
-                wrapper.borrow_mut().class_name = "Iterator".to_string();
-                wrapper.borrow_mut().wrap_iter_record =
-                    Some((iter_val.clone(), next_method.clone()));
-                wrapper.borrow_mut().gc_native_roots = Some(vec![iter_val, next_method]);
+                let wrapper_id = interp.create_object_id();
+                interp
+                    .get_object_cell_expect(wrapper_id)
+                    .borrow_mut()
+                    .prototype_id = wvp_for_from;
+                interp
+                    .get_object_cell_expect(wrapper_id)
+                    .borrow_mut()
+                    .class_name = "Iterator".to_string();
+                interp
+                    .get_object_cell_expect(wrapper_id)
+                    .borrow_mut()
+                    .wrap_iter_record = Some((iter_val.clone(), next_method.clone()));
+                interp
+                    .get_object_cell_expect(wrapper_id)
+                    .borrow_mut()
+                    .gc_native_roots = Some(vec![iter_val, next_method]);
 
-                let wrapper_id = wrapper.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: wrapper_id }))
             },
         ));
 
         if let JsValue::Object(ctor_obj) = iterator_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
         }
@@ -2745,7 +2792,7 @@ impl Interpreter {
                         // Verify it's callable
                         let is_callable = if let JsValue::Object(fo) = &iter_fn {
                             interp
-                                .get_object(fo.id)
+                                .get_object_cell(fo.id)
                                 .map(|od| od.borrow().callable.is_some())
                                 .unwrap_or(false)
                         } else {
@@ -2925,7 +2972,7 @@ impl Interpreter {
 
         // Fix concat.length to 0 (spec says rest parameter = length 0)
         if let JsValue::Object(concat_obj) = &concat_fn
-            && let Some(obj) = self.get_object(concat_obj.id)
+            && let Some(obj) = self.get_object_cell(concat_obj.id)
         {
             obj.borrow_mut().insert_property(
                 "length".to_string(),
@@ -2934,7 +2981,7 @@ impl Interpreter {
         }
 
         if let JsValue::Object(ctor_obj) = iterator_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut()
                 .insert_builtin("concat".to_string(), concat_fn);
@@ -3233,7 +3280,7 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ctor_obj) = iterator_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut().insert_builtin("zip".to_string(), zip_fn);
         }
@@ -3555,7 +3602,7 @@ impl Interpreter {
         ));
 
         if let JsValue::Object(ctor_obj) = iterator_ctor
-            && let Some(obj) = self.get_object(ctor_obj.id)
+            && let Some(obj) = self.get_object_cell(ctor_obj.id)
         {
             obj.borrow_mut()
                 .insert_builtin("zipKeyed".to_string(), zip_keyed_fn);
@@ -3620,9 +3667,13 @@ impl Interpreter {
     }
 
     pub(crate) fn setup_generator_prototype(&mut self) {
-        let gen_proto = self.create_object();
-        gen_proto.borrow_mut().class_name = "Generator".to_string();
-        gen_proto.borrow_mut().prototype_id = self.realm().iterator_prototype;
+        let gen_proto_id = self.create_object_id();
+        self.get_object_cell_expect(gen_proto_id)
+            .borrow_mut()
+            .class_name = "Generator".to_string();
+        self.get_object_cell_expect(gen_proto_id)
+            .borrow_mut()
+            .prototype_id = self.realm().iterator_prototype;
 
         // next(value)
         let next_fn = self.create_function(JsFunction::native(
@@ -3632,7 +3683,7 @@ impl Interpreter {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 // Check which variant we have
                 if let JsValue::Object(o) = this
-                    && let Some(obj_rc) = interp.get_object(o.id)
+                    && let Some(obj_rc) = interp.get_object_cell(o.id)
                 {
                     let is_state_machine = matches!(
                         obj_rc.borrow().iterator_state,
@@ -3645,10 +3696,12 @@ impl Interpreter {
                 interp.generator_next(this, value)
             },
         ));
-        gen_proto.borrow_mut().insert_property(
-            "next".to_string(),
-            PropertyDescriptor::data(next_fn, true, false, true),
-        );
+        self.get_object_cell_expect(gen_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "next".to_string(),
+                PropertyDescriptor::data(next_fn, true, false, true),
+            );
 
         // return(value)
         let return_fn = self.create_function(JsFunction::native(
@@ -3658,7 +3711,7 @@ impl Interpreter {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 // Check which variant we have
                 if let JsValue::Object(o) = this
-                    && let Some(obj_rc) = interp.get_object(o.id)
+                    && let Some(obj_rc) = interp.get_object_cell(o.id)
                 {
                     let is_state_machine = matches!(
                         obj_rc.borrow().iterator_state,
@@ -3671,10 +3724,12 @@ impl Interpreter {
                 interp.generator_return(this, value)
             },
         ));
-        gen_proto.borrow_mut().insert_property(
-            "return".to_string(),
-            PropertyDescriptor::data(return_fn, true, false, true),
-        );
+        self.get_object_cell_expect(gen_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "return".to_string(),
+                PropertyDescriptor::data(return_fn, true, false, true),
+            );
 
         // throw(exception)
         let throw_fn = self.create_function(JsFunction::native(
@@ -3684,7 +3739,7 @@ impl Interpreter {
                 let exception = args.first().cloned().unwrap_or(JsValue::Undefined);
                 // Check which variant we have
                 if let JsValue::Object(o) = this
-                    && let Some(obj_rc) = interp.get_object(o.id)
+                    && let Some(obj_rc) = interp.get_object_cell(o.id)
                 {
                     let is_state_machine = matches!(
                         obj_rc.borrow().iterator_state,
@@ -3697,29 +3752,35 @@ impl Interpreter {
                 interp.generator_throw(this, exception)
             },
         ));
-        gen_proto.borrow_mut().insert_property(
-            "throw".to_string(),
-            PropertyDescriptor::data(throw_fn, true, false, true),
-        );
+        self.get_object_cell_expect(gen_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "throw".to_string(),
+                PropertyDescriptor::data(throw_fn, true, false, true),
+            );
 
         // @@iterator is inherited from %IteratorPrototype%
 
         // Symbol.toStringTag
-        gen_proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("Generator")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(gen_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("Generator")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
-        self.realm_mut().generator_prototype = Some(gen_proto.borrow().id.unwrap());
+        self.realm_mut().generator_prototype = Some(gen_proto_id);
 
         // %GeneratorFunction.prototype% - the prototype of generator function objects
-        let gf_proto = self.create_object();
-        gf_proto.borrow_mut().class_name = "GeneratorFunction".to_string();
+        let gf_proto_id = self.create_object_id();
+        self.get_object_cell_expect(gf_proto_id)
+            .borrow_mut()
+            .class_name = "GeneratorFunction".to_string();
 
         // [[Prototype]] = Function.prototype_id
         // Get Function.prototype from global Function
@@ -3727,53 +3788,61 @@ impl Interpreter {
             && let JsValue::Object(func_obj) = func_val
             && let JsValue::Object(func_proto_obj) =
                 self.get_property_on_id(func_obj.id, "prototype")
-            && let Some(func_proto) = self.get_object(func_proto_obj.id)
+            && let Some(func_proto) = self.get_object_cell(func_proto_obj.id)
         {
-            gf_proto.borrow_mut().prototype_id = Some(func_proto.borrow().id.unwrap());
+            self.get_object_cell_expect(gf_proto_id)
+                .borrow_mut()
+                .prototype_id = Some(func_proto.borrow().id.unwrap());
         }
 
         // GeneratorFunction.prototype.prototype_id = Generator.prototype_id
-        let gen_proto_id = gen_proto.borrow().id.unwrap();
-        gf_proto.borrow_mut().insert_property(
-            "prototype".to_string(),
-            PropertyDescriptor::data(
-                JsValue::Object(crate::types::JsObject { id: gen_proto_id }),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(gf_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::Object(crate::types::JsObject { id: gen_proto_id }),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
         // Symbol.toStringTag = "GeneratorFunction"
-        gf_proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("GeneratorFunction")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(gf_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("GeneratorFunction")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
         // Set constructor on Generator.prototype pointing back to GeneratorFunction.prototype_id
-        let gf_proto_id = gf_proto.borrow().id.unwrap();
-        gen_proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(
-                JsValue::Object(crate::types::JsObject { id: gf_proto_id }),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(gen_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::Object(crate::types::JsObject { id: gf_proto_id }),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
-        self.realm_mut().generator_function_prototype = Some(gf_proto.borrow().id.unwrap());
+        self.realm_mut().generator_function_prototype = Some(gf_proto_id);
     }
 
     pub(crate) fn setup_async_generator_prototype(&mut self) {
         // %AsyncIteratorPrototype% — has [Symbol.asyncIterator]() returning this
-        let async_iter_proto = self.create_object();
-        async_iter_proto.borrow_mut().class_name = "AsyncIterator".to_string();
+        let async_iter_proto_id = self.create_object_id();
+        self.get_object_cell_expect(async_iter_proto_id)
+            .borrow_mut()
+            .class_name = "AsyncIterator".to_string();
 
         let async_iter_self_fn = self.create_function(JsFunction::native(
             "[Symbol.asyncIterator]".to_string(),
@@ -3781,10 +3850,12 @@ impl Interpreter {
             |_interp, this, _args| Completion::Normal(this.clone()),
         ));
         if let Some(key) = self.get_symbol_key("asyncIterator") {
-            async_iter_proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(async_iter_self_fn, true, false, true),
-            );
+            self.get_object_cell_expect(async_iter_proto_id)
+                .borrow_mut()
+                .insert_property(
+                    key,
+                    PropertyDescriptor::data(async_iter_self_fn, true, false, true),
+                );
         }
 
         // [Symbol.asyncDispose]() — §27.1.3.2
@@ -3795,10 +3866,7 @@ impl Interpreter {
                 // 1. Let O be the this value.
                 // 2. Let promiseCapability be ! NewPromiseCapability(%Promise%).
                 let promise_ctor = interp
-                    .realm()
-                    .global_env
-                    .borrow()
-                    .get("Promise")
+                    .get_global_var("Promise")
                     .unwrap_or(JsValue::Undefined);
                 let cap = match interp.new_promise_capability(&promise_ctor) {
                     Ok(c) => c,
@@ -3897,7 +3965,7 @@ impl Interpreter {
 
                 let fulfill_reaction2 = fulfill_reaction.clone();
                 let reject_reaction2 = reject_reaction.clone();
-                let state = if let Some(obj) = interp.get_object(wrapper_id) {
+                let state = if let Some(obj) = interp.get_object_cell(wrapper_id) {
                     let mut o = obj.borrow_mut();
                     if let Some(ref mut pd) = o.promise_data {
                         pd.is_handled = true;
@@ -3934,18 +4002,24 @@ impl Interpreter {
             },
         ));
         if let Some(key) = self.get_symbol_key("asyncDispose") {
-            async_iter_proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(async_dispose_fn, true, false, true),
-            );
+            self.get_object_cell_expect(async_iter_proto_id)
+                .borrow_mut()
+                .insert_property(
+                    key,
+                    PropertyDescriptor::data(async_dispose_fn, true, false, true),
+                );
         }
 
-        self.realm_mut().async_iterator_prototype = Some(async_iter_proto.borrow().id.unwrap());
+        self.realm_mut().async_iterator_prototype = Some(async_iter_proto_id);
 
         // %AsyncGeneratorPrototype%
-        let gen_proto = self.create_object();
-        gen_proto.borrow_mut().prototype_id = Some(async_iter_proto.borrow().id.unwrap());
-        gen_proto.borrow_mut().class_name = "AsyncGenerator".to_string();
+        let gen_proto_id = self.create_object_id();
+        self.get_object_cell_expect(gen_proto_id)
+            .borrow_mut()
+            .prototype_id = Some(async_iter_proto_id);
+        self.get_object_cell_expect(gen_proto_id)
+            .borrow_mut()
+            .class_name = "AsyncGenerator".to_string();
 
         // next(value)
         let next_fn = self.create_function(JsFunction::native(
@@ -3956,10 +4030,12 @@ impl Interpreter {
                 interp.async_generator_next(this, value)
             },
         ));
-        gen_proto.borrow_mut().insert_property(
-            "next".to_string(),
-            PropertyDescriptor::data(next_fn, true, false, true),
-        );
+        self.get_object_cell_expect(gen_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "next".to_string(),
+                PropertyDescriptor::data(next_fn, true, false, true),
+            );
 
         // return(value)
         let return_fn = self.create_function(JsFunction::native(
@@ -3970,10 +4046,12 @@ impl Interpreter {
                 interp.async_generator_return(this, value)
             },
         ));
-        gen_proto.borrow_mut().insert_property(
-            "return".to_string(),
-            PropertyDescriptor::data(return_fn, true, false, true),
-        );
+        self.get_object_cell_expect(gen_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "return".to_string(),
+                PropertyDescriptor::data(return_fn, true, false, true),
+            );
 
         // throw(exception)
         let throw_fn = self.create_function(JsFunction::native(
@@ -3984,59 +4062,69 @@ impl Interpreter {
                 interp.async_generator_throw(this, exception)
             },
         ));
-        gen_proto.borrow_mut().insert_property(
-            "throw".to_string(),
-            PropertyDescriptor::data(throw_fn, true, false, true),
-        );
+        self.get_object_cell_expect(gen_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "throw".to_string(),
+                PropertyDescriptor::data(throw_fn, true, false, true),
+            );
 
         // Symbol.toStringTag
-        gen_proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("AsyncGenerator")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(gen_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("AsyncGenerator")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
-        self.realm_mut().async_generator_prototype = Some(gen_proto.borrow().id.unwrap());
+        self.realm_mut().async_generator_prototype = Some(gen_proto_id);
 
         // %AsyncGeneratorFunction.prototype%
-        let agf_proto = self.create_object();
-        agf_proto.borrow_mut().class_name = "AsyncGeneratorFunction".to_string();
+        let agf_proto_id = self.create_object_id();
+        self.get_object_cell_expect(agf_proto_id)
+            .borrow_mut()
+            .class_name = "AsyncGeneratorFunction".to_string();
         // prototype property points to AsyncGenerator.prototype_id
-        let gen_proto_id = gen_proto.borrow().id.unwrap();
-        agf_proto.borrow_mut().insert_property(
-            "prototype".to_string(),
-            PropertyDescriptor::data(
-                JsValue::Object(crate::types::JsObject { id: gen_proto_id }),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(agf_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "prototype".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::Object(crate::types::JsObject { id: gen_proto_id }),
+                    false,
+                    false,
+                    true,
+                ),
+            );
         // Symbol.toStringTag
-        agf_proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("AsyncGeneratorFunction")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(agf_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("AsyncGeneratorFunction")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
         // Set constructor on AsyncGenerator.prototype pointing back to AsyncGeneratorFunction.prototype_id
-        let agf_proto_id = agf_proto.borrow().id.unwrap();
-        gen_proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(
-                JsValue::Object(crate::types::JsObject { id: agf_proto_id }),
-                false,
-                false,
-                true,
-            ),
-        );
-        self.realm_mut().async_generator_function_prototype = Some(agf_proto.borrow().id.unwrap());
+        self.get_object_cell_expect(gen_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(
+                    JsValue::Object(crate::types::JsObject { id: agf_proto_id }),
+                    false,
+                    false,
+                    true,
+                ),
+            );
+        self.realm_mut().async_generator_function_prototype = Some(agf_proto_id);
     }
 }

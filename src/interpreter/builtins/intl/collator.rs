@@ -207,26 +207,31 @@ fn is_thai_locale(locale_str: &str) -> bool {
 }
 
 impl Interpreter {
-    pub(crate) fn setup_intl_collator(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
-        let proto = self.create_object();
+    pub(crate) fn setup_intl_collator(&mut self, intl_obj_id: u64) {
+        let proto_id = self.create_object_id();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype_id =
-                Some(self.get_object_expect(op_id).borrow().id.unwrap());
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .prototype_id = Some(op_id);
         }
-        proto.borrow_mut().class_name = "Intl.Collator".to_string();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Intl.Collator".to_string();
 
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Intl.Collator"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor {
+                    value: Some(JsValue::String(JsString::from_str("Intl.Collator"))),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                    get: None,
+                    set: None,
+                },
+            );
 
         // compare getter
         let compare_getter = self.create_function(JsFunction::native(
@@ -234,24 +239,63 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        let cached = {
-                            let b = obj.borrow();
+                    if let Some(cell) = interp.get_object_cell(o.id) {
+                        enum Probe {
+                            NotCollator,
+                            Cached(JsValue),
+                            Uncached,
+                        }
+                        let probe = {
+                            let b = cell.borrow();
                             if !matches!(b.intl_data, Some(IntlData::Collator { .. })) {
+                                Probe::NotCollator
+                            } else if let Some(func) = b
+                                .properties
+                                .get("[[BoundCompare]]")
+                                .and_then(|pd| pd.value.clone())
+                            {
+                                Probe::Cached(func)
+                            } else {
+                                Probe::Uncached
+                            }
+                        };
+                        match probe {
+                            Probe::NotCollator => {
                                 return Completion::Throw(interp.create_type_error(
                                     "Intl.Collator.prototype.compare called on non-Collator object",
                                 ));
                             }
-                            b.properties
-                                .get("[[BoundCompare]]")
-                                .and_then(|pd| pd.value.clone())
-                        };
-
-                        if let Some(func) = cached {
-                            return Completion::Normal(func);
+                            Probe::Cached(func) => return Completion::Normal(func),
+                            Probe::Uncached => {}
                         }
                     }
 
+                    let snapshot = interp.get_object_cell(o.id).and_then(|cell| {
+                        let b = cell.borrow();
+                        if let Some(IntlData::Collator {
+                            ref locale,
+                            ref usage,
+                            ref collation,
+                            ref sensitivity,
+                            ref ignore_punctuation,
+                            ref numeric,
+                            ref case_first,
+                            ..
+                        }) = b.intl_data
+                        {
+                            Some((
+                                locale.clone(),
+                                usage.clone(),
+                                collation.clone(),
+                                sensitivity.clone(),
+                                *numeric,
+                                case_first.clone(),
+                                *ignore_punctuation,
+                            ))
+                        } else {
+                            None
+                        }
+                    });
                     let (
                         locale,
                         usage,
@@ -260,35 +304,9 @@ impl Interpreter {
                         numeric,
                         case_first,
                         ignore_punctuation,
-                    ) = {
-                        if let Some(obj) = interp.get_object(o.id) {
-                            let b = obj.borrow();
-                            if let Some(IntlData::Collator {
-                                ref locale,
-                                ref usage,
-                                ref collation,
-                                ref sensitivity,
-                                ref ignore_punctuation,
-                                ref numeric,
-                                ref case_first,
-                                ..
-                            }) = b.intl_data
-                            {
-                                (
-                                    locale.clone(),
-                                    usage.clone(),
-                                    collation.clone(),
-                                    sensitivity.clone(),
-                                    *numeric,
-                                    case_first.clone(),
-                                    *ignore_punctuation,
-                                )
-                            } else {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Intl.Collator.prototype.compare called on non-Collator object",
-                                ));
-                            }
-                        } else {
+                    ) = match snapshot {
+                        Some(t) => t,
+                        None => {
                             return Completion::Throw(interp.create_type_error(
                                 "Intl.Collator.prototype.compare called on non-Collator object",
                             ));
@@ -325,7 +343,7 @@ impl Interpreter {
                         },
                     ));
 
-                    if let Some(obj) = interp.get_object(o.id) {
+                    if let Some(obj) = interp.get_object_cell(o.id) {
                         obj.borrow_mut().properties.insert(
                             "[[BoundCompare]]".to_string(),
                             PropertyDescriptor::data(compare_fn.clone(), false, false, false),
@@ -339,10 +357,12 @@ impl Interpreter {
                 ))
             },
         ));
-        proto.borrow_mut().insert_property(
-            "compare".to_string(),
-            PropertyDescriptor::accessor(Some(compare_getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "compare".to_string(),
+                PropertyDescriptor::accessor(Some(compare_getter), None, false, true),
+            );
 
         // resolvedOptions()
         let resolved_fn = self.create_function(JsFunction::native(
@@ -350,7 +370,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let data = {
                         let b = obj.borrow();
@@ -366,10 +386,12 @@ impl Interpreter {
                         case_first,
                     }) = data
                     {
-                        let result = interp.create_object();
+                        let result_id = interp.create_object_id();
                         if let Some(op_id) = interp.realm().object_prototype {
-                            result.borrow_mut().prototype_id =
-                                Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                            interp
+                                .get_object_cell_expect(result_id)
+                                .borrow_mut()
+                                .prototype_id = Some(op_id);
                         }
 
                         let props = vec![
@@ -388,13 +410,15 @@ impl Interpreter {
                             ),
                         ];
                         for (key, val) in props {
-                            result.borrow_mut().insert_property(
-                                key.to_string(),
-                                PropertyDescriptor::data(val, true, true, true),
-                            );
+                            interp
+                                .get_object_cell_expect(result_id)
+                                .borrow_mut()
+                                .insert_property(
+                                    key.to_string(),
+                                    PropertyDescriptor::data(val, true, true, true),
+                                );
                         }
 
-                        let result_id = result.borrow().id.unwrap();
                         return Completion::Normal(JsValue::Object(crate::types::JsObject {
                             id: result_id,
                         }));
@@ -405,16 +429,15 @@ impl Interpreter {
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_collator_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().intl_collator_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone_id = proto.borrow().id.unwrap();
+        let proto_clone_id = proto_id;
 
         let collator_ctor = self.create_function(JsFunction::constructor(
             "Collator".to_string(),
@@ -644,32 +667,41 @@ impl Interpreter {
                     Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
-                let obj = interp.create_object();
-                obj.borrow_mut().prototype_id = Some(proto);
-                obj.borrow_mut().class_name = "Intl.Collator".to_string();
-                obj.borrow_mut().intl_data = Some(IntlData::Collator {
-                    locale,
-                    usage,
-                    sensitivity,
-                    ignore_punctuation,
-                    collation,
-                    numeric,
-                    case_first,
-                });
+                let obj_id = interp.create_object_id();
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .prototype_id = Some(proto);
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .class_name = "Intl.Collator".to_string();
+                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
+                    Some(IntlData::Collator {
+                        locale,
+                        usage,
+                        sensitivity,
+                        ignore_punctuation,
+                        collation,
+                        numeric,
+                        case_first,
+                    });
 
-                let obj_id = obj.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },
         ));
 
         // Set Collator.prototype on constructor
         if let JsValue::Object(ctor_ref) = &collator_ctor
-            && let Some(obj) = self.get_object(ctor_ref.id)
+            && self.get_object_cell(ctor_ref.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), false, false, false),
-            );
+            let ctor_id = ctor_ref.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
+                );
 
             // supportedLocalesOf static method
             let slof = self.create_function(JsFunction::native(
@@ -688,21 +720,26 @@ impl Interpreter {
                     }
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
                 .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(collator_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(collator_ctor.clone(), true, false, true),
+            );
 
         // Register Intl.Collator on the Intl namespace
-        intl_obj.borrow_mut().insert_property(
-            "Collator".to_string(),
-            PropertyDescriptor::data(collator_ctor, true, false, true),
-        );
+        self.get_object_cell_expect(intl_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "Collator".to_string(),
+                PropertyDescriptor::data(collator_ctor, true, false, true),
+            );
     }
 
     pub(crate) fn intl_locale_compare(

@@ -2903,26 +2903,31 @@ pub(crate) fn format_to_parts_internal(
 }
 
 impl Interpreter {
-    pub(crate) fn setup_intl_number_format(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
-        let proto = self.create_object();
+    pub(crate) fn setup_intl_number_format(&mut self, intl_obj_id: u64) {
+        let proto_id = self.create_object_id();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype_id =
-                Some(self.get_object_expect(op_id).borrow().id.unwrap());
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .prototype_id = Some(op_id);
         }
-        proto.borrow_mut().class_name = "Intl.NumberFormat".to_string();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Intl.NumberFormat".to_string();
 
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Intl.NumberFormat"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor {
+                    value: Some(JsValue::String(JsString::from_str("Intl.NumberFormat"))),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                    get: None,
+                    set: None,
+                },
+            );
 
         // format getter
         let format_getter = self.create_function(JsFunction::native(
@@ -2930,26 +2935,40 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
-                        let cached = {
-                            let b = obj.borrow();
+                    enum Probe {
+                        NotNf,
+                        Cached(JsValue),
+                        Uncached,
+                    }
+                    let probe = interp
+                        .get_object_cell(o.id)
+                        .map(|cell| {
+                            let b = cell.borrow();
                             if !matches!(b.intl_data, Some(IntlData::NumberFormat { .. })) {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Intl.NumberFormat.prototype.format called on incompatible receiver",
-                                ));
-                            }
-                            b.properties
+                                Probe::NotNf
+                            } else if let Some(func) = b
+                                .properties
                                 .get("[[BoundFormat]]")
                                 .and_then(|pd| pd.value.clone())
-                        };
-
-                        if let Some(func) = cached {
-                            return Completion::Normal(func);
+                            {
+                                Probe::Cached(func)
+                            } else {
+                                Probe::Uncached
+                            }
+                        })
+                        .unwrap_or(Probe::Uncached);
+                    match probe {
+                        Probe::NotNf => {
+                            return Completion::Throw(interp.create_type_error(
+                                "Intl.NumberFormat.prototype.format called on incompatible receiver",
+                            ));
                         }
+                        Probe::Cached(func) => return Completion::Normal(func),
+                        Probe::Uncached => {}
                     }
 
                     let nf_data = {
-                        if let Some(obj) = interp.get_object(o.id) {
+                        if let Some(obj) = interp.get_object_cell(o.id) {
                             let b = obj.borrow();
                             b.intl_data.clone()
                         } else {
@@ -3028,7 +3047,7 @@ impl Interpreter {
                             },
                         ));
 
-                        if let Some(obj) = interp.get_object(o.id) {
+                        if let Some(obj) = interp.get_object_cell(o.id) {
                             obj.borrow_mut().properties.insert(
                                 "[[BoundFormat]]".to_string(),
                                 PropertyDescriptor::data(format_fn.clone(), false, false, false),
@@ -3043,10 +3062,12 @@ impl Interpreter {
                 ))
             },
         ));
-        proto.borrow_mut().insert_property(
-            "format".to_string(),
-            PropertyDescriptor::accessor(Some(format_getter), None, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "format".to_string(),
+                PropertyDescriptor::accessor(Some(format_getter), None, false, true),
+            );
 
         // formatToParts(number)
         let format_to_parts_fn = self.create_function(JsFunction::native(
@@ -3055,7 +3076,7 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     let nf_data = {
-                        if let Some(obj) = interp.get_object(o.id) {
+                        if let Some(obj) = interp.get_object_cell(o.id) {
                             let b = obj.borrow();
                             b.intl_data.clone()
                         } else {
@@ -3121,29 +3142,38 @@ impl Interpreter {
                         let result_parts: Vec<JsValue> = parts
                             .into_iter()
                             .map(|(typ, val)| {
-                                let part_obj = interp.create_object();
+                                let part_obj_id = interp.create_object_id();
                                 if let Some(op_id) = interp.realm().object_prototype {
-                                    part_obj.borrow_mut().prototype_id = Some(op_id);
+                                    interp
+                                        .get_object_cell_expect(part_obj_id)
+                                        .borrow_mut()
+                                        .prototype_id = Some(op_id);
                                 }
-                                part_obj.borrow_mut().insert_property(
-                                    "type".to_string(),
-                                    PropertyDescriptor::data(
-                                        JsValue::String(JsString::from_str(&typ)),
-                                        true,
-                                        true,
-                                        true,
-                                    ),
-                                );
-                                part_obj.borrow_mut().insert_property(
-                                    "value".to_string(),
-                                    PropertyDescriptor::data(
-                                        JsValue::String(JsString::from_str(&val)),
-                                        true,
-                                        true,
-                                        true,
-                                    ),
-                                );
-                                let id = part_obj.borrow().id.unwrap();
+                                interp
+                                    .get_object_cell_expect(part_obj_id)
+                                    .borrow_mut()
+                                    .insert_property(
+                                        "type".to_string(),
+                                        PropertyDescriptor::data(
+                                            JsValue::String(JsString::from_str(&typ)),
+                                            true,
+                                            true,
+                                            true,
+                                        ),
+                                    );
+                                interp
+                                    .get_object_cell_expect(part_obj_id)
+                                    .borrow_mut()
+                                    .insert_property(
+                                        "value".to_string(),
+                                        PropertyDescriptor::data(
+                                            JsValue::String(JsString::from_str(&val)),
+                                            true,
+                                            true,
+                                            true,
+                                        ),
+                                    );
+                                let id = part_obj_id;
                                 JsValue::Object(crate::types::JsObject { id })
                             })
                             .collect();
@@ -3156,7 +3186,7 @@ impl Interpreter {
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("formatToParts".to_string(), format_to_parts_fn);
 
@@ -3165,36 +3195,38 @@ impl Interpreter {
             "formatRange".to_string(),
             2,
             |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id) {
-                        let has_nf = {
-                            let b = obj.borrow();
-                            matches!(b.intl_data, Some(IntlData::NumberFormat { .. }))
-                        };
-                        if !has_nf {
-                            return Completion::Throw(interp.create_type_error(
-                                "Intl.NumberFormat.prototype.formatRange called on incompatible receiver",
-                            ));
-                        }
-
+                if let JsValue::Object(o) = this {
+                    let nf_present = interp.get_object_cell(o.id).is_some_and(|cell| {
+                        matches!(cell.borrow().intl_data, Some(IntlData::NumberFormat { .. }))
+                    });
+                    if nf_present {
                         let start = args.first().cloned().unwrap_or(JsValue::Undefined);
                         let end = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
-                        if matches!(start, JsValue::Undefined) || matches!(end, JsValue::Undefined) {
-                            return Completion::Throw(interp.create_type_error(
-                                "start and end must not be undefined",
-                            ));
+                        if matches!(start, JsValue::Undefined) || matches!(end, JsValue::Undefined)
+                        {
+                            return Completion::Throw(
+                                interp.create_type_error("start and end must not be undefined"),
+                            );
                         }
 
                         let start_str = if let JsValue::String(s) = &start {
                             let sv = s.to_string();
-                            if string_needs_decimal_precision(&sv) { Some(sv) } else { None }
+                            if string_needs_decimal_precision(&sv) {
+                                Some(sv)
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         };
                         let end_str = if let JsValue::String(s) = &end {
                             let sv = s.to_string();
-                            if string_needs_decimal_precision(&sv) { Some(sv) } else { None }
+                            if string_needs_decimal_precision(&sv) {
+                                Some(sv)
+                            } else {
+                                None
+                            }
                         } else {
                             None
                         };
@@ -3214,10 +3246,9 @@ impl Interpreter {
                             );
                         }
 
-                        let nf_data = {
-                            let b = obj.borrow();
-                            b.intl_data.clone()
-                        };
+                        let nf_data = interp
+                            .get_object_cell(o.id)
+                            .and_then(|cell| cell.borrow().intl_data.clone());
 
                         if let Some(IntlData::NumberFormat {
                             locale,
@@ -3245,56 +3276,112 @@ impl Interpreter {
                         {
                             let fmt_start = if let Some(ref s) = start_str {
                                 format_number_from_string_decimal(
-                                    s, &locale, &style, &currency, &currency_display,
-                                    &currency_sign, &unit, &unit_display, &sign_display,
-                                    &use_grouping, minimum_integer_digits, minimum_fraction_digits,
-                                    maximum_fraction_digits, &numbering_system,
+                                    s,
+                                    &locale,
+                                    &style,
+                                    &currency,
+                                    &currency_display,
+                                    &currency_sign,
+                                    &unit,
+                                    &unit_display,
+                                    &sign_display,
+                                    &use_grouping,
+                                    minimum_integer_digits,
+                                    minimum_fraction_digits,
+                                    maximum_fraction_digits,
+                                    &numbering_system,
                                 )
                             } else {
                                 format_number_internal(
-                                    x, &locale, &style, &currency, &currency_display,
-                                    &currency_sign, &unit, &unit_display, &notation,
-                                    &compact_display, &sign_display, &use_grouping,
-                                    minimum_integer_digits, minimum_fraction_digits,
-                                    maximum_fraction_digits, &minimum_significant_digits,
-                                    &maximum_significant_digits, &rounding_mode, rounding_increment,
-                                    &rounding_priority, &trailing_zero_display, &numbering_system,
+                                    x,
+                                    &locale,
+                                    &style,
+                                    &currency,
+                                    &currency_display,
+                                    &currency_sign,
+                                    &unit,
+                                    &unit_display,
+                                    &notation,
+                                    &compact_display,
+                                    &sign_display,
+                                    &use_grouping,
+                                    minimum_integer_digits,
+                                    minimum_fraction_digits,
+                                    maximum_fraction_digits,
+                                    &minimum_significant_digits,
+                                    &maximum_significant_digits,
+                                    &rounding_mode,
+                                    rounding_increment,
+                                    &rounding_priority,
+                                    &trailing_zero_display,
+                                    &numbering_system,
                                 )
                             };
                             let fmt_end = if let Some(ref s) = end_str {
                                 format_number_from_string_decimal(
-                                    s, &locale, &style, &currency, &currency_display,
-                                    &currency_sign, &unit, &unit_display, &sign_display,
-                                    &use_grouping, minimum_integer_digits, minimum_fraction_digits,
-                                    maximum_fraction_digits, &numbering_system,
+                                    s,
+                                    &locale,
+                                    &style,
+                                    &currency,
+                                    &currency_display,
+                                    &currency_sign,
+                                    &unit,
+                                    &unit_display,
+                                    &sign_display,
+                                    &use_grouping,
+                                    minimum_integer_digits,
+                                    minimum_fraction_digits,
+                                    maximum_fraction_digits,
+                                    &numbering_system,
                                 )
                             } else {
                                 format_number_internal(
-                                    y, &locale, &style, &currency, &currency_display,
-                                    &currency_sign, &unit, &unit_display, &notation,
-                                    &compact_display, &sign_display, &use_grouping,
-                                    minimum_integer_digits, minimum_fraction_digits,
-                                    maximum_fraction_digits, &minimum_significant_digits,
-                                    &maximum_significant_digits, &rounding_mode, rounding_increment,
-                                    &rounding_priority, &trailing_zero_display, &numbering_system,
+                                    y,
+                                    &locale,
+                                    &style,
+                                    &currency,
+                                    &currency_display,
+                                    &currency_sign,
+                                    &unit,
+                                    &unit_display,
+                                    &notation,
+                                    &compact_display,
+                                    &sign_display,
+                                    &use_grouping,
+                                    minimum_integer_digits,
+                                    minimum_fraction_digits,
+                                    maximum_fraction_digits,
+                                    &minimum_significant_digits,
+                                    &maximum_significant_digits,
+                                    &rounding_mode,
+                                    rounding_increment,
+                                    &rounding_priority,
+                                    &trailing_zero_display,
+                                    &numbering_system,
                                 )
                             };
 
                             let result = format_range_string(
-                                &fmt_start, &fmt_end, &locale, &style,
-                                &currency, &currency_display, &sign_display,
+                                &fmt_start,
+                                &fmt_end,
+                                &locale,
+                                &style,
+                                &currency,
+                                &currency_display,
+                                &sign_display,
                             );
                             return Completion::Normal(JsValue::String(JsString::from_str(
                                 &result,
                             )));
                         }
                     }
+                }
                 Completion::Throw(interp.create_type_error(
                     "Intl.NumberFormat.prototype.formatRange called on incompatible receiver",
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("formatRange".to_string(), format_range_fn);
 
@@ -3303,18 +3390,11 @@ impl Interpreter {
             "formatRangeToParts".to_string(),
             2,
             |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id) {
-                        let has_nf = {
-                            let b = obj.borrow();
-                            matches!(b.intl_data, Some(IntlData::NumberFormat { .. }))
-                        };
-                        if !has_nf {
-                            return Completion::Throw(interp.create_type_error(
-                                "Intl.NumberFormat.prototype.formatRangeToParts called on incompatible receiver",
-                            ));
-                        }
-
+                if let JsValue::Object(o) = this {
+                    let nf_present = interp
+                        .get_object_cell(o.id)
+                        .is_some_and(|cell| matches!(cell.borrow().intl_data, Some(IntlData::NumberFormat { .. })));
+                    if nf_present {
                         let start = args.first().cloned().unwrap_or(JsValue::Undefined);
                         let end = args.get(1).cloned().unwrap_or(JsValue::Undefined);
 
@@ -3339,10 +3419,9 @@ impl Interpreter {
                             );
                         }
 
-                        let nf_data = {
-                            let b = obj.borrow();
-                            b.intl_data.clone()
-                        };
+                        let nf_data = interp
+                            .get_object_cell(o.id)
+                            .and_then(|cell| cell.borrow().intl_data.clone());
 
                         if let Some(IntlData::NumberFormat {
                             locale,
@@ -3390,23 +3469,23 @@ impl Interpreter {
                             let approximately_equal = fmt_start == fmt_end;
 
                             let make_part = |interp: &mut Interpreter, typ: &str, val: &str, source: &str| -> JsValue {
-                                let part = interp.create_object();
+                                let part_id = interp.create_object_id();
                                 if let Some(op_id) = interp.realm().object_prototype {
-                                    part.borrow_mut().prototype_id = Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                                    interp.get_object_cell_expect(part_id).borrow_mut().prototype_id = Some(op_id);
                                 }
-                                part.borrow_mut().insert_property(
+                                interp.get_object_cell_expect(part_id).borrow_mut().insert_property(
                                     "type".to_string(),
                                     PropertyDescriptor::data(JsValue::String(JsString::from_str(typ)), true, true, true),
                                 );
-                                part.borrow_mut().insert_property(
+                                interp.get_object_cell_expect(part_id).borrow_mut().insert_property(
                                     "value".to_string(),
                                     PropertyDescriptor::data(JsValue::String(JsString::from_str(val)), true, true, true),
                                 );
-                                part.borrow_mut().insert_property(
+                                interp.get_object_cell_expect(part_id).borrow_mut().insert_property(
                                     "source".to_string(),
                                     PropertyDescriptor::data(JsValue::String(JsString::from_str(source)), true, true, true),
                                 );
-                                let id = part.borrow().id.unwrap();
+                                let id = part_id;
                                 JsValue::Object(crate::types::JsObject { id })
                             };
 
@@ -3460,12 +3539,13 @@ impl Interpreter {
                             return Completion::Normal(interp.create_array(result_parts));
                         }
                     }
+                }
                 Completion::Throw(interp.create_type_error(
                     "Intl.NumberFormat.prototype.formatRangeToParts called on incompatible receiver",
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("formatRangeToParts".to_string(), format_range_to_parts_fn);
 
@@ -3475,7 +3555,7 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let data = {
                         let b = obj.borrow();
@@ -3505,10 +3585,12 @@ impl Interpreter {
                         trailing_zero_display,
                     }) = data
                     {
-                        let result = interp.create_object();
+                        let result_id = interp.create_object_id();
                         if let Some(op_id) = interp.realm().object_prototype {
-                            result.borrow_mut().prototype_id =
-                                Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                            interp
+                                .get_object_cell_expect(result_id)
+                                .borrow_mut()
+                                .prototype_id = Some(op_id);
                         }
 
                         let mut props: Vec<(&str, JsValue)> = vec![
@@ -3612,13 +3694,15 @@ impl Interpreter {
                         ));
 
                         for (key, val) in props {
-                            result.borrow_mut().insert_property(
-                                key.to_string(),
-                                PropertyDescriptor::data(val, true, true, true),
-                            );
+                            interp
+                                .get_object_cell_expect(result_id)
+                                .borrow_mut()
+                                .insert_property(
+                                    key.to_string(),
+                                    PropertyDescriptor::data(val, true, true, true),
+                                );
                         }
 
-                        let result_id = result.borrow().id.unwrap();
                         return Completion::Normal(JsValue::Object(crate::types::JsObject {
                             id: result_id,
                         }));
@@ -3629,16 +3713,15 @@ impl Interpreter {
                 ))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_number_format_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().intl_number_format_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone_id = proto.borrow().id.unwrap();
+        let proto_clone_id = proto_id;
 
         let nf_ctor = self.create_function(JsFunction::constructor(
             "NumberFormat".to_string(),
@@ -4336,10 +4419,10 @@ impl Interpreter {
                     Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
-                let obj = interp.create_object();
-                obj.borrow_mut().prototype_id = Some(proto);
-                obj.borrow_mut().class_name = "Intl.NumberFormat".to_string();
-                obj.borrow_mut().intl_data = Some(IntlData::NumberFormat {
+                let obj_id = interp.create_object_id();
+                interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
+                interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "Intl.NumberFormat".to_string();
+                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data = Some(IntlData::NumberFormat {
                     locale,
                     numbering_system,
                     style,
@@ -4363,19 +4446,21 @@ impl Interpreter {
                     trailing_zero_display,
                 });
 
-                let obj_id = obj.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },
         ));
 
         // Set NumberFormat.prototype on constructor
         if let JsValue::Object(ctor_ref) = &nf_ctor
-            && let Some(obj) = self.get_object(ctor_ref.id)
+            && self.get_object_cell(ctor_ref.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), false, false, false),
-            );
+            let ctor_id = ctor_ref.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
+                );
 
             // supportedLocalesOf static method
             let slof = self.create_function(JsFunction::native(
@@ -4394,23 +4479,28 @@ impl Interpreter {
                     }
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
                 .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(nf_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(nf_ctor.clone(), true, false, true),
+            );
 
         // Save built-in constructor for internal use (e.g. toLocaleString)
         self.realm_mut().intl_number_format_ctor = Some(nf_ctor.clone());
 
         // Register Intl.NumberFormat on the Intl namespace
-        intl_obj.borrow_mut().insert_property(
-            "NumberFormat".to_string(),
-            PropertyDescriptor::data(nf_ctor, true, false, true),
-        );
+        self.get_object_cell_expect(intl_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "NumberFormat".to_string(),
+                PropertyDescriptor::data(nf_ctor, true, false, true),
+            );
     }
 }

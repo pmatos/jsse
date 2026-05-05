@@ -164,10 +164,7 @@ pub(crate) fn strict_equality(left: &JsValue, right: &JsValue) -> bool {
     }
 }
 
-pub(crate) fn typeof_val<'a>(
-    val: &JsValue,
-    objects: &[Option<Rc<RefCell<JsObjectData>>>],
-) -> &'a str {
+pub(crate) fn typeof_val<'a>(val: &JsValue, objects: &super::object_arena::ObjectArena) -> &'a str {
     match val {
         JsValue::Undefined => "undefined",
         JsValue::Null => "object",
@@ -177,11 +174,12 @@ pub(crate) fn typeof_val<'a>(
         JsValue::Symbol(_) => "symbol",
         JsValue::BigInt(_) => "bigint",
         JsValue::Object(o) => {
-            if let Some(Some(obj)) = objects.get(o.id as usize) {
-                if obj.borrow().is_htmldda {
+            if let Some(obj) = objects.get(o.id) {
+                let b = obj.borrow();
+                if b.is_htmldda {
                     return "undefined";
                 }
-                if obj.borrow().callable.is_some() {
+                if b.callable.is_some() {
                     return "function";
                 }
             }
@@ -247,16 +245,16 @@ fn json_quote_js_string(s: &JsString) -> String {
 
 // Proxy-aware IsArray (§7.2.2)
 pub(crate) fn is_array_value(interp: &mut Interpreter, obj_id: u64) -> Result<bool, JsValue> {
-    if let Some(obj) = interp.get_object(obj_id) {
-        let (is_revoked, is_proxy, target_id, class) = {
-            let b = obj.borrow();
-            let tid = if b.is_proxy() {
-                b.proxy_target_id
-            } else {
-                None
-            };
-            (b.proxy_revoked, b.is_proxy(), tid, b.class_name.clone())
+    let snapshot = interp.get_object_cell(obj_id).map(|cell| {
+        let b = cell.borrow();
+        let tid = if b.is_proxy() {
+            b.proxy_target_id
+        } else {
+            None
         };
+        (b.proxy_revoked, b.is_proxy(), tid, b.class_name.clone())
+    });
+    if let Some((is_revoked, is_proxy, target_id, class)) = snapshot {
         if is_revoked {
             return Err(interp.create_error(
                 "TypeError",
@@ -301,7 +299,7 @@ pub(crate) fn enumerable_own_keys(
     interp: &mut Interpreter,
     obj_id: u64,
 ) -> Result<Vec<String>, JsValue> {
-    if let Some(obj) = interp.get_object(obj_id) {
+    if let Some(obj) = interp.get_object_cell(obj_id) {
         if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
             let target_val = interp.get_proxy_target_val(obj_id);
             match interp.invoke_proxy_trap(obj_id, "ownKeys", vec![target_val.clone()]) {
@@ -343,7 +341,7 @@ pub(crate) fn enumerable_own_keys(
                                     }
                                     Ok(None) => {
                                         if let JsValue::Object(ref t) = target_val
-                                            && let Some(tobj) = interp.get_object(t.id)
+                                            && let Some(tobj) = interp.get_object_cell(t.id)
                                             && let Some(d) = tobj.borrow().properties.get(&key_str)
                                             && d.enumerable != Some(false)
                                         {
@@ -421,7 +419,7 @@ pub(crate) fn json_stringify_full(
 
     if let Some(rep) = replacer
         && let JsValue::Object(o) = rep
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(obj) = interp.get_object_cell(o.id)
     {
         if obj.borrow().callable.is_some() {
             replacer_fn = Some(rep.clone());
@@ -447,7 +445,7 @@ pub(crate) fn json_stringify_full(
                     JsValue::String(s) => Some(s.to_rust_string()),
                     JsValue::Number(n) => Some(number_ops::to_string(*n)),
                     JsValue::Object(oo) => {
-                        if let Some(inner) = interp.get_object(oo.id) {
+                        if let Some(inner) = interp.get_object_cell(oo.id) {
                             let cn = inner.borrow().class_name.clone();
                             if cn == "String" || cn == "Number" {
                                 match interp.to_string_value(&item) {
@@ -473,11 +471,12 @@ pub(crate) fn json_stringify_full(
         }
     }
 
-    let wrapper = interp.create_object();
-    wrapper
+    let wrapper_id = interp.create_object_id();
+    interp
+        .get_object_cell_expect(wrapper_id)
         .borrow_mut()
         .insert_value("".to_string(), val.clone());
-    let holder_id = wrapper.borrow().id.unwrap();
+    let holder_id = wrapper_id;
 
     json_stringify_internal(
         interp,
@@ -534,7 +533,7 @@ fn json_stringify_internal(
             JsValue::Undefined
         };
         if let JsValue::Object(fobj) = &to_json
-            && let Some(fdata) = interp.get_object(fobj.id)
+            && let Some(fdata) = interp.get_object_cell(fobj.id)
             && fdata.borrow().callable.is_some()
         {
             let key_val = JsValue::String(JsString::from_str(key));
@@ -559,8 +558,8 @@ fn json_stringify_internal(
 
     // Step 4: Unwrap wrapper objects per spec (ToNumber/ToString trigger valueOf/toString)
     if let JsValue::Object(o) = &value {
-        let class = if let Some(obj) = interp.get_object(o.id) {
-            obj.borrow().class_name.clone()
+        let class = if let Some(cell) = interp.get_object_cell(o.id) {
+            cell.borrow().class_name.clone()
         } else {
             String::new()
         };
@@ -574,15 +573,15 @@ fn json_stringify_internal(
                 Err(e) => return Err(e),
             },
             "Boolean" => {
-                if let Some(obj) = interp.get_object(o.id)
-                    && let Some(pv) = obj.borrow().primitive_value.clone()
+                if let Some(cell) = interp.get_object_cell(o.id)
+                    && let Some(pv) = cell.borrow().primitive_value.clone()
                 {
                     value = pv;
                 }
             }
             "BigInt" => {
-                if let Some(obj) = interp.get_object(o.id)
-                    && let Some(pv) = obj.borrow().primitive_value.clone()
+                if let Some(cell) = interp.get_object_cell(o.id)
+                    && let Some(pv) = cell.borrow().primitive_value.clone()
                 {
                     value = pv;
                 }
@@ -606,7 +605,7 @@ fn json_stringify_internal(
             Err(interp.create_error("TypeError", "Do not know how to serialize a BigInt"))
         }
         JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object(o.id) {
+            if let Some(obj) = interp.get_object_cell(o.id) {
                 if obj.borrow().is_raw_json
                     && let Some(raw) = obj.borrow().get_property_value("rawJSON")
                 {
@@ -846,8 +845,7 @@ fn json_parse_value_inner(
             return Completion::Throw(err);
         }
         let pairs = json_split_items(inner);
-        let obj = interp.create_object();
-        let obj_id = obj.borrow().id.unwrap();
+        let obj_id = interp.create_object_id();
         for pair in &pairs {
             let pair = pair.trim();
             if pair.is_empty() {
@@ -881,7 +879,10 @@ fn json_parse_value_inner(
                     {
                         smap.insert((obj_id, key.clone()), val_src);
                     }
-                    obj.borrow_mut().insert_value(key, v);
+                    interp
+                        .get_object_cell_expect(obj_id)
+                        .borrow_mut()
+                        .insert_value(key, v);
                 }
                 other => return other,
             }
@@ -965,8 +966,8 @@ fn json_internalize_apply(
     new_val: JsValue,
 ) -> Result<(), JsValue> {
     let is_proxy = interp
-        .get_object(obj_id)
-        .map(|o| o.borrow().is_proxy() || o.borrow().proxy_revoked)
+        .get_object_cell(obj_id)
+        .map(|c| c.borrow().is_proxy() || c.borrow().proxy_revoked)
         .unwrap_or(false);
 
     if is_proxy {
@@ -985,7 +986,7 @@ fn json_internalize_apply(
                 Ok(None) => {
                     // No trap, delete on target directly
                     if let JsValue::Object(t) = &interp.get_proxy_target_val(obj_id)
-                        && let Some(tobj) = interp.get_object(t.id)
+                        && let Some(tobj) = interp.get_object_cell(t.id)
                     {
                         tobj.borrow_mut().properties.remove(key);
                         tobj.borrow_mut().property_order.retain(|k| k != key);
@@ -996,22 +997,24 @@ fn json_internalize_apply(
         } else {
             // CreateDataProperty via proxy defineProperty trap
             let key_val = JsValue::String(JsString::from_str(key));
-            let desc_obj = interp.create_object();
-            desc_obj
+            let desc_obj_id = interp.create_object_id();
+            interp
+                .get_object_cell_expect(desc_obj_id)
                 .borrow_mut()
                 .insert_value("value".to_string(), new_val.clone());
-            desc_obj
+            interp
+                .get_object_cell_expect(desc_obj_id)
                 .borrow_mut()
                 .insert_value("writable".to_string(), JsValue::Boolean(true));
-            desc_obj
+            interp
+                .get_object_cell_expect(desc_obj_id)
                 .borrow_mut()
                 .insert_value("enumerable".to_string(), JsValue::Boolean(true));
-            desc_obj
+            interp
+                .get_object_cell_expect(desc_obj_id)
                 .borrow_mut()
                 .insert_value("configurable".to_string(), JsValue::Boolean(true));
-            let desc_val = JsValue::Object(crate::types::JsObject {
-                id: desc_obj.borrow().id.unwrap(),
-            });
+            let desc_val = JsValue::Object(crate::types::JsObject { id: desc_obj_id });
             match interp.invoke_proxy_trap(
                 obj_id,
                 "defineProperty",
@@ -1027,7 +1030,7 @@ fn json_internalize_apply(
                 Ok(None) => {
                     // No trap, define on target directly
                     if let JsValue::Object(t) = &interp.get_proxy_target_val(obj_id)
-                        && let Some(tobj) = interp.get_object(t.id)
+                        && let Some(tobj) = interp.get_object_cell(t.id)
                     {
                         tobj.borrow_mut().insert_value(key.to_string(), new_val);
                     }
@@ -1039,8 +1042,8 @@ fn json_internalize_apply(
     }
 
     // Non-proxy path
-    if let Some(obj) = interp.get_object(obj_id) {
-        let configurable = obj
+    if let Some(cell) = interp.get_object_cell(obj_id) {
+        let configurable = cell
             .borrow()
             .properties
             .get(key)
@@ -1050,11 +1053,11 @@ fn json_internalize_apply(
             return Ok(());
         }
         if let JsValue::Undefined = &new_val {
-            obj.borrow_mut().properties.remove(key);
-            obj.borrow_mut().property_order.retain(|k| k != key);
+            cell.borrow_mut().properties.remove(key);
+            cell.borrow_mut().property_order.retain(|k| k != key);
             // Also clear dense array storage so get_property doesn't find stale values
             if let Ok(idx) = key.parse::<usize>() {
-                let mut b = obj.borrow_mut();
+                let mut b = cell.borrow_mut();
                 if let Some(ref mut elems) = b.array_elements
                     && idx < elems.len()
                 {
@@ -1062,7 +1065,7 @@ fn json_internalize_apply(
                 }
             }
         } else {
-            obj.borrow_mut().insert_value(key.to_string(), new_val);
+            cell.borrow_mut().insert_value(key.to_string(), new_val);
         }
     }
     Ok(())
@@ -1137,7 +1140,7 @@ pub(crate) fn json_internalize(
 
     // Build context argument for reviver
     let context = {
-        let ctx = interp.create_object();
+        let ctx_id = interp.create_object_id();
         if is_json_primitive(&walked)
             && let Some(smap) = source_map
             && let JsValue::Object(o) = holder
@@ -1161,13 +1164,16 @@ pub(crate) fn json_internalize(
                 _ => false,
             };
             if source_matches {
-                ctx.borrow_mut().insert_value(
-                    "source".to_string(),
-                    JsValue::String(JsString::from_str(src)),
-                );
+                interp
+                    .get_object_cell_expect(ctx_id)
+                    .borrow_mut()
+                    .insert_value(
+                        "source".to_string(),
+                        JsValue::String(JsString::from_str(src)),
+                    );
             }
         }
-        let id = ctx.borrow().id.unwrap();
+        let id = ctx_id;
         JsValue::Object(crate::types::JsObject { id })
     };
     let key_val = JsValue::String(JsString::from_str(name));

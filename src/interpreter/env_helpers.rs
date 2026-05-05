@@ -33,7 +33,7 @@ impl Interpreter {
         }
         let gid = env.global_object_id?;
         drop(env);
-        self.get_object(gid)
+        self.get_object_cell(gid)
             .and_then(|go| go.borrow().own_property_lookup(name))
     }
 
@@ -103,7 +103,7 @@ impl Interpreter {
                     if let Some(gid) = mirror_gid {
                         // Borrow on `current` is dropped above; safe to call
                         // out to the slab (re-entrant set traps OK).
-                        if let Some(go) = self.get_object(gid) {
+                        if let Some(go) = self.get_object_cell(gid) {
                             let ok = go.borrow_mut().set_property_value(name, value.clone());
                             if !ok {
                                 if strict {
@@ -127,10 +127,10 @@ impl Interpreter {
                 }
                 EnvSetAction::ImplicitGlobal { gid } => {
                     let already_on_global = self
-                        .get_object(gid)
+                        .get_object_cell(gid)
                         .is_some_and(|go| go.borrow().has_own_property(name));
                     let ok = self
-                        .get_object(gid)
+                        .get_object_cell(gid)
                         .is_some_and(|go| go.borrow_mut().set_property_value(name, value.clone()));
                     if !ok {
                         return Ok(());
@@ -171,7 +171,7 @@ impl Interpreter {
             }
             if let Some(gid) = e.global_object_id {
                 drop(e);
-                if let Some(go) = self.get_object(gid)
+                if let Some(go) = self.get_object_cell(gid)
                     && let Some(v) = go.borrow().own_property_lookup(name)
                 {
                     return Some(v);
@@ -196,7 +196,7 @@ impl Interpreter {
             }
             if let Some(gid) = e.global_object_id {
                 drop(e);
-                if let Some(go) = self.get_object(gid) {
+                if let Some(go) = self.get_object_cell(gid) {
                     return go.borrow().own_has_property(name).unwrap_or(false);
                 }
                 return false;
@@ -212,7 +212,7 @@ impl Interpreter {
     pub(crate) fn env_declare_global_var(&mut self, env: &EnvRef, name: &str) {
         let gid = env.borrow().global_object_id;
         if let Some(gid) = gid {
-            if let Some(go) = self.get_object(gid) {
+            if let Some(go) = self.get_object_cell(gid) {
                 let mut g = go.borrow_mut();
                 if !g.properties.contains_key(name) {
                     g.property_order.push(name.to_string());
@@ -233,13 +233,13 @@ impl Interpreter {
         if let Some(gid) = gid {
             if !env.borrow().bindings.contains_key(name) {
                 let has_global_prop = self
-                    .get_object(gid)
+                    .get_object_cell(gid)
                     .is_some_and(|g| g.borrow().properties.contains_key(name));
                 if !has_global_prop {
                     env.borrow_mut().declare(name, BindingKind::Var);
                 }
             }
-            if let Some(go) = self.get_object(gid) {
+            if let Some(go) = self.get_object_cell(gid) {
                 let mut g = go.borrow_mut();
                 if !g.properties.contains_key(name) {
                     g.property_order.push(name.to_string());
@@ -251,6 +251,50 @@ impl Interpreter {
             }
         } else {
             env.borrow_mut().declare_global_var_configurable(name);
+        }
+    }
+
+    /// Walk the scope chain and check what error (if any) setting a binding
+    /// would produce. Mirrors the static `Environment::check_set_binding` but
+    /// reads the global object via the slab.
+    pub(crate) fn env_check_set_binding(&self, env: &EnvRef, name: &str) -> SetBindingCheck {
+        let mut current = env.clone();
+        loop {
+            let next = {
+                let e = current.borrow();
+                if e.is_indirect_binding(name) {
+                    return SetBindingCheck::ConstAssign;
+                }
+                if let Some(binding) = e.bindings.get(name) {
+                    if !binding.initialized && binding.kind != BindingKind::Var {
+                        return SetBindingCheck::TdzError;
+                    }
+                    if binding.kind == BindingKind::Const && binding.initialized {
+                        return SetBindingCheck::ConstAssign;
+                    }
+                    if (binding.kind == BindingKind::FunctionName
+                        || binding.kind == BindingKind::ImmutableValue)
+                        && binding.initialized
+                    {
+                        return SetBindingCheck::FunctionNameAssign;
+                    }
+                    return SetBindingCheck::Ok;
+                }
+                if let Some(gid) = e.global_object_id {
+                    drop(e);
+                    if let Some(go) = self.get_object_cell(gid)
+                        && matches!(go.borrow().own_has_property(name), Some(true))
+                    {
+                        return SetBindingCheck::Ok;
+                    }
+                    return SetBindingCheck::Unresolvable;
+                }
+                e.parent.clone()
+            };
+            match next {
+                Some(parent) => current = parent,
+                None => return SetBindingCheck::Unresolvable,
+            }
         }
     }
 
@@ -266,7 +310,7 @@ impl Interpreter {
             .declare_global_function_binding(name, value.clone(), configurable);
         let gid = env.borrow().global_object_id;
         if let Some(gid) = gid
-            && let Some(go) = self.get_object(gid)
+            && let Some(go) = self.get_object_cell(gid)
         {
             let mut g = go.borrow_mut();
             let existing = g.properties.get(name);

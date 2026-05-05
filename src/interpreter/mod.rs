@@ -27,6 +27,7 @@ mod gc;
 pub(crate) mod generator_analysis;
 pub(crate) mod generator_transform;
 pub(crate) mod ic;
+mod object_arena;
 mod property_map;
 pub(crate) use property_map::PropertyMap;
 mod scheduler;
@@ -52,16 +53,14 @@ fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
     None
 }
 
-#[allow(clippy::type_complexity)]
 pub struct Interpreter {
     pub(crate) realms: Vec<Realm>,
     pub(crate) current_realm_id: usize,
-    objects: Vec<Option<Rc<RefCell<JsObjectData>>>>,
+    objects: object_arena::ObjectArena,
     global_symbol_registry: HashMap<String, crate::types::JsSymbol>,
     pub(crate) well_known_symbols: HashMap<String, crate::types::JsSymbol>,
     next_symbol_id: u64,
     new_target: Option<JsValue>,
-    free_list: Vec<usize>,
     gc_alloc_count: usize,
     gc_requested: bool,
     gc_bytes_since_gc: usize,
@@ -214,12 +213,11 @@ impl Interpreter {
         let mut interp = Self {
             realms: vec![realm],
             current_realm_id: 0,
-            objects: Vec::new(),
+            objects: object_arena::ObjectArena::new(),
             global_symbol_registry: HashMap::new(),
             well_known_symbols: HashMap::new(),
             next_symbol_id: 1,
             new_target: None,
-            free_list: Vec::new(),
             gc_alloc_count: 0,
             gc_requested: false,
             gc_bytes_since_gc: 0,
@@ -332,8 +330,7 @@ impl Interpreter {
     }
 
     pub(crate) fn create_dollar_262(&mut self, realm_id: usize) -> JsValue {
-        let dollar_262 = self.create_object();
-        let dollar_262_id = dollar_262.borrow().id.unwrap();
+        let dollar_262_id = self.create_object_id();
 
         // $262.detachArrayBuffer
         let detach_fn = self.create_function(JsFunction::native(
@@ -344,7 +341,7 @@ impl Interpreter {
                 interp.detach_arraybuffer(&buf)
             },
         ));
-        dollar_262
+        self.get_object_cell_expect(dollar_262_id)
             .borrow_mut()
             .insert_builtin("detachArrayBuffer".to_string(), detach_fn);
 
@@ -358,17 +355,19 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        dollar_262
+        self.get_object_cell_expect(dollar_262_id)
             .borrow_mut()
             .insert_builtin("gc".to_string(), gc_fn);
 
         // $262.global — reference to the realm's global object
         let global_env = self.realms[realm_id].global_env.clone();
         if let Some(go_id) = global_env.borrow().global_object_id {
-            dollar_262.borrow_mut().insert_builtin(
-                "global".to_string(),
-                JsValue::Object(crate::types::JsObject { id: go_id }),
-            );
+            self.get_object_cell_expect(dollar_262_id)
+                .borrow_mut()
+                .insert_builtin(
+                    "global".to_string(),
+                    JsValue::Object(crate::types::JsObject { id: go_id }),
+                );
         }
 
         // $262.createRealm
@@ -381,7 +380,7 @@ impl Interpreter {
                 Completion::Normal(new_dollar_262)
             },
         ));
-        dollar_262
+        self.get_object_cell_expect(dollar_262_id)
             .borrow_mut()
             .insert_builtin("createRealm".to_string(), create_realm_fn);
 
@@ -427,28 +426,29 @@ impl Interpreter {
                 }
             },
         ));
-        dollar_262
+        self.get_object_cell_expect(dollar_262_id)
             .borrow_mut()
             .insert_builtin("evalScript".to_string(), eval_script_fn);
 
         // $262.IsHTMLDDA — B.3.6 [[IsHTMLDDA]] internal slot
-        let htmldda_obj = self.create_object();
-        htmldda_obj.borrow_mut().callable = Some(JsFunction::native(
+        let htmldda_obj_id = self.create_object_id();
+        self.get_object_cell_expect(htmldda_obj_id)
+            .borrow_mut()
+            .callable = Some(JsFunction::native(
             "".to_string(),
             0,
             |_interp, _this, _args| Completion::Normal(JsValue::Null),
         ));
-        htmldda_obj.borrow_mut().is_htmldda = true;
-        let htmldda_val = JsValue::Object(crate::types::JsObject {
-            id: htmldda_obj.borrow().id.unwrap(),
-        });
-        dollar_262
+        self.get_object_cell_expect(htmldda_obj_id)
+            .borrow_mut()
+            .is_htmldda = true;
+        let htmldda_val = JsValue::Object(crate::types::JsObject { id: htmldda_obj_id });
+        self.get_object_cell_expect(dollar_262_id)
             .borrow_mut()
             .insert_builtin("IsHTMLDDA".to_string(), htmldda_val);
 
         // $262.agent
-        let agent_obj = self.create_object();
-        let agent_obj_id = agent_obj.borrow().id.unwrap();
+        let agent_obj_id = self.create_object_id();
 
         // $262.agent.start(script)
         let _reports_clone = self.agent_reports.clone();
@@ -492,7 +492,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        agent_obj
+        self.get_object_cell_expect(agent_obj_id)
             .borrow_mut()
             .insert_builtin("start".to_string(), start_fn);
 
@@ -503,9 +503,9 @@ impl Interpreter {
             |interp, _this, args| {
                 let sab_val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = &sab_val
-                    && let Some(obj) = interp.get_object(o.id)
+                    && let Some(cell) = interp.get_object_cell(o.id)
                 {
-                    let sab_shared = obj.borrow().sab_shared.clone();
+                    let sab_shared = cell.borrow().sab_shared.clone();
                     if let Some(inner) = sab_shared {
                         for tx in &interp.agent_broadcast_txs {
                             let _ = tx.send(AgentBroadcastMsg {
@@ -517,7 +517,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        agent_obj
+        self.get_object_cell_expect(agent_obj_id)
             .borrow_mut()
             .insert_builtin("broadcast".to_string(), broadcast_fn);
 
@@ -535,7 +535,7 @@ impl Interpreter {
                 }
             },
         ));
-        agent_obj
+        self.get_object_cell_expect(agent_obj_id)
             .borrow_mut()
             .insert_builtin("getReport".to_string(), get_report_fn);
 
@@ -603,7 +603,7 @@ impl Interpreter {
                 Completion::Normal(promise_val)
             },
         ));
-        agent_obj
+        self.get_object_cell_expect(agent_obj_id)
             .borrow_mut()
             .insert_builtin("getReportAsync".to_string(), get_report_async_fn);
 
@@ -621,7 +621,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        agent_obj
+        self.get_object_cell_expect(agent_obj_id)
             .borrow_mut()
             .insert_builtin("sleep".to_string(), sleep_fn);
 
@@ -635,7 +635,7 @@ impl Interpreter {
                 Completion::Normal(JsValue::Number(elapsed))
             },
         ));
-        agent_obj
+        self.get_object_cell_expect(agent_obj_id)
             .borrow_mut()
             .insert_builtin("monotonicNow".to_string(), monotonic_fn);
 
@@ -645,12 +645,12 @@ impl Interpreter {
             0,
             |_interp, _this, _args| Completion::Normal(JsValue::Undefined),
         ));
-        agent_obj
+        self.get_object_cell_expect(agent_obj_id)
             .borrow_mut()
             .insert_builtin("leaving".to_string(), leaving_fn);
 
         let agent_val = JsValue::Object(crate::types::JsObject { id: agent_obj_id });
-        dollar_262
+        self.get_object_cell_expect(dollar_262_id)
             .borrow_mut()
             .insert_builtin("agent".to_string(), agent_val);
 
@@ -671,9 +671,9 @@ impl Interpreter {
         };
 
         // AbstractModuleSource.prototype_id
-        let ams_proto = self.create_object();
+        let ams_proto_id = self.create_object_id();
         // constructor property
-        ams_proto
+        self.get_object_cell_expect(ams_proto_id)
             .borrow_mut()
             .insert_builtin("constructor".to_string(), ams_fn.clone());
         // @@toStringTag getter — returns undefined (no [[ModuleSourceClassName]] slot)
@@ -687,30 +687,30 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             },
         ));
-        ams_proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor {
-                value: None,
-                writable: None,
-                get: Some(tag_getter),
-                set: None,
-                enumerable: Some(false),
-                configurable: Some(true),
-            },
-        );
-        let ams_proto_val = JsValue::Object(crate::types::JsObject {
-            id: ams_proto.borrow().id.unwrap(),
-        });
+        self.get_object_cell_expect(ams_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor {
+                    value: None,
+                    writable: None,
+                    get: Some(tag_getter),
+                    set: None,
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                },
+            );
+        let ams_proto_val = JsValue::Object(crate::types::JsObject { id: ams_proto_id });
 
         // Wire prototype on the constructor: {writable: false, enumerable: false, configurable: false}
-        if let Some(obj) = self.get_object(ams_fn_id) {
+        if let Some(obj) = self.get_object_cell(ams_fn_id) {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(ams_proto_val, false, false, false),
             );
         }
 
-        dollar_262
+        self.get_object_cell_expect(dollar_262_id)
             .borrow_mut()
             .insert_builtin("AbstractModuleSource".to_string(), ams_fn);
 
@@ -777,7 +777,7 @@ impl Interpreter {
     // GetFunctionRealm — §10.2.4
     pub(crate) fn get_function_realm(&mut self, func_val: &JsValue) -> Result<usize, JsValue> {
         if let JsValue::Object(o) = func_val
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             let obj_ref = obj.borrow();
             // Bound function: recurse on [[BoundTargetFunction]]
@@ -893,7 +893,7 @@ impl Interpreter {
                 && !matches!(getter, JsValue::Undefined)
             {
                 let is_callable = if let JsValue::Object(o) = getter
-                    && let Some(obj) = self.get_object(o.id)
+                    && let Some(obj) = self.get_object_cell(o.id)
                 {
                     obj.borrow().callable.is_some()
                 } else {
@@ -907,7 +907,7 @@ impl Interpreter {
                 && !matches!(setter, JsValue::Undefined)
             {
                 let is_callable = if let JsValue::Object(o) = setter
-                    && let Some(obj) = self.get_object(o.id)
+                    && let Some(obj) = self.get_object_cell(o.id)
                 {
                     obj.borrow().callable.is_some()
                 } else {
@@ -943,9 +943,9 @@ impl Interpreter {
 
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn from_property_descriptor(&mut self, desc: &PropertyDescriptor) -> JsValue {
-        let result = self.create_object();
+        let result_id = self.create_object_id();
         {
-            let mut r = result.borrow_mut();
+            let mut r = self.get_object_cell_expect(result_id).borrow_mut();
             // §6.2.6.4 FromPropertyDescriptor — only include fields that are present
             if let Some(ref val) = desc.value {
                 r.insert_value("value".to_string(), val.clone());
@@ -966,13 +966,13 @@ impl Interpreter {
                 r.insert_value("configurable".to_string(), JsValue::Boolean(c));
             }
         }
-        let id = result.borrow().id.unwrap();
+        let id = result_id;
         JsValue::Object(crate::types::JsObject { id })
     }
 
     pub(crate) fn to_boolean_val(&self, val: &JsValue) -> bool {
         if let JsValue::Object(o) = val
-            && let Some(Some(obj)) = self.objects.get(o.id as usize)
+            && let Some(obj) = self.objects.get(o.id)
             && obj.borrow().is_htmldda
         {
             return false;
@@ -980,11 +980,14 @@ impl Interpreter {
         to_boolean(val)
     }
 
-    fn create_object(&mut self) -> Rc<RefCell<JsObjectData>> {
+    /// Allocate a new JS object on the slab, prototype-linked to the
+    /// realm's `Object.prototype`, and return its slot id. Callers that
+    /// need to mutate the new object should follow with
+    /// `get_object_cell_expect(id).borrow_mut()`.
+    pub(crate) fn create_object_id(&mut self) -> u64 {
         let mut data = JsObjectData::new();
         data.prototype_id = self.realm().object_prototype;
-        let id = self.alloc_object(data);
-        self.get_object_expect(id)
+        self.alloc_object(data)
     }
 
     fn create_thrower_function(&mut self) -> JsValue {
@@ -1133,13 +1136,16 @@ impl Interpreter {
         // even when they are class methods (non-constructable)
         let needs_prototype = is_constructable || is_gen || is_async_gen;
         if needs_prototype {
-            let proto = self.create_object();
+            let proto_id = self.create_object_id();
             if is_async_gen {
-                proto.borrow_mut().prototype_id = self.realm().async_generator_prototype;
+                self.get_object_cell_expect(proto_id)
+                    .borrow_mut()
+                    .prototype_id = self.realm().async_generator_prototype;
             } else if is_gen {
-                proto.borrow_mut().prototype_id = self.realm().generator_prototype;
+                self.get_object_cell_expect(proto_id)
+                    .borrow_mut()
+                    .prototype_id = self.realm().generator_prototype;
             }
-            let proto_id = proto.borrow().id.unwrap();
             let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
             obj_data.insert_property(
                 "prototype".to_string(),
@@ -1154,10 +1160,10 @@ impl Interpreter {
         if is_constructable
             && !is_gen
             && let Some(JsValue::Object(proto_ref)) = self
-                .get_object_expect(func_id)
+                .get_object_cell_expect(func_id)
                 .borrow()
                 .get_property_value("prototype")
-            && let Some(proto_obj) = self.get_object(proto_ref.id)
+            && let Some(proto_obj) = self.get_object_cell(proto_ref.id)
         {
             proto_obj
                 .borrow_mut()
@@ -1166,8 +1172,15 @@ impl Interpreter {
         func_val
     }
 
+    /// Get a fresh `Rc::clone` of the slot's `Rc<RefCell<…>>` if live.
+    /// New callers should prefer `get_object_cell` / `get_object_cell_expect`
+    /// (returns `&RefCell<…>`) to avoid the per-call `Rc::clone`; this
+    /// function remains for the (large) set of legacy callers that
+    /// pattern-match `if let Some(obj) = interp.get_object(id) { obj.borrow*() }`
+    /// and need a value-type binding outliving any inner `&mut self`
+    /// callback (proxy traps, getter dispatch, error allocation).
     pub(crate) fn get_object(&self, id: u64) -> Option<Rc<RefCell<JsObjectData>>> {
-        self.objects.get(id as usize).and_then(|slot| slot.clone())
+        self.objects.get(id)
     }
 
     /// Total IC hits since interpreter construction. Whitebox accessor used
@@ -1232,25 +1245,26 @@ impl Interpreter {
         result
     }
 
-    /// Like `get_object` but panics if the id is dead. Matches the pattern
-    /// `self.objects[id as usize].as_ref().unwrap().clone()` used at most
-    /// call sites where the id is known live (held by a live JsValue).
-    pub(crate) fn get_object_expect(&self, id: u64) -> Rc<RefCell<JsObjectData>> {
-        self.objects[id as usize]
-            .as_ref()
-            .expect("dead object id")
-            .clone()
+    /// Borrow the slot's `RefCell` if live, else `None`. Lifetime tied
+    /// to `&self`; drop the borrow before any `&mut self` call.
+    #[allow(dead_code)] // get_object_cell isn't yet hot; get_object_cell_expect is
+    pub(crate) fn get_object_cell(&self, id: u64) -> Option<&RefCell<JsObjectData>> {
+        self.objects.get_cell(id)
+    }
+
+    pub(crate) fn get_object_cell_expect(&self, id: u64) -> &RefCell<JsObjectData> {
+        self.objects.get_cell_expect(id)
     }
 
     /// Iterative prototype-chain walk of `get_property`. Returns
     /// `JsValue::Undefined` when the key is not found anywhere in the chain.
-    /// Each frame is pinned by the Rc returned from `get_object_expect` so
-    /// intermediate safepoints cannot sweep the next prototype before we reach it.
+    /// Each frame borrows the slot's `RefCell` directly via `get_object_cell_expect`,
+    /// avoiding an `Rc::clone` per prototype hop. The walk holds no state across
+    /// `&mut self` calls, so the `&self`-tied lifetime is safe.
     pub(crate) fn get_property_on_id(&self, start_id: u64, key: &str) -> JsValue {
         let mut current = Some(start_id);
         while let Some(id) = current {
-            let obj_rc = self.get_object_expect(id);
-            let b = obj_rc.borrow();
+            let b = self.get_object_cell_expect(id).borrow();
             if let Some(v) = b.own_property_lookup(key) {
                 return v;
             }
@@ -1269,8 +1283,7 @@ impl Interpreter {
     ) -> Option<PropertyDescriptor> {
         let mut current = Some(start_id);
         while let Some(id) = current {
-            let obj_rc = self.get_object_expect(id);
-            let b = obj_rc.borrow();
+            let b = self.get_object_cell_expect(id).borrow();
             if let Some(d) = b.own_property_descriptor_lookup(key) {
                 return Some(d);
             }
@@ -1286,8 +1299,7 @@ impl Interpreter {
     pub(crate) fn has_property_on_id(&self, start_id: u64, key: &str) -> bool {
         let mut current = Some(start_id);
         while let Some(id) = current {
-            let obj_rc = self.get_object_expect(id);
-            let b = obj_rc.borrow();
+            let b = self.get_object_cell_expect(id).borrow();
             if let Some(result) = b.own_has_property(key) {
                 return result;
             }
@@ -1307,8 +1319,7 @@ impl Interpreter {
         let mut result: Vec<String> = Vec::new();
         let mut current = Some(start_id);
         while let Some(id) = current {
-            let obj_rc = self.get_object_expect(id);
-            let b = obj_rc.borrow();
+            let b = self.get_object_cell_expect(id).borrow();
             let (keys, shadow) = b.own_enumerable_keys_with_shadow();
             for k in keys {
                 if global_seen.insert(k.clone()) {
@@ -1327,7 +1338,7 @@ impl Interpreter {
 
     pub(crate) fn set_function_name(&self, val: &JsValue, name: &str) {
         if let JsValue::Object(o) = val
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             let obj_ref = obj.borrow();
             if obj_ref.callable.is_none() {
@@ -1365,9 +1376,9 @@ impl Interpreter {
         func_env: Option<&EnvRef>,
         param_names: &[String],
     ) -> JsValue {
-        let obj = self.create_object();
+        let obj_id = self.create_object_id();
         {
-            let mut o = obj.borrow_mut();
+            let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = "Arguments".to_string();
 
             // length property: writable, not enumerable, configurable
@@ -1430,7 +1441,7 @@ impl Interpreter {
             }
         }
 
-        let result_id = obj.borrow().id.unwrap();
+        let result_id = obj_id;
         let result = JsValue::Object(crate::types::JsObject { id: result_id });
 
         // Unmapped (strict OR non-simple params): callee is a throw accessor
@@ -1441,7 +1452,7 @@ impl Interpreter {
                 .clone()
                 .unwrap_or_else(|| self.create_thrower_function());
             if let JsValue::Object(ref o) = result
-                && let Some(obj_rc) = self.get_object(o.id)
+                && let Some(obj_rc) = self.get_object_cell(o.id)
             {
                 obj_rc.borrow_mut().define_own_property(
                     "callee".to_string(),
@@ -1467,7 +1478,7 @@ impl Interpreter {
             if let Some(iter_fn) = array_iter_fn
                 && !matches!(iter_fn, JsValue::Undefined)
                 && let JsValue::Object(ref o) = result
-                && let Some(obj_rc) = self.get_object(o.id)
+                && let Some(obj_rc) = self.get_object_cell(o.id)
             {
                 obj_rc
                     .borrow_mut()
@@ -2700,9 +2711,9 @@ impl Interpreter {
         let buf_rc = Rc::new(RefCell::new(BufferData::Owned(bytes.to_vec())));
         let detached = Rc::new(Cell::new(false));
 
-        let ab_obj = self.create_object();
+        let ab_obj_id = self.create_object_id();
         {
-            let mut ab = ab_obj.borrow_mut();
+            let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
             ab.class_name = "ArrayBuffer".to_string();
             ab.prototype_id = self.realm().arraybuffer_prototype;
             ab.arraybuffer_data = Some(buf_rc.clone());
@@ -2710,7 +2721,7 @@ impl Interpreter {
             ab.arraybuffer_is_immutable = true;
         }
         self.gc_track_external_bytes(len);
-        let ab_id = ab_obj.borrow().id.unwrap();
+        let ab_id = ab_obj_id;
         let buf_val = JsValue::Object(crate::types::JsObject { id: ab_id });
 
         let ta_info = TypedArrayInfo {
@@ -2724,8 +2735,7 @@ impl Interpreter {
         };
 
         let proto_id = self.realm().uint8array_prototype.unwrap();
-        let ta_obj = self.create_typed_array_object_with_proto(ta_info, buf_val, proto_id);
-        let ta_id = ta_obj.borrow().id.unwrap();
+        let ta_id = self.create_typed_array_object_with_proto(ta_info, buf_val, proto_id);
         JsValue::Object(crate::types::JsObject { id: ta_id })
     }
 
@@ -3942,7 +3952,7 @@ impl Interpreter {
             return cached;
         }
 
-        let obj = self.create_object();
+        let obj_id = self.create_object_id();
         let (env, export_bindings, module_path, export_names) = {
             let module_ref = module.borrow();
             let env = module_ref.env.clone();
@@ -3968,25 +3978,31 @@ impl Interpreter {
         }; // module_ref borrow dropped here
 
         // Set module namespace data for live bindings
-        obj.borrow_mut().module_namespace = Some(ModuleNamespaceData {
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .module_namespace = Some(ModuleNamespaceData {
             env: env.clone(),
             export_names: export_names.clone(),
             export_to_binding: export_bindings,
             module_path,
             deferred: false,
         });
-        obj.borrow_mut().class_name = "Module".to_string();
-        obj.borrow_mut().extensible = false; // Module namespaces are non-extensible
-        obj.borrow_mut().prototype_id = None; // Module namespaces have null prototype
+        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".to_string();
+        self.get_object_cell_expect(obj_id).borrow_mut().extensible = false; // Module namespaces are non-extensible
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .prototype_id = None; // Module namespaces have null prototype
 
         // Add property descriptors for each export (values will be looked up dynamically)
         for name in &export_names {
             // Exports: writable=true, enumerable=true, configurable=false
             // Value is left as undefined - will be looked up dynamically
-            obj.borrow_mut().insert_property(
-                name.clone(),
-                PropertyDescriptor::data(JsValue::Undefined, true, true, false),
-            );
+            self.get_object_cell_expect(obj_id)
+                .borrow_mut()
+                .insert_property(
+                    name.clone(),
+                    PropertyDescriptor::data(JsValue::Undefined, true, true, false),
+                );
         }
 
         // Set Symbol.toStringTag to "Module"
@@ -3994,17 +4010,19 @@ impl Interpreter {
         let sym_key = self
             .get_symbol_key("toStringTag")
             .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
-        obj.borrow_mut().insert_property(
-            sym_key,
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("Module")),
-                false,
-                false,
-                false,
-            ),
-        );
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .insert_property(
+                sym_key,
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("Module")),
+                    false,
+                    false,
+                    false,
+                ),
+            );
 
-        let id = obj.borrow().id.unwrap();
+        let id = obj_id;
         let ns = JsValue::Object(crate::types::JsObject { id });
         module.borrow_mut().cached_namespace = Some(ns.clone());
         ns
@@ -4017,7 +4035,7 @@ impl Interpreter {
             return cached;
         }
 
-        let obj = self.create_object();
+        let obj_id = self.create_object_id();
         let (env, export_bindings, module_path, export_names) = {
             let module_ref = module.borrow();
             let env = module_ref.env.clone();
@@ -4042,38 +4060,46 @@ impl Interpreter {
             (env, export_bindings, module_path, export_names)
         };
 
-        obj.borrow_mut().module_namespace = Some(ModuleNamespaceData {
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .module_namespace = Some(ModuleNamespaceData {
             env: env.clone(),
             export_names: export_names.clone(),
             export_to_binding: export_bindings,
             module_path,
             deferred: true,
         });
-        obj.borrow_mut().class_name = "Module".to_string();
-        obj.borrow_mut().extensible = false;
-        obj.borrow_mut().prototype_id = None;
+        self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".to_string();
+        self.get_object_cell_expect(obj_id).borrow_mut().extensible = false;
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .prototype_id = None;
 
         for name in &export_names {
-            obj.borrow_mut().insert_property(
-                name.clone(),
-                PropertyDescriptor::data(JsValue::Undefined, true, true, false),
-            );
+            self.get_object_cell_expect(obj_id)
+                .borrow_mut()
+                .insert_property(
+                    name.clone(),
+                    PropertyDescriptor::data(JsValue::Undefined, true, true, false),
+                );
         }
 
         let sym_key = self
             .get_symbol_key("toStringTag")
             .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
-        obj.borrow_mut().insert_property(
-            sym_key,
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("Deferred Module")),
-                false,
-                false,
-                false,
-            ),
-        );
+        self.get_object_cell_expect(obj_id)
+            .borrow_mut()
+            .insert_property(
+                sym_key,
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("Deferred Module")),
+                    false,
+                    false,
+                    false,
+                ),
+            );
 
-        let id = obj.borrow().id.unwrap();
+        let id = obj_id;
         let ns = JsValue::Object(crate::types::JsObject { id });
         module.borrow_mut().cached_deferred_namespace = Some(ns.clone());
         ns
@@ -4137,7 +4163,7 @@ impl Interpreter {
                     uses_arguments: func_uses_arguments(&f.params, &f.body),
                 };
                 let val = self.create_function(func);
-                let _ = env.borrow_mut().set(&f.name, val);
+                let _ = self.env_set(env, &f.name, val);
             }
             Statement::ClassDeclaration(c) => {
                 if !c.name.is_empty() {
@@ -4511,7 +4537,7 @@ impl Interpreter {
         }
         let ids = self.scheduler.pending_async_promise_ids_lock();
         for &id in ids.iter() {
-            if let Some(obj) = self.get_object(id)
+            if let Some(obj) = self.get_object_cell(id)
                 && let Some(ref pd) = obj.borrow().promise_data
                 && (!pd.fulfill_reactions.is_empty() || !pd.reject_reactions.is_empty())
             {
@@ -4573,7 +4599,7 @@ impl Interpreter {
     ) -> Result<bool, JsValue> {
         // 1. If Desc does not have [[Value]], just do OrdinaryDefineOwnProperty(A, "length", Desc)
         if desc.value.is_none() {
-            let obj_rc = self.get_object(obj_id as u64).unwrap();
+            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             return Ok(obj_rc
                 .borrow_mut()
                 .define_own_property("length".to_string(), desc));
@@ -4602,7 +4628,7 @@ impl Interpreter {
 
         // 6. Let oldLenDesc be OrdinaryGetOwnProperty(A, "length").
         let (old_len, old_len_writable) = {
-            let obj_rc = self.get_object(obj_id as u64).unwrap();
+            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let obj = obj_rc.borrow();
             let old_len_desc = obj.properties.get("length").cloned();
             match old_len_desc {
@@ -4627,7 +4653,7 @@ impl Interpreter {
 
         // 7. If newLen >= oldLen, return OrdinaryDefineOwnProperty(A, "length", newLenDesc).
         if new_len >= old_len {
-            let obj_rc = self.get_object(obj_id as u64).unwrap();
+            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let result = obj_rc
                 .borrow_mut()
                 .define_own_property("length".to_string(), new_len_desc);
@@ -4650,7 +4676,7 @@ impl Interpreter {
 
         // 11. Let succeeded be OrdinaryDefineOwnProperty(A, "length", newLenDesc).
         {
-            let obj_rc = self.get_object(obj_id as u64).unwrap();
+            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let succeeded = obj_rc
                 .borrow_mut()
                 .define_own_property("length".to_string(), new_len_desc);
@@ -4664,7 +4690,7 @@ impl Interpreter {
         //     Stop if a deletion fails (non-configurable).
         let mut actual_new_len = new_len;
         {
-            let obj_rc = self.get_object(obj_id as u64).unwrap();
+            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let mut obj = obj_rc.borrow_mut();
 
             // Collect array index keys >= newLen and < oldLen, sorted descending.
@@ -4705,7 +4731,7 @@ impl Interpreter {
 
         // If we were blocked by a non-configurable element, update length and handle writable.
         if actual_new_len != new_len {
-            let obj_rc = self.get_object(obj_id as u64).unwrap();
+            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let mut obj = obj_rc.borrow_mut();
             if let Some(len_desc) = obj.properties.get_mut("length") {
                 len_desc.value = Some(JsValue::Number(actual_new_len as f64));
@@ -4719,7 +4745,7 @@ impl Interpreter {
 
         // 14. If newWritable is false, set [[Writable]] on length to false.
         if !new_writable {
-            let obj_rc = self.get_object(obj_id as u64).unwrap();
+            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let mut obj = obj_rc.borrow_mut();
             if let Some(len_desc) = obj.properties.get_mut("length") {
                 len_desc.writable = Some(false);
@@ -4750,7 +4776,7 @@ impl Interpreter {
 
             // 2.a. Let oldLen be the current length value.
             let (old_len, length_writable) = {
-                let obj_rc = self.get_object(obj_id as u64).unwrap();
+                let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 let obj = obj_rc.borrow();
                 let len_desc = obj.properties.get("length");
                 let ol = len_desc
@@ -4774,7 +4800,7 @@ impl Interpreter {
 
             // 2.c. Let succeeded be OrdinaryDefineOwnProperty(A, P, Desc).
             let succeeded = {
-                let obj_rc = self.get_object(obj_id as u64).unwrap();
+                let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 obj_rc
                     .borrow_mut()
                     .define_own_property(key.to_string(), desc.clone())
@@ -4788,7 +4814,7 @@ impl Interpreter {
             // 2.e. If index >= oldLen, set length to index + 1.
             if index_u32 >= old_len {
                 let new_len = index_u32 + 1;
-                let obj_rc = self.get_object(obj_id as u64).unwrap();
+                let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 let mut obj = obj_rc.borrow_mut();
                 if let Some(len_desc) = obj.properties.get_mut("length") {
                     len_desc.value = Some(JsValue::Number(new_len as f64));
@@ -4806,7 +4832,7 @@ impl Interpreter {
                     }
                 }
             } else {
-                let obj_rc = self.get_object(obj_id as u64).unwrap();
+                let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 let mut obj = obj_rc.borrow_mut();
                 if let Some(ref mut elems) = obj.array_elements {
                     let idx = index_u32 as usize;
@@ -4822,7 +4848,7 @@ impl Interpreter {
         }
 
         // 3. Return OrdinaryDefineOwnProperty(A, P, Desc).
-        let obj_rc = self.get_object(obj_id as u64).unwrap();
+        let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
         Ok(obj_rc
             .borrow_mut()
             .define_own_property(key.to_string(), desc))
@@ -4831,7 +4857,7 @@ impl Interpreter {
     pub fn format_value(&self, val: &JsValue) -> String {
         match val {
             JsValue::Object(o) => {
-                if self.get_object(o.id).is_some() {
+                if self.get_object_cell(o.id).is_some() {
                     let name = self.get_property_on_id(o.id, "name");
                     let message = self.get_property_on_id(o.id, "message");
                     if let JsValue::String(ref msg) = message {
@@ -4871,11 +4897,9 @@ fn to_uint32_f64(n: f64) -> u32 {
 fn setup_agent_side_262(interp: &mut Interpreter) {
     use crate::types::JsObject;
 
-    let dollar_262 = interp.create_object();
-    let dollar_262_id = dollar_262.borrow().id.unwrap();
+    let dollar_262_id = interp.create_object_id();
 
-    let agent_obj = interp.create_object();
-    let agent_obj_id = agent_obj.borrow().id.unwrap();
+    let agent_obj_id = interp.create_object_id();
 
     // $262.agent.receiveBroadcast(callback)
     let receive_fn = interp.create_function(JsFunction::native(
@@ -4889,10 +4913,10 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                     let sab_inner = msg.sab_shared;
                     let buf = BufferData::Shared(sab_inner.clone());
                     let buf_rc = Rc::new(RefCell::new(buf));
-                    let sab_obj = interp.create_object();
+                    let sab_obj_id = interp.create_object_id();
                     let sab_proto = interp.realm().shared_arraybuffer_prototype;
                     {
-                        let mut o = sab_obj.borrow_mut();
+                        let mut o = interp.get_object_cell_expect(sab_obj_id).borrow_mut();
                         o.class_name = "SharedArrayBuffer".to_string();
                         o.prototype_id = sab_proto;
                         o.arraybuffer_data = Some(buf_rc);
@@ -4900,9 +4924,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                         o.arraybuffer_is_shared = true;
                         o.sab_shared = Some(sab_inner);
                     }
-                    let sab_val = JsValue::Object(JsObject {
-                        id: sab_obj.borrow().id.unwrap(),
-                    });
+                    let sab_val = JsValue::Object(JsObject { id: sab_obj_id });
                     interp.agent_broadcast_rx = Some(rx);
                     let _ = interp.call_function(&callback, &JsValue::Undefined, &[sab_val]);
                     interp.drain_microtasks();
@@ -4913,7 +4935,8 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
             Completion::Normal(JsValue::Undefined)
         },
     ));
-    agent_obj
+    interp
+        .get_object_cell_expect(agent_obj_id)
         .borrow_mut()
         .insert_builtin("receiveBroadcast".to_string(), receive_fn);
 
@@ -4933,7 +4956,8 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
             Completion::Normal(JsValue::Undefined)
         },
     ));
-    agent_obj
+    interp
+        .get_object_cell_expect(agent_obj_id)
         .borrow_mut()
         .insert_builtin("report".to_string(), report_fn);
 
@@ -4951,7 +4975,8 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
             Completion::Normal(JsValue::Undefined)
         },
     ));
-    agent_obj
+    interp
+        .get_object_cell_expect(agent_obj_id)
         .borrow_mut()
         .insert_builtin("sleep".to_string(), sleep_fn);
 
@@ -4961,7 +4986,8 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
         0,
         |_interp, _this, _args| Completion::Normal(JsValue::Undefined),
     ));
-    agent_obj
+    interp
+        .get_object_cell_expect(agent_obj_id)
         .borrow_mut()
         .insert_builtin("leaving".to_string(), leaving_fn);
 
@@ -4975,12 +5001,14 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
             Completion::Normal(JsValue::Number(elapsed))
         },
     ));
-    agent_obj
+    interp
+        .get_object_cell_expect(agent_obj_id)
         .borrow_mut()
         .insert_builtin("monotonicNow".to_string(), monotonic_fn);
 
     let agent_val = JsValue::Object(JsObject { id: agent_obj_id });
-    dollar_262
+    interp
+        .get_object_cell_expect(dollar_262_id)
         .borrow_mut()
         .insert_builtin("agent".to_string(), agent_val);
 

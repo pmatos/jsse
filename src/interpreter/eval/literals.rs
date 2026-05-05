@@ -4,7 +4,7 @@ impl Interpreter {
     pub(super) fn get_template_object(&mut self, tmpl: &TemplateLiteral) -> JsValue {
         let cache_key = tmpl.id;
         if let Some(&obj_id) = self.realm().template_cache.get(&cache_key)
-            && self.get_object(obj_id).is_some()
+            && self.get_object_cell(obj_id).is_some()
         {
             return JsValue::Object(crate::types::JsObject { id: obj_id });
         }
@@ -27,7 +27,7 @@ impl Interpreter {
         let template_arr = self.create_frozen_template_array(cooked_vals);
 
         if let JsValue::Object(o) = &template_arr
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut().insert_property(
                 "raw".to_string(),
@@ -362,7 +362,7 @@ impl Interpreter {
 
         // Mark derived class constructors and make .prototype writable:false
         if let JsValue::Object(ref o) = ctor_val
-            && let Some(func_obj) = self.get_object(o.id)
+            && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj.borrow_mut().is_class_constructor = true;
             if super_val.is_some() {
@@ -425,15 +425,15 @@ impl Interpreter {
                 }
             }
             if let JsValue::Object(ref sp) = super_proto_val
-                && let Some(super_proto) = self.get_object(sp.id)
+                && let Some(super_proto) = self.get_object_cell(sp.id)
                 && let Some(ref proto) = proto_obj
             {
                 proto.borrow_mut().prototype_id = Some(super_proto.borrow().id.unwrap());
             }
             // Step 7.a: F.[[Prototype]] = superclass (for static method inheritance)
             if let JsValue::Object(ref o) = ctor_val
-                && let Some(ctor_obj) = self.get_object(o.id)
-                && let Some(super_obj) = self.get_object(super_o_id)
+                && let Some(ctor_obj) = self.get_object_cell(o.id)
+                && let Some(super_obj) = self.get_object_cell(super_o_id)
             {
                 ctor_obj.borrow_mut().prototype_id = Some(super_obj.borrow().id.unwrap());
             }
@@ -573,7 +573,7 @@ impl Interpreter {
 
                             if m.is_static {
                                 if let JsValue::Object(ref o) = ctor_val
-                                    && let Some(func_obj) = self.get_object(o.id)
+                                    && let Some(func_obj) = self.get_object_cell(o.id)
                                 {
                                     match m.kind {
                                         ClassMethodKind::Get => {
@@ -637,7 +637,7 @@ impl Interpreter {
                                     }
                                 }
                             } else if let JsValue::Object(ref o) = ctor_val
-                                && let Some(func_obj) = self.get_object(o.id)
+                                && let Some(func_obj) = self.get_object_cell(o.id)
                             {
                                 match m.kind {
                                     ClassMethodKind::Get => {
@@ -923,7 +923,7 @@ impl Interpreter {
                                     ));
                                 }
                             };
-                            if let Some(obj) = interp.get_object(obj_id)
+                            if let Some(obj) = interp.get_object_cell(obj_id)
                                 && let Some(PrivateElement::Field(v)) =
                                     obj.borrow().private_fields.get(&getter_slot)
                             {
@@ -950,7 +950,7 @@ impl Interpreter {
                                 }
                             };
                             let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                            if let Some(obj) = interp.get_object(obj_id)
+                            if let Some(obj) = interp.get_object_cell(obj_id)
                                 && obj.borrow().private_fields.contains_key(&setter_slot)
                             {
                                 obj.borrow_mut()
@@ -993,7 +993,7 @@ impl Interpreter {
                             p.value.clone(),
                         ));
                     } else if let JsValue::Object(ref o) = ctor_val
-                        && let Some(func_obj) = self.get_object(o.id)
+                        && let Some(func_obj) = self.get_object_cell(o.id)
                     {
                         func_obj.borrow_mut().class_instance_field_defs.push(
                             InstanceFieldDef::AutoAccessorStorage(storage_slot, p.value.clone()),
@@ -1032,7 +1032,7 @@ impl Interpreter {
                         JsValue::Undefined
                     };
                     if let JsValue::Object(ref o) = ctor_val
-                        && let Some(func_obj) = self.get_object(o.id)
+                        && let Some(func_obj) = self.get_object_cell(o.id)
                     {
                         func_obj.borrow_mut().insert_value(key, val);
                     }
@@ -1053,7 +1053,7 @@ impl Interpreter {
                         JsValue::Undefined
                     };
                     if let JsValue::Object(ref o) = ctor_val
-                        && let Some(func_obj) = self.get_object(o.id)
+                        && let Some(func_obj) = self.get_object_cell(o.id)
                     {
                         if !func_obj.borrow().extensible {
                             return Completion::Throw(self.create_type_error(
@@ -1081,7 +1081,7 @@ impl Interpreter {
                         JsValue::Undefined
                     };
                     if let JsValue::Object(ref o) = ctor_val
-                        && let Some(func_obj) = self.get_object(o.id)
+                        && let Some(func_obj) = self.get_object_cell(o.id)
                     {
                         func_obj
                             .borrow_mut()
@@ -1155,7 +1155,7 @@ impl Interpreter {
                             continue;
                         }
                         if let JsValue::Object(ref dobj) = v
-                            && let Some(desc_rc) = self.get_object(dobj.id)
+                            && let Some(desc_rc) = self.get_object_cell(dobj.id)
                         {
                             match desc_rc.borrow().get_property_value("enumerable") {
                                 Some(ev) => self.to_boolean_val(&ev),
@@ -1166,7 +1166,7 @@ impl Interpreter {
                         }
                     }
                     Ok(None) => {
-                        if let Some(obj) = self.get_object(src_id) {
+                        if let Some(obj) = self.get_object_cell(src_id) {
                             let desc = obj.borrow().get_own_property(&key_str);
                             match desc {
                                 Some(d) => d.enumerable != Some(false),
@@ -1178,7 +1178,7 @@ impl Interpreter {
                     }
                     Err(e) => return Err(e),
                 }
-            } else if let Some(obj) = self.get_object(src_id) {
+            } else if let Some(obj) = self.get_object_cell(src_id) {
                 let desc = obj.borrow().get_own_property(&key_str);
                 match desc {
                     Some(d) => d.enumerable != Some(false),
@@ -1345,7 +1345,7 @@ impl Interpreter {
         {
             for val in &method_values {
                 if let JsValue::Object(fo) = val
-                    && let Some(func_obj) = self.get_object(fo.id)
+                    && let Some(func_obj) = self.get_object_cell(fo.id)
                 {
                     let old_closure = if let Some(JsFunction::User { ref closure, .. }) =
                         func_obj.borrow().callable

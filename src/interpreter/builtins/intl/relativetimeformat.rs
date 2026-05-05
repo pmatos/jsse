@@ -440,9 +440,9 @@ fn extract_rtf_data(
     this: &JsValue,
 ) -> Result<(String, String, String, String), JsValue> {
     if let JsValue::Object(o) = this
-        && let Some(obj) = interp.get_object(o.id)
+        && let Some(cell) = interp.get_object_cell(o.id)
     {
-        let b = obj.borrow();
+        let b = cell.borrow();
         if let Some(IntlData::RelativeTimeFormat {
             ref locale,
             ref style,
@@ -462,28 +462,33 @@ fn extract_rtf_data(
 }
 
 impl Interpreter {
-    pub(crate) fn setup_intl_relative_time_format(&mut self, intl_obj: &Rc<RefCell<JsObjectData>>) {
-        let proto = self.create_object();
+    pub(crate) fn setup_intl_relative_time_format(&mut self, intl_obj_id: u64) {
+        let proto_id = self.create_object_id();
         if let Some(op_id) = self.realm().object_prototype {
-            proto.borrow_mut().prototype_id =
-                Some(self.get_object_expect(op_id).borrow().id.unwrap());
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .prototype_id = Some(op_id);
         }
-        proto.borrow_mut().class_name = "Intl.RelativeTimeFormat".to_string();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "Intl.RelativeTimeFormat".to_string();
 
         // @@toStringTag
-        proto.borrow_mut().insert_property(
-            "Symbol(Symbol.toStringTag)".to_string(),
-            PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str(
-                    "Intl.RelativeTimeFormat",
-                ))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            },
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "Symbol(Symbol.toStringTag)".to_string(),
+                PropertyDescriptor {
+                    value: Some(JsValue::String(JsString::from_str(
+                        "Intl.RelativeTimeFormat",
+                    ))),
+                    writable: Some(false),
+                    enumerable: Some(false),
+                    configurable: Some(true),
+                    get: None,
+                    set: None,
+                },
+            );
 
         // format(value, unit)
         let format_fn =
@@ -529,7 +534,7 @@ impl Interpreter {
                     Completion::Normal(JsValue::String(JsString::from_str(&result)))
                 },
             ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("format".to_string(), format_fn);
 
@@ -580,41 +585,52 @@ impl Interpreter {
                 let js_parts: Vec<JsValue> = parts_data
                     .into_iter()
                     .map(|(ptype, pvalue, punit)| {
-                        let part_obj = interp.create_object();
+                        let part_obj_id = interp.create_object_id();
                         if let Some(op_id) = interp.realm().object_prototype {
-                            part_obj.borrow_mut().prototype_id =
-                                Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                            interp
+                                .get_object_cell_expect(part_obj_id)
+                                .borrow_mut()
+                                .prototype_id = Some(op_id);
                         }
-                        part_obj.borrow_mut().insert_property(
-                            "type".to_string(),
-                            PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&ptype)),
-                                true,
-                                true,
-                                true,
-                            ),
-                        );
-                        part_obj.borrow_mut().insert_property(
-                            "value".to_string(),
-                            PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&pvalue)),
-                                true,
-                                true,
-                                true,
-                            ),
-                        );
-                        if let Some(u) = punit {
-                            part_obj.borrow_mut().insert_property(
-                                "unit".to_string(),
+                        interp
+                            .get_object_cell_expect(part_obj_id)
+                            .borrow_mut()
+                            .insert_property(
+                                "type".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&u)),
+                                    JsValue::String(JsString::from_str(&ptype)),
                                     true,
                                     true,
                                     true,
                                 ),
                             );
+                        interp
+                            .get_object_cell_expect(part_obj_id)
+                            .borrow_mut()
+                            .insert_property(
+                                "value".to_string(),
+                                PropertyDescriptor::data(
+                                    JsValue::String(JsString::from_str(&pvalue)),
+                                    true,
+                                    true,
+                                    true,
+                                ),
+                            );
+                        if let Some(u) = punit {
+                            interp
+                                .get_object_cell_expect(part_obj_id)
+                                .borrow_mut()
+                                .insert_property(
+                                    "unit".to_string(),
+                                    PropertyDescriptor::data(
+                                        JsValue::String(JsString::from_str(&u)),
+                                        true,
+                                        true,
+                                        true,
+                                    ),
+                                );
                         }
-                        let id = part_obj.borrow().id.unwrap();
+                        let id = part_obj_id;
                         JsValue::Object(crate::types::JsObject { id })
                     })
                     .collect();
@@ -622,7 +638,7 @@ impl Interpreter {
                 Completion::Normal(interp.create_array(js_parts))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("formatToParts".to_string(), format_to_parts_fn);
 
@@ -637,10 +653,12 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
 
-                let result = interp.create_object();
+                let result_id = interp.create_object_id();
                 if let Some(op_id) = interp.realm().object_prototype {
-                    result.borrow_mut().prototype_id =
-                        Some(interp.get_object_expect(op_id).borrow().id.unwrap());
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .prototype_id = Some(op_id);
                 }
 
                 let props = vec![
@@ -653,26 +671,27 @@ impl Interpreter {
                     ),
                 ];
                 for (key, val) in props {
-                    result.borrow_mut().insert_property(
-                        key.to_string(),
-                        PropertyDescriptor::data(val, true, true, true),
-                    );
+                    interp
+                        .get_object_cell_expect(result_id)
+                        .borrow_mut()
+                        .insert_property(
+                            key.to_string(),
+                            PropertyDescriptor::data(val, true, true, true),
+                        );
                 }
 
-                let result_id = result.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
             },
         ));
-        proto
+        self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_builtin("resolvedOptions".to_string(), resolved_fn);
 
-        self.realm_mut().intl_relative_time_format_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().intl_relative_time_format_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_id = proto.borrow().id.unwrap();
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-        let proto_clone_id = proto.borrow().id.unwrap();
+        let proto_clone_id = proto_id;
 
         let rtf_ctor = self.create_function(JsFunction::constructor(
             "RelativeTimeFormat".to_string(),
@@ -831,29 +850,38 @@ impl Interpreter {
                     Ok(p) => p.unwrap_or(proto_clone_id),
                     Err(e) => return Completion::Throw(e),
                 };
-                let obj = interp.create_object();
-                obj.borrow_mut().prototype_id = Some(proto);
-                obj.borrow_mut().class_name = "Intl.RelativeTimeFormat".to_string();
-                obj.borrow_mut().intl_data = Some(IntlData::RelativeTimeFormat {
-                    locale,
-                    style,
-                    numeric,
-                    numbering_system,
-                });
+                let obj_id = interp.create_object_id();
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .prototype_id = Some(proto);
+                interp
+                    .get_object_cell_expect(obj_id)
+                    .borrow_mut()
+                    .class_name = "Intl.RelativeTimeFormat".to_string();
+                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
+                    Some(IntlData::RelativeTimeFormat {
+                        locale,
+                        style,
+                        numeric,
+                        numbering_system,
+                    });
 
-                let obj_id = obj.borrow().id.unwrap();
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },
         ));
 
         // Set RelativeTimeFormat.prototype on constructor
         if let JsValue::Object(ctor_ref) = &rtf_ctor
-            && let Some(obj) = self.get_object(ctor_ref.id)
+            && self.get_object_cell(ctor_ref.id).is_some()
         {
-            obj.borrow_mut().insert_property(
-                "prototype".to_string(),
-                PropertyDescriptor::data(proto_val.clone(), false, false, false),
-            );
+            let ctor_id = ctor_ref.id;
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
+                .insert_property(
+                    "prototype".to_string(),
+                    PropertyDescriptor::data(proto_val.clone(), false, false, false),
+                );
 
             // supportedLocalesOf static method
             let slof = self.create_function(JsFunction::native(
@@ -872,20 +900,25 @@ impl Interpreter {
                     }
                 },
             ));
-            obj.borrow_mut()
+            self.get_object_cell_expect(ctor_id)
+                .borrow_mut()
                 .insert_builtin("supportedLocalesOf".to_string(), slof);
         }
 
         // Set constructor on prototype
-        proto.borrow_mut().insert_property(
-            "constructor".to_string(),
-            PropertyDescriptor::data(rtf_ctor.clone(), true, false, true),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                "constructor".to_string(),
+                PropertyDescriptor::data(rtf_ctor.clone(), true, false, true),
+            );
 
         // Register Intl.RelativeTimeFormat on the Intl namespace
-        intl_obj.borrow_mut().insert_property(
-            "RelativeTimeFormat".to_string(),
-            PropertyDescriptor::data(rtf_ctor, true, false, true),
-        );
+        self.get_object_cell_expect(intl_obj_id)
+            .borrow_mut()
+            .insert_property(
+                "RelativeTimeFormat".to_string(),
+                PropertyDescriptor::data(rtf_ctor, true, false, true),
+            );
     }
 }

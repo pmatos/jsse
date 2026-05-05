@@ -33,8 +33,9 @@ fn eval_with_mode(source: &str, bytecode: bool) -> (JsValue, usize) {
     let mut interp = Interpreter::new();
     interp.bytecode_enabled = bytecode;
     let _ = interp.run(&program);
-    let env = interp.realm().global_env.clone();
-    let v = env.borrow().get("__r").unwrap_or(JsValue::Undefined);
+    let v = interp
+        .get_global_var_ref("__r")
+        .unwrap_or(JsValue::Undefined);
     (v, interp.bytecode_chunks_executed)
 }
 

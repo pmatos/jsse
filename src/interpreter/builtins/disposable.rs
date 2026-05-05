@@ -2,23 +2,26 @@ use super::*;
 
 impl Interpreter {
     pub(crate) fn setup_disposable_stack(&mut self) {
-        let ds_proto = self.create_object();
+        let ds_proto_id = self.create_object_id();
         if let Some(op_id) = self.realm().object_prototype {
-            ds_proto.borrow_mut().prototype_id =
-                Some(self.get_object_expect(op_id).borrow().id.unwrap());
+            self.get_object_cell_expect(ds_proto_id)
+                .borrow_mut()
+                .prototype_id = Some(op_id);
         }
 
         // Symbol.toStringTag
         if let Some(key) = self.get_symbol_key("toStringTag") {
-            ds_proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("DisposableStack")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+            self.get_object_cell_expect(ds_proto_id)
+                .borrow_mut()
+                .insert_property(
+                    key,
+                    PropertyDescriptor::data(
+                        JsValue::String(JsString::from_str("DisposableStack")),
+                        false,
+                        false,
+                        true,
+                    ),
+                );
         }
 
         // dispose()
@@ -27,13 +30,13 @@ impl Interpreter {
             0,
             |interp, this, _args| interp.disposable_stack_dispose(this, false),
         ));
-        ds_proto
+        self.get_object_cell_expect(ds_proto_id)
             .borrow_mut()
             .insert_builtin("dispose".to_string(), dispose_fn.clone());
 
         // Symbol.dispose = dispose
         if let Some(key) = self.get_symbol_key("dispose") {
-            ds_proto
+            self.get_object_cell_expect(ds_proto_id)
                 .borrow_mut()
                 .insert_property(key, PropertyDescriptor::data(dispose_fn, true, false, true));
         }
@@ -43,25 +46,34 @@ impl Interpreter {
             "get disposed".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let b = obj.borrow();
-                    if b.class_name == "DisposableStack"
-                        && let Some(ref ds) = b.disposable_stack
-                    {
-                        return Completion::Normal(JsValue::Boolean(ds.disposed));
-                    }
+                let disposed = if let JsValue::Object(o) = this {
+                    interp.get_object_cell(o.id).and_then(|cell| {
+                        let b = cell.borrow();
+                        if b.class_name == "DisposableStack"
+                            && let Some(ref ds) = b.disposable_stack
+                        {
+                            Some(ds.disposed)
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                };
+                match disposed {
+                    Some(d) => Completion::Normal(JsValue::Boolean(d)),
+                    None => Completion::Throw(interp.create_type_error(
+                        "DisposableStack.prototype.disposed called on non-DisposableStack",
+                    )),
                 }
-                Completion::Throw(interp.create_type_error(
-                    "DisposableStack.prototype.disposed called on non-DisposableStack",
-                ))
             },
         ));
-        ds_proto.borrow_mut().insert_property(
-            "disposed".to_string(),
-            PropertyDescriptor::accessor(Some(disposed_getter), None, false, true),
-        );
+        self.get_object_cell_expect(ds_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "disposed".to_string(),
+                PropertyDescriptor::accessor(Some(disposed_getter), None, false, true),
+            );
 
         // use(value)
         let use_fn = self.create_function(JsFunction::native(
@@ -70,29 +82,37 @@ impl Interpreter {
             |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && interp.get_object_cell(o.id).is_some()
                 {
-                    {
-                        let b = obj.borrow();
+                    enum Probe {
+                        NotStack,
+                        AlreadyDisposed,
+                        Active,
+                    }
+                    let probe = {
+                        let b = interp.get_object_cell_expect(o.id).borrow();
                         if b.class_name != "DisposableStack" {
+                            Probe::NotStack
+                        } else {
+                            match &b.disposable_stack {
+                                Some(ds) if ds.disposed => Probe::AlreadyDisposed,
+                                Some(_) => Probe::Active,
+                                None => Probe::NotStack,
+                            }
+                        }
+                    };
+                    match probe {
+                        Probe::NotStack => {
                             return Completion::Throw(
                                 interp.create_type_error("Not a DisposableStack"),
                             );
                         }
-                        match &b.disposable_stack {
-                            Some(ds) => {
-                                if ds.disposed {
-                                    return Completion::Throw(interp.create_reference_error(
-                                        "DisposableStack has already been disposed",
-                                    ));
-                                }
-                            }
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("Not a DisposableStack"),
-                                );
-                            }
+                        Probe::AlreadyDisposed => {
+                            return Completion::Throw(interp.create_reference_error(
+                                "DisposableStack has already been disposed",
+                            ));
                         }
+                        Probe::Active => {}
                     }
                     if matches!(value, JsValue::Null | JsValue::Undefined) {
                         return Completion::Normal(value);
@@ -138,8 +158,8 @@ impl Interpreter {
                         hint: DisposeHint::Sync,
                         dispose_method: method,
                     };
-                    if let Some(obj) = interp.get_object(o.id) {
-                        let mut b = obj.borrow_mut();
+                    if let Some(cell) = interp.get_object_cell(o.id) {
+                        let mut b = cell.borrow_mut();
                         if let Some(ref mut ds) = b.disposable_stack {
                             ds.stack.push(resource);
                         }
@@ -149,7 +169,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("Not a DisposableStack"))
             },
         ));
-        ds_proto
+        self.get_object_cell_expect(ds_proto_id)
             .borrow_mut()
             .insert_builtin("use".to_string(), use_fn);
 
@@ -161,23 +181,33 @@ impl Interpreter {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let on_dispose = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && interp.get_object_cell(o.id).is_some()
                 {
-                    {
-                        let b = obj.borrow();
+                    enum Probe {
+                        AlreadyDisposed,
+                        NotStack,
+                        Active,
+                    }
+                    let probe = {
+                        let b = interp.get_object_cell_expect(o.id).borrow();
                         match &b.disposable_stack {
-                            Some(ds) if ds.disposed => {
-                                return Completion::Throw(interp.create_reference_error(
-                                    "DisposableStack has already been disposed",
-                                ));
-                            }
-                            Some(_) => {}
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("Not a DisposableStack"),
-                                );
-                            }
+                            Some(ds) if ds.disposed => Probe::AlreadyDisposed,
+                            Some(_) => Probe::Active,
+                            None => Probe::NotStack,
                         }
+                    };
+                    match probe {
+                        Probe::AlreadyDisposed => {
+                            return Completion::Throw(interp.create_reference_error(
+                                "DisposableStack has already been disposed",
+                            ));
+                        }
+                        Probe::NotStack => {
+                            return Completion::Throw(
+                                interp.create_type_error("Not a DisposableStack"),
+                            );
+                        }
+                        Probe::Active => {}
                     }
                     if !interp.is_callable(&on_dispose) {
                         return Completion::Throw(
@@ -203,8 +233,8 @@ impl Interpreter {
                         hint: DisposeHint::Sync,
                         dispose_method: wrapper_fn,
                     };
-                    if let Some(obj2) = interp.get_object(o.id) {
-                        let mut b = obj2.borrow_mut();
+                    if let Some(cell) = interp.get_object_cell(o.id) {
+                        let mut b = cell.borrow_mut();
                         if let Some(ref mut ds) = b.disposable_stack {
                             ds.stack.push(resource);
                         }
@@ -214,7 +244,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("Not a DisposableStack"))
             },
         ));
-        ds_proto
+        self.get_object_cell_expect(ds_proto_id)
             .borrow_mut()
             .insert_builtin("adopt".to_string(), adopt_fn);
 
@@ -225,23 +255,33 @@ impl Interpreter {
             |interp, this, args| {
                 let on_dispose = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && interp.get_object_cell(o.id).is_some()
                 {
-                    {
-                        let b = obj.borrow();
+                    enum Probe {
+                        AlreadyDisposed,
+                        NotStack,
+                        Active,
+                    }
+                    let probe = {
+                        let b = interp.get_object_cell_expect(o.id).borrow();
                         match &b.disposable_stack {
-                            Some(ds) if ds.disposed => {
-                                return Completion::Throw(interp.create_reference_error(
-                                    "DisposableStack has already been disposed",
-                                ));
-                            }
-                            Some(_) => {}
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("Not a DisposableStack"),
-                                );
-                            }
+                            Some(ds) if ds.disposed => Probe::AlreadyDisposed,
+                            Some(_) => Probe::Active,
+                            None => Probe::NotStack,
                         }
+                    };
+                    match probe {
+                        Probe::AlreadyDisposed => {
+                            return Completion::Throw(interp.create_reference_error(
+                                "DisposableStack has already been disposed",
+                            ));
+                        }
+                        Probe::NotStack => {
+                            return Completion::Throw(
+                                interp.create_type_error("Not a DisposableStack"),
+                            );
+                        }
+                        Probe::Active => {}
                     }
                     if !interp.is_callable(&on_dispose) {
                         return Completion::Throw(
@@ -253,8 +293,8 @@ impl Interpreter {
                         hint: DisposeHint::Sync,
                         dispose_method: on_dispose,
                     };
-                    if let Some(obj2) = interp.get_object(o.id) {
-                        let mut b = obj2.borrow_mut();
+                    if let Some(cell) = interp.get_object_cell(o.id) {
+                        let mut b = cell.borrow_mut();
                         if let Some(ref mut ds) = b.disposable_stack {
                             ds.stack.push(resource);
                         }
@@ -264,7 +304,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("Not a DisposableStack"))
             },
         ));
-        ds_proto
+        self.get_object_cell_expect(ds_proto_id)
             .borrow_mut()
             .insert_builtin("defer".to_string(), defer_fn);
 
@@ -274,67 +314,79 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && interp.get_object_cell(o.id).is_some()
                 {
-                    let stack = {
-                        let mut b = obj.borrow_mut();
+                    enum Probe {
+                        NotStack,
+                        AlreadyDisposed,
+                        Moved(Vec<DisposableResource>),
+                    }
+                    let probe = {
+                        let cell = interp.get_object_cell_expect(o.id);
+                        let mut b = cell.borrow_mut();
                         if b.class_name != "DisposableStack" {
+                            Probe::NotStack
+                        } else {
+                            match &mut b.disposable_stack {
+                                Some(ds) if ds.disposed => Probe::AlreadyDisposed,
+                                Some(ds) => {
+                                    let s = std::mem::take(&mut ds.stack);
+                                    ds.disposed = true;
+                                    Probe::Moved(s)
+                                }
+                                None => Probe::NotStack,
+                            }
+                        }
+                    };
+                    let stack = match probe {
+                        Probe::NotStack => {
                             return Completion::Throw(
                                 interp.create_type_error("Not a DisposableStack"),
                             );
                         }
-                        match &mut b.disposable_stack {
-                            Some(ds) if ds.disposed => {
-                                return Completion::Throw(interp.create_reference_error(
-                                    "DisposableStack has already been disposed",
-                                ));
-                            }
-                            Some(ds) => {
-                                let s = std::mem::take(&mut ds.stack);
-                                ds.disposed = true;
-                                s
-                            }
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("Not a DisposableStack"),
-                                );
-                            }
+                        Probe::AlreadyDisposed => {
+                            return Completion::Throw(interp.create_reference_error(
+                                "DisposableStack has already been disposed",
+                            ));
                         }
+                        Probe::Moved(s) => s,
                     };
                     // Create a new DisposableStack with the moved resources
-                    let new_obj = interp.create_object();
+                    let new_obj_id = interp.create_object_id();
                     {
                         // Get DisposableStack prototype
-                        let env = interp.realm().global_env.borrow();
-                        if let Some(ctor_val) = env.get("DisposableStack")
+                        if let Some(ctor_val) = interp.get_global_var("DisposableStack")
                             && let JsValue::Object(ctor) = &ctor_val
                         {
                             let proto_val = interp.get_property_on_id(ctor.id, "prototype");
                             if let JsValue::Object(p) = &proto_val {
-                                new_obj.borrow_mut().prototype_id = Some(p.id);
+                                interp
+                                    .get_object_cell_expect(new_obj_id)
+                                    .borrow_mut()
+                                    .prototype_id = Some(p.id);
                             }
                         }
                     }
                     {
-                        let mut b = new_obj.borrow_mut();
+                        let mut b = interp.get_object_cell_expect(new_obj_id).borrow_mut();
                         b.class_name = "DisposableStack".to_string();
                         b.disposable_stack = Some(DisposableStackData {
                             stack,
                             disposed: false,
                         });
                     }
-                    let id = new_obj.borrow().id.unwrap();
+                    let id = new_obj_id;
                     return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
                 }
                 Completion::Throw(interp.create_type_error("Not a DisposableStack"))
             },
         ));
-        ds_proto
+        self.get_object_cell_expect(ds_proto_id)
             .borrow_mut()
             .insert_builtin("move".to_string(), move_fn);
 
         // Store prototype in realm for OrdinaryCreateFromConstructor
-        self.realm_mut().disposable_stack_prototype = Some(ds_proto.borrow().id.unwrap());
+        self.realm_mut().disposable_stack_prototype = Some(ds_proto_id);
 
         // Constructor
         self.register_global_fn(
@@ -356,9 +408,9 @@ impl Interpreter {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let obj = interp.create_object();
+                    let obj_id = interp.create_object_id();
                     {
-                        let mut b = obj.borrow_mut();
+                        let mut b = interp.get_object_cell_expect(obj_id).borrow_mut();
                         b.class_name = "DisposableStack".to_string();
                         if let Some(p) = proto {
                             b.prototype_id = Some(p);
@@ -368,28 +420,24 @@ impl Interpreter {
                             disposed: false,
                         });
                     }
-                    let id = obj.borrow().id.unwrap();
+                    let id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 },
             ),
         );
 
         // Wire up constructor and prototype
-        {
-            let env = self.realm().global_env.borrow();
-            if let Some(ctor_val) = env.get("DisposableStack") {
-                ds_proto
-                    .borrow_mut()
-                    .insert_builtin("constructor".to_string(), ctor_val);
-            }
+        if let Some(ctor_val) = self.get_global_var("DisposableStack") {
+            self.get_object_cell_expect(ds_proto_id)
+                .borrow_mut()
+                .insert_builtin("constructor".to_string(), ctor_val);
         }
         {
-            let env = self.realm().global_env.borrow();
-            if let Some(ctor_val) = env.get("DisposableStack")
+            if let Some(ctor_val) = self.get_global_var("DisposableStack")
                 && let JsValue::Object(o) = &ctor_val
-                && let Some(ctor_obj) = self.get_object(o.id)
+                && let Some(ctor_obj) = self.get_object_cell(o.id)
             {
-                let proto_id = ds_proto.borrow().id.unwrap();
+                let proto_id = ds_proto_id;
                 // prototype property: { writable: false, enumerable: false, configurable: false }
                 ctor_obj.borrow_mut().insert_property(
                     "prototype".to_string(),
@@ -410,25 +458,38 @@ impl Interpreter {
         _is_async: bool,
     ) -> Completion {
         if let JsValue::Object(o) = this
-            && let Some(obj) = self.get_object(o.id)
+            && self.get_object_cell(o.id).is_some()
         {
-            let stack = {
-                let mut b = obj.borrow_mut();
+            enum Probe {
+                NotStack,
+                AlreadyDisposed,
+                Active(Vec<DisposableResource>),
+            }
+            let probe = {
+                let cell = self.get_object_cell_expect(o.id);
+                let mut b = cell.borrow_mut();
                 if b.class_name != "DisposableStack" {
+                    Probe::NotStack
+                } else {
+                    match &mut b.disposable_stack {
+                        Some(ds) => {
+                            if ds.disposed {
+                                Probe::AlreadyDisposed
+                            } else {
+                                ds.disposed = true;
+                                Probe::Active(std::mem::take(&mut ds.stack))
+                            }
+                        }
+                        None => Probe::NotStack,
+                    }
+                }
+            };
+            let stack = match probe {
+                Probe::NotStack => {
                     return Completion::Throw(self.create_type_error("Not a DisposableStack"));
                 }
-                match &mut b.disposable_stack {
-                    Some(ds) => {
-                        if ds.disposed {
-                            return Completion::Normal(JsValue::Undefined);
-                        }
-                        ds.disposed = true;
-                        std::mem::take(&mut ds.stack)
-                    }
-                    None => {
-                        return Completion::Throw(self.create_type_error("Not a DisposableStack"));
-                    }
-                }
+                Probe::AlreadyDisposed => return Completion::Normal(JsValue::Undefined),
+                Probe::Active(s) => s,
             };
 
             let mut current_error: Option<JsValue> = None;
@@ -456,23 +517,26 @@ impl Interpreter {
     }
 
     pub(crate) fn setup_async_disposable_stack(&mut self) {
-        let ads_proto = self.create_object();
+        let ads_proto_id = self.create_object_id();
         if let Some(op_id) = self.realm().object_prototype {
-            ads_proto.borrow_mut().prototype_id =
-                Some(self.get_object_expect(op_id).borrow().id.unwrap());
+            self.get_object_cell_expect(ads_proto_id)
+                .borrow_mut()
+                .prototype_id = Some(op_id);
         }
 
         // Symbol.toStringTag
         if let Some(key) = self.get_symbol_key("toStringTag") {
-            ads_proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("AsyncDisposableStack")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+            self.get_object_cell_expect(ads_proto_id)
+                .borrow_mut()
+                .insert_property(
+                    key,
+                    PropertyDescriptor::data(
+                        JsValue::String(JsString::from_str("AsyncDisposableStack")),
+                        false,
+                        false,
+                        true,
+                    ),
+                );
         }
 
         // disposeAsync()
@@ -488,16 +552,18 @@ impl Interpreter {
                 }
             },
         ));
-        ads_proto
+        self.get_object_cell_expect(ads_proto_id)
             .borrow_mut()
             .insert_builtin("disposeAsync".to_string(), dispose_async_fn.clone());
 
         // Symbol.asyncDispose = disposeAsync
         if let Some(key) = self.get_symbol_key("asyncDispose") {
-            ads_proto.borrow_mut().insert_property(
-                key,
-                PropertyDescriptor::data(dispose_async_fn, true, false, true),
-            );
+            self.get_object_cell_expect(ads_proto_id)
+                .borrow_mut()
+                .insert_property(
+                    key,
+                    PropertyDescriptor::data(dispose_async_fn, true, false, true),
+                );
         }
 
         // get disposed
@@ -505,25 +571,34 @@ impl Interpreter {
             "get disposed".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let b = obj.borrow();
-                    if b.class_name == "AsyncDisposableStack"
-                        && let Some(ref ds) = b.disposable_stack
-                    {
-                        return Completion::Normal(JsValue::Boolean(ds.disposed));
-                    }
+                let disposed = if let JsValue::Object(o) = this {
+                    interp.get_object_cell(o.id).and_then(|cell| {
+                        let b = cell.borrow();
+                        if b.class_name == "AsyncDisposableStack"
+                            && let Some(ref ds) = b.disposable_stack
+                        {
+                            Some(ds.disposed)
+                        } else {
+                            None
+                        }
+                    })
+                } else {
+                    None
+                };
+                match disposed {
+                    Some(d) => Completion::Normal(JsValue::Boolean(d)),
+                    None => Completion::Throw(interp.create_type_error(
+                        "AsyncDisposableStack.prototype.disposed called on non-AsyncDisposableStack",
+                    )),
                 }
-                Completion::Throw(interp.create_type_error(
-                    "AsyncDisposableStack.prototype.disposed called on non-AsyncDisposableStack",
-                ))
             },
         ));
-        ads_proto.borrow_mut().insert_property(
-            "disposed".to_string(),
-            PropertyDescriptor::accessor(Some(disposed_getter), None, false, true),
-        );
+        self.get_object_cell_expect(ads_proto_id)
+            .borrow_mut()
+            .insert_property(
+                "disposed".to_string(),
+                PropertyDescriptor::accessor(Some(disposed_getter), None, false, true),
+            );
 
         // use(value)
         let use_fn = self.create_function(JsFunction::native(
@@ -532,28 +607,37 @@ impl Interpreter {
             |interp, this, args| {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && interp.get_object_cell(o.id).is_some()
                 {
-                    {
-                        let b = obj.borrow();
+                    enum Probe {
+                        NotStack,
+                        AlreadyDisposed,
+                        Active,
+                    }
+                    let probe = {
+                        let b = interp.get_object_cell_expect(o.id).borrow();
                         if b.class_name != "AsyncDisposableStack" {
+                            Probe::NotStack
+                        } else {
+                            match &b.disposable_stack {
+                                Some(ds) if ds.disposed => Probe::AlreadyDisposed,
+                                Some(_) => Probe::Active,
+                                None => Probe::NotStack,
+                            }
+                        }
+                    };
+                    match probe {
+                        Probe::NotStack => {
                             return Completion::Throw(
                                 interp.create_type_error("Not an AsyncDisposableStack"),
                             );
                         }
-                        match &b.disposable_stack {
-                            Some(ds) if ds.disposed => {
-                                return Completion::Throw(interp.create_reference_error(
-                                    "AsyncDisposableStack has already been disposed",
-                                ));
-                            }
-                            Some(_) => {}
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("Not an AsyncDisposableStack"),
-                                );
-                            }
+                        Probe::AlreadyDisposed => {
+                            return Completion::Throw(interp.create_reference_error(
+                                "AsyncDisposableStack has already been disposed",
+                            ));
                         }
+                        Probe::Active => {}
                     }
                     if matches!(value, JsValue::Null | JsValue::Undefined) {
                         let resource = DisposableResource {
@@ -561,7 +645,7 @@ impl Interpreter {
                             hint: DisposeHint::Async,
                             dispose_method: JsValue::Undefined,
                         };
-                        if let Some(obj2) = interp.get_object(o.id)
+                        if let Some(obj2) = interp.get_object_cell(o.id)
                             && let Some(ds) = &mut obj2.borrow_mut().disposable_stack
                         {
                             ds.stack.push(resource);
@@ -610,8 +694,8 @@ impl Interpreter {
                         hint,
                         dispose_method: method,
                     };
-                    if let Some(obj2) = interp.get_object(o.id) {
-                        let mut b = obj2.borrow_mut();
+                    if let Some(cell) = interp.get_object_cell(o.id) {
+                        let mut b = cell.borrow_mut();
                         if let Some(ref mut ds) = b.disposable_stack {
                             ds.stack.push(resource);
                         }
@@ -621,7 +705,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("Not an AsyncDisposableStack"))
             },
         ));
-        ads_proto
+        self.get_object_cell_expect(ads_proto_id)
             .borrow_mut()
             .insert_builtin("use".to_string(), use_fn);
 
@@ -633,23 +717,33 @@ impl Interpreter {
                 let value = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let on_dispose = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && interp.get_object_cell(o.id).is_some()
                 {
-                    {
-                        let b = obj.borrow();
+                    enum Probe {
+                        AlreadyDisposed,
+                        NotStack,
+                        Active,
+                    }
+                    let probe = {
+                        let b = interp.get_object_cell_expect(o.id).borrow();
                         match &b.disposable_stack {
-                            Some(ds) if ds.disposed => {
-                                return Completion::Throw(interp.create_reference_error(
-                                    "AsyncDisposableStack has already been disposed",
-                                ));
-                            }
-                            Some(_) => {}
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("Not an AsyncDisposableStack"),
-                                );
-                            }
+                            Some(ds) if ds.disposed => Probe::AlreadyDisposed,
+                            Some(_) => Probe::Active,
+                            None => Probe::NotStack,
                         }
+                    };
+                    match probe {
+                        Probe::AlreadyDisposed => {
+                            return Completion::Throw(interp.create_reference_error(
+                                "AsyncDisposableStack has already been disposed",
+                            ));
+                        }
+                        Probe::NotStack => {
+                            return Completion::Throw(
+                                interp.create_type_error("Not an AsyncDisposableStack"),
+                            );
+                        }
+                        Probe::Active => {}
                     }
                     if !interp.is_callable(&on_dispose) {
                         return Completion::Throw(
@@ -674,8 +768,8 @@ impl Interpreter {
                         hint: DisposeHint::Async,
                         dispose_method: wrapper_fn,
                     };
-                    if let Some(obj2) = interp.get_object(o.id) {
-                        let mut b = obj2.borrow_mut();
+                    if let Some(cell) = interp.get_object_cell(o.id) {
+                        let mut b = cell.borrow_mut();
                         if let Some(ref mut ds) = b.disposable_stack {
                             ds.stack.push(resource);
                         }
@@ -685,7 +779,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("Not an AsyncDisposableStack"))
             },
         ));
-        ads_proto
+        self.get_object_cell_expect(ads_proto_id)
             .borrow_mut()
             .insert_builtin("adopt".to_string(), adopt_fn);
 
@@ -696,23 +790,33 @@ impl Interpreter {
             |interp, this, args| {
                 let on_dispose = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && interp.get_object_cell(o.id).is_some()
                 {
-                    {
-                        let b = obj.borrow();
+                    enum Probe {
+                        AlreadyDisposed,
+                        NotStack,
+                        Active,
+                    }
+                    let probe = {
+                        let b = interp.get_object_cell_expect(o.id).borrow();
                         match &b.disposable_stack {
-                            Some(ds) if ds.disposed => {
-                                return Completion::Throw(interp.create_reference_error(
-                                    "AsyncDisposableStack has already been disposed",
-                                ));
-                            }
-                            Some(_) => {}
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("Not an AsyncDisposableStack"),
-                                );
-                            }
+                            Some(ds) if ds.disposed => Probe::AlreadyDisposed,
+                            Some(_) => Probe::Active,
+                            None => Probe::NotStack,
                         }
+                    };
+                    match probe {
+                        Probe::AlreadyDisposed => {
+                            return Completion::Throw(interp.create_reference_error(
+                                "AsyncDisposableStack has already been disposed",
+                            ));
+                        }
+                        Probe::NotStack => {
+                            return Completion::Throw(
+                                interp.create_type_error("Not an AsyncDisposableStack"),
+                            );
+                        }
+                        Probe::Active => {}
                     }
                     if !interp.is_callable(&on_dispose) {
                         return Completion::Throw(
@@ -724,8 +828,8 @@ impl Interpreter {
                         hint: DisposeHint::Async,
                         dispose_method: on_dispose,
                     };
-                    if let Some(obj2) = interp.get_object(o.id) {
-                        let mut b = obj2.borrow_mut();
+                    if let Some(cell) = interp.get_object_cell(o.id) {
+                        let mut b = cell.borrow_mut();
                         if let Some(ref mut ds) = b.disposable_stack {
                             ds.stack.push(resource);
                         }
@@ -735,7 +839,7 @@ impl Interpreter {
                 Completion::Throw(interp.create_type_error("Not an AsyncDisposableStack"))
             },
         ));
-        ads_proto
+        self.get_object_cell_expect(ads_proto_id)
             .borrow_mut()
             .insert_builtin("defer".to_string(), defer_fn);
 
@@ -745,61 +849,73 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                    && interp.get_object_cell(o.id).is_some()
                 {
-                    let stack = {
-                        let mut b = obj.borrow_mut();
+                    enum Probe {
+                        NotStack,
+                        AlreadyDisposed,
+                        Moved(Vec<DisposableResource>),
+                    }
+                    let probe = {
+                        let cell = interp.get_object_cell_expect(o.id);
+                        let mut b = cell.borrow_mut();
                         if b.class_name != "AsyncDisposableStack" {
+                            Probe::NotStack
+                        } else {
+                            match &mut b.disposable_stack {
+                                Some(ds) if ds.disposed => Probe::AlreadyDisposed,
+                                Some(ds) => {
+                                    let s = std::mem::take(&mut ds.stack);
+                                    ds.disposed = true;
+                                    Probe::Moved(s)
+                                }
+                                None => Probe::NotStack,
+                            }
+                        }
+                    };
+                    let stack = match probe {
+                        Probe::NotStack => {
                             return Completion::Throw(
                                 interp.create_type_error("Not an AsyncDisposableStack"),
                             );
                         }
-                        match &mut b.disposable_stack {
-                            Some(ds) if ds.disposed => {
-                                return Completion::Throw(interp.create_reference_error(
-                                    "AsyncDisposableStack has already been disposed",
-                                ));
-                            }
-                            Some(ds) => {
-                                let s = std::mem::take(&mut ds.stack);
-                                ds.disposed = true;
-                                s
-                            }
-                            None => {
-                                return Completion::Throw(
-                                    interp.create_type_error("Not an AsyncDisposableStack"),
-                                );
-                            }
+                        Probe::AlreadyDisposed => {
+                            return Completion::Throw(interp.create_reference_error(
+                                "AsyncDisposableStack has already been disposed",
+                            ));
                         }
+                        Probe::Moved(s) => s,
                     };
-                    let new_obj = interp.create_object();
+                    let new_obj_id = interp.create_object_id();
                     {
                         let default_proto_id = interp.realm().async_disposable_stack_prototype;
                         if let Some(pid) = default_proto_id {
-                            new_obj.borrow_mut().prototype_id =
-                                Some(interp.get_object_expect(pid).borrow().id.unwrap());
+                            interp
+                                .get_object_cell_expect(new_obj_id)
+                                .borrow_mut()
+                                .prototype_id = Some(pid);
                         }
                     }
                     {
-                        let mut b = new_obj.borrow_mut();
+                        let mut b = interp.get_object_cell_expect(new_obj_id).borrow_mut();
                         b.class_name = "AsyncDisposableStack".to_string();
                         b.disposable_stack = Some(DisposableStackData {
                             stack,
                             disposed: false,
                         });
                     }
-                    let id = new_obj.borrow().id.unwrap();
+                    let id = new_obj_id;
                     return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
                 }
                 Completion::Throw(interp.create_type_error("Not an AsyncDisposableStack"))
             },
         ));
-        ads_proto
+        self.get_object_cell_expect(ads_proto_id)
             .borrow_mut()
             .insert_builtin("move".to_string(), move_fn);
 
         // Store prototype in realm for OrdinaryCreateFromConstructor
-        self.realm_mut().async_disposable_stack_prototype = Some(ads_proto.borrow().id.unwrap());
+        self.realm_mut().async_disposable_stack_prototype = Some(ads_proto_id);
 
         // Constructor
         self.register_global_fn(
@@ -823,9 +939,9 @@ impl Interpreter {
                         Ok(p) => p,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let obj = interp.create_object();
+                    let obj_id = interp.create_object_id();
                     {
-                        let mut b = obj.borrow_mut();
+                        let mut b = interp.get_object_cell_expect(obj_id).borrow_mut();
                         b.class_name = "AsyncDisposableStack".to_string();
                         if let Some(p) = proto {
                             b.prototype_id = Some(p);
@@ -835,28 +951,24 @@ impl Interpreter {
                             disposed: false,
                         });
                     }
-                    let id = obj.borrow().id.unwrap();
+                    let id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 },
             ),
         );
 
         // Wire up
-        {
-            let env = self.realm().global_env.borrow();
-            if let Some(ctor_val) = env.get("AsyncDisposableStack") {
-                ads_proto
-                    .borrow_mut()
-                    .insert_builtin("constructor".to_string(), ctor_val);
-            }
+        if let Some(ctor_val) = self.get_global_var("AsyncDisposableStack") {
+            self.get_object_cell_expect(ads_proto_id)
+                .borrow_mut()
+                .insert_builtin("constructor".to_string(), ctor_val);
         }
         {
-            let env = self.realm().global_env.borrow();
-            if let Some(ctor_val) = env.get("AsyncDisposableStack")
+            if let Some(ctor_val) = self.get_global_var("AsyncDisposableStack")
                 && let JsValue::Object(o) = &ctor_val
-                && let Some(ctor_obj) = self.get_object(o.id)
+                && let Some(ctor_obj) = self.get_object_cell(o.id)
             {
-                let proto_id = ads_proto.borrow().id.unwrap();
+                let proto_id = ads_proto_id;
                 // prototype property: { writable: false, enumerable: false, configurable: false }
                 ctor_obj.borrow_mut().insert_property(
                     "prototype".to_string(),
@@ -873,29 +985,40 @@ impl Interpreter {
 
     fn async_disposable_stack_dispose(&mut self, this: &JsValue) -> Completion {
         if let JsValue::Object(o) = this
-            && let Some(obj) = self.get_object(o.id)
+            && self.get_object_cell(o.id).is_some()
         {
-            let stack = {
-                let mut b = obj.borrow_mut();
+            enum Probe {
+                NotStack,
+                AlreadyDisposed,
+                Active(Vec<DisposableResource>),
+            }
+            let probe = {
+                let cell = self.get_object_cell_expect(o.id);
+                let mut b = cell.borrow_mut();
                 if b.class_name != "AsyncDisposableStack" {
+                    Probe::NotStack
+                } else {
+                    match &mut b.disposable_stack {
+                        Some(ds) => {
+                            if ds.disposed {
+                                Probe::AlreadyDisposed
+                            } else {
+                                ds.disposed = true;
+                                Probe::Active(std::mem::take(&mut ds.stack))
+                            }
+                        }
+                        None => Probe::NotStack,
+                    }
+                }
+            };
+            let stack = match probe {
+                Probe::NotStack => {
                     return Completion::Throw(
                         self.create_type_error("Not an AsyncDisposableStack"),
                     );
                 }
-                match &mut b.disposable_stack {
-                    Some(ds) => {
-                        if ds.disposed {
-                            return Completion::Normal(JsValue::Undefined);
-                        }
-                        ds.disposed = true;
-                        std::mem::take(&mut ds.stack)
-                    }
-                    None => {
-                        return Completion::Throw(
-                            self.create_type_error("Not an AsyncDisposableStack"),
-                        );
-                    }
-                }
+                Probe::AlreadyDisposed => return Completion::Normal(JsValue::Undefined),
+                Probe::Active(s) => s,
             };
 
             let mut current_error: Option<JsValue> = None;

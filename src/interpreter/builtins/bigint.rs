@@ -32,14 +32,16 @@ pub fn f64_to_bigint(n: f64) -> num_bigint::BigInt {
 
 impl Interpreter {
     pub(crate) fn setup_bigint_prototype(&mut self) {
-        let proto = self.create_object();
-        proto.borrow_mut().class_name = "BigInt".to_string();
+        let proto_id = self.create_object_id();
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .class_name = "BigInt".to_string();
 
         fn this_bigint_value(interp: &Interpreter, this: &JsValue) -> Option<num_bigint::BigInt> {
             match this {
                 JsValue::BigInt(b) => Some(b.value.clone()),
-                JsValue::Object(o) => interp.get_object(o.id).and_then(|obj| {
-                    let b = obj.borrow();
+                JsValue::Object(o) => interp.get_object_cell(o.id).and_then(|cell| {
+                    let b = cell.borrow();
                     if b.class_name == "BigInt"
                         && let Some(JsValue::BigInt(bi)) = &b.primitive_value
                     {
@@ -128,22 +130,26 @@ impl Interpreter {
         for (name, arity, func) in methods {
             let fn_val =
                 self.create_function(JsFunction::Native(name.to_string(), arity, func, false));
-            proto.borrow_mut().insert_builtin(name.to_string(), fn_val);
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_builtin(name.to_string(), fn_val);
         }
 
         // @@toStringTag
         let tag_key = self
             .get_symbol_key("toStringTag")
             .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
-        proto.borrow_mut().insert_property(
-            tag_key,
-            PropertyDescriptor::data(
-                JsValue::String(JsString::from_str("BigInt")),
-                false,
-                false,
-                true,
-            ),
-        );
+        self.get_object_cell_expect(proto_id)
+            .borrow_mut()
+            .insert_property(
+                tag_key,
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str("BigInt")),
+                    false,
+                    false,
+                    true,
+                ),
+            );
 
         // BigInt() — is a constructor but throws TypeError when called with new
         self.register_global_fn(
@@ -304,32 +310,32 @@ impl Interpreter {
 
         if let Some(bigint_val) = self.get_global_var("BigInt")
             && let JsValue::Object(o) = &bigint_val
-            && let Some(bigint_obj) = self.get_object(o.id)
+            && let Some(bigint_cell) = self.get_object_cell(o.id)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject {
-                id: proto.borrow().id.unwrap(),
-            });
-            bigint_obj.borrow_mut().insert_property(
+            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            bigint_cell.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
             );
-            bigint_obj
+            bigint_cell
                 .borrow_mut()
                 .insert_builtin("asIntN".to_string(), as_int_n);
-            bigint_obj
+            bigint_cell
                 .borrow_mut()
                 .insert_builtin("asUintN".to_string(), as_uint_n);
         }
 
         // Set constructor property on prototype
         if let Some(bigint_val) = self.get_global_var("BigInt") {
-            proto.borrow_mut().insert_property(
-                "constructor".to_string(),
-                PropertyDescriptor::data(bigint_val, true, false, true),
-            );
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    "constructor".to_string(),
+                    PropertyDescriptor::data(bigint_val, true, false, true),
+                );
         }
 
-        self.realm_mut().bigint_prototype = Some(proto.borrow().id.unwrap());
+        self.realm_mut().bigint_prototype = Some(proto_id);
     }
 }
 

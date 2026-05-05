@@ -43,7 +43,7 @@ impl Interpreter {
                         MemberProperty::Private(name) => {
                             let branded = self.resolve_private_name(name, env);
                             if let JsValue::Object(ref o) = this_val
-                                && let Some(obj) = self.get_object(o.id)
+                                && let Some(obj) = self.get_object_cell(o.id)
                             {
                                 let elem = obj.borrow().private_fields.get(&branded).cloned();
                                 match elem {
@@ -105,7 +105,7 @@ impl Interpreter {
                         MemberProperty::Private(name) => {
                             let branded = self.resolve_private_name(name, env);
                             if let JsValue::Object(ref o) = obj_val
-                                && let Some(obj) = self.get_object(o.id)
+                                && let Some(obj) = self.get_object_cell(o.id)
                             {
                                 let elem = obj.borrow().private_fields.get(&branded).cloned();
                                 match elem {
@@ -273,7 +273,7 @@ impl Interpreter {
                     MemberProperty::Private(name) => {
                         let branded = self.resolve_private_name(name, env);
                         if let JsValue::Object(o) = &inner_val
-                            && let Some(obj) = self.get_object(o.id)
+                            && let Some(obj) = self.get_object_cell(o.id)
                         {
                             let elem = obj.borrow().private_fields.get(&branded).cloned();
                             match elem {
@@ -450,7 +450,7 @@ impl Interpreter {
             obj_val.clone()
         };
         if let JsValue::Object(ref o) = obj_val
-            && let Some(obj) = self.get_object(o.id)
+            && let Some(obj) = self.get_object_cell(o.id)
         {
             if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
                 match self.proxy_delete_property(o.id, key) {
@@ -577,7 +577,7 @@ impl Interpreter {
                 let branded = self.resolve_private_name(name, env);
                 return match &obj_val {
                     JsValue::Object(o) => {
-                        if let Some(obj_rc) = self.get_object(o.id) {
+                        if let Some(obj_rc) = self.get_object_cell(o.id) {
                             let elem = obj_rc.borrow().private_fields.get(&branded).cloned();
                             match elem {
                                 Some(PrivateElement::Field(v))
@@ -655,7 +655,7 @@ impl Interpreter {
             let branded = self.resolve_private_name(name, env);
             return match &obj_val {
                 JsValue::Object(o) => {
-                    if let Some(obj) = self.get_object(o.id) {
+                    if let Some(obj) = self.get_object_cell(o.id) {
                         let elem = obj.borrow().private_fields.get(&branded).cloned();
                         match elem {
                             Some(PrivateElement::Field(v)) | Some(PrivateElement::Method(v)) => {
@@ -702,7 +702,7 @@ impl Interpreter {
                 // Fast path: numeric index on typed array or array object
                 if let JsValue::Number(index) = &v
                     && let JsValue::Object(o) = &obj_val
-                    && let Some(obj_rc) = self.get_object(o.id)
+                    && let Some(obj_rc) = self.get_object_cell(o.id)
                 {
                     let obj_borrow = obj_rc.borrow();
                     // Typed array: direct element access
