@@ -96,8 +96,6 @@ uv run python scripts/run-test262.py
 ```
 
 Options: `-j <n>` for parallelism (default: nproc/2), `--timeout <s>` (default: 120).
-The runner exits non-zero for baseline regressions. Use `--fail-on-failures`
-when a selected test set must be 100% passing, as CI does for smoke/sample runs.
 
 The runner supports multiple engines via `--engine`:
 

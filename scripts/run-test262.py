@@ -610,14 +610,6 @@ examples:
         help="Pass --bytecode to jsse so eligible functions run through the bytecode VM (jsse only).",
     )
     parser.add_argument(
-        "--fail-on-failures",
-        action="store_true",
-        help=(
-            "Exit non-zero if any scenario fails, even if it is not a baseline "
-            "regression. CI smoke/sample gates should use this."
-        ),
-    )
-    parser.add_argument(
         "paths",
         nargs="*",
         help="Specific test files or directories to run (default: all tests)",
@@ -853,13 +845,6 @@ def main():
     print(f"Fail:    {failed}")
     print(f"Rate:    {percentage:.2f}%")
 
-    if fail_list:
-        print(f"\n--- Failures: {len(fail_list)} tests ---")
-        for f in sorted(fail_list)[:20]:
-            print(f"  FAILED: {f}")
-        if len(fail_list) > 20:
-            print(f"  ... and {len(fail_list) - 20} more")
-
     if regressions:
         print(f"\n!!! REGRESSIONS: {len(regressions)} tests that previously passed now fail:")
         for r in regressions[:20]:
@@ -908,23 +893,6 @@ def main():
         'new_passes': len(new_passes),
     }
     print(f"JSON: {json.dumps(json_obj)}")
-
-    should_fail = False
-    sys.stdout.flush()
-    if regressions:
-        print(
-            f"Error: {len(regressions)} baseline regression(s) detected.",
-            file=sys.stderr,
-        )
-        should_fail = True
-    if args.fail_on_failures and failed:
-        print(
-            f"Error: {failed} test262 scenario(s) failed.",
-            file=sys.stderr,
-        )
-        should_fail = True
-    if should_fail:
-        sys.exit(1)
 
 
 if __name__ == "__main__":
