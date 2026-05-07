@@ -1,0 +1,49 @@
+benchmark,old_status,head_status,transition,old_avg_ms,head_avg_ms,avg_time_speedup_old_div_head,old_score,head_score,score_ratio_head_div_old,old_elapsed_seconds,head_elapsed_seconds,old_iterations,head_iterations,old_reason,head_reason
+Air,error,pass,error_to_pass,,2643,,,1.891790,,4.756,2.786,,1,exit code 1,
+Babylon,error,error,error_to_error,,,,,,,0.048,0.072,,,no JSON output,no JSON output
+Basic,error,error,error_to_error,,,,,,,0.690,0.927,,,exit code 1,exit code 1
+Box2D,pass,pass,pass_to_pass,16658,10023,1.6620,0.300156,0.498853,1.6620,16.775,10.135,1,1,,
+FlightPlanner,skipped,skipped,skipped_to_skipped,,,,,,,,,,,file not found: RexBench/FlightPlanner/waypoints.js,file not found: RexBench/FlightPlanner/waypoints.js
+ML,timeout,pass,timeout_to_pass,,66075,,,0.075672,,,66.155,,1,exceeded 120s,
+OfflineAssembler,timeout,timeout,timeout_to_timeout,,,,,,,,,,,exceeded 120s,exceeded 120s
+UniPoker,pass,pass,pass_to_pass,20963,4729,4.4329,0.238515,1.057306,4.4329,20.989,4.757,1,1,,
+ai-astar,pass,pass,pass_to_pass,54649,41845,1.3060,0.091493,0.119489,1.3060,89.896,68.982,1,1,,
+async-fs,error,error,error_to_error,,,,,,,3.154,2.218,,,no JSON output,no JSON output
+bigint-bigdenary,pass,pass,pass_to_pass,17819,4611,3.8645,0.280599,1.084363,3.8645,17.844,4.637,1,1,,
+bigint-noble-bls12-381,error,error,error_to_error,,,,,,,0.028,6.378,,,exit code 2,no JSON output
+bigint-noble-ed25519,error,error,error_to_error,,,,,,,0.037,1.053,,,exit code 2,no JSON output
+bigint-noble-secp256k1,error,error,error_to_error,,,,,,,0.016,0.601,,,exit code 2,no JSON output
+bigint-paillier,error,error,error_to_error,,,,,,,0.035,0.086,,,exit code 2,exit code 1
+cdjs,error,error,error_to_error,,,,,,,0.014,0.015,,,exit code 1,exit code 1
+crypto,pass,pass,pass_to_pass,11767,6885,1.7091,0.424917,0.726216,1.7091,11.832,6.949,1,1,,
+delta-blue,pass,pass,pass_to_pass,22465,15872,1.4154,0.222568,0.315020,1.4154,22.488,15.904,1,1,,
+doxbee-async,error,error,error_to_error,,,,,,,17.190,9.974,,,no JSON output,no JSON output
+doxbee-promise,error,error,error_to_error,,,,,,,7.351,40.271,,,no JSON output,no JSON output
+earley-boyer,pass,pass,pass_to_pass,31539,19641,1.6058,0.158534,0.254570,1.6058,31.777,19.834,1,1,,
+first-inspector-code-load,error,error,error_to_error,,,,,,,0.073,0.047,,,no JSON output,no JSON output
+gaussian-blur,pass,pass,pass_to_pass,53054,31802,1.6683,0.094244,0.157223,1.6683,61.805,34.937,1,1,,
+gbemu,pass,pass,pass_to_pass,57396,36898,1.5555,0.087114,0.135509,1.5555,60.114,37.759,1,1,,
+hash-map,pass,pass,pass_to_pass,113422,75462,1.5030,0.044083,0.066259,1.5030,113.782,75.675,1,1,,
+js-tokens,timeout,error,timeout_to_error,,,,,,,,65.000,,,exceeded 120s,exit code 1
+json-parse-inspector,skipped,skipped,skipped_to_skipped,,,,,,,,,,,file not found: SeaMonster/inspector-json-payload.js,file not found: SeaMonster/inspector-json-payload.js
+json-stringify-inspector,skipped,skipped,skipped_to_skipped,,,,,,,,,,,file not found: SeaMonster/inspector-json-payload.js,file not found: SeaMonster/inspector-json-payload.js
+lazy-collections,error,error,error_to_error,,,,,,,0.134,0.229,,,exit code 1,exit code 1
+mandreel,timeout,timeout,timeout_to_timeout,,,,,,,,,,,exceeded 120s,exceeded 120s
+multi-inspector-code-load,error,error,error_to_error,,,,,,,0.045,0.071,,,no JSON output,no JSON output
+navier-stokes,pass,pass,pass_to_pass,9018,5237,1.7220,0.554447,0.954745,1.7220,9.553,5.464,1,1,,
+octane-code-load,pass,pass,pass_to_pass,138,72,1.9167,36.231884,69.444444,1.9167,0.171,0.105,1,1,,
+pdfjs,pass,pass,pass_to_pass,24985,12226,2.0436,0.200120,0.408965,2.0436,51.117,14.548,1,1,,
+proxy-mobx,error,pass,error_to_pass,,1069,,,4.677268,,0.980,1.205,,1,no JSON output,
+proxy-vue,error,pass,error_to_pass,,201,,,24.875622,,0.014,0.301,,1,exit code 2,
+raytrace,pass,pass,pass_to_pass,36213,14252,2.5409,0.138072,0.350828,2.5409,36.241,14.279,1,1,,
+raytrace-private-class-fields,pass,pass,pass_to_pass,45531,16576,2.7468,0.109815,0.301641,2.7468,45.558,16.605,1,1,,
+raytrace-public-class-fields,error,pass,error_to_pass,,13890,,,0.359971,,26.294,13.918,,1,exit code 1,
+regexp-octane,timeout,pass,timeout_to_pass,,6141,,,0.814200,,,12.880,,1,exceeded 120s,
+richards,pass,pass,pass_to_pass,30469,19104,1.5949,0.164101,0.261725,1.5949,30.500,19.128,1,1,,
+splay,timeout,timeout,timeout_to_timeout,,,,,,,,,,,exceeded 120s,exceeded 120s
+stanford-crypto-aes,pass,pass,pass_to_pass,13888,8592,1.6164,0.360023,0.581937,1.6164,14.048,8.744,1,1,,
+stanford-crypto-pbkdf2,pass,pass,pass_to_pass,8291,4960,1.6716,0.603064,1.008065,1.6716,8.338,5.008,1,1,,
+stanford-crypto-sha256,pass,pass,pass_to_pass,9150,5378,1.7014,0.546448,0.929714,1.7014,9.199,5.425,1,1,,
+sync-fs,error,pass,error_to_pass,,9604,,,0.520616,,4.706,9.646,,1,exit code 1,
+typescript-octane,timeout,timeout,timeout_to_timeout,,,,,,,,,,,exceeded 120s,exceeded 120s
+validatorjs,error,error,error_to_error,,,,,,,3.571,0.434,,,exit code 1,exit code 1

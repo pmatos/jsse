@@ -1,0 +1,8 @@
+transition,count
+error_to_error,14
+error_to_pass,5
+pass_to_pass,19
+skipped_to_skipped,3
+timeout_to_error,1
+timeout_to_pass,2
+timeout_to_timeout,4
