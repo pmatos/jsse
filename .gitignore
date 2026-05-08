@@ -9,3 +9,5 @@ jetstream-baseline.json
 jetstream-results.json
 scripts/.unicode_cache/
 __pycache__/
+mutants.out/
+mutants.out.old/
