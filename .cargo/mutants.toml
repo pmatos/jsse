@@ -1,0 +1,23 @@
+# cargo-mutants configuration. Defaults documented at https://mutants.rs/.
+#
+# `unicode_tables.rs` and `emoji_strings.rs` are generated data tables; mutating
+# bytes inside lookup tables only produces noise.
+#
+# `temporal/duration.rs` and `temporal/plain_date_time.rs` each contain several
+# helpers that return a 10-tuple of `f64`. cargo-mutants enumerates 3^10 =
+# 59,049 mutants per such function (every combination of 0.0 / 1.0 / -1.0 per
+# tuple slot), and these two files alone account for ~90% of all mutants in the
+# crate. Excluded until cargo-mutants supports a per-function mutant cap or
+# those helpers are refactored to return a struct.
+
+exclude_globs = [
+    "src/unicode_tables.rs",
+    "src/emoji_strings.rs",
+    "src/interpreter/builtins/temporal/duration.rs",
+    "src/interpreter/builtins/temporal/plain_date_time.rs",
+]
+
+# The default per-mutant timeout multiplier (5x baseline) is tight when the
+# baseline is dominated by a fixed-cost test262 sample. Floor it so a quick
+# baseline doesn't squeeze the budget below what the oracle actually needs.
+minimum_test_timeout = 60.0

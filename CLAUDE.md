@@ -71,6 +71,17 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - Run test262 on a specific directory: `uv run python scripts/run-test262.py test262/test/built-ins/Symbol/`
 - Run custom tests: `uv run python scripts/run-custom-tests.py`
 
+## Mutation Testing
+- Local-only (not in CI). Driver: `./scripts/run-mutants.sh` (forwards args to `cargo mutants`).
+- Requires `cargo install cargo-mutants --locked` and `uv` on PATH (or at `~/.local/bin/uv`).
+- Examples:
+  - `./scripts/run-mutants.sh --list` — enumerate mutants without running.
+  - `./scripts/run-mutants.sh --shard 0/8` — single shard of the corpus.
+  - `./scripts/run-mutants.sh --file src/lexer.rs` — restrict to one file.
+- Oracle is `cargo test --release` plus `tests/test262_smoke_oracle.rs`, which runs a 0.5% random test262 sample (~3,500 scenarios, ~20 s on a fast machine). The sample is unseeded, so kill verdicts are non-deterministic across mutants — the trade-off is broader cross-section coverage over many runs.
+- Configuration in `.cargo/mutants.toml`. Generated tables (`unicode_tables.rs`, `emoji_strings.rs`) and two combinatorially-explosive Temporal helpers (`duration.rs`, `plain_date_time.rs`) are excluded.
+- Output in `mutants.out/` (gitignored): `caught.txt`, `missed.txt`, `unviable.txt`, `outcomes.json`, plus per-mutant diffs/logs.
+
 ## Acorn Tests
 - Run acorn tests: `./scripts/run-acorn-tests.sh`
 - Compare with Node baseline: `./scripts/run-acorn-tests.sh --node`
