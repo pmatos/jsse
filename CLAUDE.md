@@ -97,3 +97,17 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - GC is mark-and-sweep with ephemeron support for WeakMap/WeakSet. Prototype fields must be added to the root set in `maybe_gc()`.
 - Generators use a replay-based approach (re-execute the function body, fast-forwarding past previous yields).
 - The `Object()` constructor calls `to_object()` to wrap primitives (String, Number, Boolean, Symbol, BigInt).
+
+## Agent skills
+
+### Issue tracker
+
+Issues live on GitHub at `pmatos/jsse` and are managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Canonical label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout — one `CONTEXT.md` + `docs/adr/` at the repo root (created lazily by `/grill-with-docs`). See `docs/agents/domain.md`.
