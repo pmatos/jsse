@@ -6290,7 +6290,7 @@ fn spec_set(
     let obj_val = JsValue::Object(crate::types::JsObject { id: obj_id });
     if let Some(obj) = interp.get_object_cell(obj_id) {
         // Proxy set trap
-        if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+        if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
             let receiver = obj_val.clone();
             match interp.proxy_set(obj_id, key, value, &receiver) {
                 Ok(success) => {

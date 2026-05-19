@@ -352,11 +352,13 @@ impl Interpreter {
                 Self::collect_value_roots(val, worklist);
             }
         }
-        if let Some(tid) = obj.proxy_target_id {
-            worklist.push(tid);
-        }
-        if let Some(hid) = obj.proxy_handler_id {
-            worklist.push(hid);
+        if let Some(ref p) = obj.proxy {
+            if let Some(tid) = p.target_id {
+                worklist.push(tid);
+            }
+            if let Some(hid) = p.handler_id {
+                worklist.push(hid);
+            }
         }
         if let Some(ref pd) = obj.promise_data {
             match &pd.state {

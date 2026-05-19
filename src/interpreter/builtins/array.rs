@@ -4,13 +4,12 @@ use super::super::*;
 fn is_array_check(interp: &mut Interpreter, obj_id: u64) -> Result<bool, JsValue> {
     let snapshot = interp.get_object_cell(obj_id).map(|cell| {
         let b = cell.borrow();
-        let tid = b.proxy_target_id;
-        // is_proxy() checks proxy_target_id.is_some(), but revoked proxies have proxy_target_id=None
-        // Use proxy_revoked flag to also detect revoked proxies
+        // `is_proxy()` is active-only; revoked proxies still need IsArray to throw, so we
+        // also surface the revoked flag.
         (
-            b.proxy_revoked,
-            b.is_proxy() || b.proxy_revoked,
-            tid,
+            b.is_proxy_revoked(),
+            b.is_proxy() || b.is_proxy_revoked(),
+            b.proxy_target_id(),
             b.class_name.clone(),
         )
     });
@@ -89,7 +88,7 @@ fn obj_set_throw(
         // Check for Proxy
         let is_proxy = interp.get_object_cell(obj_ref.id).is_some_and(|cell| {
             let b = cell.borrow();
-            b.is_proxy() || b.proxy_revoked
+            b.is_proxy() || b.is_proxy_revoked()
         });
         if is_proxy {
             match interp.proxy_set(obj_ref.id, key, value, o) {
@@ -702,7 +701,7 @@ fn obj_delete_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<
         // Check for Proxy deleteProperty trap
         let is_proxy = interp.get_object_cell(obj_ref.id).is_some_and(|cell| {
             let b = cell.borrow();
-            b.is_proxy() || b.proxy_revoked
+            b.is_proxy() || b.is_proxy_revoked()
         });
         if is_proxy {
             match interp.proxy_delete_property(obj_ref.id, key) {

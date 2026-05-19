@@ -768,8 +768,9 @@ fn proxy_install_via_chokepoint_bumps_shape() {
     let proxy_id = interp.alloc_object(JsObjectData::new());
     let before = interp.get_object(proxy_id).unwrap().borrow().shape_id;
     interp.mutate_object_shape(proxy_id, |obj| {
-        obj.proxy_target_id = Some(target_id);
-        obj.proxy_handler_id = Some(handler_id);
+        obj.proxy = Some(crate::interpreter::types::ProxyData::active(
+            target_id, handler_id,
+        ));
     });
     let after = interp.get_object(proxy_id).unwrap().borrow().shape_id;
     assert!(

@@ -452,7 +452,7 @@ impl Interpreter {
         if let JsValue::Object(ref o) = obj_val
             && let Some(obj) = self.get_object_cell(o.id)
         {
-            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+            if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
                 match self.proxy_delete_property(o.id, key) {
                     Ok(false) => {
                         if env.borrow().strict {
@@ -516,11 +516,7 @@ impl Interpreter {
         let obj_rc = self.get_object(obj_id)?;
         let obj = obj_rc.borrow();
         // Non-cacheable categories (plan "Excluded from IC in v1").
-        if obj.proxy_target_id.is_some()
-            || obj.proxy_revoked
-            || obj.module_namespace.is_some()
-            || obj.typed_array_info.is_some()
-        {
+        if obj.proxy.is_some() || obj.module_namespace.is_some() || obj.typed_array_info.is_some() {
             return None;
         }
         // Own property?

@@ -787,11 +787,11 @@ impl Interpreter {
                 return self.get_function_realm(&target_clone);
             }
             // Proxy: §7.3.22 step 4
-            if obj_ref.proxy_revoked {
+            if obj_ref.is_proxy_revoked() {
                 drop(obj_ref);
                 return Err(self.create_type_error("Cannot perform operation on a revoked proxy"));
             }
-            if let Some(target_id) = obj_ref.proxy_target_id {
+            if let Some(target_id) = obj_ref.proxy_target_id() {
                 drop(obj_ref);
                 return self.get_function_realm(&JsValue::Object(crate::types::JsObject {
                     id: target_id,

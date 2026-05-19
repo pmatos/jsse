@@ -627,7 +627,7 @@ impl Interpreter {
                     };
                     if let Some(obj) = self.get_object_cell(obj_ref.id) {
                         // Proxy deleteProperty trap
-                        if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+                        if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
                             match self.proxy_delete_property(obj_ref.id, &key) {
                                 Ok(false) => {
                                     if env.borrow().strict {
@@ -3216,7 +3216,7 @@ impl Interpreter {
                         }
                     };
                     // Proxy set trap
-                    if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+                    if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
                         let receiver = obj_val.clone();
                         match self.proxy_set(o.id, &key, final_val.clone(), &receiver) {
                             Ok(success) => {
@@ -3824,7 +3824,7 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = boxed_obj
                     && let Some(obj) = self.get_object_cell(o.id)
                 {
-                    if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+                    if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
                         let receiver = boxed_obj.clone();
                         match self.proxy_set(o.id, &key, rval.clone(), &receiver) {
                             Ok(success) => {
@@ -4068,7 +4068,7 @@ impl Interpreter {
             && let Some(obj) = self.get_object(o.id)
         {
             // Proxy set trap
-            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+            if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
                 let receiver = obj_val.clone();
                 match self.proxy_set(o.id, key, val, &receiver) {
                     Ok(success) => {
@@ -5397,8 +5397,7 @@ impl Interpreter {
         use crate::interpreter::ic::{CallIcKind, CallIcSlot};
         let obj_rc = self.get_object(callee_obj_id)?;
         let obj = obj_rc.borrow();
-        if obj.proxy_target_id.is_some()
-            || obj.proxy_revoked
+        if obj.proxy.is_some()
             || obj.wrapped_target_function_id.is_some()
             || obj.bound_target_function.is_some()
             || obj.is_class_constructor
@@ -11925,7 +11924,7 @@ impl Interpreter {
             } else {
                 let b = obj.borrow();
                 (
-                    b.is_proxy() || b.proxy_revoked,
+                    b.is_proxy() || b.is_proxy_revoked(),
                     b.wrapped_target_function_id.is_some(),
                     b.is_class_constructor,
                 )
@@ -14263,15 +14262,10 @@ impl Interpreter {
     }
 
     pub(crate) fn get_proxy_info(&self, obj_id: u64) -> Option<(bool, Option<u64>, Option<u64>)> {
-        if let Some(obj) = self.get_object_cell(obj_id) {
-            let b = obj.borrow();
-            if b.is_proxy() || b.proxy_revoked {
-                let target_id = b.proxy_target_id;
-                let handler_id = b.proxy_handler_id;
-                return Some((b.proxy_revoked, target_id, handler_id));
-            }
-        }
-        None
+        let obj = self.get_object_cell(obj_id)?;
+        let b = obj.borrow();
+        let p = b.proxy.as_ref()?;
+        Some((p.revoked, p.target_id, p.handler_id))
     }
 
     pub(crate) fn invoke_proxy_trap(
@@ -14318,7 +14312,7 @@ impl Interpreter {
 
     pub(crate) fn get_proxy_target_val(&self, proxy_id: u64) -> JsValue {
         if let Some(obj) = self.get_object_cell(proxy_id)
-            && let Some(tid) = obj.borrow().proxy_target_id
+            && let Some(tid) = obj.borrow().proxy_target_id()
         {
             return JsValue::Object(crate::types::JsObject { id: tid });
         }
@@ -15039,7 +15033,7 @@ impl Interpreter {
                 let recv_id = recv_o.id;
                 let is_proxy_recv = self
                     .get_object_cell(recv_id)
-                    .is_some_and(|o| o.borrow().is_proxy() || o.borrow().proxy_revoked);
+                    .is_some_and(|o| o.borrow().is_proxy() || o.borrow().is_proxy_revoked());
                 if is_proxy_recv {
                     let existing = self.proxy_get_own_property_descriptor(recv_id, key)?;
                     if matches!(existing, JsValue::Undefined) {

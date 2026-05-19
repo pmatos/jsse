@@ -248,11 +248,16 @@ pub(crate) fn is_array_value(interp: &mut Interpreter, obj_id: u64) -> Result<bo
     let snapshot = interp.get_object_cell(obj_id).map(|cell| {
         let b = cell.borrow();
         let tid = if b.is_proxy() {
-            b.proxy_target_id
+            b.proxy_target_id()
         } else {
             None
         };
-        (b.proxy_revoked, b.is_proxy(), tid, b.class_name.clone())
+        (
+            b.is_proxy_revoked(),
+            b.is_proxy(),
+            tid,
+            b.class_name.clone(),
+        )
     });
     if let Some((is_revoked, is_proxy, target_id, class)) = snapshot {
         if is_revoked {
@@ -300,7 +305,7 @@ pub(crate) fn enumerable_own_keys(
     obj_id: u64,
 ) -> Result<Vec<String>, JsValue> {
     if let Some(obj) = interp.get_object_cell(obj_id) {
-        if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+        if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
             let target_val = interp.get_proxy_target_val(obj_id);
             match interp.invoke_proxy_trap(obj_id, "ownKeys", vec![target_val.clone()]) {
                 Ok(Some(v)) => {
@@ -967,7 +972,7 @@ fn json_internalize_apply(
 ) -> Result<(), JsValue> {
     let is_proxy = interp
         .get_object_cell(obj_id)
-        .map(|c| c.borrow().is_proxy() || c.borrow().proxy_revoked)
+        .map(|c| c.borrow().is_proxy() || c.borrow().is_proxy_revoked())
         .unwrap_or(false);
 
     if is_proxy {

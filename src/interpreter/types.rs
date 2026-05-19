@@ -1552,9 +1552,7 @@ pub struct JsObjectData {
     pub parameter_map: Option<HashMap<String, (EnvRef, String)>>,
     pub map_data: Option<Vec<Option<(JsValue, JsValue)>>>,
     pub set_data: Option<Vec<Option<JsValue>>>,
-    pub proxy_target_id: Option<u64>,
-    pub proxy_handler_id: Option<u64>,
-    pub proxy_revoked: bool,
+    pub proxy: Option<ProxyData>,
     pub arraybuffer_data: Option<Rc<RefCell<BufferData>>>,
     pub arraybuffer_detached: Option<Rc<Cell<bool>>>,
     pub arraybuffer_max_byte_length: Option<usize>,
@@ -1616,6 +1614,36 @@ pub(crate) struct DisposableStackData {
     pub(crate) disposed: bool,
 }
 
+/// Proxy slot data. Present on an object iff it is (or was) a Proxy.
+///
+/// Invariants:
+/// - Constructed via `ProxyData::active(target, handler)` — both ids `Some`, `revoked == false`.
+/// - After `revoke()`, both ids are `None` and `revoked == true`. Once revoked, never reactivated.
+/// - `JsObjectData::is_proxy()` returns true only for the *active* state, matching the engine's
+///   pre-existing predicate semantics. Use `is_proxy_revoked()` for the revoked branch.
+#[derive(Clone, Debug)]
+pub(crate) struct ProxyData {
+    pub target_id: Option<u64>,
+    pub handler_id: Option<u64>,
+    pub revoked: bool,
+}
+
+impl ProxyData {
+    pub(crate) fn active(target_id: u64, handler_id: u64) -> Self {
+        Self {
+            target_id: Some(target_id),
+            handler_id: Some(handler_id),
+            revoked: false,
+        }
+    }
+
+    pub(crate) fn revoke(&mut self) {
+        self.target_id = None;
+        self.handler_id = None;
+        self.revoked = true;
+    }
+}
+
 impl JsObjectData {
     pub(crate) fn new() -> Self {
         Self {
@@ -1634,9 +1662,7 @@ impl JsObjectData {
             parameter_map: None,
             map_data: None,
             set_data: None,
-            proxy_target_id: None,
-            proxy_handler_id: None,
-            proxy_revoked: false,
+            proxy: None,
             arraybuffer_data: None,
             arraybuffer_detached: None,
             arraybuffer_max_byte_length: None,
@@ -1677,8 +1703,19 @@ impl JsObjectData {
         }
     }
 
+    /// True iff this is an *active* (non-revoked) proxy. Preserves pre-bundling semantics.
     pub fn is_proxy(&self) -> bool {
-        self.proxy_target_id.is_some()
+        self.proxy.as_ref().is_some_and(|p| !p.revoked)
+    }
+
+    /// True iff this object has been revoked.
+    pub fn is_proxy_revoked(&self) -> bool {
+        self.proxy.as_ref().is_some_and(|p| p.revoked)
+    }
+
+    /// Target id for an active proxy, `None` otherwise (including revoked).
+    pub fn proxy_target_id(&self) -> Option<u64> {
+        self.proxy.as_ref().and_then(|p| p.target_id)
     }
 
     fn string_exotic_value(&self, key: &str) -> Option<JsValue> {
