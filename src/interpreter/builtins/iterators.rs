@@ -960,7 +960,7 @@ impl Interpreter {
                             // §23.1.5.1.1 step 3: TypedArray OOB check
                             if let Some(arr_obj) = interp.get_object(array_id) {
                                 let borrowed = arr_obj.borrow();
-                                if let Some(ref ta) = borrowed.typed_array_info
+                                if let Some(ta) = borrowed.typed_array_info()
                                     && is_typed_array_out_of_bounds(ta)
                                 {
                                     drop(borrowed);
@@ -980,7 +980,7 @@ impl Interpreter {
                             }
                             let (len, val) = if let Some(arr_obj) = interp.get_object(array_id) {
                                 let borrowed = arr_obj.borrow();
-                                let len = if let Some(ref ta) = borrowed.typed_array_info {
+                                let len = if let Some(ta) = borrowed.typed_array_info() {
                                     typed_array_length(ta)
                                 } else if let Some(JsValue::Number(n)) =
                                     borrowed.get_property_value("length")
@@ -1110,7 +1110,7 @@ impl Interpreter {
                                 );
                             }
                             let ta_obj = ta_obj.unwrap();
-                            let ta_info = ta_obj.borrow().typed_array_info.clone();
+                            let ta_info = ta_obj.borrow().typed_array_info().cloned();
                             if let Some(ref ta) = ta_info {
                                 if ta.is_detached.get() {
                                     return Completion::Throw(

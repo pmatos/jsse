@@ -266,7 +266,7 @@ impl Interpreter {
 
             if !is_proxy && !has_module_ns {
                 // Fast path for ordinary objects (the common case)
-                let is_ta = b.typed_array_info.is_some();
+                let is_ta = b.typed_array_info().is_some();
 
                 // TypedArray: canonical numeric index strings must not walk prototype
                 if is_ta
@@ -276,7 +276,7 @@ impl Interpreter {
                     use crate::interpreter::types::{
                         is_valid_integer_index, typed_array_get_index,
                     };
-                    let ta = b.typed_array_info.as_ref().unwrap();
+                    let ta = b.typed_array_info().unwrap();
                     if is_valid_integer_index(ta, index) {
                         return Completion::Normal(typed_array_get_index(ta, index as usize));
                     }
@@ -492,12 +492,12 @@ impl Interpreter {
             // TypedArray §10.4.5.3 [[HasProperty]]: numeric indices handled by IsValidIntegerIndex only
             {
                 let b = obj.borrow();
-                if b.typed_array_info.is_some()
+                if b.typed_array_info().is_some()
                     && let Some(index) =
                         crate::interpreter::types::canonical_numeric_index_string(key)
                 {
                     return Ok(is_valid_integer_index(
-                        b.typed_array_info.as_ref().unwrap(),
+                        b.typed_array_info().unwrap(),
                         index,
                     ));
                 }

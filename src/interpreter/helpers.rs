@@ -380,7 +380,7 @@ pub(crate) fn enumerable_own_keys(
             }
         }
         // TypedArray [[OwnPropertyKeys]]: virtual indexed properties are enumerable
-        if let Some(ref ta) = b.typed_array_info {
+        if let Some(ta) = b.typed_array_info() {
             for i in 0..ta.array_length {
                 result.push(i.to_string());
             }

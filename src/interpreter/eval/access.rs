@@ -518,7 +518,7 @@ impl Interpreter {
         // Non-cacheable categories (plan "Excluded from IC in v1").
         if obj.proxy().is_some()
             || obj.module_namespace().is_some()
-            || obj.typed_array_info.is_some()
+            || obj.typed_array_info().is_some()
         {
             return None;
         }
@@ -705,7 +705,7 @@ impl Interpreter {
                 {
                     let obj_borrow = obj_rc.borrow();
                     // Typed array: direct element access
-                    if let Some(ref ta) = obj_borrow.typed_array_info {
+                    if let Some(ta) = obj_borrow.typed_array_info() {
                         use crate::interpreter::types::{
                             is_valid_integer_index, typed_array_get_index,
                         };

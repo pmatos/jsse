@@ -4810,7 +4810,7 @@ impl Interpreter {
                         match interp.to_property_descriptor(&desc_val) {
                             Ok(desc) => {
                                 let is_array = obj.borrow().class_name == "Array";
-                                let is_ta = obj.borrow().typed_array_info.is_some();
+                                let is_ta = obj.borrow().typed_array_info().is_some();
                                 if is_array {
                                     match interp.array_define_own_property(o.id as usize, &key, desc) {
                                         Ok(true) => {}
@@ -5144,7 +5144,7 @@ impl Interpreter {
                             // TypedArray [[PreventExtensions]] — §10.4.5.2
                             {
                                 let b = obj.borrow();
-                                if let Some(ref ta) = b.typed_array_info {
+                                if let Some(ta) = b.typed_array_info() {
                                     use crate::interpreter::types::is_typed_array_fixed_length;
                                     let is_fixed = b
                                         .view_buffer_object_id()
@@ -5163,7 +5163,7 @@ impl Interpreter {
                             // TA elements can't be made non-configurable/non-writable (§10.4.5.3)
                             {
                                 let b = obj.borrow();
-                                if let Some(ref ta) = b.typed_array_info {
+                                if let Some(ta) = b.typed_array_info() {
                                     use crate::interpreter::types::typed_array_length;
                                     if typed_array_length(ta) > 0 {
                                         return Completion::Throw(interp.create_type_error(
@@ -5873,7 +5873,7 @@ impl Interpreter {
                         // TypedArray [[OwnPropertyKeys]]: virtual index keys
                         {
                             let b = obj.borrow();
-                            if let Some(ref ta) = b.typed_array_info {
+                            if let Some(ta) = b.typed_array_info() {
                                 let len = crate::interpreter::types::typed_array_length(ta);
                                 let property_order = b.property_order.clone();
                                 drop(b);
@@ -6064,7 +6064,7 @@ impl Interpreter {
                         // TypedArray [[PreventExtensions]] — §10.4.5.2
                         {
                             let b = obj.borrow();
-                            if let Some(ref ta) = b.typed_array_info {
+                            if let Some(ta) = b.typed_array_info() {
                                 let is_fixed = b.view_buffer_object_id()
                                     .and_then(|buf_id| interp.get_object(buf_id))
                                     .map(|buf| {
@@ -6296,7 +6296,7 @@ impl Interpreter {
                             // TypedArray [[PreventExtensions]] — §10.4.5.2
                             {
                                 let b = obj.borrow();
-                                if let Some(ref ta) = b.typed_array_info {
+                                if let Some(ta) = b.typed_array_info() {
                                     let is_fixed = b.view_buffer_object_id()
                                         .and_then(|buf_id| interp.get_object(buf_id))
                                         .map(|buf| {
@@ -6316,7 +6316,7 @@ impl Interpreter {
                             // TA elements can't be made non-configurable (§10.4.5.3)
                             {
                                 let b = obj.borrow();
-                                if let Some(ref ta) = b.typed_array_info {
+                                if let Some(ta) = b.typed_array_info() {
                                     use crate::interpreter::types::typed_array_length;
                                     if typed_array_length(ta) > 0 {
                                         return Completion::Throw(interp.create_type_error(
@@ -7538,7 +7538,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     }
-                    let is_ta = obj.borrow().typed_array_info.is_some();
+                    let is_ta = obj.borrow().typed_array_info().is_some();
                     match interp.to_property_descriptor(&desc_val) {
                         Ok(desc) => {
                             if is_ta {
@@ -7917,7 +7917,7 @@ impl Interpreter {
                     // TypedArray [[OwnPropertyKeys]]: §10.4.5.6
                     {
                         let b = obj.borrow();
-                        if let Some(ref ta) = b.typed_array_info {
+                        if let Some(ta) = b.typed_array_info() {
                             let len = crate::interpreter::types::typed_array_length(ta);
                             let property_order = b.property_order.clone();
                             drop(b);
@@ -8043,7 +8043,7 @@ impl Interpreter {
                     // TypedArray [[PreventExtensions]] — §10.4.5.2
                     {
                         let b = obj.borrow();
-                        if let Some(ref ta) = b.typed_array_info {
+                        if let Some(ta) = b.typed_array_info() {
                             let is_fixed = b
                                 .view_buffer_object_id()
                                 .and_then(|buf_id| interp.get_object_cell(buf_id))
@@ -8108,7 +8108,7 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target {
                     let ta_info_opt = interp
                         .get_object_cell(o.id)
-                        .and_then(|obj| obj.borrow().typed_array_info.clone());
+                        .and_then(|obj| obj.borrow().typed_array_info().cloned());
                     if let Some(ta_info) = ta_info_opt
                         && let Some(index) = canonical_numeric_index_string(&key)
                     {
@@ -8143,7 +8143,7 @@ impl Interpreter {
                         if let JsValue::Object(ref r) = receiver {
                             let recv_ta_opt = interp
                                 .get_object_cell(r.id)
-                                .and_then(|obj| obj.borrow().typed_array_info.clone());
+                                .and_then(|obj| obj.borrow().typed_array_info().cloned());
                             if let Some(recv_ta) = recv_ta_opt {
                                 // Receiver is TypedArray: IntegerIndexedElementSet
                                 if !is_valid_integer_index(&recv_ta, index) {
@@ -8211,7 +8211,7 @@ impl Interpreter {
                             // TypedArray [[Set]] §10.4.5.5 via prototype chain
                             {
                                 let borrow = cur_obj.borrow();
-                                if let Some(ref ta) = borrow.typed_array_info
+                                if let Some(ta) = borrow.typed_array_info()
                                     && let Some(index) = canonical_numeric_index_string(&key)
                                 {
                                     let same = if let JsValue::Object(ref r) = receiver {

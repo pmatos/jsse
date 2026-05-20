@@ -134,7 +134,7 @@ fn obj_set_throw(
         {
             let ta_info = interp.get_object_cell(obj_ref.id).and_then(|cell| {
                 let b = cell.borrow();
-                b.typed_array_info
+                b.typed_array_info()
                     .as_ref()
                     .map(|ta| (ta.kind.is_bigint(), ta.kind))
             });
@@ -150,7 +150,7 @@ fn obj_set_throw(
                     }
                 };
                 if let Some(cell) = interp.get_object_cell(obj_ref.id)
-                    && let Some(ref ta) = cell.borrow().typed_array_info
+                    && let Some(ta) = cell.borrow().typed_array_info()
                     && is_valid_integer_index(ta, index)
                 {
                     typed_array_set_index(ta, index as usize, &num_val);

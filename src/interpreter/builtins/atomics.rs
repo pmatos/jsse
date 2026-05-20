@@ -18,8 +18,7 @@ fn check_ta_detached(interp: &mut Interpreter, ta_val: &JsValue) -> Result<(), J
     let detached = if let JsValue::Object(o) = ta_val {
         interp.get_object_cell(o.id).is_some_and(|cell| {
             cell.borrow()
-                .typed_array_info
-                .as_ref()
+                .typed_array_info()
                 .is_some_and(|info| info.is_detached.get())
         })
     } else {
@@ -37,8 +36,7 @@ fn get_sab_info(interp: &Interpreter, ta_val: &JsValue) -> Option<(Arc<SharedBuf
     {
         let obj_ref = obj.borrow();
         let byte_offset = obj_ref
-            .typed_array_info
-            .as_ref()
+            .typed_array_info()
             .map(|i| i.byte_offset)
             .unwrap_or(0);
         if let Some(buf_id) = obj_ref.view_buffer_object_id()
@@ -562,7 +560,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if obj_ref.typed_array_info.is_some() {
+                    if obj_ref.typed_array_info().is_some() {
                         if let Some(buf_id) = obj_ref.view_buffer_object_id()
                             && let Some(buf_obj) = interp.get_object_cell(buf_id)
                         {
@@ -1268,7 +1266,7 @@ fn validate_integer_typed_array(
     let info_snapshot = if let JsValue::Object(o) = ta_val {
         interp.get_object_cell(o.id).and_then(|cell| {
             let obj_ref = cell.borrow();
-            obj_ref.typed_array_info.as_ref().map(|info| {
+            obj_ref.typed_array_info().map(|info| {
                 (
                     info.kind,
                     info.buffer.clone(),
@@ -1321,7 +1319,7 @@ fn validate_atomic_access(
         && let Some(obj) = interp.get_object_cell(o.id)
     {
         let obj_ref = obj.borrow();
-        if let Some(ref info) = obj_ref.typed_array_info {
+        if let Some(info) = obj_ref.typed_array_info() {
             info.array_length
         } else {
             0

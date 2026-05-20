@@ -673,7 +673,7 @@ impl Interpreter {
                         // TypedArray: §10.4.5.4 [[Delete]]
                         {
                             let obj_borrow = obj.borrow();
-                            if let Some(ref ta) = obj_borrow.typed_array_info
+                            if let Some(ta) = obj_borrow.typed_array_info()
                                 && let Some(index) = canonical_numeric_index_string(&key)
                             {
                                 if is_valid_integer_index(ta, index) {
@@ -2688,10 +2688,10 @@ impl Interpreter {
                         if let JsValue::Number(index) = &v
                             && let JsValue::Object(ref o) = obj_val
                             && let Some(obj) = self.get_object(o.id)
-                            && obj.borrow().typed_array_info.is_some()
+                            && obj.borrow().typed_array_info().is_some()
                         {
                             let obj_ref = obj.borrow();
-                            let ta = obj_ref.typed_array_info.as_ref().unwrap();
+                            let ta = obj_ref.typed_array_info().unwrap();
                             if is_valid_integer_index(ta, *index) {
                                 let is_bigint = ta.kind.is_bigint();
                                 let ta_clone = ta.clone();
@@ -2725,12 +2725,11 @@ impl Interpreter {
                     && let Some(obj) = self.get_object(o.id)
                 {
                     // TypedArray [[Set]]
-                    let is_ta = obj.borrow().typed_array_info.is_some();
+                    let is_ta = obj.borrow().typed_array_info().is_some();
                     if is_ta && let Some(index) = canonical_numeric_index_string(&key) {
                         let is_bigint = obj
                             .borrow()
-                            .typed_array_info
-                            .as_ref()
+                            .typed_array_info()
                             .map(|ta| ta.kind.is_bigint())
                             .unwrap_or(false);
                         let num_val = if is_bigint {
@@ -2739,7 +2738,7 @@ impl Interpreter {
                             JsValue::Number(self.to_number_value(&value)?)
                         };
                         let obj_ref = obj.borrow();
-                        let ta = obj_ref.typed_array_info.as_ref().unwrap();
+                        let ta = obj_ref.typed_array_info().unwrap();
                         if is_valid_integer_index(ta, index) {
                             let ta_clone = ta.clone();
                             drop(obj_ref);
@@ -3270,12 +3269,11 @@ impl Interpreter {
                     }
                     // TypedArray [[Set]]: ToNumber/ToBigInt before index check
                     {
-                        let is_ta = obj.borrow().typed_array_info.is_some();
+                        let is_ta = obj.borrow().typed_array_info().is_some();
                         if is_ta && let Some(index) = canonical_numeric_index_string(&key) {
                             let is_bigint = obj
                                 .borrow()
-                                .typed_array_info
-                                .as_ref()
+                                .typed_array_info()
                                 .map(|ta| ta.kind.is_bigint())
                                 .unwrap_or(false);
                             // Convert value first (may throw)
@@ -3291,7 +3289,7 @@ impl Interpreter {
                                 }
                             };
                             let obj_ref = obj.borrow();
-                            let ta = obj_ref.typed_array_info.as_ref().unwrap();
+                            let ta = obj_ref.typed_array_info().unwrap();
                             if is_valid_integer_index(ta, index) {
                                 let ta_clone = ta.clone();
                                 drop(obj_ref);
@@ -3308,7 +3306,7 @@ impl Interpreter {
                             // TypedArray [[Set]] §10.4.5.5: canonical numeric index in TA prototype
                             {
                                 let proto_borrow = self.get_object_cell_expect(proto_rc).borrow();
-                                if let Some(ref ta) = proto_borrow.typed_array_info
+                                if let Some(ta) = proto_borrow.typed_array_info()
                                     && let Some(index) = canonical_numeric_index_string(&key)
                                     && !is_valid_integer_index(ta, index)
                                 {
@@ -4118,12 +4116,11 @@ impl Interpreter {
                 return Ok(());
             }
             // TypedArray [[Set]]
-            let is_ta = obj.borrow().typed_array_info.is_some();
+            let is_ta = obj.borrow().typed_array_info().is_some();
             if is_ta && let Some(index) = canonical_numeric_index_string(key) {
                 let is_bigint = obj
                     .borrow()
-                    .typed_array_info
-                    .as_ref()
+                    .typed_array_info()
                     .map(|ta| ta.kind.is_bigint())
                     .unwrap_or(false);
                 let num_val = if is_bigint {
@@ -4132,7 +4129,7 @@ impl Interpreter {
                     JsValue::Number(self.to_number_value(&val)?)
                 };
                 let obj_ref = obj.borrow();
-                let ta = obj_ref.typed_array_info.as_ref().unwrap();
+                let ta = obj_ref.typed_array_info().unwrap();
                 if is_valid_integer_index(ta, index) {
                     let ta_clone = ta.clone();
                     drop(obj_ref);
@@ -4148,7 +4145,7 @@ impl Interpreter {
                     // TypedArray [[Set]] §10.4.5.5: canonical numeric index in TA prototype
                     {
                         let proto_borrow = self.get_object_cell_expect(proto_rc).borrow();
-                        if let Some(ref ta) = proto_borrow.typed_array_info
+                        if let Some(ta) = proto_borrow.typed_array_info()
                             && let Some(index) = canonical_numeric_index_string(key)
                             && !is_valid_integer_index(ta, index)
                         {
@@ -14905,7 +14902,7 @@ impl Interpreter {
             }
         } else if let Some(obj) = self.get_object(obj_id) {
             // TypedArray [[Set]] §10.4.5.5
-            let is_ta = obj.borrow().typed_array_info.is_some();
+            let is_ta = obj.borrow().typed_array_info().is_some();
             if is_ta && let Some(index) = canonical_numeric_index_string(key) {
                 let same_val = if let JsValue::Object(ref r) = *receiver {
                     r.id == obj_id
@@ -14916,8 +14913,7 @@ impl Interpreter {
                     // SameValue(O, Receiver): IntegerIndexedElementSet
                     let is_bigint = obj
                         .borrow()
-                        .typed_array_info
-                        .as_ref()
+                        .typed_array_info()
                         .map(|ta| ta.kind.is_bigint())
                         .unwrap_or(false);
                     let num_val = if is_bigint {
@@ -14926,7 +14922,7 @@ impl Interpreter {
                         JsValue::Number(self.to_number_value(&value)?)
                     };
                     let obj_ref = obj.borrow();
-                    let ta = obj_ref.typed_array_info.as_ref().unwrap();
+                    let ta = obj_ref.typed_array_info().unwrap();
                     if is_valid_integer_index(ta, index) {
                         let ta_clone = ta.clone();
                         drop(obj_ref);
@@ -14937,7 +14933,7 @@ impl Interpreter {
                     // Different receiver: if invalid index return true without coercing
                     let valid = {
                         let obj_ref = obj.borrow();
-                        let ta = obj_ref.typed_array_info.as_ref().unwrap();
+                        let ta = obj_ref.typed_array_info().unwrap();
                         is_valid_integer_index(ta, index)
                     };
                     if !valid {
@@ -15265,7 +15261,7 @@ impl Interpreter {
         let (is_ta, is_bigint) = {
             if let Some(obj) = self.get_object_cell(obj_id) {
                 let b = obj.borrow();
-                if let Some(ref ta) = b.typed_array_info {
+                if let Some(ta) = b.typed_array_info() {
                     (true, ta.kind.is_bigint())
                 } else {
                     (false, false)
@@ -15288,7 +15284,7 @@ impl Interpreter {
         {
             let valid = if let Some(obj) = self.get_object_cell(obj_id) {
                 let b = obj.borrow();
-                b.typed_array_info
+                b.typed_array_info()
                     .as_ref()
                     .map(|ta| is_valid_integer_index(ta, index))
                     .unwrap_or(false)
@@ -15328,7 +15324,7 @@ impl Interpreter {
             // After conversion, re-read ta info (buffer may have been detached during conversion)
             if let Some(obj) = self.get_object_cell(obj_id) {
                 let b = obj.borrow();
-                if let Some(ref ta) = b.typed_array_info
+                if let Some(ta) = b.typed_array_info()
                     && is_valid_integer_index(ta, index)
                 {
                     let ta_clone2 = ta.clone();
@@ -15746,7 +15742,7 @@ impl Interpreter {
             }
 
             // TypedArray [[OwnPropertyKeys]]: virtual integer indices
-            if let Some(ref ta) = b.typed_array_info {
+            if let Some(ta) = b.typed_array_info() {
                 use crate::interpreter::types::{is_typed_array_out_of_bounds, typed_array_length};
                 if !is_typed_array_out_of_bounds(ta) {
                     let len = typed_array_length(ta);

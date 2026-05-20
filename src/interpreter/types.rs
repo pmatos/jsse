@@ -1553,7 +1553,6 @@ pub struct JsObjectData {
     pub private_fields: HashMap<String, PrivateElement>,
     pub class_instance_field_defs: Vec<InstanceFieldDef>,
     pub iterator_state: Option<IteratorState>,
-    pub typed_array_info: Option<TypedArrayInfo>,
     pub is_raw_json: bool,
     pub constructor_kind: ConstructorKind,
     pub(crate) generator_realm_id: Option<usize>,
@@ -1781,7 +1780,6 @@ impl JsObjectData {
             private_fields: HashMap::new(),
             class_instance_field_defs: Vec::new(),
             iterator_state: None,
-            typed_array_info: None,
             is_raw_json: false,
             constructor_kind: ConstructorKind::Function,
             generator_realm_id: None,
@@ -1859,6 +1857,24 @@ impl JsObjectData {
     pub(crate) fn data_view_info(&self) -> Option<&DataViewInfo> {
         if let ObjectKind::DataView(ref d) = self.kind {
             Some(d)
+        } else {
+            None
+        }
+    }
+
+    /// TypedArray slot data.
+    pub(crate) fn typed_array_info(&self) -> Option<&TypedArrayInfo> {
+        if let ObjectKind::TypedArray(ref t) = self.kind {
+            Some(t)
+        } else {
+            None
+        }
+    }
+
+    /// TypedArray slot data — mutable view (some methods resize length-tracking views).
+    pub(crate) fn typed_array_info_mut(&mut self) -> Option<&mut TypedArrayInfo> {
+        if let ObjectKind::TypedArray(ref mut t) = self.kind {
+            Some(t)
         } else {
             None
         }
@@ -2128,7 +2144,7 @@ impl JsObjectData {
     /// Id of the ArrayBuffer wrapper object that backs this TypedArray or DataView,
     /// pulled from whichever kind slot is populated. `None` for non-view objects.
     pub fn view_buffer_object_id(&self) -> Option<u64> {
-        self.typed_array_info
+        self.typed_array_info()
             .as_ref()
             .and_then(|ta| ta.buffer_object_id)
             .or_else(|| self.data_view_info().and_then(|dv| dv.buffer_object_id))
@@ -2185,7 +2201,7 @@ impl JsObjectData {
                 set: None,
             });
         }
-        if let Some(ref ta) = self.typed_array_info
+        if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
             if is_valid_integer_index(ta, index) {
@@ -2295,7 +2311,7 @@ impl JsObjectData {
             });
         }
         // TypedArray: §10.4.5.1
-        if let Some(ref ta) = self.typed_array_info
+        if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
             if is_valid_integer_index(ta, index) {
@@ -2354,7 +2370,7 @@ impl JsObjectData {
             return true;
         }
         // TypedArray: §10.4.5.2
-        if let Some(ref ta) = self.typed_array_info
+        if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
             return is_valid_integer_index(ta, index);
@@ -2450,10 +2466,10 @@ impl JsObjectData {
             return false;
         }
         // TypedArray: §10.4.5.3 [[DefineOwnProperty]]
-        if self.typed_array_info.is_some()
+        if self.typed_array_info().is_some()
             && let Some(index) = canonical_numeric_index_string(&key)
         {
-            let ta = self.typed_array_info.as_ref().unwrap();
+            let ta = self.typed_array_info().unwrap();
             if !is_valid_integer_index(ta, index) {
                 return false;
             }
@@ -2729,7 +2745,7 @@ impl JsObjectData {
     }
 
     pub fn set_property_value(&mut self, key: &str, value: JsValue) -> bool {
-        if let Some(ref ta) = self.typed_array_info
+        if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
             if is_valid_integer_index(ta, index) {
@@ -3002,7 +3018,7 @@ impl JsObjectData {
         {
             return Some(elems[idx].clone());
         }
-        if let Some(ref ta) = self.typed_array_info
+        if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
             if is_valid_integer_index(ta, index) {
@@ -3053,7 +3069,7 @@ impl JsObjectData {
                 set: None,
             });
         }
-        if let Some(ref ta) = self.typed_array_info
+        if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
             if is_valid_integer_index(ta, index) {
@@ -3106,7 +3122,7 @@ impl JsObjectData {
     /// §10.4.5.2, typed arrays never consult the prototype for these),
     /// and `None` to continue walking the chain.
     pub fn own_has_property(&self, key: &str) -> Option<bool> {
-        if let Some(ref ta) = self.typed_array_info
+        if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
             return Some(is_valid_integer_index(ta, index));
@@ -3139,7 +3155,7 @@ impl JsObjectData {
             }
         }
 
-        if let Some(ref ta) = self.typed_array_info {
+        if let Some(ta) = self.typed_array_info() {
             let len = ta.array_length;
             for i in 0..len {
                 let k = i.to_string();
