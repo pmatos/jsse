@@ -387,15 +387,21 @@ impl Interpreter {
                 Self::collect_value_roots(v, worklist);
             }
         }
-        if let Some((ref iter, ref next)) = obj.wrap_iter_record {
-            Self::collect_value_roots(iter, worklist);
-            Self::collect_value_roots(next, worklist);
-        }
-        if let Some(ref v) = obj.helper_next_closure {
-            Self::collect_value_roots(v, worklist);
-        }
-        if let Some(ref v) = obj.helper_return_closure {
-            Self::collect_value_roots(v, worklist);
+        if let Some(ref h) = obj.iter_helper {
+            match h {
+                crate::interpreter::types::IterHelperData::Delegation { iter, next } => {
+                    Self::collect_value_roots(iter, worklist);
+                    Self::collect_value_roots(next, worklist);
+                }
+                crate::interpreter::types::IterHelperData::Helper {
+                    next,
+                    return_closure,
+                    ..
+                } => {
+                    Self::collect_value_roots(next, worklist);
+                    Self::collect_value_roots(return_closure, worklist);
+                }
+            }
         }
         if let Some(ref state) = obj.iterator_state {
             match state {

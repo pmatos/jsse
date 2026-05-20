@@ -1305,7 +1305,7 @@ impl Interpreter {
             .borrow_mut()
             .class_name = "Iterator Helper".to_string();
 
-        // next() — reads helper_next_closure and helper_gen_state from this
+        // next() — reads next + gen_state from this object's IterHelperData::Helper
         let next_fn = self.create_function(JsFunction::native(
             "next".to_string(),
             0,
@@ -1328,8 +1328,12 @@ impl Interpreter {
                         }
                     };
                     let b = obj.borrow();
-                    match (&b.helper_next_closure, &b.helper_gen_state) {
-                        (Some(nc), Some(gs)) => (nc.clone(), gs.clone()),
+                    match b.iter_helper {
+                        Some(crate::interpreter::types::IterHelperData::Helper {
+                            ref next,
+                            ref gen_state,
+                            ..
+                        }) => (next.clone(), gen_state.clone()),
                         _ => {
                             return Completion::Throw(
                                 interp
@@ -1371,7 +1375,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("next".to_string(), next_fn);
 
-        // return() — reads helper_return_closure and helper_gen_state from this
+        // return() — reads return_closure + gen_state from this object's IterHelperData::Helper
         let return_fn = self.create_function(JsFunction::native(
             "return".to_string(),
             0,
@@ -1395,8 +1399,12 @@ impl Interpreter {
                             }
                         };
                         let b = obj.borrow();
-                        match (&b.helper_return_closure, &b.helper_gen_state) {
-                            (Some(rc), Some(gs)) => (rc.clone(), gs.clone()),
+                        match b.iter_helper {
+                            Some(crate::interpreter::types::IterHelperData::Helper {
+                                ref return_closure,
+                                ref gen_state,
+                                ..
+                            }) => (return_closure.clone(), gen_state.clone()),
                             _ => {
                                 return Completion::Throw(interp.create_type_error(
                                     "return method called on incompatible object",
@@ -1468,18 +1476,15 @@ impl Interpreter {
             .borrow_mut()
             .prototype_id = self.realm().iterator_helper_prototype;
         self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Iterator Helper".to_string();
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .helper_next_closure = Some(next_fn.clone());
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .helper_return_closure = Some(return_fn.clone());
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .helper_gen_state = Some(state);
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .gc_native_roots = Some(vec![next_fn, return_fn]);
+        {
+            let mut obj = self.get_object_cell_expect(obj_id).borrow_mut();
+            obj.iter_helper = Some(crate::interpreter::types::IterHelperData::Helper {
+                next: next_fn.clone(),
+                return_closure: return_fn.clone(),
+                gen_state: state,
+            });
+            obj.gc_native_roots = Some(vec![next_fn, return_fn]);
+        }
 
         let id = obj_id;
         JsValue::Object(crate::types::JsObject { id })
@@ -2649,9 +2654,17 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
                 };
-                let record = interp
-                    .get_object_cell(this_id)
-                    .and_then(|o| o.borrow().wrap_iter_record.clone());
+                let record = interp.get_object_cell(this_id).and_then(|o| {
+                    if let Some(crate::interpreter::types::IterHelperData::Delegation {
+                        ref iter,
+                        ref next,
+                    }) = o.borrow().iter_helper
+                    {
+                        Some((iter.clone(), next.clone()))
+                    } else {
+                        None
+                    }
+                });
                 let (iter, next_method) = match record {
                     Some(r) => r,
                     None => {
@@ -2677,9 +2690,17 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
                 };
-                let record = interp
-                    .get_object_cell(this_id)
-                    .and_then(|o| o.borrow().wrap_iter_record.clone());
+                let record = interp.get_object_cell(this_id).and_then(|o| {
+                    if let Some(crate::interpreter::types::IterHelperData::Delegation {
+                        ref iter,
+                        ref next,
+                    }) = o.borrow().iter_helper
+                    {
+                        Some((iter.clone(), next.clone()))
+                    } else {
+                        None
+                    }
+                });
                 let (iter, _next_method) = match record {
                     Some(r) => r,
                     None => {
@@ -2742,14 +2763,15 @@ impl Interpreter {
                     .get_object_cell_expect(wrapper_id)
                     .borrow_mut()
                     .class_name = "Iterator".to_string();
-                interp
-                    .get_object_cell_expect(wrapper_id)
-                    .borrow_mut()
-                    .wrap_iter_record = Some((iter_val.clone(), next_method.clone()));
-                interp
-                    .get_object_cell_expect(wrapper_id)
-                    .borrow_mut()
-                    .gc_native_roots = Some(vec![iter_val, next_method]);
+                {
+                    let mut wrapper = interp.get_object_cell_expect(wrapper_id).borrow_mut();
+                    wrapper.iter_helper =
+                        Some(crate::interpreter::types::IterHelperData::Delegation {
+                            iter: iter_val.clone(),
+                            next: next_method.clone(),
+                        });
+                    wrapper.gc_native_roots = Some(vec![iter_val, next_method]);
+                }
 
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: wrapper_id }))
             },

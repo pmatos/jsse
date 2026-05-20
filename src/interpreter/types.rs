@@ -1580,10 +1580,7 @@ pub struct JsObjectData {
     pub(crate) regexp: Option<RegExpData>,
     pub(crate) deferred_construct: bool,
     pub(crate) gc_native_roots: Option<Vec<JsValue>>,
-    pub(crate) wrap_iter_record: Option<(JsValue, JsValue)>,
-    pub(crate) helper_next_closure: Option<JsValue>,
-    pub(crate) helper_return_closure: Option<JsValue>,
-    pub(crate) helper_gen_state: Option<Rc<Cell<u8>>>,
+    pub(crate) iter_helper: Option<IterHelperData>,
     /// Per-object shape id. Bumped by `Interpreter::mutate_object_shape` on
     /// every structural mutation (property add/delete/attribute change,
     /// prototype mutation, proxy install). Pure value reassignment does NOT
@@ -1608,6 +1605,25 @@ pub(crate) struct ModuleNamespaceData {
 pub(crate) struct DisposableStackData {
     pub(crate) stack: Vec<DisposableResource>,
     pub(crate) disposed: bool,
+}
+
+/// Iterator-helper or wrap-delegation slot data. The two cases are mutually
+/// exclusive at the object level — an `Iterator.from(x)` wrapper carries
+/// `Delegation`, while every `Iterator.prototype.{map,filter,take,drop,flatMap}`
+/// result carries `Helper`. Before this bundle they shared the same object via
+/// disjoint `Option` fields (`wrap_iter_record` vs `helper_*`), and the
+/// disjunction was enforced only by convention.
+#[derive(Clone, Debug)]
+pub(crate) enum IterHelperData {
+    Delegation {
+        iter: JsValue,
+        next: JsValue,
+    },
+    Helper {
+        next: JsValue,
+        return_closure: JsValue,
+        gen_state: Rc<Cell<u8>>,
+    },
 }
 
 /// Wrapped-function slot data. Present iff this object is the wrapper a
@@ -1719,10 +1735,7 @@ impl JsObjectData {
             regexp: None,
             deferred_construct: false,
             gc_native_roots: None,
-            wrap_iter_record: None,
-            helper_next_closure: None,
-            helper_return_closure: None,
-            helper_gen_state: None,
+            iter_helper: None,
             shape_id: 0,
             bytecode_cache: super::bytecode::BytecodeCacheState::Untried,
         }
