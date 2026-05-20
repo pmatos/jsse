@@ -5400,7 +5400,7 @@ impl Interpreter {
         if obj.proxy.is_some()
             || obj.wrapped.is_some()
             || obj.bound.is_some()
-            || obj.is_class_constructor
+            || obj.is_class_constructor()
         {
             return None;
         }
@@ -11926,7 +11926,7 @@ impl Interpreter {
                 (
                     b.is_proxy() || b.is_proxy_revoked(),
                     b.wrapped.is_some(),
-                    b.is_class_constructor,
+                    b.is_class_constructor(),
                 )
             };
             if is_proxy_or_revoked {
@@ -13604,7 +13604,7 @@ impl Interpreter {
         let is_derived = if let JsValue::Object(o) = &callee_val
             && let Some(func_obj) = self.get_object_cell(o.id)
         {
-            func_obj.borrow().is_derived_class_constructor
+            func_obj.borrow().is_derived_class_constructor()
         } else {
             false
         };
@@ -13615,7 +13615,7 @@ impl Interpreter {
             let is_default_derived = if let JsValue::Object(o) = &callee_val
                 && let Some(func_obj) = self.get_object_cell(o.id)
             {
-                func_obj.borrow().is_default_derived_constructor
+                func_obj.borrow().is_default_derived_constructor()
             } else {
                 false
             };
@@ -13971,7 +13971,7 @@ impl Interpreter {
         }
 
         let is_derived = if let Some(func_obj) = self.get_object_cell(co.id) {
-            func_obj.borrow().is_derived_class_constructor
+            func_obj.borrow().is_derived_class_constructor()
         } else {
             false
         };

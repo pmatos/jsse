@@ -1564,9 +1564,7 @@ pub struct JsObjectData {
     pub view_buffer_object_id: Option<u64>,
     pub promise_data: Option<PromiseData>,
     pub is_raw_json: bool,
-    pub is_class_constructor: bool,
-    pub is_derived_class_constructor: bool,
-    pub is_default_derived_constructor: bool,
+    pub constructor_kind: ConstructorKind,
     pub bound: Option<BoundFunctionData>,
     pub shadow_realm_id: Option<usize>,
     pub wrapped: Option<WrappedFunctionData>,
@@ -1605,6 +1603,26 @@ pub(crate) struct ModuleNamespaceData {
 pub(crate) struct DisposableStackData {
     pub(crate) stack: Vec<DisposableResource>,
     pub(crate) disposed: bool,
+}
+
+/// The constructor flavor of a callable object. Replaces three previously
+/// independent booleans (`is_class_constructor`, `is_derived_class_constructor`,
+/// `is_default_derived_constructor`) whose set of valid combinations was
+/// expressible only by convention — e.g. `default && !derived` was nonsense
+/// but compiled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConstructorKind {
+    /// A regular function — or the constructor slot is unused.
+    Function,
+    /// A base class constructor (`class C { ... }` without `extends`).
+    Class,
+    /// An explicit derived class constructor (`class C extends B { constructor() { ... } }`).
+    DerivedClass,
+    /// A synthesized default derived constructor — derived class with no
+    /// `constructor` method (`class C extends B {}`). Construction bypasses
+    /// the synthetic body to avoid Symbol.iterator on the rest parameter
+    /// (spec §15.7.14).
+    DefaultDerivedClass,
 }
 
 /// Iterator-helper or wrap-delegation slot data. The two cases are mutually
@@ -1719,9 +1737,7 @@ impl JsObjectData {
             view_buffer_object_id: None,
             promise_data: None,
             is_raw_json: false,
-            is_class_constructor: false,
-            is_derived_class_constructor: false,
-            is_default_derived_constructor: false,
+            constructor_kind: ConstructorKind::Function,
             bound: None,
             shadow_realm_id: None,
             wrapped: None,
@@ -1754,6 +1770,24 @@ impl JsObjectData {
     /// Target id for an active proxy, `None` otherwise (including revoked).
     pub fn proxy_target_id(&self) -> Option<u64> {
         self.proxy.as_ref().and_then(|p| p.target_id)
+    }
+
+    /// True iff this object is a class constructor of any flavor.
+    pub fn is_class_constructor(&self) -> bool {
+        !matches!(self.constructor_kind, ConstructorKind::Function)
+    }
+
+    /// True iff this object is a derived class constructor (explicit or default).
+    pub fn is_derived_class_constructor(&self) -> bool {
+        matches!(
+            self.constructor_kind,
+            ConstructorKind::DerivedClass | ConstructorKind::DefaultDerivedClass
+        )
+    }
+
+    /// True iff this is a synthesized default derived constructor.
+    pub fn is_default_derived_constructor(&self) -> bool {
+        matches!(self.constructor_kind, ConstructorKind::DefaultDerivedClass)
     }
 
     fn string_exotic_value(&self, key: &str) -> Option<JsValue> {

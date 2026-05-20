@@ -368,13 +368,15 @@ impl Interpreter {
         if let JsValue::Object(ref o) = ctor_val
             && let Some(func_obj) = self.get_object_cell(o.id)
         {
-            func_obj.borrow_mut().is_class_constructor = true;
-            if super_val.is_some() {
-                func_obj.borrow_mut().is_derived_class_constructor = true;
+            func_obj.borrow_mut().constructor_kind = if super_val.is_some() {
                 if ctor_method.is_none() {
-                    func_obj.borrow_mut().is_default_derived_constructor = true;
+                    crate::interpreter::types::ConstructorKind::DefaultDerivedClass
+                } else {
+                    crate::interpreter::types::ConstructorKind::DerivedClass
                 }
-            }
+            } else {
+                crate::interpreter::types::ConstructorKind::Class
+            };
             // Per spec §14.6.13: class .prototype is {writable: false, enumerable: false, configurable: false}
             let func_obj_id = func_obj.borrow().id.unwrap();
             let proto_val_for_desc = self.get_property_on_id(func_obj_id, "prototype");
