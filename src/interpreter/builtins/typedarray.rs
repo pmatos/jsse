@@ -951,7 +951,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if obj_ref.typed_array_info.is_some() || obj_ref.data_view_info.is_some() {
+                    if obj_ref.typed_array_info.is_some() || obj_ref.data_view_info().is_some() {
                         return Completion::Normal(JsValue::Boolean(true));
                     }
                 }
@@ -5253,7 +5253,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if obj_ref.data_view_info.is_some() {
+                    if obj_ref.data_view_info().is_some() {
                         if let Some(buf_id) = obj_ref.view_buffer_object_id() {
                             return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
                         }
@@ -5286,7 +5286,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if let Some(ref dv) = obj_ref.data_view_info {
+                    if let Some(dv) = obj_ref.data_view_info() {
                         if dv.is_detached.get() {
                             return Completion::Throw(
                                 interp.create_type_error("DataView buffer is detached"),
@@ -5332,7 +5332,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if let Some(ref dv) = obj_ref.data_view_info {
+                    if let Some(dv) = obj_ref.data_view_info() {
                         if dv.is_detached.get() {
                             return Completion::Throw(
                                 interp.create_type_error("DataView buffer is detached"),
@@ -5393,7 +5393,7 @@ impl Interpreter {
                         {
                             {
                                 let obj_ref = obj.borrow();
-                                if obj_ref.data_view_info.is_none() {
+                                if obj_ref.data_view_info().is_none() {
                                     return Completion::Throw(
                                         interp.create_type_error("not a DataView"),
                                     );
@@ -5413,7 +5413,7 @@ impl Interpreter {
                             };
                             let dv = {
                                 let obj_ref = obj.borrow();
-                                obj_ref.data_view_info.as_ref().unwrap().clone()
+                                obj_ref.data_view_info().unwrap().clone()
                             };
                             if dv.is_detached.get() {
                                 return Completion::Throw(
@@ -5566,13 +5566,13 @@ impl Interpreter {
                         {
                             {
                                 let obj_ref = obj.borrow();
-                                if obj_ref.data_view_info.is_none() {
+                                if obj_ref.data_view_info().is_none() {
                                     return Completion::Throw(
                                         interp.create_type_error("not a DataView"),
                                     );
                                 }
                                 // Step 3: IsImmutableBuffer — before ToIndex/ToNumber
-                                if let Some(ref dv) = obj_ref.data_view_info
+                                if let Some(dv) = obj_ref.data_view_info()
                                     && dv.is_immutable
                                 {
                                     return Completion::Throw(interp.create_type_error(
@@ -5603,7 +5603,7 @@ impl Interpreter {
                             // Step 4-6: Re-borrow, check detach, check bounds, write
                             let dv = {
                                 let obj_ref = obj.borrow();
-                                obj_ref.data_view_info.as_ref().unwrap().clone()
+                                obj_ref.data_view_info().unwrap().clone()
                             };
                             if dv.is_detached.get() {
                                 return Completion::Throw(
@@ -5656,13 +5656,13 @@ impl Interpreter {
                         {
                             {
                                 let obj_ref = obj.borrow();
-                                if obj_ref.data_view_info.is_none() {
+                                if obj_ref.data_view_info().is_none() {
                                     return Completion::Throw(
                                         interp.create_type_error("not a DataView"),
                                     );
                                 }
                                 // Step 3: IsImmutableBuffer — before ToIndex/ToBigInt
-                                if let Some(ref dv) = obj_ref.data_view_info
+                                if let Some(dv) = obj_ref.data_view_info()
                                     && dv.is_immutable
                                 {
                                     return Completion::Throw(interp.create_type_error(
@@ -5693,7 +5693,7 @@ impl Interpreter {
                             // Step 4-6: Re-borrow, check detach, check bounds, write
                             let dv = {
                                 let obj_ref = obj.borrow();
-                                obj_ref.data_view_info.as_ref().unwrap().clone()
+                                obj_ref.data_view_info().unwrap().clone()
                             };
                             if dv.is_detached.get() {
                                 return Completion::Throw(
@@ -5973,7 +5973,7 @@ impl Interpreter {
                         let mut r = interp.get_object_cell_expect(result_id).borrow_mut();
                         r.class_name = "DataView".to_string();
                         r.prototype_id = Some(dv_proto);
-                        r.data_view_info = Some(dv_info);
+                        r.kind = crate::interpreter::types::ObjectKind::DataView(dv_info);
                     }
                     let id = result_id;
                     return Completion::Normal(JsValue::Object(JsObject { id }));

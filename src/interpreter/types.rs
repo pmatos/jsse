@@ -1558,7 +1558,6 @@ pub struct JsObjectData {
     pub map_data: Option<Vec<Option<(JsValue, JsValue)>>>,
     pub set_data: Option<Vec<Option<JsValue>>>,
     pub typed_array_info: Option<TypedArrayInfo>,
-    pub data_view_info: Option<DataViewInfo>,
     pub promise_data: Option<PromiseData>,
     pub is_raw_json: bool,
     pub constructor_kind: ConstructorKind,
@@ -1787,7 +1786,6 @@ impl JsObjectData {
             map_data: None,
             set_data: None,
             typed_array_info: None,
-            data_view_info: None,
             promise_data: None,
             is_raw_json: false,
             constructor_kind: ConstructorKind::Function,
@@ -1859,6 +1857,15 @@ impl JsObjectData {
     pub(crate) fn arraybuffer_mut(&mut self) -> Option<&mut ArrayBufferData> {
         if let ObjectKind::ArrayBuffer(ref mut ab) = self.kind {
             Some(ab)
+        } else {
+            None
+        }
+    }
+
+    /// DataView slot data.
+    pub(crate) fn data_view_info(&self) -> Option<&DataViewInfo> {
+        if let ObjectKind::DataView(ref d) = self.kind {
+            Some(d)
         } else {
             None
         }
@@ -1981,11 +1988,7 @@ impl JsObjectData {
         self.typed_array_info
             .as_ref()
             .and_then(|ta| ta.buffer_object_id)
-            .or_else(|| {
-                self.data_view_info
-                    .as_ref()
-                    .and_then(|dv| dv.buffer_object_id)
-            })
+            .or_else(|| self.data_view_info().and_then(|dv| dv.buffer_object_id))
     }
 
     fn string_exotic_value(&self, key: &str) -> Option<JsValue> {
