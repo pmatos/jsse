@@ -1553,8 +1553,6 @@ pub struct JsObjectData {
     pub private_fields: HashMap<String, PrivateElement>,
     pub class_instance_field_defs: Vec<InstanceFieldDef>,
     pub iterator_state: Option<IteratorState>,
-    pub map_data: Option<Vec<Option<(JsValue, JsValue)>>>,
-    pub set_data: Option<Vec<Option<JsValue>>>,
     pub typed_array_info: Option<TypedArrayInfo>,
     pub is_raw_json: bool,
     pub constructor_kind: ConstructorKind,
@@ -1667,6 +1665,13 @@ pub(crate) enum ObjectKind {
     Map(Vec<Option<(JsValue, JsValue)>>),
     /// Slot list, tombstones as above.
     Set(Vec<Option<JsValue>>),
+    /// FinalizationRegistry cells. Two parallel slot lists:
+    ///   `cells[i]`  = Some((target, heldValue)) or None (tombstone)
+    ///   `tokens[i]` = Some(unregisterToken) or None
+    FinalizationRegistry {
+        cells: Vec<Option<(JsValue, JsValue)>>,
+        tokens: Vec<Option<JsValue>>,
+    },
     Iterator(IteratorState),
     /// `parameter_map` for an Arguments exotic object.
     Arguments(HashMap<String, (EnvRef, String)>),
@@ -1778,8 +1783,6 @@ impl JsObjectData {
             private_fields: HashMap::new(),
             class_instance_field_defs: Vec::new(),
             iterator_state: None,
-            map_data: None,
-            set_data: None,
             typed_array_info: None,
             is_raw_json: false,
             constructor_kind: ConstructorKind::Function,
@@ -1914,6 +1917,75 @@ impl JsObjectData {
     pub(crate) fn array_elements_mut(&mut self) -> Option<&mut Vec<JsValue>> {
         if let ObjectKind::Array(ref mut v) = self.kind {
             Some(v)
+        } else {
+            None
+        }
+    }
+
+    /// Map slot data (entry list, tombstones encoded as None).
+    pub(crate) fn map_data(&self) -> Option<&Vec<Option<(JsValue, JsValue)>>> {
+        if let ObjectKind::Map(ref m) = self.kind {
+            Some(m)
+        } else {
+            None
+        }
+    }
+
+    /// Map slot data — mutable view.
+    pub(crate) fn map_data_mut(&mut self) -> Option<&mut Vec<Option<(JsValue, JsValue)>>> {
+        if let ObjectKind::Map(ref mut m) = self.kind {
+            Some(m)
+        } else {
+            None
+        }
+    }
+
+    /// Set slot data (entry list).
+    pub(crate) fn set_data(&self) -> Option<&Vec<Option<JsValue>>> {
+        if let ObjectKind::Set(ref s) = self.kind {
+            Some(s)
+        } else {
+            None
+        }
+    }
+
+    /// Set slot data — mutable view.
+    pub(crate) fn set_data_mut(&mut self) -> Option<&mut Vec<Option<JsValue>>> {
+        if let ObjectKind::Set(ref mut s) = self.kind {
+            Some(s)
+        } else {
+            None
+        }
+    }
+
+    /// FinalizationRegistry cells (target+heldValue) + tokens (unregister keys).
+    pub(crate) fn finalization_registry(
+        &self,
+    ) -> Option<(&Vec<Option<(JsValue, JsValue)>>, &Vec<Option<JsValue>>)> {
+        if let ObjectKind::FinalizationRegistry {
+            ref cells,
+            ref tokens,
+        } = self.kind
+        {
+            Some((cells, tokens))
+        } else {
+            None
+        }
+    }
+
+    /// FinalizationRegistry cells + tokens — mutable view.
+    pub(crate) fn finalization_registry_mut(
+        &mut self,
+    ) -> Option<(
+        &mut Vec<Option<(JsValue, JsValue)>>,
+        &mut Vec<Option<JsValue>>,
+    )> {
+        if let ObjectKind::FinalizationRegistry {
+            ref mut cells,
+            ref mut tokens,
+        } = self.kind
+        {
+            Some((cells, tokens))
         } else {
             None
         }

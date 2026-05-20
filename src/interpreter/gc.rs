@@ -145,7 +145,7 @@ impl Interpreter {
                 if obj.class_name != "WeakMap" {
                     continue;
                 }
-                if let Some(ref entries) = obj.map_data {
+                if let Some(entries) = obj.map_data() {
                     for entry in entries.iter().flatten() {
                         if let JsValue::Object(key_obj) = &entry.0 {
                             let kid = key_obj.id as usize;
@@ -220,7 +220,7 @@ impl Interpreter {
             };
             let mut obj = obj_rc.borrow_mut();
             if obj.class_name == "WeakMap" {
-                if let Some(ref mut entries) = obj.map_data {
+                if let Some(entries) = obj.map_data_mut() {
                     for entry in entries.iter_mut() {
                         let dead = if let Some((JsValue::Object(key_obj), _)) = entry {
                             let kid = key_obj.id as usize;
@@ -234,7 +234,7 @@ impl Interpreter {
                     }
                 }
             } else if obj.class_name == "WeakSet"
-                && let Some(ref mut entries) = obj.set_data
+                && let Some(entries) = obj.set_data_mut()
             {
                 for entry in entries.iter_mut() {
                     let dead = if let Some(JsValue::Object(val_obj)) = entry {
@@ -334,7 +334,7 @@ impl Interpreter {
             }
         }
         if obj.class_name != "WeakMap"
-            && let Some(ref entries) = obj.map_data
+            && let Some(entries) = obj.map_data()
         {
             for entry in entries.iter().flatten() {
                 Self::collect_value_roots(&entry.0, worklist);
@@ -342,7 +342,7 @@ impl Interpreter {
             }
         }
         if obj.class_name != "WeakSet"
-            && let Some(ref entries) = obj.set_data
+            && let Some(entries) = obj.set_data()
         {
             for val in entries.iter().flatten() {
                 Self::collect_value_roots(val, worklist);
