@@ -191,7 +191,7 @@ impl Interpreter {
             if !mark && live {
                 if let Some(obj_rc) = self.objects.get(id) {
                     let obj = obj_rc.borrow();
-                    if let Some(ref buf_data) = obj.arraybuffer_data
+                    if let Some(buf_data) = obj.arraybuffer_data()
                         && let BufferData::Owned(ref v) = *buf_data.borrow()
                     {
                         self.gc_external_bytes = self.gc_external_bytes.saturating_sub(v.len());

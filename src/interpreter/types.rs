@@ -1558,12 +1558,7 @@ pub struct JsObjectData {
     pub map_data: Option<Vec<Option<(JsValue, JsValue)>>>,
     pub set_data: Option<Vec<Option<JsValue>>>,
     pub proxy: Option<ProxyData>,
-    pub arraybuffer_data: Option<Rc<RefCell<BufferData>>>,
-    pub arraybuffer_detached: Option<Rc<Cell<bool>>>,
-    pub arraybuffer_max_byte_length: Option<usize>,
-    pub arraybuffer_is_shared: bool,
-    pub arraybuffer_is_immutable: bool,
-    pub sab_shared: Option<Arc<SharedBufferInner>>,
+    pub arraybuffer: Option<ArrayBufferData>,
     pub typed_array_info: Option<TypedArrayInfo>,
     pub data_view_info: Option<DataViewInfo>,
     pub promise_data: Option<PromiseData>,
@@ -1607,6 +1602,23 @@ pub(crate) struct ModuleNamespaceData {
 pub(crate) struct DisposableStackData {
     pub(crate) stack: Vec<DisposableResource>,
     pub(crate) disposed: bool,
+}
+
+/// ArrayBuffer / SharedArrayBuffer slot data. Present iff this object is one
+/// of those two kinds. Six previously-loose fields with implicit "all
+/// meaningful together" invariants are now grouped.
+///
+/// SAB vs AB is encoded by `is_shared` + presence of `sab_shared`; immutable
+/// ABs set `is_immutable`. `detached` is `None` for SAB (which cannot detach)
+/// and `Some(Cell<bool>)` for regular AB.
+#[derive(Clone, Debug)]
+pub(crate) struct ArrayBufferData {
+    pub data: Rc<RefCell<BufferData>>,
+    pub detached: Option<Rc<Cell<bool>>>,
+    pub max_byte_length: Option<usize>,
+    pub is_shared: bool,
+    pub is_immutable: bool,
+    pub sab_shared: Option<Arc<SharedBufferInner>>,
 }
 
 /// The constructor flavor of a callable object. Replaces three previously
@@ -1730,12 +1742,7 @@ impl JsObjectData {
             map_data: None,
             set_data: None,
             proxy: None,
-            arraybuffer_data: None,
-            arraybuffer_detached: None,
-            arraybuffer_max_byte_length: None,
-            arraybuffer_is_shared: false,
-            arraybuffer_is_immutable: false,
-            sab_shared: None,
+            arraybuffer: None,
             typed_array_info: None,
             data_view_info: None,
             promise_data: None,
@@ -1791,6 +1798,38 @@ impl JsObjectData {
     /// True iff this is a synthesized default derived constructor.
     pub fn is_default_derived_constructor(&self) -> bool {
         matches!(self.constructor_kind, ConstructorKind::DefaultDerivedClass)
+    }
+
+    /// Backing bytes for an ArrayBuffer / SharedArrayBuffer.
+    pub fn arraybuffer_data(&self) -> Option<&Rc<RefCell<BufferData>>> {
+        self.arraybuffer.as_ref().map(|b| &b.data)
+    }
+
+    /// Detached cell for a regular ArrayBuffer. `None` for SAB or non-buffers.
+    pub fn arraybuffer_detached(&self) -> Option<&Rc<Cell<bool>>> {
+        self.arraybuffer.as_ref().and_then(|b| b.detached.as_ref())
+    }
+
+    /// Max byte length for a resizable / growable AB; `None` for non-resizable.
+    pub fn arraybuffer_max_byte_length(&self) -> Option<usize> {
+        self.arraybuffer.as_ref().and_then(|b| b.max_byte_length)
+    }
+
+    /// True iff this is a SharedArrayBuffer.
+    pub fn arraybuffer_is_shared(&self) -> bool {
+        self.arraybuffer.as_ref().is_some_and(|b| b.is_shared)
+    }
+
+    /// True iff this is an immutable ArrayBuffer (post-`sliceToImmutable`).
+    pub fn arraybuffer_is_immutable(&self) -> bool {
+        self.arraybuffer.as_ref().is_some_and(|b| b.is_immutable)
+    }
+
+    /// SAB shared inner state. `Some` iff this is a SharedArrayBuffer.
+    pub fn sab_shared(&self) -> Option<&Arc<SharedBufferInner>> {
+        self.arraybuffer
+            .as_ref()
+            .and_then(|b| b.sab_shared.as_ref())
     }
 
     /// Id of the ArrayBuffer wrapper object that backs this TypedArray or DataView,
@@ -2912,10 +2951,10 @@ pub(crate) fn typed_array_length(ta: &TypedArrayInfo) -> usize {
 /// Returns true only if the TA has an explicit length on a non-resizable buffer,
 /// or an explicit length on a SharedArrayBuffer (which can only grow, not shrink).
 pub(crate) fn is_typed_array_fixed_length(ta: &TypedArrayInfo, buffer_obj: &JsObjectData) -> bool {
-    if !ta.is_length_tracking && buffer_obj.arraybuffer_max_byte_length.is_none() {
+    if !ta.is_length_tracking && buffer_obj.arraybuffer_max_byte_length().is_none() {
         return true;
     }
-    if !ta.is_length_tracking && buffer_obj.arraybuffer_is_shared {
+    if !ta.is_length_tracking && buffer_obj.arraybuffer_is_shared() {
         return true;
     }
     false

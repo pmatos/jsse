@@ -505,7 +505,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = &sab_val
                     && let Some(cell) = interp.get_object_cell(o.id)
                 {
-                    let sab_shared = cell.borrow().sab_shared.clone();
+                    let sab_shared = cell.borrow().sab_shared().cloned();
                     if let Some(inner) = sab_shared {
                         for tx in &interp.agent_broadcast_txs {
                             let _ = tx.send(AgentBroadcastMsg {
@@ -2716,9 +2716,14 @@ impl Interpreter {
             let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
             ab.class_name = "ArrayBuffer".to_string();
             ab.prototype_id = self.realm().arraybuffer_prototype;
-            ab.arraybuffer_data = Some(buf_rc.clone());
-            ab.arraybuffer_detached = Some(detached.clone());
-            ab.arraybuffer_is_immutable = true;
+            ab.arraybuffer = Some(crate::interpreter::types::ArrayBufferData {
+                data: buf_rc.clone(),
+                detached: Some(detached.clone()),
+                max_byte_length: None,
+                is_shared: false,
+                is_immutable: true,
+                sab_shared: None,
+            });
         }
         self.gc_track_external_bytes(len);
         let ab_id = ab_obj_id;
@@ -4923,10 +4928,14 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                         let mut o = interp.get_object_cell_expect(sab_obj_id).borrow_mut();
                         o.class_name = "SharedArrayBuffer".to_string();
                         o.prototype_id = sab_proto;
-                        o.arraybuffer_data = Some(buf_rc);
-                        o.arraybuffer_detached = None;
-                        o.arraybuffer_is_shared = true;
-                        o.sab_shared = Some(sab_inner);
+                        o.arraybuffer = Some(crate::interpreter::types::ArrayBufferData {
+                            data: buf_rc,
+                            detached: None,
+                            max_byte_length: None,
+                            is_shared: true,
+                            is_immutable: false,
+                            sab_shared: Some(sab_inner),
+                        });
                     }
                     let sab_val = JsValue::Object(JsObject { id: sab_obj_id });
                     interp.agent_broadcast_rx = Some(rx);

@@ -45,8 +45,8 @@ fn get_sab_info(interp: &Interpreter, ta_val: &JsValue) -> Option<(Arc<SharedBuf
             && let Some(buf_obj) = interp.get_object_cell(buf_id)
         {
             let buf_ref = buf_obj.borrow();
-            if buf_ref.arraybuffer_is_shared
-                && let Some(ref inner) = buf_ref.sab_shared
+            if buf_ref.arraybuffer_is_shared()
+                && let Some(inner) = buf_ref.sab_shared()
             {
                 return Some((inner.clone(), byte_offset));
             }
@@ -566,7 +566,7 @@ impl Interpreter {
                         if let Some(buf_id) = obj_ref.view_buffer_object_id()
                             && let Some(buf_obj) = interp.get_object_cell(buf_id)
                         {
-                            buf_obj.borrow().arraybuffer_is_shared
+                            buf_obj.borrow().arraybuffer_is_shared()
                         } else {
                             false
                         }
