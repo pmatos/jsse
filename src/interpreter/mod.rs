@@ -1436,7 +1436,7 @@ impl Interpreter {
                     }
                 }
                 if !map.is_empty() {
-                    o.parameter_map = Some(map);
+                    o.kind = crate::interpreter::types::ObjectKind::Arguments(map);
                 }
             }
         }
@@ -4733,7 +4733,7 @@ impl Interpreter {
             }
 
             // Also truncate array_elements.
-            if let Some(ref mut elements) = obj.array_elements {
+            if let Some(elements) = obj.array_elements_mut() {
                 elements.truncate(actual_new_len as usize);
             }
         }
@@ -4828,7 +4828,7 @@ impl Interpreter {
                 if let Some(len_desc) = obj.properties.get_mut("length") {
                     len_desc.value = Some(JsValue::Number(new_len as f64));
                 }
-                if let Some(ref mut elems) = obj.array_elements {
+                if let Some(elems) = obj.array_elements_mut() {
                     let val = desc.value.unwrap_or(JsValue::Undefined);
                     let idx = index_u32 as usize;
                     if idx < elems.len() {
@@ -4843,7 +4843,7 @@ impl Interpreter {
             } else {
                 let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 let mut obj = obj_rc.borrow_mut();
-                if let Some(ref mut elems) = obj.array_elements {
+                if let Some(elems) = obj.array_elements_mut() {
                     let idx = index_u32 as usize;
                     if idx < elems.len()
                         && let Some(ref val) = desc.value

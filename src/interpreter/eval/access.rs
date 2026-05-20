@@ -483,11 +483,11 @@ impl Interpreter {
             }
             obj_mut.properties.remove(key);
             obj_mut.property_order.retain(|k| k != key);
-            if let Some(ref mut map) = obj_mut.parameter_map {
+            if let Some(map) = obj_mut.parameter_map_mut() {
                 map.remove(key);
             }
             if let Ok(idx) = key.parse::<usize>()
-                && let Some(ref mut elems) = obj_mut.array_elements
+                && let Some(elems) = obj_mut.array_elements_mut()
                 && idx < elems.len()
             {
                 elems[idx] = JsValue::Undefined;
@@ -721,7 +721,7 @@ impl Interpreter {
                         }
                     }
                     // Array: direct element access (skip if index overridden by defineProperty)
-                    if let Some(ref elems) = obj_borrow.array_elements {
+                    if let Some(elems) = obj_borrow.array_elements() {
                         let trunc = index.trunc();
                         if *index == trunc && *index >= 0.0 && (*index as usize) < elems.len() {
                             let idx = *index as usize;

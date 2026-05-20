@@ -986,7 +986,7 @@ impl Interpreter {
                                     borrowed.get_property_value("length")
                                 {
                                     n as usize
-                                } else if let Some(ref elems) = borrowed.array_elements {
+                                } else if let Some(elems) = borrowed.array_elements() {
                                     elems.len()
                                 } else {
                                     0
@@ -999,15 +999,12 @@ impl Interpreter {
                                         .properties
                                         .get(&idx_str)
                                         .is_some_and(|d| d.get.is_some());
-                                    let is_hole = borrowed
-                                        .array_elements
-                                        .as_ref()
-                                        .is_some_and(|e| index < e.len())
-                                        && !borrowed.properties.contains_key(&idx_str);
+                                    let is_hole =
+                                        borrowed.array_elements().is_some_and(|e| index < e.len())
+                                            && !borrowed.properties.contains_key(&idx_str);
                                     let fast_val = if !has_accessor && !is_hole {
                                         borrowed
-                                            .array_elements
-                                            .as_ref()
+                                            .array_elements()
                                             .and_then(|e| e.get(index).cloned())
                                     } else {
                                         None

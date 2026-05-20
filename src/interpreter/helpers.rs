@@ -1063,7 +1063,7 @@ fn json_internalize_apply(
             // Also clear dense array storage so get_property doesn't find stale values
             if let Ok(idx) = key.parse::<usize>() {
                 let mut b = cell.borrow_mut();
-                if let Some(ref mut elems) = b.array_elements
+                if let Some(elems) = b.array_elements_mut()
                     && idx < elems.len()
                 {
                     elems[idx] = JsValue::Undefined;

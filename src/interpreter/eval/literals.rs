@@ -60,7 +60,7 @@ impl Interpreter {
             "length".to_string(),
             PropertyDescriptor::data(JsValue::Number(len as f64), false, false, false),
         );
-        obj_data.array_elements = Some(values);
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(values);
         obj_data.extensible = false;
         let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })

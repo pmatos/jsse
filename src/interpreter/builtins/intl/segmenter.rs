@@ -339,7 +339,7 @@ impl Interpreter {
                                     && let Some(arr) = interp.get_object_cell(arr_obj.id)
                                 {
                                     let ab = arr.borrow();
-                                    if let Some(elems) = &ab.array_elements {
+                                    if let Some(elems) = ab.array_elements() {
                                         for elem in elems {
                                             if let JsValue::Number(n) = elem {
                                                 break_points.push(*n as usize);

@@ -272,7 +272,7 @@ impl Interpreter {
                 Self::collect_value_roots(v, worklist);
             }
         }
-        if let Some(ref elems) = obj.array_elements {
+        if let Some(elems) = obj.array_elements() {
             for v in elems {
                 Self::collect_value_roots(v, worklist);
             }
@@ -328,7 +328,7 @@ impl Interpreter {
                 Self::collect_value_roots(v, worklist);
             }
         }
-        if let Some(ref map) = obj.parameter_map {
+        if let Some(map) = obj.parameter_map() {
             for (env_ref, _) in map.values() {
                 Self::collect_env_roots(env_ref, worklist);
             }

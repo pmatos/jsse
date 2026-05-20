@@ -1547,14 +1547,12 @@ pub struct JsObjectData {
     pub property_order: Vec<String>,
     pub prototype_id: Option<u64>,
     pub callable: Option<JsFunction>,
-    pub array_elements: Option<Vec<JsValue>>,
     pub class_name: String,
     pub extensible: bool,
     pub primitive_value: Option<JsValue>,
     pub private_fields: HashMap<String, PrivateElement>,
     pub class_instance_field_defs: Vec<InstanceFieldDef>,
     pub iterator_state: Option<IteratorState>,
-    pub parameter_map: Option<HashMap<String, (EnvRef, String)>>,
     pub map_data: Option<Vec<Option<(JsValue, JsValue)>>>,
     pub set_data: Option<Vec<Option<JsValue>>>,
     pub typed_array_info: Option<TypedArrayInfo>,
@@ -1774,14 +1772,12 @@ impl JsObjectData {
             property_order: Vec::new(),
             prototype_id: None,
             callable: None,
-            array_elements: None,
             class_name: "Object".to_string(),
             extensible: true,
             primitive_value: None,
             private_fields: HashMap::new(),
             class_instance_field_defs: Vec::new(),
             iterator_state: None,
-            parameter_map: None,
             map_data: None,
             set_data: None,
             typed_array_info: None,
@@ -1882,6 +1878,42 @@ impl JsObjectData {
     pub(crate) fn promise_data_mut(&mut self) -> Option<&mut PromiseData> {
         if let ObjectKind::Promise(ref mut p) = self.kind {
             Some(p)
+        } else {
+            None
+        }
+    }
+
+    /// Arguments parameter-map slot data.
+    pub(crate) fn parameter_map(&self) -> Option<&HashMap<String, (EnvRef, String)>> {
+        if let ObjectKind::Arguments(ref m) = self.kind {
+            Some(m)
+        } else {
+            None
+        }
+    }
+
+    /// Arguments parameter-map — mutable view (delete map entry on property delete).
+    pub(crate) fn parameter_map_mut(&mut self) -> Option<&mut HashMap<String, (EnvRef, String)>> {
+        if let ObjectKind::Arguments(ref mut m) = self.kind {
+            Some(m)
+        } else {
+            None
+        }
+    }
+
+    /// Array exotic element list.
+    pub(crate) fn array_elements(&self) -> Option<&Vec<JsValue>> {
+        if let ObjectKind::Array(ref v) = self.kind {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    /// Array exotic element list — mutable view.
+    pub(crate) fn array_elements_mut(&mut self) -> Option<&mut Vec<JsValue>> {
+        if let ObjectKind::Array(ref mut v) = self.kind {
+            Some(v)
         } else {
             None
         }
@@ -2036,7 +2068,7 @@ impl JsObjectData {
     pub fn get_own_property_full(&self, key: &str) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
-            if let Some(ref map) = self.parameter_map
+            if let Some(map) = self.parameter_map()
                 && let Some((env_ref, param_name)) = map.get(key)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
@@ -2044,7 +2076,7 @@ impl JsObjectData {
             }
             return Some(d);
         }
-        if let Some(ref elems) = self.array_elements
+        if let Some(elems) = self.array_elements()
             && let Ok(idx) = key.parse::<usize>()
             && idx < elems.len()
             && !matches!(elems[idx], JsValue::Undefined)
@@ -2136,7 +2168,7 @@ impl JsObjectData {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
             // Mapped arguments: update value from the live binding (§10.4.4.1)
-            if let Some(ref map) = self.parameter_map
+            if let Some(map) = self.parameter_map()
                 && let Some((env_ref, param_name)) = map.get(key)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
@@ -2153,7 +2185,7 @@ impl JsObjectData {
             }
             return Some(d);
         }
-        if let Some(ref elems) = self.array_elements
+        if let Some(elems) = self.array_elements()
             && let Some(idx) = parse_array_index(key)
             && (idx as usize) < elems.len()
             && !matches!(elems[idx as usize], JsValue::Undefined)
@@ -2219,7 +2251,7 @@ impl JsObjectData {
         if self.properties.contains_key(key) {
             return true;
         }
-        if let Some(ref elems) = self.array_elements
+        if let Some(elems) = self.array_elements()
             && let Some(idx) = parse_array_index(key)
             && (idx as usize) < elems.len()
             && !matches!(elems[idx as usize], JsValue::Undefined)
@@ -2351,7 +2383,7 @@ impl JsObjectData {
         }
         // Check array_elements for existing array index properties
         let current_from_array = if !self.properties.contains_key(&key) {
-            if let Some(ref elems) = self.array_elements
+            if let Some(elems) = self.array_elements()
                 && let Ok(idx) = key.parse::<usize>()
                 && idx < elems.len()
             {
@@ -2450,7 +2482,7 @@ impl JsObjectData {
                 && !desc_is_accessor
                 && desc_writable == Some(false)
                 && !desc_has_value
-                && let Some(ref map) = self.parameter_map
+                && let Some(map) = self.parameter_map()
                 && let Some((env_ref, param_name)) = map.get(&key)
                 && let Some(live_val) = env_ref.borrow().get(param_name)
             {
@@ -2530,7 +2562,7 @@ impl JsObjectData {
             // handled by array_set_length() in mod.rs, which calls this function.
             // Do NOT duplicate that logic here.
             // Save key before it's moved into insert
-            let key_for_step7 = if self.parameter_map.is_some() {
+            let key_for_step7 = if self.parameter_map().is_some() {
                 Some(key.clone())
             } else {
                 None
@@ -2539,7 +2571,7 @@ impl JsObjectData {
 
             // §10.4.4.3 step 7: post-define parameter map handling
             if let Some(key_ref) = key_for_step7
-                && let Some(ref mut map) = self.parameter_map
+                && let Some(map) = self.parameter_map_mut()
                 && map.contains_key(&key_ref)
             {
                 if desc_has_get || desc_has_set {
@@ -2565,7 +2597,7 @@ impl JsObjectData {
                 return false;
             }
             // Handle parameter map for new properties
-            if let Some(ref mut map) = self.parameter_map
+            if let Some(map) = self.parameter_map_mut()
                 && map.contains_key(&key)
                 && let Some(ref val) = desc.value
                 && let Some((env_ref, param_name)) = map.get(&key)
@@ -2673,7 +2705,7 @@ impl JsObjectData {
                         }
                     }
                     let mut did_truncate = false;
-                    if let Some(ref mut elements) = self.array_elements {
+                    if let Some(elements) = self.array_elements_mut() {
                         let prev_len = elements.len();
                         elements.truncate(actual_new_len as usize);
                         did_truncate = elements.len() < prev_len;
@@ -2691,7 +2723,7 @@ impl JsObjectData {
                 }
             }
         }
-        if let Some(ref map) = self.parameter_map
+        if let Some(map) = self.parameter_map()
             && let Some((env_ref, param_name)) = map.get(key)
         {
             let _ = env_ref.borrow_mut().set(param_name, value.clone());
@@ -2700,29 +2732,31 @@ impl JsObjectData {
             && !matches!(value, JsValue::Undefined)
             && !self.properties.contains_key(key)
             && let Some(idx_u32) = parse_array_index(key)
-            && let Some(ref mut elements) = self.array_elements
+            && self.array_elements().is_some()
         {
             let idx = idx_u32 as usize;
+            let old_len = self
+                .properties
+                .get("length")
+                .and_then(|d| d.value.as_ref())
+                .and_then(|v| {
+                    if let JsValue::Number(n) = v {
+                        Some(*n as u32)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            let length_writable = self
+                .properties
+                .get("length")
+                .map(|d| d.writable != Some(false))
+                .unwrap_or(true);
+            let extensible = self.extensible;
+            let elements = self.array_elements_mut().unwrap();
             if idx <= elements.len() + 1024 {
-                let old_len = self
-                    .properties
-                    .get("length")
-                    .and_then(|d| d.value.as_ref())
-                    .and_then(|v| {
-                        if let JsValue::Number(n) = v {
-                            Some(*n as u32)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0);
-                let length_writable = self
-                    .properties
-                    .get("length")
-                    .map(|d| d.writable != Some(false))
-                    .unwrap_or(true);
                 let existed = idx < elements.len() && !matches!(elements[idx], JsValue::Undefined);
-                if !existed && !self.extensible {
+                if !existed && !extensible {
                     return false;
                 }
                 if idx_u32 >= old_len && !length_writable {
@@ -2748,7 +2782,7 @@ impl JsObjectData {
             }
         }
         // Keep array_elements in sync with properties for numeric indices
-        if let Some(ref mut elements) = self.array_elements
+        if let Some(elements) = self.array_elements_mut()
             && let Ok(idx) = key.parse::<usize>()
         {
             // Valid array indices are 0 to 2^32-2 (spec §6.1.7)
@@ -2854,7 +2888,7 @@ impl JsObjectData {
                     .unwrap_or(JsValue::Undefined),
             );
         }
-        if let Some(ref map) = self.parameter_map
+        if let Some(map) = self.parameter_map()
             && let Some((env_ref, param_name)) = map.get(key)
             && let Some(val) = env_ref.borrow().get(param_name)
         {
@@ -2866,7 +2900,7 @@ impl JsObjectData {
             }
             return Some(JsValue::Undefined);
         }
-        if let Some(ref elems) = self.array_elements
+        if let Some(elems) = self.array_elements()
             && let Ok(idx) = key.parse::<usize>()
             && idx < elems.len()
             && !matches!(elems[idx], JsValue::Undefined)
@@ -2894,7 +2928,7 @@ impl JsObjectData {
     pub fn own_property_descriptor_lookup(&self, key: &str) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
-            if let Some(ref map) = self.parameter_map
+            if let Some(map) = self.parameter_map()
                 && let Some((env_ref, param_name)) = map.get(key)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
@@ -2910,7 +2944,7 @@ impl JsObjectData {
             }
             return Some(d);
         }
-        if let Some(ref elems) = self.array_elements
+        if let Some(elems) = self.array_elements()
             && let Ok(idx) = key.parse::<usize>()
             && idx < elems.len()
             && !matches!(elems[idx], JsValue::Undefined)
@@ -3020,7 +3054,7 @@ impl JsObjectData {
             }
         }
 
-        if let Some(ref elems) = self.array_elements {
+        if let Some(elems) = self.array_elements() {
             for (i, value) in elems.iter().enumerate() {
                 if matches!(value, JsValue::Undefined) || i > 0xFFFF_FFFE {
                     continue;

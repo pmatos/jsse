@@ -5619,7 +5619,7 @@ impl Interpreter {
                             let mut int_keys: Vec<(u64, String)> = Vec::new();
                             let mut str_keys: Vec<String> = Vec::new();
                             let mut sym_keys: Vec<String> = Vec::new();
-                            if let Some(ref elems) = b.array_elements {
+                            if let Some(elems) = b.array_elements() {
                                 for (i, value) in elems.iter().enumerate() {
                                     if matches!(value, JsValue::Undefined) || i > 0xFFFF_FFFE {
                                         continue;
@@ -7637,11 +7637,11 @@ impl Interpreter {
                     }
                     obj_mut.properties.remove(&key);
                     obj_mut.property_order.retain(|k| k != &key);
-                    if let Some(ref mut map) = obj_mut.parameter_map {
+                    if let Some(map) = obj_mut.parameter_map_mut() {
                         map.remove(&key);
                     }
                     if let Ok(idx) = key.parse::<usize>()
-                        && let Some(ref mut elems) = obj_mut.array_elements
+                        && let Some(elems) = obj_mut.array_elements_mut()
                         && idx < elems.len()
                     {
                         elems[idx] = JsValue::Undefined;

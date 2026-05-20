@@ -240,7 +240,7 @@ pub(crate) fn create_data_property_or_throw(
             }
             let cell = interp.get_object_cell_expect(obj_ref.id);
             let mut borrow = cell.borrow_mut();
-            if let Some(ref mut elems) = borrow.array_elements
+            if let Some(elems) = borrow.array_elements_mut()
                 && let Ok(idx) = key.parse::<usize>()
             {
                 if idx < elems.len() {
@@ -685,7 +685,7 @@ fn obj_delete(interp: &mut Interpreter, o: &JsValue, key: &str) {
         let mut borrow = cell.borrow_mut();
         borrow.properties.remove(key);
         borrow.property_order.retain(|k| k != key);
-        if let Some(ref mut elems) = borrow.array_elements
+        if let Some(elems) = borrow.array_elements_mut()
             && let Ok(idx) = key.parse::<usize>()
             && idx < elems.len()
         {
@@ -732,7 +732,7 @@ fn obj_delete_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<
 fn set_length(interp: &mut Interpreter, o: &JsValue, len: usize) {
     if let Some(cell) = get_obj(interp, o) {
         let mut borrow = cell.borrow_mut();
-        if let Some(ref mut elems) = borrow.array_elements
+        if let Some(elems) = borrow.array_elements_mut()
             && len <= elems.len()
         {
             elems.truncate(len);
@@ -746,7 +746,7 @@ fn set_length(interp: &mut Interpreter, o: &JsValue, len: usize) {
 fn set_length_throw(interp: &mut Interpreter, o: &JsValue, len: usize) -> Result<(), JsValue> {
     let snapshot = get_obj(interp, o).and_then(|cell| {
         let b = cell.borrow();
-        b.array_elements.as_ref()?;
+        b.array_elements()?;
         let length_desc = b.get_own_property("length");
         let length_writable_false = length_desc
             .as_ref()
@@ -771,7 +771,7 @@ fn set_length_throw(interp: &mut Interpreter, o: &JsValue, len: usize) -> Result
         }
         if let Some(cell) = get_obj(interp, o) {
             let mut borrow = cell.borrow_mut();
-            if let Some(ref mut elems) = borrow.array_elements
+            if let Some(elems) = borrow.array_elements_mut()
                 && len <= elems.len()
             {
                 elems.truncate(len);
@@ -902,9 +902,8 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .class_name = "Array".to_string();
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .array_elements = Some(Vec::new());
+        self.get_object_cell_expect(proto_id).borrow_mut().kind =
+            crate::interpreter::types::ObjectKind::Array(Vec::new());
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(
@@ -3938,7 +3937,7 @@ impl Interpreter {
             "length".to_string(),
             PropertyDescriptor::data(JsValue::Number(values.len() as f64), true, false, false),
         );
-        obj_data.array_elements = Some(values);
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(values);
         let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
@@ -3968,7 +3967,7 @@ impl Interpreter {
             "length".to_string(),
             PropertyDescriptor::data(JsValue::Number(len as f64), true, false, false),
         );
-        obj_data.array_elements = Some(array_elements);
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(array_elements);
         let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
@@ -3985,7 +3984,7 @@ impl Interpreter {
             PropertyDescriptor::data(JsValue::Number(len as f64), true, false, false),
         );
         // Use a small Vec for sparse arrays — don't pre-allocate huge arrays
-        obj_data.array_elements = Some(Vec::new());
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(Vec::new());
         let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
