@@ -318,7 +318,7 @@ impl Interpreter {
         {
             Self::collect_env_roots(closure, worklist);
         }
-        if let Some(ref w) = obj.wrapped {
+        if let Some(w) = obj.wrapped() {
             worklist.push(w.target_id);
         }
         if let Some(ref b) = obj.bound {

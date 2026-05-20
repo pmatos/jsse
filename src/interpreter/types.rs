@@ -1566,7 +1566,6 @@ pub struct JsObjectData {
     pub constructor_kind: ConstructorKind,
     pub bound: Option<BoundFunctionData>,
     pub shadow_realm_id: Option<usize>,
-    pub wrapped: Option<WrappedFunctionData>,
     pub(crate) disposable_stack: Option<DisposableStackData>,
     pub(crate) module_namespace: Option<ModuleNamespaceData>,
     pub(crate) temporal_data: Option<TemporalData>,
@@ -1574,7 +1573,6 @@ pub struct JsObjectData {
     pub(crate) generator_realm_id: Option<usize>,
     pub(crate) is_htmldda: bool,
     pub(crate) is_immutable_prototype: bool,
-    pub(crate) regexp: Option<RegExpData>,
     pub(crate) deferred_construct: bool,
     pub(crate) gc_native_roots: Option<Vec<JsValue>>,
     pub(crate) iter_helper: Option<IterHelperData>,
@@ -1804,7 +1802,6 @@ impl JsObjectData {
             constructor_kind: ConstructorKind::Function,
             bound: None,
             shadow_realm_id: None,
-            wrapped: None,
             disposable_stack: None,
             module_namespace: None,
             temporal_data: None,
@@ -1812,7 +1809,6 @@ impl JsObjectData {
             generator_realm_id: None,
             is_htmldda: false,
             is_immutable_prototype: false,
-            regexp: None,
             deferred_construct: false,
             gc_native_roots: None,
             iter_helper: None,
@@ -1878,6 +1874,24 @@ impl JsObjectData {
     /// True iff this is an immutable ArrayBuffer (post-`sliceToImmutable`).
     pub fn arraybuffer_is_immutable(&self) -> bool {
         self.arraybuffer.as_ref().is_some_and(|b| b.is_immutable)
+    }
+
+    /// RegExp slot data, pulled from the kind enum. `Some` iff this is a RegExp instance.
+    pub(crate) fn regexp(&self) -> Option<&RegExpData> {
+        if let ObjectKind::RegExp(ref r) = self.kind {
+            Some(r)
+        } else {
+            None
+        }
+    }
+
+    /// Wrapped-function slot data. `Some` iff this is a ShadowRealm cross-realm wrapper.
+    pub(crate) fn wrapped(&self) -> Option<&WrappedFunctionData> {
+        if let ObjectKind::WrappedFunction(ref w) = self.kind {
+            Some(w)
+        } else {
+            None
+        }
     }
 
     /// SAB shared inner state. `Some` iff this is a SharedArrayBuffer.
