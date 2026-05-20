@@ -1563,7 +1563,6 @@ pub struct JsObjectData {
     pub promise_data: Option<PromiseData>,
     pub is_raw_json: bool,
     pub constructor_kind: ConstructorKind,
-    pub(crate) disposable_stack: Option<DisposableStackData>,
     pub(crate) temporal_data: Option<TemporalData>,
     pub(crate) intl_data: Option<IntlData>,
     pub(crate) generator_realm_id: Option<usize>,
@@ -1794,7 +1793,6 @@ impl JsObjectData {
             promise_data: None,
             is_raw_json: false,
             constructor_kind: ConstructorKind::Function,
-            disposable_stack: None,
             temporal_data: None,
             intl_data: None,
             generator_realm_id: None,
@@ -1933,6 +1931,24 @@ impl JsObjectData {
     pub(crate) fn module_namespace_mut(&mut self) -> Option<&mut ModuleNamespaceData> {
         if let ObjectKind::ModuleNamespace(ref mut n) = self.kind {
             Some(n)
+        } else {
+            None
+        }
+    }
+
+    /// DisposableStack slot data.
+    pub(crate) fn disposable_stack(&self) -> Option<&DisposableStackData> {
+        if let ObjectKind::DisposableStack(ref d) = self.kind {
+            Some(d)
+        } else {
+            None
+        }
+    }
+
+    /// DisposableStack slot data — mutable view (push/drain mutate the resource list).
+    pub(crate) fn disposable_stack_mut(&mut self) -> Option<&mut DisposableStackData> {
+        if let ObjectKind::DisposableStack(ref mut d) = self.kind {
+            Some(d)
         } else {
             None
         }
