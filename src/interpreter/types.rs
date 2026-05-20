@@ -1557,7 +1557,6 @@ pub struct JsObjectData {
     pub parameter_map: Option<HashMap<String, (EnvRef, String)>>,
     pub map_data: Option<Vec<Option<(JsValue, JsValue)>>>,
     pub set_data: Option<Vec<Option<JsValue>>>,
-    pub arraybuffer: Option<ArrayBufferData>,
     pub typed_array_info: Option<TypedArrayInfo>,
     pub data_view_info: Option<DataViewInfo>,
     pub promise_data: Option<PromiseData>,
@@ -1787,7 +1786,6 @@ impl JsObjectData {
             parameter_map: None,
             map_data: None,
             set_data: None,
-            arraybuffer: None,
             typed_array_info: None,
             data_view_info: None,
             promise_data: None,
@@ -1848,29 +1846,47 @@ impl JsObjectData {
         matches!(self.constructor_kind, ConstructorKind::DefaultDerivedClass)
     }
 
+    /// ArrayBuffer / SharedArrayBuffer slot data (any kind), pulled from `kind`.
+    pub(crate) fn arraybuffer(&self) -> Option<&ArrayBufferData> {
+        if let ObjectKind::ArrayBuffer(ref ab) = self.kind {
+            Some(ab)
+        } else {
+            None
+        }
+    }
+
+    /// ArrayBuffer slot data — mutable view for in-place mutation (resize/detach/toImmutable).
+    pub(crate) fn arraybuffer_mut(&mut self) -> Option<&mut ArrayBufferData> {
+        if let ObjectKind::ArrayBuffer(ref mut ab) = self.kind {
+            Some(ab)
+        } else {
+            None
+        }
+    }
+
     /// Backing bytes for an ArrayBuffer / SharedArrayBuffer.
     pub fn arraybuffer_data(&self) -> Option<&Rc<RefCell<BufferData>>> {
-        self.arraybuffer.as_ref().map(|b| &b.data)
+        self.arraybuffer().map(|b| &b.data)
     }
 
     /// Detached cell for a regular ArrayBuffer. `None` for SAB or non-buffers.
     pub fn arraybuffer_detached(&self) -> Option<&Rc<Cell<bool>>> {
-        self.arraybuffer.as_ref().and_then(|b| b.detached.as_ref())
+        self.arraybuffer().and_then(|b| b.detached.as_ref())
     }
 
     /// Max byte length for a resizable / growable AB; `None` for non-resizable.
     pub fn arraybuffer_max_byte_length(&self) -> Option<usize> {
-        self.arraybuffer.as_ref().and_then(|b| b.max_byte_length)
+        self.arraybuffer().and_then(|b| b.max_byte_length)
     }
 
     /// True iff this is a SharedArrayBuffer.
     pub fn arraybuffer_is_shared(&self) -> bool {
-        self.arraybuffer.as_ref().is_some_and(|b| b.is_shared)
+        self.arraybuffer().is_some_and(|b| b.is_shared)
     }
 
     /// True iff this is an immutable ArrayBuffer (post-`sliceToImmutable`).
     pub fn arraybuffer_is_immutable(&self) -> bool {
-        self.arraybuffer.as_ref().is_some_and(|b| b.is_immutable)
+        self.arraybuffer().is_some_and(|b| b.is_immutable)
     }
 
     /// RegExp slot data, pulled from the kind enum. `Some` iff this is a RegExp instance.
@@ -1956,9 +1972,7 @@ impl JsObjectData {
 
     /// SAB shared inner state. `Some` iff this is a SharedArrayBuffer.
     pub fn sab_shared(&self) -> Option<&Arc<SharedBufferInner>> {
-        self.arraybuffer
-            .as_ref()
-            .and_then(|b| b.sab_shared.as_ref())
+        self.arraybuffer().and_then(|b| b.sab_shared.as_ref())
     }
 
     /// Id of the ArrayBuffer wrapper object that backs this TypedArray or DataView,

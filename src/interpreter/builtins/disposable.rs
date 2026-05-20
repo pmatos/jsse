@@ -370,10 +370,12 @@ impl Interpreter {
                     {
                         let mut b = interp.get_object_cell_expect(new_obj_id).borrow_mut();
                         b.class_name = "DisposableStack".to_string();
-                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(DisposableStackData {
-                            stack,
-                            disposed: false,
-                        });
+                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(
+                            DisposableStackData {
+                                stack,
+                                disposed: false,
+                            },
+                        );
                     }
                     let id = new_obj_id;
                     return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
@@ -415,10 +417,12 @@ impl Interpreter {
                         if let Some(p) = proto {
                             b.prototype_id = Some(p);
                         }
-                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(DisposableStackData {
-                            stack: Vec::new(),
-                            disposed: false,
-                        });
+                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(
+                            DisposableStackData {
+                                stack: Vec::new(),
+                                disposed: false,
+                            },
+                        );
                     }
                     let id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
@@ -899,10 +903,12 @@ impl Interpreter {
                     {
                         let mut b = interp.get_object_cell_expect(new_obj_id).borrow_mut();
                         b.class_name = "AsyncDisposableStack".to_string();
-                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(DisposableStackData {
-                            stack,
-                            disposed: false,
-                        });
+                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(
+                            DisposableStackData {
+                                stack,
+                                disposed: false,
+                            },
+                        );
                     }
                     let id = new_obj_id;
                     return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
@@ -946,10 +952,12 @@ impl Interpreter {
                         if let Some(p) = proto {
                             b.prototype_id = Some(p);
                         }
-                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(DisposableStackData {
-                            stack: Vec::new(),
-                            disposed: false,
-                        });
+                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(
+                            DisposableStackData {
+                                stack: Vec::new(),
+                                disposed: false,
+                            },
+                        );
                     }
                     let id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
