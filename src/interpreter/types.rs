@@ -1558,7 +1558,6 @@ pub struct JsObjectData {
     pub map_data: Option<Vec<Option<(JsValue, JsValue)>>>,
     pub set_data: Option<Vec<Option<JsValue>>>,
     pub typed_array_info: Option<TypedArrayInfo>,
-    pub promise_data: Option<PromiseData>,
     pub is_raw_json: bool,
     pub constructor_kind: ConstructorKind,
     pub(crate) temporal_data: Option<TemporalData>,
@@ -1786,7 +1785,6 @@ impl JsObjectData {
             map_data: None,
             set_data: None,
             typed_array_info: None,
-            promise_data: None,
             is_raw_json: false,
             constructor_kind: ConstructorKind::Function,
             temporal_data: None,
@@ -1866,6 +1864,24 @@ impl JsObjectData {
     pub(crate) fn data_view_info(&self) -> Option<&DataViewInfo> {
         if let ObjectKind::DataView(ref d) = self.kind {
             Some(d)
+        } else {
+            None
+        }
+    }
+
+    /// Promise slot data.
+    pub(crate) fn promise_data(&self) -> Option<&PromiseData> {
+        if let ObjectKind::Promise(ref p) = self.kind {
+            Some(p)
+        } else {
+            None
+        }
+    }
+
+    /// Promise slot data — mutable view for state transitions and reaction queues.
+    pub(crate) fn promise_data_mut(&mut self) -> Option<&mut PromiseData> {
+        if let ObjectKind::Promise(ref mut p) = self.kind {
+            Some(p)
         } else {
             None
         }

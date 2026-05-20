@@ -451,7 +451,7 @@ fn from_async_attach_await(
 
             if let Some(cell) = interp.get_object_cell(promise_id) {
                 let mut ob = cell.borrow_mut();
-                if let Some(ref mut pd) = ob.promise_data {
+                if let Some(pd) = ob.promise_data_mut() {
                     pd.is_handled = true;
                     pd.fulfill_reactions.push(PromiseReaction {
                         handler: Some(fulfill_handler),

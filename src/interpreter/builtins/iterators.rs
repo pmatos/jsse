@@ -3992,7 +3992,7 @@ impl Interpreter {
                 let reject_reaction2 = reject_reaction.clone();
                 let state = if let Some(obj) = interp.get_object_cell(wrapper_id) {
                     let mut o = obj.borrow_mut();
-                    if let Some(ref mut pd) = o.promise_data {
+                    if let Some(pd) = o.promise_data_mut() {
                         pd.is_handled = true;
                         match &pd.state {
                             crate::interpreter::types::PromiseState::Pending => {

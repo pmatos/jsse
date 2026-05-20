@@ -4547,7 +4547,7 @@ impl Interpreter {
         let ids = self.scheduler.pending_async_promise_ids_lock();
         for &id in ids.iter() {
             if let Some(obj) = self.get_object_cell(id)
-                && let Some(ref pd) = obj.borrow().promise_data
+                && let Some(pd) = obj.borrow().promise_data()
                 && (!pd.fulfill_reactions.is_empty() || !pd.reject_reactions.is_empty())
             {
                 return true;

@@ -8271,7 +8271,7 @@ impl Interpreter {
                         Some(PromiseState::Pending) => {
                             if let Some(obj) = self.get_object_cell(unwrap_id) {
                                 let mut ob = obj.borrow_mut();
-                                if let Some(ref mut pd) = ob.promise_data {
+                                if let Some(pd) = ob.promise_data_mut() {
                                     pd.is_handled = true;
                                     pd.fulfill_reactions.push(PromiseReaction {
                                         handler: Some(on_fulfilled),
@@ -9940,7 +9940,7 @@ impl Interpreter {
                             Some(PromiseState::Pending) => {
                                 if let Some(obj) = self.get_object_cell(wrapped_id) {
                                     let mut ob = obj.borrow_mut();
-                                    if let Some(ref mut pd) = ob.promise_data {
+                                    if let Some(pd) = ob.promise_data_mut() {
                                         pd.is_handled = true;
                                         pd.fulfill_reactions.push(PromiseReaction {
                                             handler: Some(fulfill_handler),
@@ -10057,7 +10057,7 @@ impl Interpreter {
 
                         if let Some(obj) = self.get_object_cell(wrapped_id) {
                             let mut ob = obj.borrow_mut();
-                            if let Some(ref mut pd) = ob.promise_data {
+                            if let Some(pd) = ob.promise_data_mut() {
                                 pd.is_handled = true;
                                 pd.fulfill_reactions.push(PromiseReaction {
                                     handler: Some(fulfill_handler),
@@ -17308,7 +17308,7 @@ impl Interpreter {
 
                 if let Some(obj) = self.get_object_cell(promise_id) {
                     let mut ob = obj.borrow_mut();
-                    if let Some(ref mut pd) = ob.promise_data {
+                    if let Some(pd) = ob.promise_data_mut() {
                         pd.is_handled = true;
                         pd.fulfill_reactions.push(PromiseReaction {
                             handler: Some(fulfill_handler),
@@ -17440,7 +17440,7 @@ impl Interpreter {
 
                 if let Some(obj) = self.get_object_cell(promise_id) {
                     let mut o = obj.borrow_mut();
-                    if let Some(ref mut pd) = o.promise_data {
+                    if let Some(pd) = o.promise_data_mut() {
                         pd.is_handled = true;
                         pd.fulfill_reactions.push(PromiseReaction {
                             handler: Some(fulfill_handler),

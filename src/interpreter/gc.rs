@@ -356,7 +356,7 @@ impl Interpreter {
                 worklist.push(hid);
             }
         }
-        if let Some(ref pd) = obj.promise_data {
+        if let Some(pd) = obj.promise_data() {
             match &pd.state {
                 crate::interpreter::types::PromiseState::Fulfilled(v)
                 | crate::interpreter::types::PromiseState::Rejected(v) => {
