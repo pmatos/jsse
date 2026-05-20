@@ -261,7 +261,7 @@ impl Interpreter {
         // Single-borrow fast path: classify object and check own property in one borrow
         if let Some(obj) = self.get_object_cell(obj_id) {
             let b = obj.borrow();
-            let is_proxy = b.proxy.is_some();
+            let is_proxy = b.proxy().is_some();
             let has_module_ns = b.module_namespace.is_some();
 
             if !is_proxy && !has_module_ns {

@@ -8557,7 +8557,9 @@ impl Interpreter {
                     if callable.is_some() {
                         proxy.callable = callable;
                     }
-                    proxy.proxy = Some(crate::interpreter::types::ProxyData::active(t.id, h.id));
+                    proxy.kind = crate::interpreter::types::ObjectKind::Proxy(
+                        crate::interpreter::types::ProxyData::active(t.id, h.id),
+                    );
                 }
                 let proxy_id = proxy_obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: proxy_id }))
@@ -8606,12 +8608,13 @@ impl Interpreter {
                         && let Some(target_rc) = interp.get_object_cell(t.id)
                     {
                         let callable = target_rc.borrow().callable.clone();
-                        let mut proxy = interp.get_object_cell_expect(proxy_obj_id).borrow_mut();
+                        let mut obj = interp.get_object_cell_expect(proxy_obj_id).borrow_mut();
                         if callable.is_some() {
-                            proxy.callable = callable;
+                            obj.callable = callable;
                         }
-                        proxy.proxy =
-                            Some(crate::interpreter::types::ProxyData::active(t.id, h.id));
+                        obj.kind = crate::interpreter::types::ObjectKind::Proxy(
+                            crate::interpreter::types::ProxyData::active(t.id, h.id),
+                        );
                     }
                     let proxy_id = proxy_obj_id;
                     let proxy_val = JsValue::Object(crate::types::JsObject { id: proxy_id });
@@ -8622,7 +8625,8 @@ impl Interpreter {
                         0,
                         move |interp2, _this2, _args2| {
                             if let Some(p) = interp2.get_object_cell(proxy_id)
-                                && let Some(ref mut pd) = p.borrow_mut().proxy
+                                && let crate::interpreter::types::ObjectKind::Proxy(ref mut pd) =
+                                    p.borrow_mut().kind
                             {
                                 pd.revoke();
                             }

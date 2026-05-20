@@ -348,7 +348,7 @@ impl Interpreter {
                 Self::collect_value_roots(val, worklist);
             }
         }
-        if let Some(ref p) = obj.proxy {
+        if let Some(p) = obj.proxy() {
             if let Some(tid) = p.target_id {
                 worklist.push(tid);
             }

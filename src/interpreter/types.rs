@@ -1557,7 +1557,6 @@ pub struct JsObjectData {
     pub parameter_map: Option<HashMap<String, (EnvRef, String)>>,
     pub map_data: Option<Vec<Option<(JsValue, JsValue)>>>,
     pub set_data: Option<Vec<Option<JsValue>>>,
-    pub proxy: Option<ProxyData>,
     pub arraybuffer: Option<ArrayBufferData>,
     pub typed_array_info: Option<TypedArrayInfo>,
     pub data_view_info: Option<DataViewInfo>,
@@ -1792,7 +1791,6 @@ impl JsObjectData {
             parameter_map: None,
             map_data: None,
             set_data: None,
-            proxy: None,
             arraybuffer: None,
             typed_array_info: None,
             data_view_info: None,
@@ -1816,19 +1814,28 @@ impl JsObjectData {
         }
     }
 
+    /// Proxy slot data. `Some` for any proxy, active or revoked.
+    pub(crate) fn proxy(&self) -> Option<&ProxyData> {
+        if let ObjectKind::Proxy(ref p) = self.kind {
+            Some(p)
+        } else {
+            None
+        }
+    }
+
     /// True iff this is an *active* (non-revoked) proxy. Preserves pre-bundling semantics.
     pub fn is_proxy(&self) -> bool {
-        self.proxy.as_ref().is_some_and(|p| !p.revoked)
+        self.proxy().is_some_and(|p| !p.revoked)
     }
 
     /// True iff this object has been revoked.
     pub fn is_proxy_revoked(&self) -> bool {
-        self.proxy.as_ref().is_some_and(|p| p.revoked)
+        self.proxy().is_some_and(|p| p.revoked)
     }
 
     /// Target id for an active proxy, `None` otherwise (including revoked).
     pub fn proxy_target_id(&self) -> Option<u64> {
-        self.proxy.as_ref().and_then(|p| p.target_id)
+        self.proxy().and_then(|p| p.target_id)
     }
 
     /// True iff this object is a class constructor of any flavor.

@@ -5397,7 +5397,7 @@ impl Interpreter {
         use crate::interpreter::ic::{CallIcKind, CallIcSlot};
         let obj_rc = self.get_object(callee_obj_id)?;
         let obj = obj_rc.borrow();
-        if obj.proxy.is_some()
+        if obj.proxy().is_some()
             || obj.wrapped().is_some()
             || obj.bound().is_some()
             || obj.is_class_constructor()
@@ -14265,7 +14265,7 @@ impl Interpreter {
     pub(crate) fn get_proxy_info(&self, obj_id: u64) -> Option<(bool, Option<u64>, Option<u64>)> {
         let obj = self.get_object_cell(obj_id)?;
         let b = obj.borrow();
-        let p = b.proxy.as_ref()?;
+        let p = b.proxy()?;
         Some((p.revoked, p.target_id, p.handler_id))
     }
 
