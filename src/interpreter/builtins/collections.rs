@@ -35,7 +35,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let state = obj.borrow().iterator_state.clone();
+                    let state = obj.borrow().iterator_state().cloned();
                     if let Some(IteratorState::MapIterator {
                         map_id,
                         index,
@@ -62,13 +62,15 @@ impl Interpreter {
                                                 entry.1.clone(),
                                             ]),
                                         };
-                                        obj.borrow_mut().iterator_state =
-                                            Some(IteratorState::MapIterator {
-                                                map_id,
-                                                index: i + 1,
-                                                kind,
-                                                done: false,
-                                            });
+                                        obj.borrow_mut().kind =
+                                            crate::interpreter::types::ObjectKind::Iterator(
+                                                IteratorState::MapIterator {
+                                                    map_id,
+                                                    index: i + 1,
+                                                    kind,
+                                                    done: false,
+                                                },
+                                            );
                                         return Completion::Normal(
                                             interp.create_iter_result_object(result, false),
                                         );
@@ -77,12 +79,14 @@ impl Interpreter {
                                 }
                             }
                         }
-                        obj.borrow_mut().iterator_state = Some(IteratorState::MapIterator {
-                            map_id,
-                            index,
-                            kind,
-                            done: true,
-                        });
+                        obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::MapIterator {
+                                map_id,
+                                index,
+                                kind,
+                                done: true,
+                            },
+                        );
                         return Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         );
@@ -126,12 +130,13 @@ impl Interpreter {
                 .or(interp.realm().iterator_prototype)
                 .or(interp.realm().object_prototype);
             obj_data.class_name = "Map Iterator".to_string();
-            obj_data.iterator_state = Some(IteratorState::MapIterator {
-                map_id,
-                index: 0,
-                kind,
-                done: false,
-            });
+            obj_data.kind =
+                crate::interpreter::types::ObjectKind::Iterator(IteratorState::MapIterator {
+                    map_id,
+                    index: 0,
+                    kind,
+                    done: false,
+                });
             let id = interp.alloc_object(obj_data);
             JsValue::Object(crate::types::JsObject { id })
         }
@@ -914,7 +919,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
-                    let state = obj.borrow().iterator_state.clone();
+                    let state = obj.borrow().iterator_state().cloned();
                     if let Some(IteratorState::SetIterator {
                         set_id,
                         index,
@@ -939,13 +944,15 @@ impl Interpreter {
                                                 interp.create_array(vec![val.clone(), val.clone()])
                                             }
                                         };
-                                        obj.borrow_mut().iterator_state =
-                                            Some(IteratorState::SetIterator {
-                                                set_id,
-                                                index: i + 1,
-                                                kind,
-                                                done: false,
-                                            });
+                                        obj.borrow_mut().kind =
+                                            crate::interpreter::types::ObjectKind::Iterator(
+                                                IteratorState::SetIterator {
+                                                    set_id,
+                                                    index: i + 1,
+                                                    kind,
+                                                    done: false,
+                                                },
+                                            );
                                         return Completion::Normal(
                                             interp.create_iter_result_object(result, false),
                                         );
@@ -954,12 +961,14 @@ impl Interpreter {
                                 }
                             }
                         }
-                        obj.borrow_mut().iterator_state = Some(IteratorState::SetIterator {
-                            set_id,
-                            index,
-                            kind,
-                            done: true,
-                        });
+                        obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::SetIterator {
+                                set_id,
+                                index,
+                                kind,
+                                done: true,
+                            },
+                        );
                         return Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         );
@@ -1002,12 +1011,13 @@ impl Interpreter {
                 .or(interp.realm().iterator_prototype)
                 .or(interp.realm().object_prototype);
             obj_data.class_name = "Set Iterator".to_string();
-            obj_data.iterator_state = Some(IteratorState::SetIterator {
-                set_id,
-                index: 0,
-                kind,
-                done: false,
-            });
+            obj_data.kind =
+                crate::interpreter::types::ObjectKind::Iterator(IteratorState::SetIterator {
+                    set_id,
+                    index: 0,
+                    kind,
+                    done: false,
+                });
             let id = interp.alloc_object(obj_data);
             JsValue::Object(crate::types::JsObject { id })
         }

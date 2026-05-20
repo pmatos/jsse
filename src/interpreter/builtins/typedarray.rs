@@ -1788,8 +1788,7 @@ impl Interpreter {
                         let is_ta = src_obj.borrow().typed_array_info().is_some();
                         if is_ta {
                             // TypedArray-arg path
-                            let src_ta =
-                                src_obj.borrow().typed_array_info().unwrap().clone();
+                            let src_ta = src_obj.borrow().typed_array_info().unwrap().clone();
                             if src_ta.is_detached.get() || is_typed_array_out_of_bounds(&src_ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("source typed array is detached"),
@@ -5045,10 +5044,7 @@ impl Interpreter {
         if let JsValue::Object(ref o) = new_obj
             && let Some(obj) = self.get_object_cell(o.id)
         {
-            let ta_len = obj
-                .borrow()
-                .typed_array_info()
-                .map(|ti| ti.array_length);
+            let ta_len = obj.borrow().typed_array_info().map(|ti| ti.array_length);
             if let Some(ta_len) = ta_len {
                 if ta_len < len {
                     return Completion::Throw(

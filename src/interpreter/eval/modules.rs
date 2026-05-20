@@ -496,10 +496,7 @@ impl Interpreter {
                     && let Some(index) =
                         crate::interpreter::types::canonical_numeric_index_string(key)
                 {
-                    return Ok(is_valid_integer_index(
-                        b.typed_array_info().unwrap(),
-                        index,
-                    ));
+                    return Ok(is_valid_integer_index(b.typed_array_info().unwrap(), index));
                 }
             }
             if obj.borrow().has_own_property(key) {

@@ -868,7 +868,7 @@ impl Interpreter {
             |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object(o.id) {
-                        let state = obj.borrow().iterator_state.clone();
+                        let state = obj.borrow().iterator_state().cloned();
                         if let Some(IteratorState::ArrayIterator {
                             array_id,
                             index,
@@ -896,13 +896,15 @@ impl Interpreter {
                                 };
                                 if index >= len {
                                     if let Some(obj) = interp.get_object_cell(o.id) {
-                                        obj.borrow_mut().iterator_state =
-                                            Some(IteratorState::ArrayIterator {
-                                                array_id,
-                                                index: len,
-                                                kind,
-                                                done: true,
-                                            });
+                                        obj.borrow_mut().kind =
+                                            crate::interpreter::types::ObjectKind::Iterator(
+                                                IteratorState::ArrayIterator {
+                                                    array_id,
+                                                    index: len,
+                                                    kind,
+                                                    done: true,
+                                                },
+                                            );
                                     }
                                     return Completion::Normal(
                                         interp.create_iter_result_object(JsValue::Undefined, true),
@@ -931,13 +933,15 @@ impl Interpreter {
                                             elem,
                                         ]);
                                         if let Some(obj) = interp.get_object(o.id) {
-                                            obj.borrow_mut().iterator_state =
-                                                Some(IteratorState::ArrayIterator {
-                                                    array_id,
-                                                    index: index + 1,
-                                                    kind,
-                                                    done: false,
-                                                });
+                                            obj.borrow_mut().kind =
+                                                crate::interpreter::types::ObjectKind::Iterator(
+                                                    IteratorState::ArrayIterator {
+                                                        array_id,
+                                                        index: index + 1,
+                                                        kind,
+                                                        done: false,
+                                                    },
+                                                );
                                         }
                                         return Completion::Normal(
                                             interp.create_iter_result_object(pair, false),
@@ -945,13 +949,15 @@ impl Interpreter {
                                     }
                                 };
                                 if let Some(obj) = interp.get_object(o.id) {
-                                    obj.borrow_mut().iterator_state =
-                                        Some(IteratorState::ArrayIterator {
-                                            array_id,
-                                            index: index + 1,
-                                            kind,
-                                            done: false,
-                                        });
+                                    obj.borrow_mut().kind =
+                                        crate::interpreter::types::ObjectKind::Iterator(
+                                            IteratorState::ArrayIterator {
+                                                array_id,
+                                                index: index + 1,
+                                                kind,
+                                                done: false,
+                                            },
+                                        );
                                 }
                                 return Completion::Normal(
                                     interp.create_iter_result_object(v, false),
@@ -965,13 +971,15 @@ impl Interpreter {
                                 {
                                     drop(borrowed);
                                     if let Some(obj) = interp.get_object(o.id) {
-                                        obj.borrow_mut().iterator_state =
-                                            Some(IteratorState::ArrayIterator {
-                                                array_id,
-                                                index,
-                                                kind,
-                                                done: true,
-                                            });
+                                        obj.borrow_mut().kind =
+                                            crate::interpreter::types::ObjectKind::Iterator(
+                                                IteratorState::ArrayIterator {
+                                                    array_id,
+                                                    index,
+                                                    kind,
+                                                    done: true,
+                                                },
+                                            );
                                     }
                                     return Completion::Throw(
                                         interp.create_type_error("TypedArray is out of bounds"),
@@ -1042,13 +1050,15 @@ impl Interpreter {
                                                 elem,
                                             ]);
                                             return {
-                                                obj.borrow_mut().iterator_state =
-                                                    Some(IteratorState::ArrayIterator {
-                                                        array_id,
-                                                        index: index + 1,
-                                                        kind,
-                                                        done: false,
-                                                    });
+                                                obj.borrow_mut().kind =
+                                                    crate::interpreter::types::ObjectKind::Iterator(
+                                                        IteratorState::ArrayIterator {
+                                                            array_id,
+                                                            index: index + 1,
+                                                            kind,
+                                                            done: false,
+                                                        },
+                                                    );
                                                 Completion::Normal(
                                                     interp.create_iter_result_object(pair, false),
                                                 )
@@ -1062,23 +1072,27 @@ impl Interpreter {
                             };
                             match val {
                                 Some(v) => {
-                                    obj.borrow_mut().iterator_state =
-                                        Some(IteratorState::ArrayIterator {
-                                            array_id,
-                                            index: index + 1,
-                                            kind,
-                                            done: false,
-                                        });
+                                    obj.borrow_mut().kind =
+                                        crate::interpreter::types::ObjectKind::Iterator(
+                                            IteratorState::ArrayIterator {
+                                                array_id,
+                                                index: index + 1,
+                                                kind,
+                                                done: false,
+                                            },
+                                        );
                                     Completion::Normal(interp.create_iter_result_object(v, false))
                                 }
                                 None => {
-                                    obj.borrow_mut().iterator_state =
-                                        Some(IteratorState::ArrayIterator {
-                                            array_id,
-                                            index: len,
-                                            kind,
-                                            done: true,
-                                        });
+                                    obj.borrow_mut().kind =
+                                        crate::interpreter::types::ObjectKind::Iterator(
+                                            IteratorState::ArrayIterator {
+                                                array_id,
+                                                index: len,
+                                                kind,
+                                                done: true,
+                                            },
+                                        );
                                     Completion::Normal(
                                         interp.create_iter_result_object(JsValue::Undefined, true),
                                     )
@@ -1098,13 +1112,15 @@ impl Interpreter {
                             }
                             let ta_obj = interp.get_object(typed_array_id);
                             if ta_obj.is_none() {
-                                obj.borrow_mut().iterator_state =
-                                    Some(IteratorState::TypedArrayIterator {
-                                        typed_array_id,
-                                        index,
-                                        kind,
-                                        done: true,
-                                    });
+                                obj.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::TypedArrayIterator {
+                                            typed_array_id,
+                                            index,
+                                            kind,
+                                            done: true,
+                                        },
+                                    );
                                 return Completion::Normal(
                                     interp.create_iter_result_object(JsValue::Undefined, true),
                                 );
@@ -1124,13 +1140,15 @@ impl Interpreter {
                                 }
                                 let len = typed_array_length(ta);
                                 if index >= len {
-                                    obj.borrow_mut().iterator_state =
-                                        Some(IteratorState::TypedArrayIterator {
-                                            typed_array_id,
-                                            index,
-                                            kind,
-                                            done: true,
-                                        });
+                                    obj.borrow_mut().kind =
+                                        crate::interpreter::types::ObjectKind::Iterator(
+                                            IteratorState::TypedArrayIterator {
+                                                typed_array_id,
+                                                index,
+                                                kind,
+                                                done: true,
+                                            },
+                                        );
                                     return Completion::Normal(
                                         interp.create_iter_result_object(JsValue::Undefined, true),
                                     );
@@ -1144,25 +1162,29 @@ impl Interpreter {
                                             JsValue::Number(index as f64),
                                             elem,
                                         ]);
-                                        obj.borrow_mut().iterator_state =
-                                            Some(IteratorState::TypedArrayIterator {
-                                                typed_array_id,
-                                                index: index + 1,
-                                                kind,
-                                                done: false,
-                                            });
+                                        obj.borrow_mut().kind =
+                                            crate::interpreter::types::ObjectKind::Iterator(
+                                                IteratorState::TypedArrayIterator {
+                                                    typed_array_id,
+                                                    index: index + 1,
+                                                    kind,
+                                                    done: false,
+                                                },
+                                            );
                                         return Completion::Normal(
                                             interp.create_iter_result_object(pair, false),
                                         );
                                     }
                                 };
-                                obj.borrow_mut().iterator_state =
-                                    Some(IteratorState::TypedArrayIterator {
-                                        typed_array_id,
-                                        index: index + 1,
-                                        kind,
-                                        done: false,
-                                    });
+                                obj.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::TypedArrayIterator {
+                                            typed_array_id,
+                                            index: index + 1,
+                                            kind,
+                                            done: false,
+                                        },
+                                    );
                                 Completion::Normal(interp.create_iter_result_object(v, false))
                             } else {
                                 Completion::Throw(interp.create_type_error("not a TypedArray"))
@@ -1214,7 +1236,7 @@ impl Interpreter {
             |interp, this, _args| {
                 if let JsValue::Object(o) = this {
                     if let Some(obj) = interp.get_object_cell(o.id) {
-                        let state = obj.borrow().iterator_state.clone();
+                        let state = obj.borrow().iterator_state().cloned();
                         if let Some(IteratorState::StringIterator {
                             ref string,
                             position,
@@ -1222,12 +1244,14 @@ impl Interpreter {
                         }) = state
                         {
                             if done || position >= string.code_units.len() {
-                                obj.borrow_mut().iterator_state =
-                                    Some(IteratorState::StringIterator {
-                                        string: string.clone(),
-                                        position,
-                                        done: true,
-                                    });
+                                obj.borrow_mut().kind =
+                                    crate::interpreter::types::ObjectKind::Iterator(
+                                        IteratorState::StringIterator {
+                                            string: string.clone(),
+                                            position,
+                                            done: true,
+                                        },
+                                    );
                                 return Completion::Normal(
                                     interp.create_iter_result_object(JsValue::Undefined, true),
                                 );
@@ -1245,11 +1269,13 @@ impl Interpreter {
                             } else {
                                 (vec![cu], 1)
                             };
-                            obj.borrow_mut().iterator_state = Some(IteratorState::StringIterator {
-                                string: string.clone(),
-                                position: position + advance,
-                                done: false,
-                            });
+                            obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                                IteratorState::StringIterator {
+                                    string: string.clone(),
+                                    position: position + advance,
+                                    done: false,
+                                },
+                            );
                             let result_js_str = JsString::from_vec(result_units);
                             Completion::Normal(
                                 interp.create_iter_result_object(
@@ -3639,12 +3665,13 @@ impl Interpreter {
             .or(self.realm().iterator_prototype)
             .or(self.realm().object_prototype);
         obj_data.class_name = "Array Iterator".to_string();
-        obj_data.iterator_state = Some(IteratorState::ArrayIterator {
-            array_id,
-            index: 0,
-            kind,
-            done: false,
-        });
+        obj_data.kind =
+            crate::interpreter::types::ObjectKind::Iterator(IteratorState::ArrayIterator {
+                array_id,
+                index: 0,
+                kind,
+                done: false,
+            });
         let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
@@ -3661,12 +3688,13 @@ impl Interpreter {
             .or(self.realm().iterator_prototype)
             .or(self.realm().object_prototype);
         obj_data.class_name = "Array Iterator".to_string();
-        obj_data.iterator_state = Some(IteratorState::TypedArrayIterator {
-            typed_array_id,
-            index: 0,
-            kind,
-            done: false,
-        });
+        obj_data.kind =
+            crate::interpreter::types::ObjectKind::Iterator(IteratorState::TypedArrayIterator {
+                typed_array_id,
+                index: 0,
+                kind,
+                done: false,
+            });
         let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
@@ -3679,11 +3707,12 @@ impl Interpreter {
             .or(self.realm().iterator_prototype)
             .or(self.realm().object_prototype);
         obj_data.class_name = "String Iterator".to_string();
-        obj_data.iterator_state = Some(IteratorState::StringIterator {
-            string,
-            position: 0,
-            done: false,
-        });
+        obj_data.kind =
+            crate::interpreter::types::ObjectKind::Iterator(IteratorState::StringIterator {
+                string,
+                position: 0,
+                done: false,
+            });
         let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
@@ -3708,7 +3737,7 @@ impl Interpreter {
                     && let Some(obj_rc) = interp.get_object_cell(o.id)
                 {
                     let is_state_machine = matches!(
-                        obj_rc.borrow().iterator_state,
+                        obj_rc.borrow().iterator_state(),
                         Some(IteratorState::StateMachineGenerator { .. })
                     );
                     if is_state_machine {
@@ -3736,7 +3765,7 @@ impl Interpreter {
                     && let Some(obj_rc) = interp.get_object_cell(o.id)
                 {
                     let is_state_machine = matches!(
-                        obj_rc.borrow().iterator_state,
+                        obj_rc.borrow().iterator_state(),
                         Some(IteratorState::StateMachineGenerator { .. })
                     );
                     if is_state_machine {
@@ -3764,7 +3793,7 @@ impl Interpreter {
                     && let Some(obj_rc) = interp.get_object_cell(o.id)
                 {
                     let is_state_machine = matches!(
-                        obj_rc.borrow().iterator_state,
+                        obj_rc.borrow().iterator_state(),
                         Some(IteratorState::StateMachineGenerator { .. })
                     );
                     if is_state_machine {

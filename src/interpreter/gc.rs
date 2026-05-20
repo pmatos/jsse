@@ -403,7 +403,7 @@ impl Interpreter {
                 }
             }
         }
-        if let Some(ref state) = obj.iterator_state {
+        if let Some(state) = obj.iterator_state() {
             match state {
                 IteratorState::ArrayIterator { array_id, .. } => worklist.push(*array_id),
                 IteratorState::TypedArrayIterator { typed_array_id, .. } => {

@@ -8475,17 +8475,17 @@ impl Interpreter {
                         JsValue::Boolean(full_unicode),
                     );
 
-                interp
-                    .get_object_cell_expect(iter_obj_id)
-                    .borrow_mut()
-                    .iterator_state = Some(IteratorState::RegExpStringIterator {
-                    source: m_source,
-                    flags: m_flags,
-                    string: s,
-                    global,
-                    last_index: last_index as usize,
-                    done: false,
-                });
+                interp.get_object_cell_expect(iter_obj_id).borrow_mut().kind =
+                    crate::interpreter::types::ObjectKind::Iterator(
+                        IteratorState::RegExpStringIterator {
+                            source: m_source,
+                            flags: m_flags,
+                            string: s,
+                            global,
+                            last_index: last_index as usize,
+                            done: false,
+                        },
+                    );
 
                 let id = iter_obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
@@ -8532,7 +8532,7 @@ impl Interpreter {
                         ));
                     }
                 };
-                let state = obj.borrow().iterator_state.clone();
+                let state = obj.borrow().iterator_state().cloned();
                 let matcher_id_val = interp.get_property_on_id(o.id, "__matcher__");
                 let full_unicode_val = interp.get_property_on_id(o.id, "__full_unicode__");
                 let full_unicode = matches!(full_unicode_val, JsValue::Boolean(true));
@@ -8579,8 +8579,7 @@ impl Interpreter {
 
                     if matches!(result_val, JsValue::Null) {
                         if let Some(obj2) = interp.get_object_cell(o.id) {
-                            obj2.borrow_mut().iterator_state =
-                                Some(IteratorState::RegExpStringIterator {
+                            obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
                                     last_index, done: true,
                                 });
@@ -8592,8 +8591,7 @@ impl Interpreter {
 
                     if !global {
                         if let Some(obj2) = interp.get_object_cell(o.id) {
-                            obj2.borrow_mut().iterator_state =
-                                Some(IteratorState::RegExpStringIterator {
+                            obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
                                     last_index, done: true,
                                 });
@@ -8608,8 +8606,7 @@ impl Interpreter {
                         ro.id
                     } else {
                         if let Some(obj2) = interp.get_object_cell(o.id) {
-                            obj2.borrow_mut().iterator_state =
-                                Some(IteratorState::RegExpStringIterator {
+                            obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
                                     last_index, done: true,
                                 });
@@ -8657,8 +8654,7 @@ impl Interpreter {
                     }
 
                     if let Some(obj2) = interp.get_object_cell(o.id) {
-                        obj2.borrow_mut().iterator_state =
-                            Some(IteratorState::RegExpStringIterator {
+                        obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                 source, flags, string, global,
                                 last_index, done: false,
                             });
@@ -8673,8 +8669,7 @@ impl Interpreter {
                     Ok(r) => r,
                     Err(_) => {
                         if let Some(obj2) = interp.get_object_cell(o.id) {
-                            obj2.borrow_mut().iterator_state =
-                                Some(IteratorState::RegExpStringIterator {
+                            obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
                                     last_index, done: true,
                                 });
@@ -8687,8 +8682,7 @@ impl Interpreter {
 
                 if last_index > string.len() {
                     if let Some(obj2) = interp.get_object_cell(o.id) {
-                        obj2.borrow_mut().iterator_state =
-                            Some(IteratorState::RegExpStringIterator {
+                        obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                 source, flags, string, global,
                                 last_index, done: true,
                             });
@@ -8701,8 +8695,7 @@ impl Interpreter {
                 match regex_captures(&re, &string[last_index..]) {
                     None => {
                         if let Some(obj2) = interp.get_object_cell(o.id) {
-                            obj2.borrow_mut().iterator_state =
-                                Some(IteratorState::RegExpStringIterator {
+                            obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
                                     last_index, done: true,
                                 });
@@ -8753,8 +8746,7 @@ impl Interpreter {
                         let new_done = !global;
 
                         if let Some(obj2) = interp.get_object_cell(o.id) {
-                            obj2.borrow_mut().iterator_state =
-                                Some(IteratorState::RegExpStringIterator {
+                            obj2.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(IteratorState::RegExpStringIterator {
                                     source, flags, string, global,
                                     last_index: new_last_index,
                                     done: new_done,

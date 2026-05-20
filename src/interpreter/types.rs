@@ -1552,7 +1552,6 @@ pub struct JsObjectData {
     pub primitive_value: Option<JsValue>,
     pub private_fields: HashMap<String, PrivateElement>,
     pub class_instance_field_defs: Vec<InstanceFieldDef>,
-    pub iterator_state: Option<IteratorState>,
     pub is_raw_json: bool,
     pub constructor_kind: ConstructorKind,
     pub(crate) generator_realm_id: Option<usize>,
@@ -1779,7 +1778,6 @@ impl JsObjectData {
             primitive_value: None,
             private_fields: HashMap::new(),
             class_instance_field_defs: Vec::new(),
-            iterator_state: None,
             is_raw_json: false,
             constructor_kind: ConstructorKind::Function,
             generator_realm_id: None,
@@ -1875,6 +1873,24 @@ impl JsObjectData {
     pub(crate) fn typed_array_info_mut(&mut self) -> Option<&mut TypedArrayInfo> {
         if let ObjectKind::TypedArray(ref mut t) = self.kind {
             Some(t)
+        } else {
+            None
+        }
+    }
+
+    /// Iterator state (Array/String/Map/Set/etc. iterator instance progress).
+    pub(crate) fn iterator_state(&self) -> Option<&IteratorState> {
+        if let ObjectKind::Iterator(ref i) = self.kind {
+            Some(i)
+        } else {
+            None
+        }
+    }
+
+    /// Iterator state — mutable view (next() advances the cursor in place).
+    pub(crate) fn iterator_state_mut(&mut self) -> Option<&mut IteratorState> {
+        if let ObjectKind::Iterator(ref mut i) = self.kind {
+            Some(i)
         } else {
             None
         }
