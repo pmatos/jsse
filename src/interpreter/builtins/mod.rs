@@ -5147,7 +5147,7 @@ impl Interpreter {
                                 if let Some(ref ta) = b.typed_array_info {
                                     use crate::interpreter::types::is_typed_array_fixed_length;
                                     let is_fixed = b
-                                        .view_buffer_object_id
+                                        .view_buffer_object_id()
                                         .and_then(|buf_id| interp.get_object(buf_id))
                                         .map(|buf| is_typed_array_fixed_length(ta, &buf.borrow()))
                                         .unwrap_or(true);
@@ -6065,7 +6065,7 @@ impl Interpreter {
                         {
                             let b = obj.borrow();
                             if let Some(ref ta) = b.typed_array_info {
-                                let is_fixed = b.view_buffer_object_id
+                                let is_fixed = b.view_buffer_object_id()
                                     .and_then(|buf_id| interp.get_object(buf_id))
                                     .map(|buf| {
                                         use crate::interpreter::types::is_typed_array_fixed_length;
@@ -6297,7 +6297,7 @@ impl Interpreter {
                             {
                                 let b = obj.borrow();
                                 if let Some(ref ta) = b.typed_array_info {
-                                    let is_fixed = b.view_buffer_object_id
+                                    let is_fixed = b.view_buffer_object_id()
                                         .and_then(|buf_id| interp.get_object(buf_id))
                                         .map(|buf| {
                                             use crate::interpreter::types::is_typed_array_fixed_length;
@@ -8045,7 +8045,7 @@ impl Interpreter {
                         let b = obj.borrow();
                         if let Some(ref ta) = b.typed_array_info {
                             let is_fixed = b
-                                .view_buffer_object_id
+                                .view_buffer_object_id()
                                 .and_then(|buf_id| interp.get_object_cell(buf_id))
                                 .map(|buf| {
                                     use crate::interpreter::types::is_typed_array_fixed_length;

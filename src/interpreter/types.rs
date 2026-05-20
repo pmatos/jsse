@@ -1326,6 +1326,9 @@ pub struct TypedArrayInfo {
     pub array_length: usize,
     pub is_detached: Rc<Cell<bool>>,
     pub is_length_tracking: bool,
+    /// Id of the ArrayBuffer (or SharedArrayBuffer) JS object that wraps `buffer`.
+    /// `None` only on the rare construction path that bypasses an object wrapper.
+    pub buffer_object_id: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1335,6 +1338,8 @@ pub struct DataViewInfo {
     pub byte_length: usize,
     pub is_detached: Rc<Cell<bool>>,
     pub is_length_tracking: bool,
+    /// Id of the ArrayBuffer (or SharedArrayBuffer) JS object that wraps `buffer`.
+    pub buffer_object_id: Option<u64>,
     pub is_immutable: bool,
 }
 
@@ -1561,7 +1566,6 @@ pub struct JsObjectData {
     pub sab_shared: Option<Arc<SharedBufferInner>>,
     pub typed_array_info: Option<TypedArrayInfo>,
     pub data_view_info: Option<DataViewInfo>,
-    pub view_buffer_object_id: Option<u64>,
     pub promise_data: Option<PromiseData>,
     pub is_raw_json: bool,
     pub constructor_kind: ConstructorKind,
@@ -1734,7 +1738,6 @@ impl JsObjectData {
             sab_shared: None,
             typed_array_info: None,
             data_view_info: None,
-            view_buffer_object_id: None,
             promise_data: None,
             is_raw_json: false,
             constructor_kind: ConstructorKind::Function,
@@ -1788,6 +1791,19 @@ impl JsObjectData {
     /// True iff this is a synthesized default derived constructor.
     pub fn is_default_derived_constructor(&self) -> bool {
         matches!(self.constructor_kind, ConstructorKind::DefaultDerivedClass)
+    }
+
+    /// Id of the ArrayBuffer wrapper object that backs this TypedArray or DataView,
+    /// pulled from whichever kind slot is populated. `None` for non-view objects.
+    pub fn view_buffer_object_id(&self) -> Option<u64> {
+        self.typed_array_info
+            .as_ref()
+            .and_then(|ta| ta.buffer_object_id)
+            .or_else(|| {
+                self.data_view_info
+                    .as_ref()
+                    .and_then(|dv| dv.buffer_object_id)
+            })
     }
 
     fn string_exotic_value(&self, key: &str) -> Option<JsValue> {

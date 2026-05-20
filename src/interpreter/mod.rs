@@ -2732,6 +2732,7 @@ impl Interpreter {
             array_length: len,
             is_detached: detached,
             is_length_tracking: false,
+            buffer_object_id: None,
         };
 
         let proto_id = self.realm().uint8array_prototype.unwrap();

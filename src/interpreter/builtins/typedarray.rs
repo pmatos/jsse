@@ -1638,7 +1638,7 @@ impl Interpreter {
                 {
                     let obj_ref = obj.borrow();
                     if obj_ref.typed_array_info.is_some()
-                        && let Some(buf_id) = obj_ref.view_buffer_object_id
+                        && let Some(buf_id) = obj_ref.view_buffer_object_id()
                     {
                         return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
                     }
@@ -1884,7 +1884,7 @@ impl Interpreter {
                         let obj_ref = obj.borrow();
                         if let Some(ref ta) = obj_ref.typed_array_info {
                             let bv = obj_ref
-                                .view_buffer_object_id
+                                .view_buffer_object_id()
                                 .map(|id| JsValue::Object(JsObject { id }))
                                 .unwrap_or(JsValue::Undefined);
                             (ta.clone(), bv)
@@ -2800,6 +2800,7 @@ impl Interpreter {
                         array_length: len,
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
+                        buffer_object_id: None,
                     };
                     for i in 0..len {
                         let val = typed_array_get_index(&ta, len - 1 - i);
@@ -2943,6 +2944,7 @@ impl Interpreter {
                         array_length: len,
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
+                        buffer_object_id: None,
                     };
                     for (i, val) in elems.iter().enumerate() {
                         typed_array_set_index(&new_ta, i, val);
@@ -3158,6 +3160,7 @@ impl Interpreter {
                         array_length: len as usize,
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
+                        buffer_object_id: None,
                     };
                     for k in 0..len as usize {
                         let elem = if k == actual_index as usize {
@@ -4229,6 +4232,7 @@ impl Interpreter {
                                         array_length,
                                         is_detached: detached,
                                         is_length_tracking,
+                                        buffer_object_id: None,
                                     };
                                     let buf_val = first.clone();
                                     let id = interp.create_typed_array_object_with_proto(ta_info, buf_val, proto);
@@ -4267,6 +4271,7 @@ impl Interpreter {
                                         array_length: len,
                                         is_detached: new_detached.clone(),
                                         is_length_tracking: false,
+                                        buffer_object_id: None,
                                     };
                                     for i in 0..len {
                                         let val = typed_array_get_index(&src_ta, i);
@@ -4311,6 +4316,7 @@ impl Interpreter {
                                     array_length: len,
                                     is_detached: new_detached.clone(),
                                     is_length_tracking: false,
+                                    buffer_object_id: None,
                                 };
                                 for (i, val) in values.iter().enumerate() {
                                     let coerced = match interp.typed_array_coerce_value(kind, val) {
@@ -4793,6 +4799,7 @@ impl Interpreter {
             array_length: len,
             is_detached: detached.clone(),
             is_length_tracking: false,
+            buffer_object_id: None,
         };
         let ab_obj_id = self.create_object_id();
         let ab_proto = self.realm().arraybuffer_prototype;
@@ -4812,18 +4819,18 @@ impl Interpreter {
 
     pub(crate) fn create_typed_array_object(
         &mut self,
-        info: TypedArrayInfo,
+        mut info: TypedArrayInfo,
         buf_val: JsValue,
     ) -> u64 {
         let proto = self.get_typed_array_prototype(info.kind);
         let obj_id = self.create_object_id();
+        if let JsValue::Object(ref bobj) = buf_val {
+            info.buffer_object_id = Some(bobj.id);
+        }
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = info.kind.name().to_string();
             o.prototype_id = proto;
-            if let JsValue::Object(ref bobj) = buf_val {
-                o.view_buffer_object_id = Some(bobj.id);
-            }
             o.typed_array_info = Some(info);
         }
         obj_id
@@ -4831,18 +4838,18 @@ impl Interpreter {
 
     pub(crate) fn create_typed_array_object_with_proto(
         &mut self,
-        info: TypedArrayInfo,
+        mut info: TypedArrayInfo,
         buf_val: JsValue,
         proto_id: u64,
     ) -> u64 {
         let obj_id = self.create_object_id();
+        if let JsValue::Object(ref bobj) = buf_val {
+            info.buffer_object_id = Some(bobj.id);
+        }
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = info.kind.name().to_string();
             o.prototype_id = Some(proto_id);
-            if let JsValue::Object(ref bobj) = buf_val {
-                o.view_buffer_object_id = Some(bobj.id);
-            }
             o.typed_array_info = Some(info);
         }
         obj_id
@@ -4913,32 +4920,31 @@ impl Interpreter {
                     let new_buf = vec![0u8; buf_byte_len];
                     let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
-                    let ta = TypedArrayInfo {
-                        kind,
-                        buffer: new_buf_rc.clone(),
-                        byte_offset: 0,
-                        byte_length: buf_byte_len,
-                        array_length: len,
-                        is_detached: new_detached.clone(),
-                        is_length_tracking: false,
-                    };
                     let ab_obj_id = self.create_object_id();
                     let ab_proto = self.realm().arraybuffer_prototype;
                     {
                         let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
                         ab.prototype_id = ab_proto;
-                        ab.arraybuffer_data = Some(new_buf_rc);
-                        ab.arraybuffer_detached = Some(new_detached);
+                        ab.arraybuffer_data = Some(new_buf_rc.clone());
+                        ab.arraybuffer_detached = Some(new_detached.clone());
                     }
                     self.gc_track_external_bytes(buf_byte_len);
-                    let ab_id = ab_obj_id;
+                    let ta = TypedArrayInfo {
+                        kind,
+                        buffer: new_buf_rc,
+                        byte_offset: 0,
+                        byte_length: buf_byte_len,
+                        array_length: len,
+                        is_detached: new_detached,
+                        is_length_tracking: false,
+                        buffer_object_id: Some(ab_obj_id),
+                    };
                     let result_id = self.create_object_id();
                     {
                         let mut r = self.get_object_cell_expect(result_id).borrow_mut();
                         r.class_name = kind.name().to_string();
                         r.prototype_id = proto;
-                        r.view_buffer_object_id = Some(ab_id);
                         r.typed_array_info = Some(ta);
                     }
                     let id = result_id;
@@ -5166,7 +5172,7 @@ impl Interpreter {
                 {
                     let obj_ref = obj.borrow();
                     if obj_ref.data_view_info.is_some() {
-                        if let Some(buf_id) = obj_ref.view_buffer_object_id {
+                        if let Some(buf_id) = obj_ref.view_buffer_object_id() {
                             return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
                         }
                         return Completion::Normal(JsValue::Undefined);
@@ -5842,6 +5848,7 @@ impl Interpreter {
                         byte_length,
                         is_detached: detached_flag,
                         is_length_tracking,
+                        buffer_object_id: None,
                         is_immutable: buf_is_immutable,
                     };
                     // OrdinaryCreateFromConstructor — realm-aware prototype
@@ -5879,14 +5886,15 @@ impl Interpreter {
                             );
                         }
                     }
+                    let mut dv_info = dv_info;
+                    if let JsValue::Object(ref bobj) = buf_arg {
+                        dv_info.buffer_object_id = Some(bobj.id);
+                    }
                     let result_id = interp.create_object_id();
                     {
                         let mut r = interp.get_object_cell_expect(result_id).borrow_mut();
                         r.class_name = "DataView".to_string();
                         r.prototype_id = Some(dv_proto);
-                        if let JsValue::Object(ref bobj) = buf_arg {
-                            r.view_buffer_object_id = Some(bobj.id);
-                        }
                         r.data_view_info = Some(dv_info);
                     }
                     let id = result_id;
@@ -6730,6 +6738,7 @@ fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Compl
         array_length: len,
         is_detached: detached.clone(),
         is_length_tracking: false,
+        buffer_object_id: None,
     };
     let ab_obj_id = interp.create_object_id();
     let ab_proto = interp.realm().arraybuffer_prototype;

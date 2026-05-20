@@ -379,7 +379,7 @@ impl Interpreter {
                 }
             }
         }
-        if let Some(buf_id) = obj.view_buffer_object_id {
+        if let Some(buf_id) = obj.view_buffer_object_id() {
             worklist.push(buf_id);
         }
         if let Some(ref roots) = obj.gc_native_roots {
