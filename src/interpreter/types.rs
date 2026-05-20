@@ -1564,7 +1564,6 @@ pub struct JsObjectData {
     pub promise_data: Option<PromiseData>,
     pub is_raw_json: bool,
     pub constructor_kind: ConstructorKind,
-    pub bound: Option<BoundFunctionData>,
     pub shadow_realm_id: Option<usize>,
     pub(crate) disposable_stack: Option<DisposableStackData>,
     pub(crate) module_namespace: Option<ModuleNamespaceData>,
@@ -1800,7 +1799,6 @@ impl JsObjectData {
             promise_data: None,
             is_raw_json: false,
             constructor_kind: ConstructorKind::Function,
-            bound: None,
             shadow_realm_id: None,
             disposable_stack: None,
             module_namespace: None,
@@ -1889,6 +1887,15 @@ impl JsObjectData {
     pub(crate) fn wrapped(&self) -> Option<&WrappedFunctionData> {
         if let ObjectKind::WrappedFunction(ref w) = self.kind {
             Some(w)
+        } else {
+            None
+        }
+    }
+
+    /// Bound-function slot data. `Some` iff this is a `Function.prototype.bind` result.
+    pub(crate) fn bound(&self) -> Option<&BoundFunctionData> {
+        if let ObjectKind::BoundFunction(ref b) = self.kind {
+            Some(b)
         } else {
             None
         }

@@ -781,7 +781,7 @@ impl Interpreter {
         {
             let obj_ref = obj.borrow();
             // Bound function: recurse on [[BoundTargetFunction]]
-            if let Some(ref b) = obj_ref.bound {
+            if let Some(b) = obj_ref.bound() {
                 let target_clone = b.target.clone();
                 drop(obj_ref);
                 return self.get_function_realm(&target_clone);

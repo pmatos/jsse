@@ -321,7 +321,7 @@ impl Interpreter {
         if let Some(w) = obj.wrapped() {
             worklist.push(w.target_id);
         }
-        if let Some(ref b) = obj.bound {
+        if let Some(b) = obj.bound() {
             Self::collect_value_roots(&b.target, worklist);
             Self::collect_value_roots(&b.this, worklist);
             for v in &b.args {

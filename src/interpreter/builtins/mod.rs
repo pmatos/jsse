@@ -8839,8 +8839,8 @@ impl Interpreter {
                             let (target, bt, ba) = {
                                 let obj = interp2.get_object_cell(obj_id).unwrap();
                                 let b = obj.borrow();
-                                match b.bound {
-                                    Some(ref bd) => {
+                                match b.bound() {
+                                    Some(bd) => {
                                         (bd.target.clone(), bd.this.clone(), bd.args.clone())
                                     }
                                     None => (JsValue::Undefined, JsValue::Undefined, Vec::new()),
@@ -8873,11 +8873,13 @@ impl Interpreter {
                     obj.borrow_mut().property_order.retain(|k| k != "prototype");
                     // Store [[BoundTargetFunction]] / [[BoundThis]] / [[BoundArguments]].
                     let stored_bound_args: Vec<JsValue> = args.iter().skip(1).cloned().collect();
-                    obj.borrow_mut().bound = Some(crate::interpreter::types::BoundFunctionData {
-                        target: this_val.clone(),
-                        this: bind_this.clone(),
-                        args: stored_bound_args,
-                    });
+                    obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::BoundFunction(
+                        crate::interpreter::types::BoundFunctionData {
+                            target: this_val.clone(),
+                            this: bind_this.clone(),
+                            args: stored_bound_args,
+                        },
+                    );
                     // Overwrite length with correct f64 value (handles Infinity)
                     obj.borrow_mut().insert_property(
                         "length".to_string(),
