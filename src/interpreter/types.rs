@@ -1563,9 +1563,7 @@ pub struct JsObjectData {
     pub promise_data: Option<PromiseData>,
     pub is_raw_json: bool,
     pub constructor_kind: ConstructorKind,
-    pub shadow_realm_id: Option<usize>,
     pub(crate) disposable_stack: Option<DisposableStackData>,
-    pub(crate) module_namespace: Option<ModuleNamespaceData>,
     pub(crate) temporal_data: Option<TemporalData>,
     pub(crate) intl_data: Option<IntlData>,
     pub(crate) generator_realm_id: Option<usize>,
@@ -1796,9 +1794,7 @@ impl JsObjectData {
             promise_data: None,
             is_raw_json: false,
             constructor_kind: ConstructorKind::Function,
-            shadow_realm_id: None,
             disposable_stack: None,
-            module_namespace: None,
             temporal_data: None,
             intl_data: None,
             generator_realm_id: None,
@@ -1910,6 +1906,33 @@ impl JsObjectData {
     pub(crate) fn iter_helper(&self) -> Option<&IterHelperData> {
         if let ObjectKind::IterHelper(ref h) = self.kind {
             Some(h)
+        } else {
+            None
+        }
+    }
+
+    /// Shadow-realm id for a ShadowRealm instance.
+    pub(crate) fn shadow_realm_id(&self) -> Option<usize> {
+        if let ObjectKind::ShadowRealm(id) = self.kind {
+            Some(id)
+        } else {
+            None
+        }
+    }
+
+    /// Module namespace slot data.
+    pub(crate) fn module_namespace(&self) -> Option<&ModuleNamespaceData> {
+        if let ObjectKind::ModuleNamespace(ref n) = self.kind {
+            Some(n)
+        } else {
+            None
+        }
+    }
+
+    /// Module namespace slot data — mutable view for clearing the deferred flag.
+    pub(crate) fn module_namespace_mut(&mut self) -> Option<&mut ModuleNamespaceData> {
+        if let ObjectKind::ModuleNamespace(ref mut n) = self.kind {
+            Some(n)
         } else {
             None
         }
@@ -2035,7 +2058,7 @@ impl JsObjectData {
 
     pub fn get_own_property(&self, key: &str) -> Option<PropertyDescriptor> {
         // Module namespace exotic: §10.4.6.4 [[GetOwnProperty]]
-        if let Some(ref ns_data) = self.module_namespace
+        if let Some(ns_data) = self.module_namespace()
             && !key.starts_with("Symbol(")
         {
             if ns_data.export_names.contains(&key.to_string()) {
@@ -2139,7 +2162,7 @@ impl JsObjectData {
 
     pub fn has_own_property(&self, key: &str) -> bool {
         // Module namespace exotic: [[HasProperty]] checks export list
-        if let Some(ref ns_data) = self.module_namespace
+        if let Some(ns_data) = self.module_namespace()
             && !key.starts_with("Symbol(")
         {
             return ns_data.export_names.contains(&key.to_string());
@@ -2209,7 +2232,7 @@ impl JsObjectData {
             return true;
         }
         // Module namespace exotic: §10.4.6.5 [[DefineOwnProperty]]
-        if self.module_namespace.is_some() {
+        if self.module_namespace().is_some() {
             if let Some(current) = self.get_own_property(&key) {
                 // If every field is absent, return true
                 if desc.value.is_none()
@@ -2771,7 +2794,7 @@ impl JsObjectData {
     /// canonical numeric indices, and string exotic indices). Returns `None` if
     /// the caller should continue walking the prototype chain.
     pub fn own_property_lookup(&self, key: &str) -> Option<JsValue> {
-        if let Some(ref ns_data) = self.module_namespace
+        if let Some(ns_data) = self.module_namespace()
             && let Some(binding_name) = ns_data.export_to_binding.get(key)
         {
             return Some(

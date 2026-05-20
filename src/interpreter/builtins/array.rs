@@ -186,8 +186,7 @@ pub(crate) fn create_data_property_or_throw(
         {
             let is_deferred_ns = interp.get_object_cell(obj_ref.id).is_some_and(|cell| {
                 cell.borrow()
-                    .module_namespace
-                    .as_ref()
+                    .module_namespace()
                     .is_some_and(|ns| ns.deferred)
             });
             if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(key, true) {

@@ -516,7 +516,9 @@ impl Interpreter {
         let obj_rc = self.get_object(obj_id)?;
         let obj = obj_rc.borrow();
         // Non-cacheable categories (plan "Excluded from IC in v1").
-        if obj.proxy().is_some() || obj.module_namespace.is_some() || obj.typed_array_info.is_some()
+        if obj.proxy().is_some()
+            || obj.module_namespace().is_some()
+            || obj.typed_array_info.is_some()
         {
             return None;
         }

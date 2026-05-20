@@ -1848,7 +1848,7 @@ impl Interpreter {
                         .get_object_cell(obj_id)
                         .map(|obj| {
                             let b = obj.borrow();
-                            b.is_proxy() || b.module_namespace.is_some()
+                            b.is_proxy() || b.module_namespace().is_some()
                         })
                         .unwrap_or(false);
                     if needs_proxy_path {

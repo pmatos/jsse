@@ -645,7 +645,7 @@ impl Interpreter {
                         if !key.starts_with("Symbol(") {
                             let ns_info = obj
                                 .borrow()
-                                .module_namespace
+                                .module_namespace()
                                 .as_ref()
                                 .map(|ns| (ns.deferred, ns.export_names.clone()));
                             let ns_obj_id = obj.borrow().id.unwrap();
@@ -3231,7 +3231,7 @@ impl Interpreter {
                         }
                     }
                     // Module namespace [[Set]] always returns false (§10.4.6.5)
-                    if obj.borrow().module_namespace.is_some() {
+                    if obj.borrow().module_namespace().is_some() {
                         if env.borrow().strict {
                             return Completion::Throw(self.create_type_error(&format!(
                                 "Cannot assign to read only property '{key}' of object '[object Module]'"
@@ -4083,7 +4083,7 @@ impl Interpreter {
                 }
             }
             // Module namespace exotic: [[Set]] always returns false
-            if obj.borrow().module_namespace.is_some() {
+            if obj.borrow().module_namespace().is_some() {
                 if strict {
                     return Err(self.create_type_error(&format!(
                         "Cannot assign to read only property '{key}' of module namespace"
@@ -15430,7 +15430,7 @@ impl Interpreter {
             {
                 let is_deferred_ns = obj
                     .borrow()
-                    .module_namespace
+                    .module_namespace()
                     .as_ref()
                     .is_some_and(|ns| ns.deferred);
                 if is_deferred_ns && !Self::is_symbol_like_namespace_key(&key, true) {
@@ -15709,7 +15709,7 @@ impl Interpreter {
             {
                 let is_deferred_ns = obj
                     .borrow()
-                    .module_namespace
+                    .module_namespace()
                     .as_ref()
                     .is_some_and(|ns| ns.deferred);
                 if is_deferred_ns {

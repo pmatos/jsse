@@ -4764,7 +4764,7 @@ impl Interpreter {
                     {
                         // Deferred namespace: trigger evaluation on [[DefineOwnProperty]]
                         {
-                            let is_deferred_ns = obj.borrow().module_namespace.as_ref().is_some_and(|ns| ns.deferred);
+                            let is_deferred_ns = obj.borrow().module_namespace().is_some_and(|ns| ns.deferred);
                             if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(&key, true)
                                 && let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
                                     return Completion::Throw(e);
@@ -4792,7 +4792,7 @@ impl Interpreter {
                             }
                         }
                         // Module namespace exotic: [[DefineOwnProperty]]
-                        if obj.borrow().module_namespace.is_some() {
+                        if obj.borrow().module_namespace().is_some() {
                             match interp.to_property_descriptor(&desc_val) {
                                 Ok(desc) => {
                                     let success = obj.borrow_mut().define_own_property(key, desc);
@@ -4876,7 +4876,7 @@ impl Interpreter {
                         {
                             let deferred_ns = interp.get_object_cell(o.id).and_then(|obj| {
                                 let b = obj.borrow();
-                                b.module_namespace.as_ref().map(|ns| ns.deferred)
+                                b.module_namespace().map(|ns| ns.deferred)
                             });
                             if deferred_ns == Some(true)
                                 && !Interpreter::is_symbol_like_namespace_key(&key, true)
@@ -4900,14 +4900,14 @@ impl Interpreter {
                         // Module namespace [[GetOwnProperty]] (§10.4.6.4): live binding
                         let is_ns = interp
                             .get_object_cell(o.id)
-                            .map(|obj| obj.borrow().module_namespace.is_some())
+                            .map(|obj| obj.borrow().module_namespace().is_some())
                             .unwrap_or(false);
                         if is_ns {
                             let is_export = interp
                                 .get_object(o.id)
                                 .and_then(|obj| {
                                     let b = obj.borrow();
-                                    let ns = b.module_namespace.as_ref()?;
+                                    let ns = b.module_namespace()?;
                                     Some(ns.export_names.contains(&key))
                                 })
                                 .unwrap_or(false);
@@ -5842,7 +5842,7 @@ impl Interpreter {
                         {
                             let is_deferred_ns = obj
                                 .borrow()
-                                .module_namespace
+                                .module_namespace()
                                 .as_ref()
                                 .is_some_and(|ns| ns.deferred);
                             if is_deferred_ns
@@ -5982,7 +5982,7 @@ impl Interpreter {
                         if let Some(obj) = interp.get_object_cell(obj_id) {
                             let is_deferred_ns = obj
                                 .borrow()
-                                .module_namespace
+                                .module_namespace()
                                 .as_ref()
                                 .is_some_and(|ns| ns.deferred);
                             if is_deferred_ns
@@ -7511,7 +7511,7 @@ impl Interpreter {
                     {
                         let is_deferred_ns = obj
                             .borrow()
-                            .module_namespace
+                            .module_namespace()
                             .as_ref()
                             .is_some_and(|ns| ns.deferred);
                         if is_deferred_ns
@@ -7614,11 +7614,11 @@ impl Interpreter {
                     }
                     // Module namespace exotic: [[Delete]] — only for string keys (not symbols)
                     if !key.starts_with("Symbol(") {
-                        let is_ns = obj.borrow().module_namespace.is_some();
+                        let is_ns = obj.borrow().module_namespace().is_some();
                         if is_ns {
                             let export_names = obj
                                 .borrow()
-                                .module_namespace
+                                .module_namespace()
                                 .as_ref()
                                 .unwrap()
                                 .export_names
@@ -7705,7 +7705,7 @@ impl Interpreter {
                         {
                             let deferred_ns = interp.get_object_cell(o.id).and_then(|obj| {
                                 let b = obj.borrow();
-                                b.module_namespace.as_ref().map(|ns| ns.deferred)
+                                b.module_namespace().map(|ns| ns.deferred)
                             });
                             if deferred_ns == Some(true)
                                 && !Interpreter::is_symbol_like_namespace_key(&key, true)
@@ -7728,14 +7728,14 @@ impl Interpreter {
                         // Module namespace [[GetOwnProperty]] (§10.4.6.4): live binding
                         let is_ns = interp
                             .get_object_cell(o.id)
-                            .map(|obj| obj.borrow().module_namespace.is_some())
+                            .map(|obj| obj.borrow().module_namespace().is_some())
                             .unwrap_or(false);
                         if is_ns {
                             let is_export = interp
                                 .get_object_cell(o.id)
                                 .and_then(|obj| {
                                     let b = obj.borrow();
-                                    let ns = b.module_namespace.as_ref()?;
+                                    let ns = b.module_namespace()?;
                                     Some(ns.export_names.contains(&key))
                                 })
                                 .unwrap_or(false);
@@ -7891,7 +7891,7 @@ impl Interpreter {
                     {
                         let is_deferred_ns = obj
                             .borrow()
-                            .module_namespace
+                            .module_namespace()
                             .as_ref()
                             .is_some_and(|ns| ns.deferred);
                         if is_deferred_ns
@@ -8100,7 +8100,7 @@ impl Interpreter {
                 // Module namespace exotic: [[Set]] always returns false
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object_cell(o.id)
-                    && obj.borrow().module_namespace.is_some()
+                    && obj.borrow().module_namespace().is_some()
                 {
                     return Completion::Normal(JsValue::Boolean(false));
                 }
@@ -9009,7 +9009,7 @@ impl Interpreter {
             move |interp, this, args| {
                 let eval_realm_id = if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object_cell(o.id)
-                    && let Some(realm_id) = obj.borrow().shadow_realm_id
+                    && let Some(realm_id) = obj.borrow().shadow_realm_id()
                 {
                     realm_id
                 } else {
@@ -9046,7 +9046,7 @@ impl Interpreter {
             move |interp, this, args| {
                 let eval_realm_id = if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object_cell(o.id)
-                    && let Some(realm_id) = obj.borrow().shadow_realm_id
+                    && let Some(realm_id) = obj.borrow().shadow_realm_id()
                 {
                     realm_id
                 } else {
@@ -9185,7 +9185,7 @@ impl Interpreter {
                 {
                     let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                     o.class_name = "ShadowRealm".to_string();
-                    o.shadow_realm_id = Some(new_realm_id);
+                    o.kind = crate::interpreter::types::ObjectKind::ShadowRealm(new_realm_id);
                     if let JsValue::Object(ref p) = proto_val_for_ctor {
                         o.prototype_id = Some(p.id);
                     }

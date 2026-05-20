@@ -114,7 +114,7 @@ impl Interpreter {
             return Ok(());
         }
         let ns_data = if let Some(obj) = self.get_object_cell(obj_id) {
-            obj.borrow().module_namespace.clone()
+            obj.borrow().module_namespace().cloned()
         } else {
             None
         };
@@ -175,7 +175,7 @@ impl Interpreter {
     ) -> Result<(), JsValue> {
         let (deferred, module_path) = if let Some(obj) = self.get_object_cell(obj_id) {
             let b = obj.borrow();
-            if let Some(ref ns) = b.module_namespace {
+            if let Some(ref ns) = b.module_namespace() {
                 (ns.deferred, ns.module_path.clone())
             } else {
                 return Ok(());
@@ -204,7 +204,7 @@ impl Interpreter {
                 return Err(err.clone());
             }
             if let Some(obj) = self.get_object_cell(obj_id)
-                && let Some(ref mut ns) = obj.borrow_mut().module_namespace
+                && let Some(ns) = obj.borrow_mut().module_namespace_mut()
             {
                 ns.deferred = false;
             }
@@ -229,7 +229,7 @@ impl Interpreter {
         match result {
             Ok(_) => {
                 if let Some(obj) = self.get_object_cell(obj_id)
-                    && let Some(ref mut ns) = obj.borrow_mut().module_namespace
+                    && let Some(ns) = obj.borrow_mut().module_namespace_mut()
                 {
                     ns.deferred = false;
                 }
@@ -262,7 +262,7 @@ impl Interpreter {
         if let Some(obj) = self.get_object_cell(obj_id) {
             let b = obj.borrow();
             let is_proxy = b.proxy().is_some();
-            let has_module_ns = b.module_namespace.is_some();
+            let has_module_ns = b.module_namespace().is_some();
 
             if !is_proxy && !has_module_ns {
                 // Fast path for ordinary objects (the common case)
@@ -381,7 +381,7 @@ impl Interpreter {
         {
             let ns_data = self
                 .get_object_cell(obj_id)
-                .and_then(|obj| obj.borrow().module_namespace.clone());
+                .and_then(|obj| obj.borrow().module_namespace().cloned());
             if let Some(ns_data) = ns_data {
                 // Deferred namespace: IsSymbolLikeNamespaceKey check
                 if ns_data.deferred
@@ -482,7 +482,7 @@ impl Interpreter {
             {
                 let is_deferred_ns = obj
                     .borrow()
-                    .module_namespace
+                    .module_namespace()
                     .as_ref()
                     .is_some_and(|ns| ns.deferred);
                 if is_deferred_ns && !Self::is_symbol_like_namespace_key(key, true) {

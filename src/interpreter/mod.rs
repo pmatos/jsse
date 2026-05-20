@@ -3984,15 +3984,14 @@ impl Interpreter {
         }; // module_ref borrow dropped here
 
         // Set module namespace data for live bindings
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .module_namespace = Some(ModuleNamespaceData {
-            env: env.clone(),
-            export_names: export_names.clone(),
-            export_to_binding: export_bindings,
-            module_path,
-            deferred: false,
-        });
+        self.get_object_cell_expect(obj_id).borrow_mut().kind =
+            crate::interpreter::types::ObjectKind::ModuleNamespace(ModuleNamespaceData {
+                env: env.clone(),
+                export_names: export_names.clone(),
+                export_to_binding: export_bindings,
+                module_path,
+                deferred: false,
+            });
         self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".to_string();
         self.get_object_cell_expect(obj_id).borrow_mut().extensible = false; // Module namespaces are non-extensible
         self.get_object_cell_expect(obj_id)
@@ -4066,15 +4065,14 @@ impl Interpreter {
             (env, export_bindings, module_path, export_names)
         };
 
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .module_namespace = Some(ModuleNamespaceData {
-            env: env.clone(),
-            export_names: export_names.clone(),
-            export_to_binding: export_bindings,
-            module_path,
-            deferred: true,
-        });
+        self.get_object_cell_expect(obj_id).borrow_mut().kind =
+            crate::interpreter::types::ObjectKind::ModuleNamespace(ModuleNamespaceData {
+                env: env.clone(),
+                export_names: export_names.clone(),
+                export_to_binding: export_bindings,
+                module_path,
+                deferred: true,
+            });
         self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".to_string();
         self.get_object_cell_expect(obj_id).borrow_mut().extensible = false;
         self.get_object_cell_expect(obj_id)
