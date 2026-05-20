@@ -1580,8 +1580,7 @@ pub struct JsObjectData {
     pub(crate) generator_realm_id: Option<usize>,
     pub(crate) is_htmldda: bool,
     pub(crate) is_immutable_prototype: bool,
-    pub(crate) regexp_original_source: Option<JsString>,
-    pub(crate) regexp_original_flags: Option<JsString>,
+    pub(crate) regexp: Option<RegExpData>,
     pub(crate) deferred_construct: bool,
     pub(crate) gc_native_roots: Option<Vec<JsValue>>,
     pub(crate) wrap_iter_record: Option<(JsValue, JsValue)>,
@@ -1612,6 +1611,17 @@ pub(crate) struct ModuleNamespaceData {
 pub(crate) struct DisposableStackData {
     pub(crate) stack: Vec<DisposableResource>,
     pub(crate) disposed: bool,
+}
+
+/// RegExp instance slot data. Present iff the object is a RegExp instance
+/// (constructed via the literal syntax or `new RegExp(...)`).
+///
+/// Source and flags are stored as the *original* pattern and flag strings —
+/// what `RegExp.prototype.source` / `RegExp.prototype.flags` must return.
+#[derive(Clone, Debug)]
+pub(crate) struct RegExpData {
+    pub source: JsString,
+    pub flags: JsString,
 }
 
 /// Proxy slot data. Present on an object iff it is (or was) a Proxy.
@@ -1690,8 +1700,7 @@ impl JsObjectData {
             generator_realm_id: None,
             is_htmldda: false,
             is_immutable_prototype: false,
-            regexp_original_source: None,
-            regexp_original_flags: None,
+            regexp: None,
             deferred_construct: false,
             gc_native_roots: None,
             wrap_iter_record: None,

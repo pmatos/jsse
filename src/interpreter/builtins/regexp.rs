@@ -6224,16 +6224,11 @@ fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(Str
         && let Some(obj) = interp.get_object_cell(o.id)
     {
         let b = obj.borrow();
-        let source = if let Some(ref s) = b.regexp_original_source {
-            js_string_to_regex_input(&s.code_units)
-        } else {
+        let Some(ref r) = b.regexp else {
             return None;
         };
-        let flags = if let Some(ref s) = b.regexp_original_flags {
-            s.to_rust_string()
-        } else {
-            String::new()
-        };
+        let source = js_string_to_regex_input(&r.source.code_units);
+        let flags = r.flags.to_rust_string();
         drop(b);
         Some((source, flags, o.id))
     } else {
@@ -6386,15 +6381,13 @@ fn regexp_exec_abstract(
         }
         let (source, flags) = if let Some(obj) = interp.get_object_cell(rx_id) {
             let b = obj.borrow();
-            let src = if let Some(ref s) = b.regexp_original_source {
-                js_string_to_regex_input(&s.code_units)
+            let (src, fl) = if let Some(ref r) = b.regexp {
+                (
+                    js_string_to_regex_input(&r.source.code_units),
+                    r.flags.to_rust_string(),
+                )
             } else {
-                String::new()
-            };
-            let fl = if let Some(ref s) = b.regexp_original_flags {
-                s.to_rust_string()
-            } else {
-                String::new()
+                (String::new(), String::new())
             };
             drop(b);
             (src, fl)
@@ -6636,17 +6629,14 @@ fn regexp_exec_raw(
     let (source_owned, flags_owned) = {
         if let Some(obj) = interp.get_object_cell(this_id) {
             let b = obj.borrow();
-            let src = b
-                .regexp_original_source
-                .as_ref()
-                .map(|s| js_string_to_regex_input(&s.code_units))
-                .unwrap_or_else(|| source.to_string());
-            let fl = b
-                .regexp_original_flags
-                .as_ref()
-                .map(|s| s.to_rust_string())
-                .unwrap_or_else(|| flags.to_string());
-            (src, fl)
+            if let Some(ref r) = b.regexp {
+                (
+                    js_string_to_regex_input(&r.source.code_units),
+                    r.flags.to_rust_string(),
+                )
+            } else {
+                (source.to_string(), flags.to_string())
+            }
         } else {
             (source.to_string(), flags.to_string())
         }
@@ -7099,17 +7089,15 @@ impl Interpreter {
                     };
                     if let Some(pobj) = interp.get_object_cell(po_id) {
                         let b = pobj.borrow();
-                        pattern_str = if let Some(ref s) = b.regexp_original_source {
-                            js_string_to_regex_input(&s.code_units)
+                        if let Some(ref r) = b.regexp {
+                            pattern_str = js_string_to_regex_input(&r.source.code_units);
+                            pattern_js = Some(r.source.clone());
+                            flags_str = r.flags.to_rust_string();
                         } else {
-                            "(?:)".to_string()
-                        };
-                        pattern_js = b.regexp_original_source.clone();
-                        flags_str = if let Some(ref s) = b.regexp_original_flags {
-                            s.to_rust_string()
-                        } else {
-                            String::new()
-                        };
+                            pattern_str = "(?:)".to_string();
+                            pattern_js = None;
+                            flags_str = String::new();
+                        }
                     } else {
                         pattern_str = "(?:)".to_string();
                         pattern_js = None;
@@ -7173,9 +7161,10 @@ impl Interpreter {
 
                 // 5. Return ? RegExpInitialize(O, P, F).
                 if let Some(obj) = interp.get_object_cell(obj_id) {
-                    let mut b = obj.borrow_mut();
-                    b.regexp_original_source = Some(source_js);
-                    b.regexp_original_flags = Some(JsString::from_str(&flags_str));
+                    obj.borrow_mut().regexp = Some(crate::interpreter::types::RegExpData {
+                        source: source_js,
+                        flags: JsString::from_str(&flags_str),
+                    });
                 }
                 // Set lastIndex to 0 with strict mode (throws TypeError if non-writable)
                 if let Err(e) = set_last_index_strict(interp, obj_id, 0.0) {
@@ -7243,22 +7232,17 @@ impl Interpreter {
                 // drive the loop from the accessor while the matcher runs off the internals.
                 let flags_match_internals = interp
                     .get_object_cell(rx_id)
-                    .and_then(|o| {
-                        o.borrow()
-                            .regexp_original_flags
-                            .as_ref()
-                            .map(|f| f.to_rust_string())
-                    })
+                    .and_then(|o| o.borrow().regexp.as_ref().map(|r| r.flags.to_rust_string()))
                     .is_some_and(|fo| fo == flags_str);
                 if flags_match_internals && is_pristine_regexp(interp, rx_id) {
                     let (source, flags_owned) = {
                         let obj = interp.get_object_cell(rx_id).unwrap();
                         let b = obj.borrow();
-                        let src = js_string_to_regex_input(
-                            &b.regexp_original_source.as_ref().unwrap().code_units,
-                        );
-                        let fl = b.regexp_original_flags.as_ref().unwrap().to_rust_string();
-                        (src, fl)
+                        let r = b.regexp.as_ref().unwrap();
+                        (
+                            js_string_to_regex_input(&r.source.code_units),
+                            r.flags.to_rust_string(),
+                        )
                     };
                     let cached = match build_regex_cached(interp, &source, &flags_owned) {
                         Ok(r) => r,
@@ -7583,12 +7567,7 @@ impl Interpreter {
                 // the accessor while the matcher runs off the internals.
                 let flags_match_internals = interp
                     .get_object_cell(rx_id)
-                    .and_then(|o| {
-                        o.borrow()
-                            .regexp_original_flags
-                            .as_ref()
-                            .map(|f| f.to_rust_string())
-                    })
+                    .and_then(|o| o.borrow().regexp.as_ref().map(|r| r.flags.to_rust_string()))
                     .is_some_and(|fo| fo == flags);
                 if global
                     && !functional_replace
@@ -7598,11 +7577,11 @@ impl Interpreter {
                     let (source, flags_owned) = {
                         let obj = interp.get_object_cell(rx_id).unwrap();
                         let b = obj.borrow();
-                        let src = js_string_to_regex_input(
-                            &b.regexp_original_source.as_ref().unwrap().code_units,
-                        );
-                        let fl = b.regexp_original_flags.as_ref().unwrap().to_rust_string();
-                        (src, fl)
+                        let r = b.regexp.as_ref().unwrap();
+                        (
+                            js_string_to_regex_input(&r.source.code_units),
+                            r.flags.to_rust_string(),
+                        )
                     };
                     let cached = match build_regex_cached(interp, &source, &flags_owned) {
                         Ok(r) => r,
@@ -8916,7 +8895,7 @@ impl Interpreter {
                             ),
                         ));
                     }
-                    let flags_opt = obj.borrow().regexp_original_flags.clone();
+                    let flags_opt = obj.borrow().regexp.as_ref().map(|r| r.flags.clone());
                     if let Some(s) = flags_opt {
                         Completion::Normal(JsValue::Boolean(s.to_rust_string().contains(flag_char)))
                     } else {
@@ -8968,7 +8947,7 @@ impl Interpreter {
                         "RegExp.prototype.source requires that 'this' be a RegExp object",
                     ));
                 }
-                let source_opt = obj.borrow().regexp_original_source.clone();
+                let source_opt = obj.borrow().regexp.as_ref().map(|r| r.source.clone());
                 if let Some(ref s) = source_opt {
                     let escaped = escape_regexp_pattern_code_units(&s.code_units);
                     Completion::Normal(JsValue::String(escaped))
@@ -9070,7 +9049,7 @@ impl Interpreter {
                     if has_regexp_matcher && let JsValue::Object(ref o) = pattern_arg {
                         let src_js = interp
                             .get_object_cell(o.id)
-                            .and_then(|obj| obj.borrow().regexp_original_source.clone())
+                            .and_then(|obj| obj.borrow().regexp.as_ref().map(|r| r.source.clone()))
                             .unwrap_or_else(|| JsString::from_str(""));
                         let src = js_string_to_regex_input(&src_js.code_units);
                         let flg = if matches!(flags_arg, JsValue::Undefined) {
@@ -9078,10 +9057,7 @@ impl Interpreter {
                                 interp
                                     .get_object_cell(o.id)
                                     .and_then(|obj| {
-                                        obj.borrow()
-                                            .regexp_original_flags
-                                            .as_ref()
-                                            .map(|s| s.to_string())
+                                        obj.borrow().regexp.as_ref().map(|r| r.flags.to_string())
                                     })
                                     .unwrap_or_default(),
                             )
@@ -9188,9 +9164,11 @@ impl Interpreter {
                 let mut obj = JsObjectData::new();
                 obj.prototype_id = proto.or(Some(regexp_proto_rc_id));
                 obj.class_name = "RegExp".to_string();
-                // Store internal slots as non-enumerable hidden properties
-                obj.regexp_original_source = Some(source_js);
-                obj.regexp_original_flags = Some(JsString::from_str(&flags_str));
+                // Store internal slots ([[OriginalSource]], [[OriginalFlags]])
+                obj.regexp = Some(crate::interpreter::types::RegExpData {
+                    source: source_js,
+                    flags: JsString::from_str(&flags_str),
+                });
                 obj.insert_property(
                     "lastIndex".to_string(),
                     PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),

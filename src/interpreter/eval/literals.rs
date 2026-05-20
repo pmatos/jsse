@@ -102,8 +102,10 @@ impl Interpreter {
                 } else {
                     crate::interpreter::builtins::regexp::regex_output_to_js_string(pattern)
                 };
-                obj.regexp_original_source = Some(source_js);
-                obj.regexp_original_flags = Some(JsString::from_str(flags));
+                obj.regexp = Some(crate::interpreter::types::RegExpData {
+                    source: source_js,
+                    flags: JsString::from_str(flags),
+                });
                 obj.insert_property(
                     "lastIndex".to_string(),
                     PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
@@ -144,8 +146,10 @@ impl Interpreter {
             .or(self.realm().object_prototype);
         obj.class_name = "RegExp".to_string();
         let source_str = if pattern.is_empty() { "(?:)" } else { pattern };
-        obj.regexp_original_source = Some(JsString::from_str(source_str));
-        obj.regexp_original_flags = Some(JsString::from_str(flags));
+        obj.regexp = Some(crate::interpreter::types::RegExpData {
+            source: JsString::from_str(source_str),
+            flags: JsString::from_str(flags),
+        });
         obj.insert_property(
             "lastIndex".to_string(),
             PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
