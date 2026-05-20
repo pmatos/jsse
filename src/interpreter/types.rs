@@ -1567,9 +1567,7 @@ pub struct JsObjectData {
     pub is_class_constructor: bool,
     pub is_derived_class_constructor: bool,
     pub is_default_derived_constructor: bool,
-    pub bound_target_function: Option<JsValue>,
-    pub bound_args: Option<Vec<JsValue>>,
-    pub bound_this: Option<JsValue>,
+    pub bound: Option<BoundFunctionData>,
     pub shadow_realm_id: Option<usize>,
     pub wrapped_target_function_id: Option<u64>,
     pub wrapped_caller_realm_id: Option<usize>,
@@ -1611,6 +1609,18 @@ pub(crate) struct ModuleNamespaceData {
 pub(crate) struct DisposableStackData {
     pub(crate) stack: Vec<DisposableResource>,
     pub(crate) disposed: bool,
+}
+
+/// Bound-function slot data. Present iff this object is a bound function
+/// (created by `Function.prototype.bind`). The three slots — target, bound
+/// `this`, and pre-bound positional args — were previously held as three
+/// independent `Option` fields that were always written together; this struct
+/// makes that pairing typed.
+#[derive(Clone, Debug)]
+pub(crate) struct BoundFunctionData {
+    pub target: JsValue,
+    pub this: JsValue,
+    pub args: Vec<JsValue>,
 }
 
 /// RegExp instance slot data. Present iff the object is a RegExp instance
@@ -1687,9 +1697,7 @@ impl JsObjectData {
             is_class_constructor: false,
             is_derived_class_constructor: false,
             is_default_derived_constructor: false,
-            bound_target_function: None,
-            bound_args: None,
-            bound_this: None,
+            bound: None,
             shadow_realm_id: None,
             wrapped_target_function_id: None,
             wrapped_caller_realm_id: None,

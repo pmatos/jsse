@@ -321,16 +321,12 @@ impl Interpreter {
         if let Some(target_id) = obj.wrapped_target_function_id {
             worklist.push(target_id);
         }
-        if let Some(ref target) = obj.bound_target_function {
-            Self::collect_value_roots(target, worklist);
-        }
-        if let Some(ref bargs) = obj.bound_args {
-            for v in bargs {
+        if let Some(ref b) = obj.bound {
+            Self::collect_value_roots(&b.target, worklist);
+            Self::collect_value_roots(&b.this, worklist);
+            for v in &b.args {
                 Self::collect_value_roots(v, worklist);
             }
-        }
-        if let Some(ref bt) = obj.bound_this {
-            Self::collect_value_roots(bt, worklist);
         }
         if let Some(ref map) = obj.parameter_map {
             for (env_ref, _) in map.values() {

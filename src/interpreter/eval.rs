@@ -5399,7 +5399,7 @@ impl Interpreter {
         let obj = obj_rc.borrow();
         if obj.proxy.is_some()
             || obj.wrapped_target_function_id.is_some()
-            || obj.bound_target_function.is_some()
+            || obj.bound.is_some()
             || obj.is_class_constructor
         {
             return None;
@@ -13591,7 +13591,7 @@ impl Interpreter {
         // Bound functions: delegate to construct_with_new_target which handles new_target resolution
         if let JsValue::Object(ref co) = callee_val
             && let Some(func_obj) = self.get_object_cell(co.id)
-            && func_obj.borrow().bound_target_function.is_some()
+            && func_obj.borrow().bound.is_some()
         {
             self.gc_unroot_frame(gc_frame);
             return self.construct_with_new_target(
@@ -13936,8 +13936,9 @@ impl Interpreter {
         // Bound function [[Construct]]: resolve newTarget through bound chain
         if let Some(func_obj) = self.get_object_cell(co.id) {
             let b = func_obj.borrow();
-            if let Some(target) = b.bound_target_function.clone() {
-                let ba = b.bound_args.clone().unwrap_or_default();
+            if let Some(ref bd) = b.bound {
+                let target = bd.target.clone();
+                let ba = bd.args.clone();
                 drop(b);
                 let mut all_args = ba;
                 all_args.extend_from_slice(args);
@@ -14459,7 +14460,7 @@ impl Interpreter {
         // Step 2: bound function → recurse with target
         if let JsValue::Object(co) = ctor
             && let Some(obj_data) = self.get_object(co.id)
-            && let Some(target) = obj_data.borrow().bound_target_function.clone()
+            && let Some(target) = obj_data.borrow().bound.as_ref().map(|b| b.target.clone())
         {
             return self.eval_instanceof(obj, &target);
         }

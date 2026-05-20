@@ -8839,13 +8839,12 @@ impl Interpreter {
                             let (target, bt, ba) = {
                                 let obj = interp2.get_object_cell(obj_id).unwrap();
                                 let b = obj.borrow();
-                                (
-                                    b.bound_target_function
-                                        .clone()
-                                        .unwrap_or(JsValue::Undefined),
-                                    b.bound_this.clone().unwrap_or(JsValue::Undefined),
-                                    b.bound_args.clone().unwrap_or_default(),
-                                )
+                                match b.bound {
+                                    Some(ref bd) => {
+                                        (bd.target.clone(), bd.this.clone(), bd.args.clone())
+                                    }
+                                    None => (JsValue::Undefined, JsValue::Undefined, Vec::new()),
+                                }
                             };
                             let mut all_args = ba;
                             all_args.extend_from_slice(call_args);
@@ -8872,11 +8871,13 @@ impl Interpreter {
                     // Per spec, bound functions do not have own .prototype property
                     obj.borrow_mut().properties.remove("prototype");
                     obj.borrow_mut().property_order.retain(|k| k != "prototype");
-                    // Store all bound references in GC-traced object fields
-                    obj.borrow_mut().bound_target_function = Some(this_val.clone());
-                    obj.borrow_mut().bound_this = Some(bind_this.clone());
+                    // Store [[BoundTargetFunction]] / [[BoundThis]] / [[BoundArguments]].
                     let stored_bound_args: Vec<JsValue> = args.iter().skip(1).cloned().collect();
-                    obj.borrow_mut().bound_args = Some(stored_bound_args);
+                    obj.borrow_mut().bound = Some(crate::interpreter::types::BoundFunctionData {
+                        target: this_val.clone(),
+                        this: bind_this.clone(),
+                        args: stored_bound_args,
+                    });
                     // Overwrite length with correct f64 value (handles Infinity)
                     obj.borrow_mut().insert_property(
                         "length".to_string(),
