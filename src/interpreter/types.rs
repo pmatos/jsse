@@ -1587,6 +1587,12 @@ pub struct JsObjectData {
     /// hold `obj_shape_id == 0`. See issue #71.
     pub shape_id: u64,
     pub(crate) bytecode_cache: super::bytecode::BytecodeCacheState,
+
+    /// Strict kind discriminator. Populated alongside the legacy `Option<XData>`
+    /// fields during Phase B1; subsequent slices migrate dispatch off the old
+    /// fields and onto this enum. Defaults to `Ordinary` for plain objects.
+    #[allow(dead_code)]
+    pub(crate) kind: ObjectKind,
 }
 
 #[derive(Clone)]
@@ -1639,6 +1645,54 @@ pub enum ConstructorKind {
     /// the synthetic body to avoid Symbol.iterator on the rest parameter
     /// (spec §15.7.14).
     DefaultDerivedClass,
+}
+
+/// Discriminator for the kind-specific data attached to a JsObjectData.
+///
+/// Each variant either is the kind in isolation (Ordinary), or carries the
+/// `XData` cluster previously held in an `Option<XData>` field. Variants are
+/// **strictly disjoint** — at most one applies to any given object. Cross-cutting
+/// aspects (callable closure, prototype chain, property bag) stay as orthogonal
+/// fields on JsObjectData; the kind enum captures only the exotic-shape data
+/// the spec demands a particular object carry.
+///
+/// This is currently introduced *alongside* the existing `Option<XData>` fields
+/// — both are populated on construction. Subsequent slices migrate predicate
+/// methods to read from this enum (B2), move call sites to match on it (B3),
+/// and finally delete the now-vestigial orthogonal Options (B4).
+#[derive(Clone, Default)]
+#[allow(dead_code)] // Variants populated as Phase B2/B3 migrate call sites onto this enum.
+pub(crate) enum ObjectKind {
+    #[default]
+    Ordinary,
+    Proxy(ProxyData),
+    RegExp(RegExpData),
+    BoundFunction(BoundFunctionData),
+    WrappedFunction(WrappedFunctionData),
+    IterHelper(IterHelperData),
+    ArrayBuffer(ArrayBufferData),
+    TypedArray(TypedArrayInfo),
+    DataView(DataViewInfo),
+    Promise(PromiseData),
+    /// Slot list. `None` entries are tombstones from delete that we don't
+    /// rewrite because Map iteration must visit them with the original
+    /// insertion order intact.
+    Map(Vec<Option<(JsValue, JsValue)>>),
+    /// Slot list, tombstones as above.
+    Set(Vec<Option<JsValue>>),
+    Iterator(IteratorState),
+    /// `parameter_map` for an Arguments exotic object.
+    Arguments(HashMap<String, (EnvRef, String)>),
+    /// `array_elements` for the Array exotic object.
+    Array(Vec<JsValue>),
+    /// Primitive value wrapped by `Object(primitive)` (String/Number/Boolean/Symbol/BigInt).
+    PrimitiveWrapper(JsValue),
+    ModuleNamespace(ModuleNamespaceData),
+    DisposableStack(DisposableStackData),
+    Temporal(TemporalData),
+    Intl(IntlData),
+    /// ShadowRealm instance — carries the realm id of the shadow realm itself.
+    ShadowRealm(usize),
 }
 
 /// Iterator-helper or wrap-delegation slot data. The two cases are mutually
@@ -1764,6 +1818,7 @@ impl JsObjectData {
             iter_helper: None,
             shape_id: 0,
             bytecode_cache: super::bytecode::BytecodeCacheState::Untried,
+            kind: ObjectKind::Ordinary,
         }
     }
 
