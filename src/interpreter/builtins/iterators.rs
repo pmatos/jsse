@@ -1328,10 +1328,10 @@ impl Interpreter {
                         }
                     };
                     let b = obj.borrow();
-                    match b.iter_helper {
+                    match b.iter_helper() {
                         Some(crate::interpreter::types::IterHelperData::Helper {
-                            ref next,
-                            ref gen_state,
+                            next,
+                            gen_state,
                             ..
                         }) => (next.clone(), gen_state.clone()),
                         _ => {
@@ -1399,10 +1399,10 @@ impl Interpreter {
                             }
                         };
                         let b = obj.borrow();
-                        match b.iter_helper {
+                        match b.iter_helper() {
                             Some(crate::interpreter::types::IterHelperData::Helper {
-                                ref return_closure,
-                                ref gen_state,
+                                return_closure,
+                                gen_state,
                                 ..
                             }) => (return_closure.clone(), gen_state.clone()),
                             _ => {
@@ -1478,11 +1478,13 @@ impl Interpreter {
         self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Iterator Helper".to_string();
         {
             let mut obj = self.get_object_cell_expect(obj_id).borrow_mut();
-            obj.iter_helper = Some(crate::interpreter::types::IterHelperData::Helper {
-                next: next_fn.clone(),
-                return_closure: return_fn.clone(),
-                gen_state: state,
-            });
+            obj.kind = crate::interpreter::types::ObjectKind::IterHelper(
+                crate::interpreter::types::IterHelperData::Helper {
+                    next: next_fn.clone(),
+                    return_closure: return_fn.clone(),
+                    gen_state: state,
+                },
+            );
             obj.gc_native_roots = Some(vec![next_fn, return_fn]);
         }
 
@@ -2656,9 +2658,9 @@ impl Interpreter {
                 };
                 let record = interp.get_object_cell(this_id).and_then(|o| {
                     if let Some(crate::interpreter::types::IterHelperData::Delegation {
-                        ref iter,
-                        ref next,
-                    }) = o.borrow().iter_helper
+                        iter,
+                        next,
+                    }) = o.borrow().iter_helper()
                     {
                         Some((iter.clone(), next.clone()))
                     } else {
@@ -2692,9 +2694,9 @@ impl Interpreter {
                 };
                 let record = interp.get_object_cell(this_id).and_then(|o| {
                     if let Some(crate::interpreter::types::IterHelperData::Delegation {
-                        ref iter,
-                        ref next,
-                    }) = o.borrow().iter_helper
+                        iter,
+                        next,
+                    }) = o.borrow().iter_helper()
                     {
                         Some((iter.clone(), next.clone()))
                     } else {
@@ -2765,11 +2767,12 @@ impl Interpreter {
                     .class_name = "Iterator".to_string();
                 {
                     let mut wrapper = interp.get_object_cell_expect(wrapper_id).borrow_mut();
-                    wrapper.iter_helper =
-                        Some(crate::interpreter::types::IterHelperData::Delegation {
+                    wrapper.kind = crate::interpreter::types::ObjectKind::IterHelper(
+                        crate::interpreter::types::IterHelperData::Delegation {
                             iter: iter_val.clone(),
                             next: next_method.clone(),
-                        });
+                        },
+                    );
                     wrapper.gc_native_roots = Some(vec![iter_val, next_method]);
                 }
 

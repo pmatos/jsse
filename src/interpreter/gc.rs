@@ -387,7 +387,7 @@ impl Interpreter {
                 Self::collect_value_roots(v, worklist);
             }
         }
-        if let Some(ref h) = obj.iter_helper {
+        if let Some(h) = obj.iter_helper() {
             match h {
                 crate::interpreter::types::IterHelperData::Delegation { iter, next } => {
                     Self::collect_value_roots(iter, worklist);

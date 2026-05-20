@@ -1573,7 +1573,6 @@ pub struct JsObjectData {
     pub(crate) is_immutable_prototype: bool,
     pub(crate) deferred_construct: bool,
     pub(crate) gc_native_roots: Option<Vec<JsValue>>,
-    pub(crate) iter_helper: Option<IterHelperData>,
     /// Per-object shape id. Bumped by `Interpreter::mutate_object_shape` on
     /// every structural mutation (property add/delete/attribute change,
     /// prototype mutation, proxy install). Pure value reassignment does NOT
@@ -1807,7 +1806,6 @@ impl JsObjectData {
             is_immutable_prototype: false,
             deferred_construct: false,
             gc_native_roots: None,
-            iter_helper: None,
             shape_id: 0,
             bytecode_cache: super::bytecode::BytecodeCacheState::Untried,
             kind: ObjectKind::Ordinary,
@@ -1903,6 +1901,15 @@ impl JsObjectData {
     pub(crate) fn bound(&self) -> Option<&BoundFunctionData> {
         if let ObjectKind::BoundFunction(ref b) = self.kind {
             Some(b)
+        } else {
+            None
+        }
+    }
+
+    /// Iterator-helper / iterator-from delegation slot data.
+    pub(crate) fn iter_helper(&self) -> Option<&IterHelperData> {
+        if let ObjectKind::IterHelper(ref h) = self.kind {
+            Some(h)
         } else {
             None
         }
