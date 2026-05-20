@@ -318,8 +318,8 @@ impl Interpreter {
         {
             Self::collect_env_roots(closure, worklist);
         }
-        if let Some(target_id) = obj.wrapped_target_function_id {
-            worklist.push(target_id);
+        if let Some(ref w) = obj.wrapped {
+            worklist.push(w.target_id);
         }
         if let Some(ref b) = obj.bound {
             Self::collect_value_roots(&b.target, worklist);

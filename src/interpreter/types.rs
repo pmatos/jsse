@@ -1569,8 +1569,7 @@ pub struct JsObjectData {
     pub is_default_derived_constructor: bool,
     pub bound: Option<BoundFunctionData>,
     pub shadow_realm_id: Option<usize>,
-    pub wrapped_target_function_id: Option<u64>,
-    pub wrapped_caller_realm_id: Option<usize>,
+    pub wrapped: Option<WrappedFunctionData>,
     pub(crate) disposable_stack: Option<DisposableStackData>,
     pub(crate) module_namespace: Option<ModuleNamespaceData>,
     pub(crate) temporal_data: Option<TemporalData>,
@@ -1609,6 +1608,16 @@ pub(crate) struct ModuleNamespaceData {
 pub(crate) struct DisposableStackData {
     pub(crate) stack: Vec<DisposableResource>,
     pub(crate) disposed: bool,
+}
+
+/// Wrapped-function slot data. Present iff this object is the wrapper a
+/// ShadowRealm creates when a function crosses the realm boundary (§24.5.3).
+/// Both fields were always set together; making that a non-optional pair
+/// removes the implicit "is the target set?" invariant.
+#[derive(Clone, Debug)]
+pub(crate) struct WrappedFunctionData {
+    pub target_id: u64,
+    pub caller_realm_id: usize,
 }
 
 /// Bound-function slot data. Present iff this object is a bound function
@@ -1699,8 +1708,7 @@ impl JsObjectData {
             is_default_derived_constructor: false,
             bound: None,
             shadow_realm_id: None,
-            wrapped_target_function_id: None,
-            wrapped_caller_realm_id: None,
+            wrapped: None,
             disposable_stack: None,
             module_namespace: None,
             temporal_data: None,

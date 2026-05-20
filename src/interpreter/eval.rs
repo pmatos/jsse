@@ -5398,7 +5398,7 @@ impl Interpreter {
         let obj_rc = self.get_object(callee_obj_id)?;
         let obj = obj_rc.borrow();
         if obj.proxy.is_some()
-            || obj.wrapped_target_function_id.is_some()
+            || obj.wrapped.is_some()
             || obj.bound.is_some()
             || obj.is_class_constructor
         {
@@ -11925,7 +11925,7 @@ impl Interpreter {
                 let b = obj.borrow();
                 (
                     b.is_proxy() || b.is_proxy_revoked(),
-                    b.wrapped_target_function_id.is_some(),
+                    b.wrapped.is_some(),
                     b.is_class_constructor,
                 )
             };

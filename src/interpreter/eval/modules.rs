@@ -889,9 +889,11 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             }));
             if let JsValue::Object(tf) = target_func {
-                o.wrapped_target_function_id = Some(tf.id);
+                o.wrapped = Some(crate::interpreter::types::WrappedFunctionData {
+                    target_id: tf.id,
+                    caller_realm_id,
+                });
             }
-            o.wrapped_caller_realm_id = Some(caller_realm_id);
         }
         self.function_realm_map.insert(func_id, caller_realm_id);
 
@@ -995,18 +997,14 @@ impl Interpreter {
                 }
             };
             let b = obj.borrow();
-            let target_id = match b.wrapped_target_function_id {
-                Some(id) => id,
-                None => {
-                    return Completion::Throw(
-                        self.create_type_error("WrappedFunction: missing target"),
-                    );
-                }
+            let Some(ref w) = b.wrapped else {
+                return Completion::Throw(
+                    self.create_type_error("WrappedFunction: missing target"),
+                );
             };
-            let caller_realm_id = b.wrapped_caller_realm_id.unwrap_or(self.current_realm_id);
             (
-                JsValue::Object(crate::types::JsObject { id: target_id }),
-                caller_realm_id,
+                JsValue::Object(crate::types::JsObject { id: w.target_id }),
+                w.caller_realm_id,
             )
         };
 
