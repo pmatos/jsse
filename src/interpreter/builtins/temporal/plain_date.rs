@@ -1402,7 +1402,7 @@ impl Interpreter {
                     if let Some(obj) = interp.get_object_cell(o.id) {
                         let data = obj.borrow();
                         matches!(
-                            &data.temporal_data,
+                            data.temporal_data(),
                             Some(TemporalData::PlainDate { .. })
                                 | Some(TemporalData::PlainDateTime { .. })
                                 | Some(TemporalData::ZonedDateTime { .. })
@@ -1563,7 +1563,7 @@ fn get_plain_date_fields(
     let snapshot = match this {
         JsValue::Object(o) => interp
             .get_object_cell(o.id)
-            .map(|cell| cell.borrow().temporal_data.clone()),
+            .map(|cell| cell.borrow().temporal_data().cloned()),
         _ => None,
     };
     match snapshot {
@@ -1597,15 +1597,13 @@ pub(super) fn create_plain_date_result(
             .borrow_mut()
             .prototype_id = Some(proto_id);
     }
-    interp
-        .get_object_cell_expect(obj_id)
-        .borrow_mut()
-        .temporal_data = Some(TemporalData::PlainDate {
-        iso_year: y,
-        iso_month: m,
-        iso_day: d,
-        calendar: cal.to_string(),
-    });
+    interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+        crate::interpreter::types::ObjectKind::Temporal(TemporalData::PlainDate {
+            iso_year: y,
+            iso_month: m,
+            iso_day: d,
+            calendar: cal.to_string(),
+        });
     let id = obj_id;
     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
 }
@@ -1790,7 +1788,7 @@ pub(super) fn to_temporal_plain_date(
                     iso_month,
                     iso_day,
                     calendar,
-                }) = &data.temporal_data
+                }) = data.temporal_data()
                 {
                     return Ok((*iso_year, *iso_month, *iso_day, calendar.clone()));
                 }
@@ -1800,7 +1798,7 @@ pub(super) fn to_temporal_plain_date(
                     iso_day,
                     calendar,
                     ..
-                }) = &data.temporal_data
+                }) = data.temporal_data()
                 {
                     return Ok((*iso_year, *iso_month, *iso_day, calendar.clone()));
                 }
@@ -1808,7 +1806,7 @@ pub(super) fn to_temporal_plain_date(
                     epoch_nanoseconds,
                     time_zone,
                     calendar,
-                }) = &data.temporal_data
+                }) = data.temporal_data()
                 {
                     let (y, m, d, _, _, _, _, _, _) =
                         super::zoned_date_time::epoch_ns_to_components(

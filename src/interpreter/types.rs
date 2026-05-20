@@ -1556,8 +1556,6 @@ pub struct JsObjectData {
     pub typed_array_info: Option<TypedArrayInfo>,
     pub is_raw_json: bool,
     pub constructor_kind: ConstructorKind,
-    pub(crate) temporal_data: Option<TemporalData>,
-    pub(crate) intl_data: Option<IntlData>,
     pub(crate) generator_realm_id: Option<usize>,
     pub(crate) is_htmldda: bool,
     pub(crate) is_immutable_prototype: bool,
@@ -1786,8 +1784,6 @@ impl JsObjectData {
             typed_array_info: None,
             is_raw_json: false,
             constructor_kind: ConstructorKind::Function,
-            temporal_data: None,
-            intl_data: None,
             generator_realm_id: None,
             is_htmldda: false,
             is_immutable_prototype: false,
@@ -1953,6 +1949,33 @@ impl JsObjectData {
     pub(crate) fn set_data_mut(&mut self) -> Option<&mut Vec<Option<JsValue>>> {
         if let ObjectKind::Set(ref mut s) = self.kind {
             Some(s)
+        } else {
+            None
+        }
+    }
+
+    /// Temporal slot data (any of the Temporal kinds).
+    pub(crate) fn temporal_data(&self) -> Option<&TemporalData> {
+        if let ObjectKind::Temporal(ref t) = self.kind {
+            Some(t)
+        } else {
+            None
+        }
+    }
+
+    /// Intl slot data (any of the Intl kinds).
+    pub(crate) fn intl_data(&self) -> Option<&IntlData> {
+        if let ObjectKind::Intl(ref i) = self.kind {
+            Some(i)
+        } else {
+            None
+        }
+    }
+
+    /// Intl slot data — mutable view (PluralRules locale-data caching, etc.).
+    pub(crate) fn intl_data_mut(&mut self) -> Option<&mut IntlData> {
+        if let ObjectKind::Intl(ref mut i) = self.kind {
+            Some(i)
         } else {
             None
         }

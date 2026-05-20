@@ -846,7 +846,7 @@ fn get_plain_time_fields(
     let snapshot = match this {
         JsValue::Object(o) => interp
             .get_object_cell(o.id)
-            .map(|cell| cell.borrow().temporal_data.clone()),
+            .map(|cell| cell.borrow().temporal_data().cloned()),
         _ => None,
     };
     match snapshot {
@@ -884,17 +884,15 @@ pub(super) fn create_plain_time_result(
             .borrow_mut()
             .prototype_id = Some(proto_id);
     }
-    interp
-        .get_object_cell_expect(obj_id)
-        .borrow_mut()
-        .temporal_data = Some(TemporalData::PlainTime {
-        hour: h,
-        minute: m,
-        second: s,
-        millisecond: ms,
-        microsecond: us,
-        nanosecond: ns,
-    });
+    interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+        crate::interpreter::types::ObjectKind::Temporal(TemporalData::PlainTime {
+            hour: h,
+            minute: m,
+            second: s,
+            millisecond: ms,
+            microsecond: us,
+            nanosecond: ns,
+        });
     let id = obj_id;
     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
 }
@@ -957,7 +955,7 @@ fn to_temporal_plain_time_raw(
                     millisecond,
                     microsecond,
                     nanosecond,
-                }) = &data.temporal_data
+                }) = data.temporal_data()
                 {
                     return Ok((
                         *hour,
@@ -976,7 +974,7 @@ fn to_temporal_plain_time_raw(
                     microsecond,
                     nanosecond,
                     ..
-                }) = &data.temporal_data
+                }) = data.temporal_data()
                 {
                     return Ok((
                         *hour,
@@ -991,7 +989,7 @@ fn to_temporal_plain_time_raw(
                     epoch_nanoseconds,
                     time_zone,
                     ..
-                }) = &data.temporal_data
+                }) = data.temporal_data()
                 {
                     let (_, _, _, h, mi, s, ms, us, ns) =
                         super::zoned_date_time::epoch_ns_to_components(

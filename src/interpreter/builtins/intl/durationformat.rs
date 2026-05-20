@@ -608,7 +608,7 @@ fn to_duration_record(
             milliseconds,
             microseconds,
             nanoseconds,
-        }) = &b.temporal_data
+        }) = b.temporal_data()
         {
             let rec = DurationRecord {
                 years: *years,
@@ -899,31 +899,31 @@ fn extract_duration_format_data(
     {
         let b = obj.borrow();
         if let Some(IntlData::DurationFormat {
-            ref locale,
-            ref numbering_system,
-            ref style,
-            ref years,
-            ref years_display,
-            ref months,
-            ref months_display,
-            ref weeks,
-            ref weeks_display,
-            ref days,
-            ref days_display,
-            ref hours,
-            ref hours_display,
-            ref minutes,
-            ref minutes_display,
-            ref seconds,
-            ref seconds_display,
-            ref milliseconds,
-            ref milliseconds_display,
-            ref microseconds,
-            ref microseconds_display,
-            ref nanoseconds,
-            ref nanoseconds_display,
-            ref fractional_digits,
-        }) = b.intl_data
+            locale,
+            numbering_system,
+            style,
+            years,
+            years_display,
+            months,
+            months_display,
+            weeks,
+            weeks_display,
+            days,
+            days_display,
+            hours,
+            hours_display,
+            minutes,
+            minutes_display,
+            seconds,
+            seconds_display,
+            milliseconds,
+            milliseconds_display,
+            microseconds,
+            microseconds_display,
+            nanoseconds,
+            nanoseconds_display,
+            fractional_digits,
+        }) = b.intl_data()
         {
             return Ok(DurationFormatData {
                 locale: locale.clone(),
@@ -1715,8 +1715,8 @@ impl Interpreter {
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
                     .class_name = "Intl.DurationFormat".to_string();
-                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
-                    Some(IntlData::DurationFormat {
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+                    crate::interpreter::types::ObjectKind::Intl(IntlData::DurationFormat {
                         locale,
                         numbering_system,
                         style,

@@ -186,12 +186,12 @@ impl Interpreter {
                 {
                     let data = {
                         let b = obj.borrow();
-                        b.intl_data.clone()
+                        b.intl_data().cloned()
                     };
                     if let Some(IntlData::PluralRules {
-                        ref locale,
-                        ref plural_type,
-                        ref notation,
+                        locale,
+                        plural_type,
+                        notation,
                         ..
                     }) = data
                     {
@@ -207,7 +207,7 @@ impl Interpreter {
                             )));
                         }
 
-                        let base = base_locale(locale);
+                        let base = base_locale(&locale);
                         let icu_locale: IcuLocale =
                             base.parse().unwrap_or_else(|_| "en".parse().unwrap());
                         let prefs = PluralRulesPreferences::from(&icu_locale);
@@ -227,7 +227,7 @@ impl Interpreter {
                             }
                         };
 
-                        let operands = number_to_plural_operands_with_notation(n, notation);
+                        let operands = number_to_plural_operands_with_notation(n, &notation);
                         let cat = rules.category_for(operands);
                         return Completion::Normal(JsValue::String(JsString::from_str(
                             plural_category_to_str(cat),
@@ -253,11 +253,11 @@ impl Interpreter {
                 {
                     let data = {
                         let b = obj.borrow();
-                        b.intl_data.clone()
+                        b.intl_data().cloned()
                     };
                     if let Some(IntlData::PluralRules {
-                        ref locale,
-                        ref plural_type,
+                        locale,
+                        plural_type,
                         ..
                     }) = data
                     {
@@ -288,7 +288,7 @@ impl Interpreter {
                             );
                         }
 
-                        let base = base_locale(locale);
+                        let base = base_locale(&locale);
                         let icu_locale: IcuLocale =
                             base.parse().unwrap_or_else(|_| "en".parse().unwrap());
                         let prefs = PluralRulesPreferences::from(&icu_locale);
@@ -335,7 +335,7 @@ impl Interpreter {
                 {
                     let data = {
                         let b = obj.borrow();
-                        b.intl_data.clone()
+                        b.intl_data().cloned()
                     };
                     if let Some(IntlData::PluralRules {
                         locale,
@@ -1004,7 +1004,7 @@ impl Interpreter {
                 let obj_id = interp.create_object_id();
                 interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
                 interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "Intl.PluralRules".to_string();
-                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data = Some(IntlData::PluralRules {
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind = crate::interpreter::types::ObjectKind::Intl(IntlData::PluralRules {
                     locale,
                     plural_type,
                     notation,

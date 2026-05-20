@@ -151,9 +151,9 @@ fn extract_segmenter_data(
     {
         let b = obj.borrow();
         if let Some(IntlData::Segmenter {
-            ref locale,
-            ref granularity,
-        }) = b.intl_data
+            locale,
+            granularity,
+        }) = b.intl_data()
         {
             return Ok((locale.clone(), granularity.clone()));
         }
@@ -674,8 +674,8 @@ impl Interpreter {
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
                     .class_name = "Intl.Segmenter".to_string();
-                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
-                    Some(IntlData::Segmenter {
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+                    crate::interpreter::types::ObjectKind::Intl(IntlData::Segmenter {
                         locale,
                         granularity,
                     });

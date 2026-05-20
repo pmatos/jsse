@@ -2944,7 +2944,7 @@ impl Interpreter {
                         .get_object_cell(o.id)
                         .map(|cell| {
                             let b = cell.borrow();
-                            if !matches!(b.intl_data, Some(IntlData::NumberFormat { .. })) {
+                            if !matches!(b.intl_data(), Some(IntlData::NumberFormat { .. })) {
                                 Probe::NotNf
                             } else if let Some(func) = b
                                 .properties
@@ -2970,7 +2970,7 @@ impl Interpreter {
                     let nf_data = {
                         if let Some(obj) = interp.get_object_cell(o.id) {
                             let b = obj.borrow();
-                            b.intl_data.clone()
+                            b.intl_data().cloned()
                         } else {
                             None
                         }
@@ -3078,7 +3078,7 @@ impl Interpreter {
                     let nf_data = {
                         if let Some(obj) = interp.get_object_cell(o.id) {
                             let b = obj.borrow();
-                            b.intl_data.clone()
+                            b.intl_data().cloned()
                         } else {
                             None
                         }
@@ -3197,7 +3197,10 @@ impl Interpreter {
             |interp, this, args| {
                 if let JsValue::Object(o) = this {
                     let nf_present = interp.get_object_cell(o.id).is_some_and(|cell| {
-                        matches!(cell.borrow().intl_data, Some(IntlData::NumberFormat { .. }))
+                        matches!(
+                            cell.borrow().intl_data(),
+                            Some(IntlData::NumberFormat { .. })
+                        )
                     });
                     if nf_present {
                         let start = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -3248,7 +3251,7 @@ impl Interpreter {
 
                         let nf_data = interp
                             .get_object_cell(o.id)
-                            .and_then(|cell| cell.borrow().intl_data.clone());
+                            .and_then(|cell| cell.borrow().intl_data().cloned());
 
                         if let Some(IntlData::NumberFormat {
                             locale,
@@ -3393,7 +3396,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this {
                     let nf_present = interp
                         .get_object_cell(o.id)
-                        .is_some_and(|cell| matches!(cell.borrow().intl_data, Some(IntlData::NumberFormat { .. })));
+                        .is_some_and(|cell| matches!(cell.borrow().intl_data(), Some(IntlData::NumberFormat { .. })));
                     if nf_present {
                         let start = args.first().cloned().unwrap_or(JsValue::Undefined);
                         let end = args.get(1).cloned().unwrap_or(JsValue::Undefined);
@@ -3421,7 +3424,7 @@ impl Interpreter {
 
                         let nf_data = interp
                             .get_object_cell(o.id)
-                            .and_then(|cell| cell.borrow().intl_data.clone());
+                            .and_then(|cell| cell.borrow().intl_data().cloned());
 
                         if let Some(IntlData::NumberFormat {
                             locale,
@@ -3559,7 +3562,7 @@ impl Interpreter {
                 {
                     let data = {
                         let b = obj.borrow();
-                        b.intl_data.clone()
+                        b.intl_data().cloned()
                     };
                     if let Some(IntlData::NumberFormat {
                         locale,
@@ -4422,7 +4425,7 @@ impl Interpreter {
                 let obj_id = interp.create_object_id();
                 interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
                 interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "Intl.NumberFormat".to_string();
-                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data = Some(IntlData::NumberFormat {
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind = crate::interpreter::types::ObjectKind::Intl(IntlData::NumberFormat {
                     locale,
                     numbering_system,
                     style,

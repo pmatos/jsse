@@ -891,12 +891,12 @@ fn extract_display_names_data(
     {
         let b = cell.borrow();
         if let Some(IntlData::DisplayNames {
-            ref locale,
-            ref style,
-            ref display_type,
-            ref fallback,
-            ref language_display,
-        }) = b.intl_data
+            locale,
+            style,
+            display_type,
+            fallback,
+            language_display,
+        }) = b.intl_data()
         {
             return Ok(DisplayNamesData {
                 locale: locale.clone(),
@@ -1347,8 +1347,8 @@ impl Interpreter {
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
                     .class_name = "Intl.DisplayNames".to_string();
-                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
-                    Some(IntlData::DisplayNames {
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+                    crate::interpreter::types::ObjectKind::Intl(IntlData::DisplayNames {
                         locale,
                         style,
                         display_type,

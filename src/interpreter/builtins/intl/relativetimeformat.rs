@@ -444,11 +444,11 @@ fn extract_rtf_data(
     {
         let b = cell.borrow();
         if let Some(IntlData::RelativeTimeFormat {
-            ref locale,
-            ref style,
-            ref numeric,
-            ref numbering_system,
-        }) = b.intl_data
+            locale,
+            style,
+            numeric,
+            numbering_system,
+        }) = b.intl_data()
         {
             return Ok((
                 locale.clone(),
@@ -859,8 +859,8 @@ impl Interpreter {
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
                     .class_name = "Intl.RelativeTimeFormat".to_string();
-                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
-                    Some(IntlData::RelativeTimeFormat {
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+                    crate::interpreter::types::ObjectKind::Intl(IntlData::RelativeTimeFormat {
                         locale,
                         style,
                         numeric,

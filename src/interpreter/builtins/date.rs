@@ -1222,12 +1222,12 @@ impl Interpreter {
                             .borrow_mut()
                             .prototype_id = Some(proto_id);
                     }
-                    interp
-                        .get_object_cell_expect(obj_id)
-                        .borrow_mut()
-                        .temporal_data = Some(crate::interpreter::types::TemporalData::Instant {
-                        epoch_nanoseconds: ns,
-                    });
+                    interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+                        crate::interpreter::types::ObjectKind::Temporal(
+                            crate::interpreter::types::TemporalData::Instant {
+                                epoch_nanoseconds: ns,
+                            },
+                        );
                     let id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 }),

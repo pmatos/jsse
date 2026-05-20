@@ -343,8 +343,8 @@ impl Interpreter {
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
                     .class_name = "Intl.ListFormat".to_string();
-                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
-                    Some(IntlData::ListFormat {
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+                    crate::interpreter::types::ObjectKind::Intl(IntlData::ListFormat {
                         locale,
                         list_type,
                         style,
@@ -415,10 +415,10 @@ fn extract_list_format_data(
     {
         let b = cell.borrow();
         if let Some(IntlData::ListFormat {
-            ref locale,
-            ref list_type,
-            ref style,
-        }) = b.intl_data
+            locale,
+            list_type,
+            style,
+        }) = b.intl_data()
         {
             return Ok((locale.clone(), list_type.clone(), style.clone()));
         }

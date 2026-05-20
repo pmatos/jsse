@@ -470,7 +470,7 @@ impl Interpreter {
             && let Some(cell) = self.get_object_cell(o.id)
         {
             let b = cell.borrow();
-            if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
+            if let Some(IntlData::Locale { tag, .. }) = b.intl_data() {
                 let tag_clone = tag.clone();
                 drop(b);
                 seen.push(tag_clone);
@@ -542,7 +542,7 @@ impl Interpreter {
             // Step 7c.iii-iv: If kValue has [[InitializedLocale]], use [[Locale]] directly
             let tag = if let JsValue::Object(o) = &k_value {
                 let cached = self.get_object_cell(o.id).and_then(|cell| {
-                    if let Some(IntlData::Locale { ref tag, .. }) = cell.borrow().intl_data {
+                    if let Some(IntlData::Locale { tag, .. }) = cell.borrow().intl_data() {
                         Some(tag.clone())
                     } else {
                         None

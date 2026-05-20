@@ -163,8 +163,8 @@ fn create_locale_object_from_icu(interp: &mut Interpreter, locale: &IcuLocale) -
         .get_object_cell_expect(obj_id)
         .borrow_mut()
         .class_name = "Intl.Locale".to_string();
-    interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
-        Some(build_intl_data_from_locale(locale));
+    interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+        crate::interpreter::types::ObjectKind::Intl(build_intl_data_from_locale(locale));
     JsValue::Object(crate::types::JsObject { id: obj_id })
 }
 
@@ -181,7 +181,7 @@ where
         && let Some(obj) = interp.get_object_cell(o.id)
     {
         let b = obj.borrow();
-        if let Some(ref data @ IntlData::Locale { .. }) = b.intl_data {
+        if let Some(ref data @ IntlData::Locale { .. }) = b.intl_data() {
             return extractor(data);
         }
     }
@@ -571,7 +571,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this {
                     let tag_opt = interp.get_object_cell(o.id).and_then(|cell| {
                         let b = cell.borrow();
-                        if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
+                        if let Some(IntlData::Locale { tag, .. }) = b.intl_data() {
                             Some(tag.clone())
                         } else {
                             None
@@ -619,7 +619,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this {
                     let tag_opt = interp.get_object_cell(o.id).and_then(|cell| {
                         let b = cell.borrow();
-                        if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
+                        if let Some(IntlData::Locale { tag, .. }) = b.intl_data() {
                             Some(tag.clone())
                         } else {
                             None
@@ -667,7 +667,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this {
                     let cal_opt = interp.get_object_cell(o.id).and_then(|cell| {
                         let b = cell.borrow();
-                        if let Some(IntlData::Locale { ref calendar, .. }) = b.intl_data {
+                        if let Some(IntlData::Locale { calendar, .. }) = b.intl_data() {
                             Some(calendar.clone())
                         } else {
                             None
@@ -704,7 +704,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this {
                     let col_opt = interp.get_object_cell(o.id).and_then(|cell| {
                         let b = cell.borrow();
-                        if let Some(IntlData::Locale { ref collation, .. }) = b.intl_data {
+                        if let Some(IntlData::Locale { collation, .. }) = b.intl_data() {
                             Some(collation.clone())
                         } else {
                             None
@@ -745,10 +745,10 @@ impl Interpreter {
                     let snapshot = interp.get_object_cell(o.id).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::Locale {
-                            ref hour_cycle,
-                            ref region,
+                            hour_cycle,
+                            region,
                             ..
-                        }) = b.intl_data
+                        }) = b.intl_data()
                         {
                             Some((hour_cycle.clone(), region.clone()))
                         } else {
@@ -796,9 +796,9 @@ impl Interpreter {
                     let nu_opt = interp.get_object_cell(o.id).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::Locale {
-                            ref numbering_system,
+                            numbering_system,
                             ..
-                        }) = b.intl_data
+                        }) = b.intl_data()
                         {
                             Some(numbering_system.clone())
                         } else {
@@ -839,7 +839,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this {
                     let tag_opt = interp.get_object_cell(o.id).and_then(|cell| {
                         let b = cell.borrow();
-                        if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
+                        if let Some(IntlData::Locale { tag, .. }) = b.intl_data() {
                             Some(tag.clone())
                         } else {
                             None
@@ -904,7 +904,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = this {
                     let region_opt = interp.get_object_cell(o.id).and_then(|cell| {
                         let b = cell.borrow();
-                        if let Some(IntlData::Locale { ref region, .. }) = b.intl_data {
+                        if let Some(IntlData::Locale { region, .. }) = b.intl_data() {
                             Some(region.clone())
                         } else {
                             None
@@ -947,10 +947,10 @@ impl Interpreter {
                     let snapshot = interp.get_object_cell(o.id).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::Locale {
-                            ref tag,
-                            ref first_day_of_week,
+                            tag,
+                            first_day_of_week,
                             ..
-                        }) = b.intl_data
+                        }) = b.intl_data()
                         {
                             Some((tag.clone(), first_day_of_week.clone()))
                         } else {
@@ -1087,7 +1087,7 @@ impl Interpreter {
                 let tag_string = if let JsValue::Object(o) = &tag_arg {
                     if let Some(obj) = interp.get_object_cell(o.id) {
                         let b = obj.borrow();
-                        if let Some(IntlData::Locale { ref tag, .. }) = b.intl_data {
+                        if let Some(IntlData::Locale { tag, .. }) = b.intl_data() {
                             tag.clone()
                         } else {
                             drop(b);
@@ -1425,8 +1425,8 @@ impl Interpreter {
                         .borrow_mut()
                         .class_name = "Intl.Locale".to_string();
                     let lower_tag = tag_string.to_ascii_lowercase();
-                    interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
-                        Some(IntlData::Locale {
+                    interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+                        crate::interpreter::types::ObjectKind::Intl(IntlData::Locale {
                             tag: lower_tag.clone(),
                             language: lower_tag,
                             script: None,
@@ -1456,8 +1456,10 @@ impl Interpreter {
                         .get_object_cell_expect(obj_id)
                         .borrow_mut()
                         .class_name = "Intl.Locale".to_string();
-                    interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
-                        Some(build_intl_data_from_locale(&locale));
+                    interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+                        crate::interpreter::types::ObjectKind::Intl(build_intl_data_from_locale(
+                            &locale,
+                        ));
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
                 }
             },
