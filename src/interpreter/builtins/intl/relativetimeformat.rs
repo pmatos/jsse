@@ -860,12 +860,14 @@ impl Interpreter {
                     .borrow_mut()
                     .class_name = "Intl.RelativeTimeFormat".to_string();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Intl(IntlData::RelativeTimeFormat {
-                        locale,
-                        style,
-                        numeric,
-                        numbering_system,
-                    });
+                    crate::interpreter::types::ObjectKind::Intl(Box::new(
+                        IntlData::RelativeTimeFormat {
+                            locale,
+                            style,
+                            numeric,
+                            numbering_system,
+                        },
+                    ));
 
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },

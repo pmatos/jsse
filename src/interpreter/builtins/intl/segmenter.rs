@@ -675,10 +675,10 @@ impl Interpreter {
                     .borrow_mut()
                     .class_name = "Intl.Segmenter".to_string();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Intl(IntlData::Segmenter {
+                    crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::Segmenter {
                         locale,
                         granularity,
-                    });
+                    }));
 
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },

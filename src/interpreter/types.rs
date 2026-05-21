@@ -1678,7 +1678,10 @@ pub(crate) enum ObjectKind {
     ModuleNamespace(ModuleNamespaceData),
     DisposableStack(DisposableStackData),
     Temporal(TemporalData),
-    Intl(IntlData),
+    /// Boxed because `IntlData` is the largest variant (~560 bytes). Boxing keeps
+    /// `JsObjectData::kind` compact for the common Ordinary case at the cost of one
+    /// indirection on rare Intl-instance access. See clippy `large_enum_variant`.
+    Intl(Box<IntlData>),
     /// ShadowRealm instance — carries the realm id of the shadow realm itself.
     ShadowRealm(usize),
 }
@@ -1869,15 +1872,6 @@ impl JsObjectData {
         }
     }
 
-    /// TypedArray slot data — mutable view (some methods resize length-tracking views).
-    pub(crate) fn typed_array_info_mut(&mut self) -> Option<&mut TypedArrayInfo> {
-        if let ObjectKind::TypedArray(ref mut t) = self.kind {
-            Some(t)
-        } else {
-            None
-        }
-    }
-
     /// Iterator state (Array/String/Map/Set/etc. iterator instance progress).
     pub(crate) fn iterator_state(&self) -> Option<&IteratorState> {
         if let ObjectKind::Iterator(ref i) = self.kind {
@@ -1998,16 +1992,7 @@ impl JsObjectData {
     /// Intl slot data (any of the Intl kinds).
     pub(crate) fn intl_data(&self) -> Option<&IntlData> {
         if let ObjectKind::Intl(ref i) = self.kind {
-            Some(i)
-        } else {
-            None
-        }
-    }
-
-    /// Intl slot data — mutable view (PluralRules locale-data caching, etc.).
-    pub(crate) fn intl_data_mut(&mut self) -> Option<&mut IntlData> {
-        if let ObjectKind::Intl(ref mut i) = self.kind {
-            Some(i)
+            Some(i.as_ref())
         } else {
             None
         }

@@ -1348,13 +1348,13 @@ impl Interpreter {
                     .borrow_mut()
                     .class_name = "Intl.DisplayNames".to_string();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Intl(IntlData::DisplayNames {
+                    crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::DisplayNames {
                         locale,
                         style,
                         display_type,
                         fallback,
                         language_display,
-                    });
+                    }));
 
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },

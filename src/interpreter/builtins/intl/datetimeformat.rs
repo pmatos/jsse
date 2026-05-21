@@ -5723,28 +5723,30 @@ impl Interpreter {
                     .borrow_mut()
                     .class_name = "Intl.DateTimeFormat".to_string();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Intl(IntlData::DateTimeFormat {
-                        locale,
-                        calendar,
-                        numbering_system,
-                        time_zone,
-                        hour_cycle,
-                        hour12,
-                        weekday,
-                        era,
-                        year,
-                        month,
-                        day,
-                        day_period,
-                        hour: hour_opt,
-                        minute: minute_opt,
-                        second: second_opt,
-                        fractional_second_digits: fsd_opt,
-                        time_zone_name: tz_name,
-                        date_style,
-                        time_style,
-                        has_explicit_components: has_date_time_component || has_style,
-                    });
+                    crate::interpreter::types::ObjectKind::Intl(Box::new(
+                        IntlData::DateTimeFormat {
+                            locale,
+                            calendar,
+                            numbering_system,
+                            time_zone,
+                            hour_cycle,
+                            hour12,
+                            weekday,
+                            era,
+                            year,
+                            month,
+                            day,
+                            day_period,
+                            hour: hour_opt,
+                            minute: minute_opt,
+                            second: second_opt,
+                            fractional_second_digits: fsd_opt,
+                            time_zone_name: tz_name,
+                            date_style,
+                            time_style,
+                            has_explicit_components: has_date_time_component || has_style,
+                        },
+                    ));
 
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },

@@ -677,7 +677,7 @@ impl Interpreter {
                     .borrow_mut()
                     .class_name = "Intl.Collator".to_string();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Intl(IntlData::Collator {
+                    crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::Collator {
                         locale,
                         usage,
                         sensitivity,
@@ -685,7 +685,7 @@ impl Interpreter {
                         collation,
                         numeric,
                         case_first,
-                    });
+                    }));
 
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },

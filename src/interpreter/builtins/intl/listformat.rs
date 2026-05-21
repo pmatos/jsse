@@ -344,11 +344,11 @@ impl Interpreter {
                     .borrow_mut()
                     .class_name = "Intl.ListFormat".to_string();
                 interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                    crate::interpreter::types::ObjectKind::Intl(IntlData::ListFormat {
+                    crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::ListFormat {
                         locale,
                         list_type,
                         style,
-                    });
+                    }));
 
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },

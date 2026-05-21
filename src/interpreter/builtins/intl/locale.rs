@@ -164,7 +164,7 @@ fn create_locale_object_from_icu(interp: &mut Interpreter, locale: &IcuLocale) -
         .borrow_mut()
         .class_name = "Intl.Locale".to_string();
     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-        crate::interpreter::types::ObjectKind::Intl(build_intl_data_from_locale(locale));
+        crate::interpreter::types::ObjectKind::Intl(Box::new(build_intl_data_from_locale(locale)));
     JsValue::Object(crate::types::JsObject { id: obj_id })
 }
 
@@ -181,7 +181,7 @@ where
         && let Some(obj) = interp.get_object_cell(o.id)
     {
         let b = obj.borrow();
-        if let Some(ref data @ IntlData::Locale { .. }) = b.intl_data() {
+        if let Some(data @ IntlData::Locale { .. }) = b.intl_data() {
             return extractor(data);
         }
     }
@@ -1426,7 +1426,7 @@ impl Interpreter {
                         .class_name = "Intl.Locale".to_string();
                     let lower_tag = tag_string.to_ascii_lowercase();
                     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                        crate::interpreter::types::ObjectKind::Intl(IntlData::Locale {
+                        crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::Locale {
                             tag: lower_tag.clone(),
                             language: lower_tag,
                             script: None,
@@ -1439,7 +1439,7 @@ impl Interpreter {
                             numeric: None,
                             numbering_system: None,
                             first_day_of_week: None,
-                        });
+                        }));
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
                 } else {
                     // Canonicalize again after applying options
@@ -1457,8 +1457,8 @@ impl Interpreter {
                         .borrow_mut()
                         .class_name = "Intl.Locale".to_string();
                     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
-                        crate::interpreter::types::ObjectKind::Intl(build_intl_data_from_locale(
-                            &locale,
+                        crate::interpreter::types::ObjectKind::Intl(Box::new(
+                            build_intl_data_from_locale(&locale),
                         ));
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
                 }

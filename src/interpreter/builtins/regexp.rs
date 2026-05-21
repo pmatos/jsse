@@ -6224,9 +6224,7 @@ fn extract_source_flags(interp: &Interpreter, this_val: &JsValue) -> Option<(Str
         && let Some(obj) = interp.get_object_cell(o.id)
     {
         let b = obj.borrow();
-        let Some(r) = b.regexp() else {
-            return None;
-        };
+        let r = b.regexp()?;
         let source = js_string_to_regex_input(&r.source.code_units);
         let flags = r.flags.to_rust_string();
         drop(b);

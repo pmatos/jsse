@@ -4425,7 +4425,7 @@ impl Interpreter {
                 let obj_id = interp.create_object_id();
                 interp.get_object_cell_expect(obj_id).borrow_mut().prototype_id = Some(proto);
                 interp.get_object_cell_expect(obj_id).borrow_mut().class_name = "Intl.NumberFormat".to_string();
-                interp.get_object_cell_expect(obj_id).borrow_mut().kind = crate::interpreter::types::ObjectKind::Intl(IntlData::NumberFormat {
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind = crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::NumberFormat {
                     locale,
                     numbering_system,
                     style,
@@ -4447,7 +4447,7 @@ impl Interpreter {
                     rounding_increment,
                     rounding_priority,
                     trailing_zero_display,
-                });
+                }));
 
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },

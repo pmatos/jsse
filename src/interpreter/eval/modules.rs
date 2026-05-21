@@ -175,7 +175,7 @@ impl Interpreter {
     ) -> Result<(), JsValue> {
         let (deferred, module_path) = if let Some(obj) = self.get_object_cell(obj_id) {
             let b = obj.borrow();
-            if let Some(ref ns) = b.module_namespace() {
+            if let Some(ns) = b.module_namespace() {
                 (ns.deferred, ns.module_path.clone())
             } else {
                 return Ok(());
