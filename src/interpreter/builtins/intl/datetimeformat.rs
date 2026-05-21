@@ -4175,27 +4175,27 @@ fn extract_dtf_data(interp: &mut Interpreter, this: &JsValue) -> Result<DtfOptio
     {
         let b = obj.borrow();
         if let Some(IntlData::DateTimeFormat {
-            ref locale,
-            ref calendar,
-            ref numbering_system,
-            ref time_zone,
-            ref hour_cycle,
-            ref hour12,
-            ref weekday,
-            ref era,
-            ref year,
-            ref month,
-            ref day,
-            ref day_period,
-            ref hour,
-            ref minute,
-            ref second,
-            ref fractional_second_digits,
-            ref time_zone_name,
-            ref date_style,
-            ref time_style,
+            locale,
+            calendar,
+            numbering_system,
+            time_zone,
+            hour_cycle,
+            hour12,
+            weekday,
+            era,
+            year,
+            month,
+            day,
+            day_period,
+            hour,
+            minute,
+            second,
+            fractional_second_digits,
+            time_zone_name,
+            date_style,
+            time_style,
             has_explicit_components,
-        }) = b.intl_data
+        }) = b.intl_data()
         {
             return Ok(DtfOptions {
                 locale: locale.clone(),
@@ -4217,7 +4217,7 @@ fn extract_dtf_data(interp: &mut Interpreter, this: &JsValue) -> Result<DtfOptio
                 time_zone_name: time_zone_name.clone(),
                 date_style: date_style.clone(),
                 time_style: time_style.clone(),
-                has_explicit_components,
+                has_explicit_components: *has_explicit_components,
                 temporal_type: None,
             });
         }
@@ -4248,7 +4248,7 @@ fn resolve_date_value(interp: &mut Interpreter, date_arg: &JsValue) -> Result<f6
     if let JsValue::Object(o) = date_arg
         && let Some(obj) = interp.get_object_cell(o.id)
     {
-        let temporal = obj.borrow().temporal_data.clone();
+        let temporal = obj.borrow().temporal_data().cloned();
         if let Some(td) = temporal {
             return temporal_to_epoch_ms(&td);
         }
@@ -4276,7 +4276,7 @@ fn detect_temporal_type(interp: &Interpreter, val: &JsValue) -> Option<TemporalT
     if let JsValue::Object(o) = val
         && let Some(obj) = interp.get_object_cell(o.id)
     {
-        let td = obj.borrow().temporal_data.clone();
+        let td = obj.borrow().temporal_data().cloned();
         return match td {
             Some(TemporalData::Instant { .. }) => Some(TemporalType::Instant),
             Some(TemporalData::ZonedDateTime { .. }) => Some(TemporalType::ZonedDateTime),
@@ -4295,7 +4295,7 @@ fn detect_temporal_calendar(interp: &Interpreter, val: &JsValue) -> Option<Strin
     if let JsValue::Object(o) = val
         && let Some(obj) = interp.get_object_cell(o.id)
     {
-        let td = obj.borrow().temporal_data.clone();
+        let td = obj.borrow().temporal_data().cloned();
         return match td {
             Some(TemporalData::PlainDate { calendar, .. }) => Some(calendar),
             Some(TemporalData::PlainDateTime { calendar, .. }) => Some(calendar),
@@ -4751,7 +4751,7 @@ impl Interpreter {
                         .get_object_cell(o.id)
                         .map(|cell| {
                             let b = cell.borrow();
-                            if !matches!(b.intl_data, Some(IntlData::DateTimeFormat { .. })) {
+                            if !matches!(b.intl_data(), Some(IntlData::DateTimeFormat { .. })) {
                                 Probe::NotDtf
                             } else if let Some(func) = b
                                 .properties
@@ -4777,27 +4777,27 @@ impl Interpreter {
                     let opts_snapshot = interp.get_object_cell(o.id).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::DateTimeFormat {
-                            ref locale,
-                            ref calendar,
-                            ref numbering_system,
-                            ref time_zone,
-                            ref hour_cycle,
-                            ref hour12,
-                            ref weekday,
-                            ref era,
-                            ref year,
-                            ref month,
-                            ref day,
-                            ref day_period,
-                            ref hour,
-                            ref minute,
-                            ref second,
-                            ref fractional_second_digits,
-                            ref time_zone_name,
-                            ref date_style,
-                            ref time_style,
+                            locale,
+                            calendar,
+                            numbering_system,
+                            time_zone,
+                            hour_cycle,
+                            hour12,
+                            weekday,
+                            era,
+                            year,
+                            month,
+                            day,
+                            day_period,
+                            hour,
+                            minute,
+                            second,
+                            fractional_second_digits,
+                            time_zone_name,
+                            date_style,
+                            time_style,
                             has_explicit_components,
-                        }) = b.intl_data
+                        }) = b.intl_data()
                         {
                             Some(DtfOptions {
                                 locale: locale.clone(),
@@ -4819,7 +4819,7 @@ impl Interpreter {
                                 time_zone_name: time_zone_name.clone(),
                                 date_style: date_style.clone(),
                                 time_style: time_style.clone(),
-                                has_explicit_components,
+                                has_explicit_components: *has_explicit_components,
                                 temporal_type: None,
                             })
                         } else {
@@ -5722,29 +5722,31 @@ impl Interpreter {
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
                     .class_name = "Intl.DateTimeFormat".to_string();
-                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
-                    Some(IntlData::DateTimeFormat {
-                        locale,
-                        calendar,
-                        numbering_system,
-                        time_zone,
-                        hour_cycle,
-                        hour12,
-                        weekday,
-                        era,
-                        year,
-                        month,
-                        day,
-                        day_period,
-                        hour: hour_opt,
-                        minute: minute_opt,
-                        second: second_opt,
-                        fractional_second_digits: fsd_opt,
-                        time_zone_name: tz_name,
-                        date_style,
-                        time_style,
-                        has_explicit_components: has_date_time_component || has_style,
-                    });
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+                    crate::interpreter::types::ObjectKind::Intl(Box::new(
+                        IntlData::DateTimeFormat {
+                            locale,
+                            calendar,
+                            numbering_system,
+                            time_zone,
+                            hour_cycle,
+                            hour12,
+                            weekday,
+                            era,
+                            year,
+                            month,
+                            day,
+                            day_period,
+                            hour: hour_opt,
+                            minute: minute_opt,
+                            second: second_opt,
+                            fractional_second_digits: fsd_opt,
+                            time_zone_name: tz_name,
+                            date_style,
+                            time_style,
+                            has_explicit_components: has_date_time_component || has_style,
+                        },
+                    ));
 
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },

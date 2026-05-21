@@ -452,7 +452,7 @@ impl Interpreter {
         if let JsValue::Object(ref o) = obj_val
             && let Some(obj) = self.get_object_cell(o.id)
         {
-            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+            if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
                 match self.proxy_delete_property(o.id, key) {
                     Ok(false) => {
                         if env.borrow().strict {
@@ -483,11 +483,11 @@ impl Interpreter {
             }
             obj_mut.properties.remove(key);
             obj_mut.property_order.retain(|k| k != key);
-            if let Some(ref mut map) = obj_mut.parameter_map {
+            if let Some(map) = obj_mut.parameter_map_mut() {
                 map.remove(key);
             }
             if let Ok(idx) = key.parse::<usize>()
-                && let Some(ref mut elems) = obj_mut.array_elements
+                && let Some(elems) = obj_mut.array_elements_mut()
                 && idx < elems.len()
             {
                 elems[idx] = JsValue::Undefined;
@@ -516,10 +516,9 @@ impl Interpreter {
         let obj_rc = self.get_object(obj_id)?;
         let obj = obj_rc.borrow();
         // Non-cacheable categories (plan "Excluded from IC in v1").
-        if obj.proxy_target_id.is_some()
-            || obj.proxy_revoked
-            || obj.module_namespace.is_some()
-            || obj.typed_array_info.is_some()
+        if obj.proxy().is_some()
+            || obj.module_namespace().is_some()
+            || obj.typed_array_info().is_some()
         {
             return None;
         }
@@ -706,7 +705,7 @@ impl Interpreter {
                 {
                     let obj_borrow = obj_rc.borrow();
                     // Typed array: direct element access
-                    if let Some(ref ta) = obj_borrow.typed_array_info {
+                    if let Some(ta) = obj_borrow.typed_array_info() {
                         use crate::interpreter::types::{
                             is_valid_integer_index, typed_array_get_index,
                         };
@@ -722,7 +721,7 @@ impl Interpreter {
                         }
                     }
                     // Array: direct element access (skip if index overridden by defineProperty)
-                    if let Some(ref elems) = obj_borrow.array_elements {
+                    if let Some(elems) = obj_borrow.array_elements() {
                         let trunc = index.trunc();
                         if *index == trunc && *index >= 0.0 && (*index as usize) < elems.len() {
                             let idx = *index as usize;

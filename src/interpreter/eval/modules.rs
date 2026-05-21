@@ -114,7 +114,7 @@ impl Interpreter {
             return Ok(());
         }
         let ns_data = if let Some(obj) = self.get_object_cell(obj_id) {
-            obj.borrow().module_namespace.clone()
+            obj.borrow().module_namespace().cloned()
         } else {
             None
         };
@@ -175,7 +175,7 @@ impl Interpreter {
     ) -> Result<(), JsValue> {
         let (deferred, module_path) = if let Some(obj) = self.get_object_cell(obj_id) {
             let b = obj.borrow();
-            if let Some(ref ns) = b.module_namespace {
+            if let Some(ns) = b.module_namespace() {
                 (ns.deferred, ns.module_path.clone())
             } else {
                 return Ok(());
@@ -204,7 +204,7 @@ impl Interpreter {
                 return Err(err.clone());
             }
             if let Some(obj) = self.get_object_cell(obj_id)
-                && let Some(ref mut ns) = obj.borrow_mut().module_namespace
+                && let Some(ns) = obj.borrow_mut().module_namespace_mut()
             {
                 ns.deferred = false;
             }
@@ -229,7 +229,7 @@ impl Interpreter {
         match result {
             Ok(_) => {
                 if let Some(obj) = self.get_object_cell(obj_id)
-                    && let Some(ref mut ns) = obj.borrow_mut().module_namespace
+                    && let Some(ns) = obj.borrow_mut().module_namespace_mut()
                 {
                     ns.deferred = false;
                 }
@@ -261,12 +261,12 @@ impl Interpreter {
         // Single-borrow fast path: classify object and check own property in one borrow
         if let Some(obj) = self.get_object_cell(obj_id) {
             let b = obj.borrow();
-            let is_proxy = b.proxy_target_id.is_some() || b.proxy_revoked;
-            let has_module_ns = b.module_namespace.is_some();
+            let is_proxy = b.proxy().is_some();
+            let has_module_ns = b.module_namespace().is_some();
 
             if !is_proxy && !has_module_ns {
                 // Fast path for ordinary objects (the common case)
-                let is_ta = b.typed_array_info.is_some();
+                let is_ta = b.typed_array_info().is_some();
 
                 // TypedArray: canonical numeric index strings must not walk prototype
                 if is_ta
@@ -276,7 +276,7 @@ impl Interpreter {
                     use crate::interpreter::types::{
                         is_valid_integer_index, typed_array_get_index,
                     };
-                    let ta = b.typed_array_info.as_ref().unwrap();
+                    let ta = b.typed_array_info().unwrap();
                     if is_valid_integer_index(ta, index) {
                         return Completion::Normal(typed_array_get_index(ta, index as usize));
                     }
@@ -381,7 +381,7 @@ impl Interpreter {
         {
             let ns_data = self
                 .get_object_cell(obj_id)
-                .and_then(|obj| obj.borrow().module_namespace.clone());
+                .and_then(|obj| obj.borrow().module_namespace().cloned());
             if let Some(ns_data) = ns_data {
                 // Deferred namespace: IsSymbolLikeNamespaceKey check
                 if ns_data.deferred
@@ -482,7 +482,7 @@ impl Interpreter {
             {
                 let is_deferred_ns = obj
                     .borrow()
-                    .module_namespace
+                    .module_namespace()
                     .as_ref()
                     .is_some_and(|ns| ns.deferred);
                 if is_deferred_ns && !Self::is_symbol_like_namespace_key(key, true) {
@@ -492,14 +492,11 @@ impl Interpreter {
             // TypedArray §10.4.5.3 [[HasProperty]]: numeric indices handled by IsValidIntegerIndex only
             {
                 let b = obj.borrow();
-                if b.typed_array_info.is_some()
+                if b.typed_array_info().is_some()
                     && let Some(index) =
                         crate::interpreter::types::canonical_numeric_index_string(key)
                 {
-                    return Ok(is_valid_integer_index(
-                        b.typed_array_info.as_ref().unwrap(),
-                        index,
-                    ));
+                    return Ok(is_valid_integer_index(b.typed_array_info().unwrap(), index));
                 }
             }
             if obj.borrow().has_own_property(key) {
@@ -889,9 +886,13 @@ impl Interpreter {
                 Completion::Normal(JsValue::Undefined)
             }));
             if let JsValue::Object(tf) = target_func {
-                o.wrapped_target_function_id = Some(tf.id);
+                o.kind = crate::interpreter::types::ObjectKind::WrappedFunction(
+                    crate::interpreter::types::WrappedFunctionData {
+                        target_id: tf.id,
+                        caller_realm_id,
+                    },
+                );
             }
-            o.wrapped_caller_realm_id = Some(caller_realm_id);
         }
         self.function_realm_map.insert(func_id, caller_realm_id);
 
@@ -995,18 +996,14 @@ impl Interpreter {
                 }
             };
             let b = obj.borrow();
-            let target_id = match b.wrapped_target_function_id {
-                Some(id) => id,
-                None => {
-                    return Completion::Throw(
-                        self.create_type_error("WrappedFunction: missing target"),
-                    );
-                }
+            let Some(w) = b.wrapped() else {
+                return Completion::Throw(
+                    self.create_type_error("WrappedFunction: missing target"),
+                );
             };
-            let caller_realm_id = b.wrapped_caller_realm_id.unwrap_or(self.current_realm_id);
             (
-                JsValue::Object(crate::types::JsObject { id: target_id }),
-                caller_realm_id,
+                JsValue::Object(crate::types::JsObject { id: w.target_id }),
+                w.caller_realm_id,
             )
         };
 

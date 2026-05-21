@@ -151,9 +151,9 @@ fn extract_segmenter_data(
     {
         let b = obj.borrow();
         if let Some(IntlData::Segmenter {
-            ref locale,
-            ref granularity,
-        }) = b.intl_data
+            locale,
+            granularity,
+        }) = b.intl_data()
         {
             return Ok((locale.clone(), granularity.clone()));
         }
@@ -339,7 +339,7 @@ impl Interpreter {
                                     && let Some(arr) = interp.get_object_cell(arr_obj.id)
                                 {
                                     let ab = arr.borrow();
-                                    if let Some(elems) = &ab.array_elements {
+                                    if let Some(elems) = ab.array_elements() {
                                         for elem in elems {
                                             if let JsValue::Number(n) = elem {
                                                 break_points.push(*n as usize);
@@ -425,15 +425,15 @@ impl Interpreter {
 
                         let has_word_like = granularity_clone == "word";
 
-                        interp
-                            .get_object_cell_expect(iter_obj_id)
-                            .borrow_mut()
-                            .iterator_state = Some(IteratorState::SegmentIterator {
-                            segments: seg_data,
-                            input: std::rc::Rc::new(input_clone.as_ref().clone()),
-                            position: 0,
-                            done: false,
-                        });
+                        interp.get_object_cell_expect(iter_obj_id).borrow_mut().kind =
+                            crate::interpreter::types::ObjectKind::Iterator(
+                                IteratorState::SegmentIterator {
+                                    segments: seg_data,
+                                    input: std::rc::Rc::new(input_clone.as_ref().clone()),
+                                    position: 0,
+                                    done: false,
+                                },
+                            );
 
                         interp
                             .get_object_cell_expect(iter_obj_id)
@@ -478,11 +478,11 @@ impl Interpreter {
                                             .unwrap_or(false);
                                         let mut b = cell.borrow_mut();
                                         if let Some(IteratorState::SegmentIterator {
-                                            ref mut segments,
-                                            ref input,
-                                            ref mut position,
-                                            ref mut done,
-                                        }) = b.iterator_state
+                                            segments,
+                                            input,
+                                            position,
+                                            done,
+                                        }) = b.iterator_state_mut()
                                         {
                                             if *done || *position >= segments.len() {
                                                 *done = true;
@@ -674,11 +674,11 @@ impl Interpreter {
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
                     .class_name = "Intl.Segmenter".to_string();
-                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
-                    Some(IntlData::Segmenter {
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+                    crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::Segmenter {
                         locale,
                         granularity,
-                    });
+                    }));
 
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },

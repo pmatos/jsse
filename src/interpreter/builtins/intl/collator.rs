@@ -247,7 +247,7 @@ impl Interpreter {
                         }
                         let probe = {
                             let b = cell.borrow();
-                            if !matches!(b.intl_data, Some(IntlData::Collator { .. })) {
+                            if !matches!(b.intl_data(), Some(IntlData::Collator { .. })) {
                                 Probe::NotCollator
                             } else if let Some(func) = b
                                 .properties
@@ -273,15 +273,15 @@ impl Interpreter {
                     let snapshot = interp.get_object_cell(o.id).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::Collator {
-                            ref locale,
-                            ref usage,
-                            ref collation,
-                            ref sensitivity,
-                            ref ignore_punctuation,
-                            ref numeric,
-                            ref case_first,
+                            locale,
+                            usage,
+                            collation,
+                            sensitivity,
+                            ignore_punctuation,
+                            numeric,
+                            case_first,
                             ..
-                        }) = b.intl_data
+                        }) = b.intl_data()
                         {
                             Some((
                                 locale.clone(),
@@ -374,7 +374,7 @@ impl Interpreter {
                 {
                     let data = {
                         let b = obj.borrow();
-                        b.intl_data.clone()
+                        b.intl_data().cloned()
                     };
                     if let Some(IntlData::Collator {
                         locale,
@@ -676,8 +676,8 @@ impl Interpreter {
                     .get_object_cell_expect(obj_id)
                     .borrow_mut()
                     .class_name = "Intl.Collator".to_string();
-                interp.get_object_cell_expect(obj_id).borrow_mut().intl_data =
-                    Some(IntlData::Collator {
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+                    crate::interpreter::types::ObjectKind::Intl(Box::new(IntlData::Collator {
                         locale,
                         usage,
                         sensitivity,
@@ -685,7 +685,7 @@ impl Interpreter {
                         collation,
                         numeric,
                         case_first,
-                    });
+                    }));
 
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },

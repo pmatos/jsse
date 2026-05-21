@@ -50,7 +50,7 @@ impl Interpreter {
                     interp.get_object_cell(o.id).and_then(|cell| {
                         let b = cell.borrow();
                         if b.class_name == "DisposableStack"
-                            && let Some(ref ds) = b.disposable_stack
+                            && let Some(ds) = b.disposable_stack()
                         {
                             Some(ds.disposed)
                         } else {
@@ -94,7 +94,7 @@ impl Interpreter {
                         if b.class_name != "DisposableStack" {
                             Probe::NotStack
                         } else {
-                            match &b.disposable_stack {
+                            match b.disposable_stack() {
                                 Some(ds) if ds.disposed => Probe::AlreadyDisposed,
                                 Some(_) => Probe::Active,
                                 None => Probe::NotStack,
@@ -160,7 +160,7 @@ impl Interpreter {
                     };
                     if let Some(cell) = interp.get_object_cell(o.id) {
                         let mut b = cell.borrow_mut();
-                        if let Some(ref mut ds) = b.disposable_stack {
+                        if let Some(ds) = b.disposable_stack_mut() {
                             ds.stack.push(resource);
                         }
                     }
@@ -190,7 +190,7 @@ impl Interpreter {
                     }
                     let probe = {
                         let b = interp.get_object_cell_expect(o.id).borrow();
-                        match &b.disposable_stack {
+                        match b.disposable_stack() {
                             Some(ds) if ds.disposed => Probe::AlreadyDisposed,
                             Some(_) => Probe::Active,
                             None => Probe::NotStack,
@@ -235,7 +235,7 @@ impl Interpreter {
                     };
                     if let Some(cell) = interp.get_object_cell(o.id) {
                         let mut b = cell.borrow_mut();
-                        if let Some(ref mut ds) = b.disposable_stack {
+                        if let Some(ds) = b.disposable_stack_mut() {
                             ds.stack.push(resource);
                         }
                     }
@@ -264,7 +264,7 @@ impl Interpreter {
                     }
                     let probe = {
                         let b = interp.get_object_cell_expect(o.id).borrow();
-                        match &b.disposable_stack {
+                        match b.disposable_stack() {
                             Some(ds) if ds.disposed => Probe::AlreadyDisposed,
                             Some(_) => Probe::Active,
                             None => Probe::NotStack,
@@ -295,7 +295,7 @@ impl Interpreter {
                     };
                     if let Some(cell) = interp.get_object_cell(o.id) {
                         let mut b = cell.borrow_mut();
-                        if let Some(ref mut ds) = b.disposable_stack {
+                        if let Some(ds) = b.disposable_stack_mut() {
                             ds.stack.push(resource);
                         }
                     }
@@ -327,7 +327,7 @@ impl Interpreter {
                         if b.class_name != "DisposableStack" {
                             Probe::NotStack
                         } else {
-                            match &mut b.disposable_stack {
+                            match b.disposable_stack_mut() {
                                 Some(ds) if ds.disposed => Probe::AlreadyDisposed,
                                 Some(ds) => {
                                     let s = std::mem::take(&mut ds.stack);
@@ -370,10 +370,12 @@ impl Interpreter {
                     {
                         let mut b = interp.get_object_cell_expect(new_obj_id).borrow_mut();
                         b.class_name = "DisposableStack".to_string();
-                        b.disposable_stack = Some(DisposableStackData {
-                            stack,
-                            disposed: false,
-                        });
+                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(
+                            DisposableStackData {
+                                stack,
+                                disposed: false,
+                            },
+                        );
                     }
                     let id = new_obj_id;
                     return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
@@ -415,10 +417,12 @@ impl Interpreter {
                         if let Some(p) = proto {
                             b.prototype_id = Some(p);
                         }
-                        b.disposable_stack = Some(DisposableStackData {
-                            stack: Vec::new(),
-                            disposed: false,
-                        });
+                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(
+                            DisposableStackData {
+                                stack: Vec::new(),
+                                disposed: false,
+                            },
+                        );
                     }
                     let id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
@@ -471,7 +475,7 @@ impl Interpreter {
                 if b.class_name != "DisposableStack" {
                     Probe::NotStack
                 } else {
-                    match &mut b.disposable_stack {
+                    match b.disposable_stack_mut() {
                         Some(ds) => {
                             if ds.disposed {
                                 Probe::AlreadyDisposed
@@ -575,7 +579,7 @@ impl Interpreter {
                     interp.get_object_cell(o.id).and_then(|cell| {
                         let b = cell.borrow();
                         if b.class_name == "AsyncDisposableStack"
-                            && let Some(ref ds) = b.disposable_stack
+                            && let Some(ds) = b.disposable_stack()
                         {
                             Some(ds.disposed)
                         } else {
@@ -619,7 +623,7 @@ impl Interpreter {
                         if b.class_name != "AsyncDisposableStack" {
                             Probe::NotStack
                         } else {
-                            match &b.disposable_stack {
+                            match b.disposable_stack() {
                                 Some(ds) if ds.disposed => Probe::AlreadyDisposed,
                                 Some(_) => Probe::Active,
                                 None => Probe::NotStack,
@@ -646,7 +650,7 @@ impl Interpreter {
                             dispose_method: JsValue::Undefined,
                         };
                         if let Some(obj2) = interp.get_object_cell(o.id)
-                            && let Some(ds) = &mut obj2.borrow_mut().disposable_stack
+                            && let Some(ds) = obj2.borrow_mut().disposable_stack_mut()
                         {
                             ds.stack.push(resource);
                         }
@@ -696,7 +700,7 @@ impl Interpreter {
                     };
                     if let Some(cell) = interp.get_object_cell(o.id) {
                         let mut b = cell.borrow_mut();
-                        if let Some(ref mut ds) = b.disposable_stack {
+                        if let Some(ds) = b.disposable_stack_mut() {
                             ds.stack.push(resource);
                         }
                     }
@@ -726,7 +730,7 @@ impl Interpreter {
                     }
                     let probe = {
                         let b = interp.get_object_cell_expect(o.id).borrow();
-                        match &b.disposable_stack {
+                        match b.disposable_stack() {
                             Some(ds) if ds.disposed => Probe::AlreadyDisposed,
                             Some(_) => Probe::Active,
                             None => Probe::NotStack,
@@ -770,7 +774,7 @@ impl Interpreter {
                     };
                     if let Some(cell) = interp.get_object_cell(o.id) {
                         let mut b = cell.borrow_mut();
-                        if let Some(ref mut ds) = b.disposable_stack {
+                        if let Some(ds) = b.disposable_stack_mut() {
                             ds.stack.push(resource);
                         }
                     }
@@ -799,7 +803,7 @@ impl Interpreter {
                     }
                     let probe = {
                         let b = interp.get_object_cell_expect(o.id).borrow();
-                        match &b.disposable_stack {
+                        match b.disposable_stack() {
                             Some(ds) if ds.disposed => Probe::AlreadyDisposed,
                             Some(_) => Probe::Active,
                             None => Probe::NotStack,
@@ -830,7 +834,7 @@ impl Interpreter {
                     };
                     if let Some(cell) = interp.get_object_cell(o.id) {
                         let mut b = cell.borrow_mut();
-                        if let Some(ref mut ds) = b.disposable_stack {
+                        if let Some(ds) = b.disposable_stack_mut() {
                             ds.stack.push(resource);
                         }
                     }
@@ -862,7 +866,7 @@ impl Interpreter {
                         if b.class_name != "AsyncDisposableStack" {
                             Probe::NotStack
                         } else {
-                            match &mut b.disposable_stack {
+                            match b.disposable_stack_mut() {
                                 Some(ds) if ds.disposed => Probe::AlreadyDisposed,
                                 Some(ds) => {
                                     let s = std::mem::take(&mut ds.stack);
@@ -899,10 +903,12 @@ impl Interpreter {
                     {
                         let mut b = interp.get_object_cell_expect(new_obj_id).borrow_mut();
                         b.class_name = "AsyncDisposableStack".to_string();
-                        b.disposable_stack = Some(DisposableStackData {
-                            stack,
-                            disposed: false,
-                        });
+                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(
+                            DisposableStackData {
+                                stack,
+                                disposed: false,
+                            },
+                        );
                     }
                     let id = new_obj_id;
                     return Completion::Normal(JsValue::Object(crate::types::JsObject { id }));
@@ -946,10 +952,12 @@ impl Interpreter {
                         if let Some(p) = proto {
                             b.prototype_id = Some(p);
                         }
-                        b.disposable_stack = Some(DisposableStackData {
-                            stack: Vec::new(),
-                            disposed: false,
-                        });
+                        b.kind = crate::interpreter::types::ObjectKind::DisposableStack(
+                            DisposableStackData {
+                                stack: Vec::new(),
+                                disposed: false,
+                            },
+                        );
                     }
                     let id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
@@ -998,7 +1006,7 @@ impl Interpreter {
                 if b.class_name != "AsyncDisposableStack" {
                     Probe::NotStack
                 } else {
-                    match &mut b.disposable_stack {
+                    match b.disposable_stack_mut() {
                         Some(ds) => {
                             if ds.disposed {
                                 Probe::AlreadyDisposed

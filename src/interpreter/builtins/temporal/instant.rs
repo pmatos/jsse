@@ -818,7 +818,7 @@ fn get_instant_ns(interp: &mut Interpreter, this: &JsValue) -> Result<BigInt, Co
     let snapshot = match this {
         JsValue::Object(o) => interp
             .get_object_cell(o.id)
-            .map(|cell| cell.borrow().temporal_data.clone()),
+            .map(|cell| cell.borrow().temporal_data().cloned()),
         _ => None,
     };
     match snapshot {
@@ -841,12 +841,10 @@ fn create_instant_result(interp: &mut Interpreter, epoch_ns: BigInt) -> Completi
             .borrow_mut()
             .prototype_id = Some(proto_id);
     }
-    interp
-        .get_object_cell_expect(obj_id)
-        .borrow_mut()
-        .temporal_data = Some(TemporalData::Instant {
-        epoch_nanoseconds: epoch_ns,
-    });
+    interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+        crate::interpreter::types::ObjectKind::Temporal(TemporalData::Instant {
+            epoch_nanoseconds: epoch_ns,
+        });
     let id = obj_id;
     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
 }
@@ -859,12 +857,12 @@ pub(super) fn to_temporal_instant(
         JsValue::Object(o) => {
             if let Some(obj) = interp.get_object_cell(o.id) {
                 let data = obj.borrow();
-                if let Some(TemporalData::Instant { epoch_nanoseconds }) = &data.temporal_data {
+                if let Some(TemporalData::Instant { epoch_nanoseconds }) = data.temporal_data() {
                     return Ok(epoch_nanoseconds.clone());
                 }
                 if let Some(TemporalData::ZonedDateTime {
                     epoch_nanoseconds, ..
-                }) = &data.temporal_data
+                }) = data.temporal_data()
                 {
                     return Ok(epoch_nanoseconds.clone());
                 }

@@ -29,15 +29,13 @@ pub(super) fn create_plain_year_month_result(
             .borrow_mut()
             .prototype_id = Some(proto_id);
     }
-    interp
-        .get_object_cell_expect(obj_id)
-        .borrow_mut()
-        .temporal_data = Some(TemporalData::PlainYearMonth {
-        iso_year: y,
-        iso_month: m,
-        reference_iso_day: ref_day,
-        calendar: cal.to_string(),
-    });
+    interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+        crate::interpreter::types::ObjectKind::Temporal(TemporalData::PlainYearMonth {
+            iso_year: y,
+            iso_month: m,
+            reference_iso_day: ref_day,
+            calendar: cal.to_string(),
+        });
     let id = obj_id;
     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
 }
@@ -49,7 +47,7 @@ fn get_ym_fields(
     let snapshot = match this {
         JsValue::Object(o) => interp
             .get_object_cell(o.id)
-            .map(|cell| cell.borrow().temporal_data.clone()),
+            .map(|cell| cell.borrow().temporal_data().cloned()),
         _ => None,
     };
     match snapshot {
@@ -192,7 +190,7 @@ fn to_temporal_plain_year_month(
                     iso_month,
                     reference_iso_day,
                     calendar,
-                }) = &data.temporal_data
+                }) = data.temporal_data()
                 {
                     return Ok((*iso_year, *iso_month, *reference_iso_day, calendar.clone()));
                 }
@@ -1315,7 +1313,7 @@ impl Interpreter {
                     if let Some(obj) = interp.get_object_cell(o.id) {
                         let data = obj.borrow();
                         matches!(
-                            &data.temporal_data,
+                            data.temporal_data(),
                             Some(TemporalData::PlainYearMonth { .. })
                         )
                     } else {

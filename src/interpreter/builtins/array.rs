@@ -4,13 +4,12 @@ use super::super::*;
 fn is_array_check(interp: &mut Interpreter, obj_id: u64) -> Result<bool, JsValue> {
     let snapshot = interp.get_object_cell(obj_id).map(|cell| {
         let b = cell.borrow();
-        let tid = b.proxy_target_id;
-        // is_proxy() checks proxy_target_id.is_some(), but revoked proxies have proxy_target_id=None
-        // Use proxy_revoked flag to also detect revoked proxies
+        // `is_proxy()` is active-only; revoked proxies still need IsArray to throw, so we
+        // also surface the revoked flag.
         (
-            b.proxy_revoked,
-            b.is_proxy() || b.proxy_revoked,
-            tid,
+            b.is_proxy_revoked(),
+            b.is_proxy() || b.is_proxy_revoked(),
+            b.proxy_target_id(),
             b.class_name.clone(),
         )
     });
@@ -89,7 +88,7 @@ fn obj_set_throw(
         // Check for Proxy
         let is_proxy = interp.get_object_cell(obj_ref.id).is_some_and(|cell| {
             let b = cell.borrow();
-            b.is_proxy() || b.proxy_revoked
+            b.is_proxy() || b.is_proxy_revoked()
         });
         if is_proxy {
             match interp.proxy_set(obj_ref.id, key, value, o) {
@@ -135,7 +134,7 @@ fn obj_set_throw(
         {
             let ta_info = interp.get_object_cell(obj_ref.id).and_then(|cell| {
                 let b = cell.borrow();
-                b.typed_array_info
+                b.typed_array_info()
                     .as_ref()
                     .map(|ta| (ta.kind.is_bigint(), ta.kind))
             });
@@ -151,7 +150,7 @@ fn obj_set_throw(
                     }
                 };
                 if let Some(cell) = interp.get_object_cell(obj_ref.id)
-                    && let Some(ref ta) = cell.borrow().typed_array_info
+                    && let Some(ta) = cell.borrow().typed_array_info()
                     && is_valid_integer_index(ta, index)
                 {
                     typed_array_set_index(ta, index as usize, &num_val);
@@ -187,8 +186,7 @@ pub(crate) fn create_data_property_or_throw(
         {
             let is_deferred_ns = interp.get_object_cell(obj_ref.id).is_some_and(|cell| {
                 cell.borrow()
-                    .module_namespace
-                    .as_ref()
+                    .module_namespace()
                     .is_some_and(|ns| ns.deferred)
             });
             if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(key, true) {
@@ -242,7 +240,7 @@ pub(crate) fn create_data_property_or_throw(
             }
             let cell = interp.get_object_cell_expect(obj_ref.id);
             let mut borrow = cell.borrow_mut();
-            if let Some(ref mut elems) = borrow.array_elements
+            if let Some(elems) = borrow.array_elements_mut()
                 && let Ok(idx) = key.parse::<usize>()
             {
                 if idx < elems.len() {
@@ -453,7 +451,7 @@ fn from_async_attach_await(
 
             if let Some(cell) = interp.get_object_cell(promise_id) {
                 let mut ob = cell.borrow_mut();
-                if let Some(ref mut pd) = ob.promise_data {
+                if let Some(pd) = ob.promise_data_mut() {
                     pd.is_handled = true;
                     pd.fulfill_reactions.push(PromiseReaction {
                         handler: Some(fulfill_handler),
@@ -687,7 +685,7 @@ fn obj_delete(interp: &mut Interpreter, o: &JsValue, key: &str) {
         let mut borrow = cell.borrow_mut();
         borrow.properties.remove(key);
         borrow.property_order.retain(|k| k != key);
-        if let Some(ref mut elems) = borrow.array_elements
+        if let Some(elems) = borrow.array_elements_mut()
             && let Ok(idx) = key.parse::<usize>()
             && idx < elems.len()
         {
@@ -702,7 +700,7 @@ fn obj_delete_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<
         // Check for Proxy deleteProperty trap
         let is_proxy = interp.get_object_cell(obj_ref.id).is_some_and(|cell| {
             let b = cell.borrow();
-            b.is_proxy() || b.proxy_revoked
+            b.is_proxy() || b.is_proxy_revoked()
         });
         if is_proxy {
             match interp.proxy_delete_property(obj_ref.id, key) {
@@ -734,7 +732,7 @@ fn obj_delete_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<
 fn set_length(interp: &mut Interpreter, o: &JsValue, len: usize) {
     if let Some(cell) = get_obj(interp, o) {
         let mut borrow = cell.borrow_mut();
-        if let Some(ref mut elems) = borrow.array_elements
+        if let Some(elems) = borrow.array_elements_mut()
             && len <= elems.len()
         {
             elems.truncate(len);
@@ -748,7 +746,7 @@ fn set_length(interp: &mut Interpreter, o: &JsValue, len: usize) {
 fn set_length_throw(interp: &mut Interpreter, o: &JsValue, len: usize) -> Result<(), JsValue> {
     let snapshot = get_obj(interp, o).and_then(|cell| {
         let b = cell.borrow();
-        b.array_elements.as_ref()?;
+        b.array_elements()?;
         let length_desc = b.get_own_property("length");
         let length_writable_false = length_desc
             .as_ref()
@@ -773,7 +771,7 @@ fn set_length_throw(interp: &mut Interpreter, o: &JsValue, len: usize) -> Result
         }
         if let Some(cell) = get_obj(interp, o) {
             let mut borrow = cell.borrow_mut();
-            if let Some(ref mut elems) = borrow.array_elements
+            if let Some(elems) = borrow.array_elements_mut()
                 && len <= elems.len()
             {
                 elems.truncate(len);
@@ -904,9 +902,8 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .class_name = "Array".to_string();
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .array_elements = Some(Vec::new());
+        self.get_object_cell_expect(proto_id).borrow_mut().kind =
+            crate::interpreter::types::ObjectKind::Array(Vec::new());
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(
@@ -3940,7 +3937,7 @@ impl Interpreter {
             "length".to_string(),
             PropertyDescriptor::data(JsValue::Number(values.len() as f64), true, false, false),
         );
-        obj_data.array_elements = Some(values);
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(values);
         let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
@@ -3970,7 +3967,7 @@ impl Interpreter {
             "length".to_string(),
             PropertyDescriptor::data(JsValue::Number(len as f64), true, false, false),
         );
-        obj_data.array_elements = Some(array_elements);
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(array_elements);
         let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }
@@ -3987,7 +3984,7 @@ impl Interpreter {
             PropertyDescriptor::data(JsValue::Number(len as f64), true, false, false),
         );
         // Use a small Vec for sparse arrays — don't pre-allocate huge arrays
-        obj_data.array_elements = Some(Vec::new());
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(Vec::new());
         let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
     }

@@ -1295,7 +1295,7 @@ pub(crate) fn to_temporal_calendar_slot_value(
         JsValue::Object(o) => {
             if let Some(obj) = interp.get_object_cell(o.id) {
                 let data = obj.borrow();
-                match &data.temporal_data {
+                match data.temporal_data() {
                     Some(TemporalData::PlainDate { calendar, .. })
                     | Some(TemporalData::PlainDateTime { calendar, .. })
                     | Some(TemporalData::PlainYearMonth { calendar, .. })
@@ -1373,7 +1373,7 @@ pub(crate) fn is_partial_temporal_object(
     };
 
     if let Some(obj) = interp.get_object_cell(obj_ref.id) {
-        let td = obj.borrow().temporal_data.clone();
+        let td = obj.borrow().temporal_data().cloned();
         if let Some(
             TemporalData::PlainDate { .. }
             | TemporalData::PlainDateTime { .. }
@@ -2858,7 +2858,7 @@ pub(super) fn to_temporal_time_zone_identifier(
         JsValue::Object(o) => {
             // If it's a Temporal.ZonedDateTime, extract timeZoneId
             if let Some(obj) = interp.get_object_cell(o.id) {
-                let td = obj.borrow().temporal_data.clone();
+                let td = obj.borrow().temporal_data().cloned();
                 if let Some(TemporalData::ZonedDateTime { time_zone, .. }) = td {
                     return Ok(time_zone);
                 }

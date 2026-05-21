@@ -505,7 +505,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = &sab_val
                     && let Some(cell) = interp.get_object_cell(o.id)
                 {
-                    let sab_shared = cell.borrow().sab_shared.clone();
+                    let sab_shared = cell.borrow().sab_shared().cloned();
                     if let Some(inner) = sab_shared {
                         for tx in &interp.agent_broadcast_txs {
                             let _ = tx.send(AgentBroadcastMsg {
@@ -781,17 +781,17 @@ impl Interpreter {
         {
             let obj_ref = obj.borrow();
             // Bound function: recurse on [[BoundTargetFunction]]
-            if let Some(ref target) = obj_ref.bound_target_function {
-                let target_clone = target.clone();
+            if let Some(b) = obj_ref.bound() {
+                let target_clone = b.target.clone();
                 drop(obj_ref);
                 return self.get_function_realm(&target_clone);
             }
             // Proxy: §7.3.22 step 4
-            if obj_ref.proxy_revoked {
+            if obj_ref.is_proxy_revoked() {
                 drop(obj_ref);
                 return Err(self.create_type_error("Cannot perform operation on a revoked proxy"));
             }
-            if let Some(target_id) = obj_ref.proxy_target_id {
+            if let Some(target_id) = obj_ref.proxy_target_id() {
                 drop(obj_ref);
                 return self.get_function_realm(&JsValue::Object(crate::types::JsObject {
                     id: target_id,
@@ -1436,7 +1436,7 @@ impl Interpreter {
                     }
                 }
                 if !map.is_empty() {
-                    o.parameter_map = Some(map);
+                    o.kind = crate::interpreter::types::ObjectKind::Arguments(map);
                 }
             }
         }
@@ -2716,9 +2716,16 @@ impl Interpreter {
             let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
             ab.class_name = "ArrayBuffer".to_string();
             ab.prototype_id = self.realm().arraybuffer_prototype;
-            ab.arraybuffer_data = Some(buf_rc.clone());
-            ab.arraybuffer_detached = Some(detached.clone());
-            ab.arraybuffer_is_immutable = true;
+            ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                crate::interpreter::types::ArrayBufferData {
+                    data: buf_rc.clone(),
+                    detached: Some(detached.clone()),
+                    max_byte_length: None,
+                    is_shared: false,
+                    is_immutable: true,
+                    sab_shared: None,
+                },
+            );
         }
         self.gc_track_external_bytes(len);
         let ab_id = ab_obj_id;
@@ -2732,6 +2739,7 @@ impl Interpreter {
             array_length: len,
             is_detached: detached,
             is_length_tracking: false,
+            buffer_object_id: None,
         };
 
         let proto_id = self.realm().uint8array_prototype.unwrap();
@@ -3978,15 +3986,14 @@ impl Interpreter {
         }; // module_ref borrow dropped here
 
         // Set module namespace data for live bindings
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .module_namespace = Some(ModuleNamespaceData {
-            env: env.clone(),
-            export_names: export_names.clone(),
-            export_to_binding: export_bindings,
-            module_path,
-            deferred: false,
-        });
+        self.get_object_cell_expect(obj_id).borrow_mut().kind =
+            crate::interpreter::types::ObjectKind::ModuleNamespace(ModuleNamespaceData {
+                env: env.clone(),
+                export_names: export_names.clone(),
+                export_to_binding: export_bindings,
+                module_path,
+                deferred: false,
+            });
         self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".to_string();
         self.get_object_cell_expect(obj_id).borrow_mut().extensible = false; // Module namespaces are non-extensible
         self.get_object_cell_expect(obj_id)
@@ -4060,15 +4067,14 @@ impl Interpreter {
             (env, export_bindings, module_path, export_names)
         };
 
-        self.get_object_cell_expect(obj_id)
-            .borrow_mut()
-            .module_namespace = Some(ModuleNamespaceData {
-            env: env.clone(),
-            export_names: export_names.clone(),
-            export_to_binding: export_bindings,
-            module_path,
-            deferred: true,
-        });
+        self.get_object_cell_expect(obj_id).borrow_mut().kind =
+            crate::interpreter::types::ObjectKind::ModuleNamespace(ModuleNamespaceData {
+                env: env.clone(),
+                export_names: export_names.clone(),
+                export_to_binding: export_bindings,
+                module_path,
+                deferred: true,
+            });
         self.get_object_cell_expect(obj_id).borrow_mut().class_name = "Module".to_string();
         self.get_object_cell_expect(obj_id).borrow_mut().extensible = false;
         self.get_object_cell_expect(obj_id)
@@ -4541,7 +4547,7 @@ impl Interpreter {
         let ids = self.scheduler.pending_async_promise_ids_lock();
         for &id in ids.iter() {
             if let Some(obj) = self.get_object_cell(id)
-                && let Some(ref pd) = obj.borrow().promise_data
+                && let Some(pd) = obj.borrow().promise_data()
                 && (!pd.fulfill_reactions.is_empty() || !pd.reject_reactions.is_empty())
             {
                 return true;
@@ -4727,7 +4733,7 @@ impl Interpreter {
             }
 
             // Also truncate array_elements.
-            if let Some(ref mut elements) = obj.array_elements {
+            if let Some(elements) = obj.array_elements_mut() {
                 elements.truncate(actual_new_len as usize);
             }
         }
@@ -4822,7 +4828,7 @@ impl Interpreter {
                 if let Some(len_desc) = obj.properties.get_mut("length") {
                     len_desc.value = Some(JsValue::Number(new_len as f64));
                 }
-                if let Some(ref mut elems) = obj.array_elements {
+                if let Some(elems) = obj.array_elements_mut() {
                     let val = desc.value.unwrap_or(JsValue::Undefined);
                     let idx = index_u32 as usize;
                     if idx < elems.len() {
@@ -4837,7 +4843,7 @@ impl Interpreter {
             } else {
                 let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 let mut obj = obj_rc.borrow_mut();
-                if let Some(ref mut elems) = obj.array_elements {
+                if let Some(elems) = obj.array_elements_mut() {
                     let idx = index_u32 as usize;
                     if idx < elems.len()
                         && let Some(ref val) = desc.value
@@ -4922,10 +4928,16 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                         let mut o = interp.get_object_cell_expect(sab_obj_id).borrow_mut();
                         o.class_name = "SharedArrayBuffer".to_string();
                         o.prototype_id = sab_proto;
-                        o.arraybuffer_data = Some(buf_rc);
-                        o.arraybuffer_detached = None;
-                        o.arraybuffer_is_shared = true;
-                        o.sab_shared = Some(sab_inner);
+                        o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                            crate::interpreter::types::ArrayBufferData {
+                                data: buf_rc,
+                                detached: None,
+                                max_byte_length: None,
+                                is_shared: true,
+                                is_immutable: false,
+                                sab_shared: Some(sab_inner),
+                            },
+                        );
                     }
                     let sab_val = JsValue::Object(JsObject { id: sab_obj_id });
                     interp.agent_broadcast_rx = Some(rx);

@@ -1326,6 +1326,9 @@ pub struct TypedArrayInfo {
     pub array_length: usize,
     pub is_detached: Rc<Cell<bool>>,
     pub is_length_tracking: bool,
+    /// Id of the ArrayBuffer (or SharedArrayBuffer) JS object that wraps `buffer`.
+    /// `None` only on the rare construction path that bypasses an object wrapper.
+    pub buffer_object_id: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -1335,6 +1338,8 @@ pub struct DataViewInfo {
     pub byte_length: usize,
     pub is_detached: Rc<Cell<bool>>,
     pub is_length_tracking: bool,
+    /// Id of the ArrayBuffer (or SharedArrayBuffer) JS object that wraps `buffer`.
+    pub buffer_object_id: Option<u64>,
     pub is_immutable: bool,
 }
 
@@ -1542,54 +1547,18 @@ pub struct JsObjectData {
     pub property_order: Vec<String>,
     pub prototype_id: Option<u64>,
     pub callable: Option<JsFunction>,
-    pub array_elements: Option<Vec<JsValue>>,
     pub class_name: String,
     pub extensible: bool,
     pub primitive_value: Option<JsValue>,
     pub private_fields: HashMap<String, PrivateElement>,
     pub class_instance_field_defs: Vec<InstanceFieldDef>,
-    pub iterator_state: Option<IteratorState>,
-    pub parameter_map: Option<HashMap<String, (EnvRef, String)>>,
-    pub map_data: Option<Vec<Option<(JsValue, JsValue)>>>,
-    pub set_data: Option<Vec<Option<JsValue>>>,
-    pub proxy_target_id: Option<u64>,
-    pub proxy_handler_id: Option<u64>,
-    pub proxy_revoked: bool,
-    pub arraybuffer_data: Option<Rc<RefCell<BufferData>>>,
-    pub arraybuffer_detached: Option<Rc<Cell<bool>>>,
-    pub arraybuffer_max_byte_length: Option<usize>,
-    pub arraybuffer_is_shared: bool,
-    pub arraybuffer_is_immutable: bool,
-    pub sab_shared: Option<Arc<SharedBufferInner>>,
-    pub typed_array_info: Option<TypedArrayInfo>,
-    pub data_view_info: Option<DataViewInfo>,
-    pub view_buffer_object_id: Option<u64>,
-    pub promise_data: Option<PromiseData>,
     pub is_raw_json: bool,
-    pub is_class_constructor: bool,
-    pub is_derived_class_constructor: bool,
-    pub is_default_derived_constructor: bool,
-    pub bound_target_function: Option<JsValue>,
-    pub bound_args: Option<Vec<JsValue>>,
-    pub bound_this: Option<JsValue>,
-    pub shadow_realm_id: Option<usize>,
-    pub wrapped_target_function_id: Option<u64>,
-    pub wrapped_caller_realm_id: Option<usize>,
-    pub(crate) disposable_stack: Option<DisposableStackData>,
-    pub(crate) module_namespace: Option<ModuleNamespaceData>,
-    pub(crate) temporal_data: Option<TemporalData>,
-    pub(crate) intl_data: Option<IntlData>,
+    pub constructor_kind: ConstructorKind,
     pub(crate) generator_realm_id: Option<usize>,
     pub(crate) is_htmldda: bool,
     pub(crate) is_immutable_prototype: bool,
-    pub(crate) regexp_original_source: Option<JsString>,
-    pub(crate) regexp_original_flags: Option<JsString>,
     pub(crate) deferred_construct: bool,
     pub(crate) gc_native_roots: Option<Vec<JsValue>>,
-    pub(crate) wrap_iter_record: Option<(JsValue, JsValue)>,
-    pub(crate) helper_next_closure: Option<JsValue>,
-    pub(crate) helper_return_closure: Option<JsValue>,
-    pub(crate) helper_gen_state: Option<Rc<Cell<u8>>>,
     /// Per-object shape id. Bumped by `Interpreter::mutate_object_shape` on
     /// every structural mutation (property add/delete/attribute change,
     /// prototype mutation, proxy install). Pure value reassignment does NOT
@@ -1599,6 +1568,12 @@ pub struct JsObjectData {
     /// hold `obj_shape_id == 0`. See issue #71.
     pub shape_id: u64,
     pub(crate) bytecode_cache: super::bytecode::BytecodeCacheState,
+
+    /// Strict kind discriminator. Populated alongside the legacy `Option<XData>`
+    /// fields during Phase B1; subsequent slices migrate dispatch off the old
+    /// fields and onto this enum. Defaults to `Ordinary` for plain objects.
+    #[allow(dead_code)]
+    pub(crate) kind: ObjectKind,
 }
 
 #[derive(Clone)]
@@ -1616,6 +1591,183 @@ pub(crate) struct DisposableStackData {
     pub(crate) disposed: bool,
 }
 
+/// ArrayBuffer / SharedArrayBuffer slot data. Present iff this object is one
+/// of those two kinds. Six previously-loose fields with implicit "all
+/// meaningful together" invariants are now grouped.
+///
+/// SAB vs AB is encoded by `is_shared` + presence of `sab_shared`; immutable
+/// ABs set `is_immutable`. `detached` is `None` for SAB (which cannot detach)
+/// and `Some(Cell<bool>)` for regular AB.
+#[derive(Clone, Debug)]
+pub(crate) struct ArrayBufferData {
+    pub data: Rc<RefCell<BufferData>>,
+    pub detached: Option<Rc<Cell<bool>>>,
+    pub max_byte_length: Option<usize>,
+    pub is_shared: bool,
+    pub is_immutable: bool,
+    pub sab_shared: Option<Arc<SharedBufferInner>>,
+}
+
+/// The constructor flavor of a callable object. Replaces three previously
+/// independent booleans (`is_class_constructor`, `is_derived_class_constructor`,
+/// `is_default_derived_constructor`) whose set of valid combinations was
+/// expressible only by convention — e.g. `default && !derived` was nonsense
+/// but compiled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConstructorKind {
+    /// A regular function — or the constructor slot is unused.
+    Function,
+    /// A base class constructor (`class C { ... }` without `extends`).
+    Class,
+    /// An explicit derived class constructor (`class C extends B { constructor() { ... } }`).
+    DerivedClass,
+    /// A synthesized default derived constructor — derived class with no
+    /// `constructor` method (`class C extends B {}`). Construction bypasses
+    /// the synthetic body to avoid Symbol.iterator on the rest parameter
+    /// (spec §15.7.14).
+    DefaultDerivedClass,
+}
+
+/// Discriminator for the kind-specific data attached to a JsObjectData.
+///
+/// Each variant either is the kind in isolation (Ordinary), or carries the
+/// `XData` cluster previously held in an `Option<XData>` field. Variants are
+/// **strictly disjoint** — at most one applies to any given object. Cross-cutting
+/// aspects (callable closure, prototype chain, property bag) stay as orthogonal
+/// fields on JsObjectData; the kind enum captures only the exotic-shape data
+/// the spec demands a particular object carry.
+///
+/// This is currently introduced *alongside* the existing `Option<XData>` fields
+/// — both are populated on construction. Subsequent slices migrate predicate
+/// methods to read from this enum (B2), move call sites to match on it (B3),
+/// and finally delete the now-vestigial orthogonal Options (B4).
+#[derive(Clone, Default)]
+#[allow(dead_code)] // Variants populated as Phase B2/B3 migrate call sites onto this enum.
+pub(crate) enum ObjectKind {
+    #[default]
+    Ordinary,
+    Proxy(ProxyData),
+    RegExp(RegExpData),
+    BoundFunction(BoundFunctionData),
+    WrappedFunction(WrappedFunctionData),
+    IterHelper(IterHelperData),
+    ArrayBuffer(ArrayBufferData),
+    TypedArray(TypedArrayInfo),
+    DataView(DataViewInfo),
+    Promise(PromiseData),
+    /// Slot list. `None` entries are tombstones from delete that we don't
+    /// rewrite because Map iteration must visit them with the original
+    /// insertion order intact.
+    Map(Vec<Option<(JsValue, JsValue)>>),
+    /// Slot list, tombstones as above.
+    Set(Vec<Option<JsValue>>),
+    /// FinalizationRegistry cells. Two parallel slot lists:
+    ///   `cells[i]`  = Some((target, heldValue)) or None (tombstone)
+    ///   `tokens[i]` = Some(unregisterToken) or None
+    FinalizationRegistry {
+        cells: Vec<Option<(JsValue, JsValue)>>,
+        tokens: Vec<Option<JsValue>>,
+    },
+    Iterator(IteratorState),
+    /// `parameter_map` for an Arguments exotic object.
+    Arguments(HashMap<String, (EnvRef, String)>),
+    /// `array_elements` for the Array exotic object.
+    Array(Vec<JsValue>),
+    /// Primitive value wrapped by `Object(primitive)` (String/Number/Boolean/Symbol/BigInt).
+    PrimitiveWrapper(JsValue),
+    ModuleNamespace(ModuleNamespaceData),
+    DisposableStack(DisposableStackData),
+    Temporal(TemporalData),
+    /// Boxed because `IntlData` is the largest variant (~560 bytes). Boxing keeps
+    /// `JsObjectData::kind` compact for the common Ordinary case at the cost of one
+    /// indirection on rare Intl-instance access. See clippy `large_enum_variant`.
+    Intl(Box<IntlData>),
+    /// ShadowRealm instance — carries the realm id of the shadow realm itself.
+    ShadowRealm(usize),
+}
+
+/// Iterator-helper or wrap-delegation slot data. The two cases are mutually
+/// exclusive at the object level — an `Iterator.from(x)` wrapper carries
+/// `Delegation`, while every `Iterator.prototype.{map,filter,take,drop,flatMap}`
+/// result carries `Helper`. Before this bundle they shared the same object via
+/// disjoint `Option` fields (`wrap_iter_record` vs `helper_*`), and the
+/// disjunction was enforced only by convention.
+#[derive(Clone, Debug)]
+pub(crate) enum IterHelperData {
+    Delegation {
+        iter: JsValue,
+        next: JsValue,
+    },
+    Helper {
+        next: JsValue,
+        return_closure: JsValue,
+        gen_state: Rc<Cell<u8>>,
+    },
+}
+
+/// Wrapped-function slot data. Present iff this object is the wrapper a
+/// ShadowRealm creates when a function crosses the realm boundary (§24.5.3).
+/// Both fields were always set together; making that a non-optional pair
+/// removes the implicit "is the target set?" invariant.
+#[derive(Clone, Debug)]
+pub(crate) struct WrappedFunctionData {
+    pub target_id: u64,
+    pub caller_realm_id: usize,
+}
+
+/// Bound-function slot data. Present iff this object is a bound function
+/// (created by `Function.prototype.bind`). The three slots — target, bound
+/// `this`, and pre-bound positional args — were previously held as three
+/// independent `Option` fields that were always written together; this struct
+/// makes that pairing typed.
+#[derive(Clone, Debug)]
+pub(crate) struct BoundFunctionData {
+    pub target: JsValue,
+    pub this: JsValue,
+    pub args: Vec<JsValue>,
+}
+
+/// RegExp instance slot data. Present iff the object is a RegExp instance
+/// (constructed via the literal syntax or `new RegExp(...)`).
+///
+/// Source and flags are stored as the *original* pattern and flag strings —
+/// what `RegExp.prototype.source` / `RegExp.prototype.flags` must return.
+#[derive(Clone, Debug)]
+pub(crate) struct RegExpData {
+    pub source: JsString,
+    pub flags: JsString,
+}
+
+/// Proxy slot data. Present on an object iff it is (or was) a Proxy.
+///
+/// Invariants:
+/// - Constructed via `ProxyData::active(target, handler)` — both ids `Some`, `revoked == false`.
+/// - After `revoke()`, both ids are `None` and `revoked == true`. Once revoked, never reactivated.
+/// - `JsObjectData::is_proxy()` returns true only for the *active* state, matching the engine's
+///   pre-existing predicate semantics. Use `is_proxy_revoked()` for the revoked branch.
+#[derive(Clone, Debug)]
+pub(crate) struct ProxyData {
+    pub target_id: Option<u64>,
+    pub handler_id: Option<u64>,
+    pub revoked: bool,
+}
+
+impl ProxyData {
+    pub(crate) fn active(target_id: u64, handler_id: u64) -> Self {
+        Self {
+            target_id: Some(target_id),
+            handler_id: Some(handler_id),
+            revoked: false,
+        }
+    }
+
+    pub(crate) fn revoke(&mut self) {
+        self.target_id = None;
+        self.handler_id = None;
+        self.revoked = true;
+    }
+}
+
 impl JsObjectData {
     pub(crate) fn new() -> Self {
         Self {
@@ -1624,61 +1776,379 @@ impl JsObjectData {
             property_order: Vec::new(),
             prototype_id: None,
             callable: None,
-            array_elements: None,
             class_name: "Object".to_string(),
             extensible: true,
             primitive_value: None,
             private_fields: HashMap::new(),
             class_instance_field_defs: Vec::new(),
-            iterator_state: None,
-            parameter_map: None,
-            map_data: None,
-            set_data: None,
-            proxy_target_id: None,
-            proxy_handler_id: None,
-            proxy_revoked: false,
-            arraybuffer_data: None,
-            arraybuffer_detached: None,
-            arraybuffer_max_byte_length: None,
-            arraybuffer_is_shared: false,
-            arraybuffer_is_immutable: false,
-            sab_shared: None,
-            typed_array_info: None,
-            data_view_info: None,
-            view_buffer_object_id: None,
-            promise_data: None,
             is_raw_json: false,
-            is_class_constructor: false,
-            is_derived_class_constructor: false,
-            is_default_derived_constructor: false,
-            bound_target_function: None,
-            bound_args: None,
-            bound_this: None,
-            shadow_realm_id: None,
-            wrapped_target_function_id: None,
-            wrapped_caller_realm_id: None,
-            disposable_stack: None,
-            module_namespace: None,
-            temporal_data: None,
-            intl_data: None,
+            constructor_kind: ConstructorKind::Function,
             generator_realm_id: None,
             is_htmldda: false,
             is_immutable_prototype: false,
-            regexp_original_source: None,
-            regexp_original_flags: None,
             deferred_construct: false,
             gc_native_roots: None,
-            wrap_iter_record: None,
-            helper_next_closure: None,
-            helper_return_closure: None,
-            helper_gen_state: None,
             shape_id: 0,
             bytecode_cache: super::bytecode::BytecodeCacheState::Untried,
+            kind: ObjectKind::Ordinary,
         }
     }
 
+    /// Proxy slot data. `Some` for any proxy, active or revoked.
+    pub(crate) fn proxy(&self) -> Option<&ProxyData> {
+        if let ObjectKind::Proxy(ref p) = self.kind {
+            Some(p)
+        } else {
+            None
+        }
+    }
+
+    /// True iff this is an *active* (non-revoked) proxy. Preserves pre-bundling semantics.
     pub fn is_proxy(&self) -> bool {
-        self.proxy_target_id.is_some()
+        self.proxy().is_some_and(|p| !p.revoked)
+    }
+
+    /// True iff this object has been revoked.
+    pub fn is_proxy_revoked(&self) -> bool {
+        self.proxy().is_some_and(|p| p.revoked)
+    }
+
+    /// Target id for an active proxy, `None` otherwise (including revoked).
+    pub fn proxy_target_id(&self) -> Option<u64> {
+        self.proxy().and_then(|p| p.target_id)
+    }
+
+    /// True iff this object is a class constructor of any flavor.
+    pub fn is_class_constructor(&self) -> bool {
+        !matches!(self.constructor_kind, ConstructorKind::Function)
+    }
+
+    /// True iff this object is a derived class constructor (explicit or default).
+    pub fn is_derived_class_constructor(&self) -> bool {
+        matches!(
+            self.constructor_kind,
+            ConstructorKind::DerivedClass | ConstructorKind::DefaultDerivedClass
+        )
+    }
+
+    /// True iff this is a synthesized default derived constructor.
+    pub fn is_default_derived_constructor(&self) -> bool {
+        matches!(self.constructor_kind, ConstructorKind::DefaultDerivedClass)
+    }
+
+    /// ArrayBuffer / SharedArrayBuffer slot data (any kind), pulled from `kind`.
+    pub(crate) fn arraybuffer(&self) -> Option<&ArrayBufferData> {
+        if let ObjectKind::ArrayBuffer(ref ab) = self.kind {
+            Some(ab)
+        } else {
+            None
+        }
+    }
+
+    /// ArrayBuffer slot data — mutable view for in-place mutation (resize/detach/toImmutable).
+    pub(crate) fn arraybuffer_mut(&mut self) -> Option<&mut ArrayBufferData> {
+        if let ObjectKind::ArrayBuffer(ref mut ab) = self.kind {
+            Some(ab)
+        } else {
+            None
+        }
+    }
+
+    /// DataView slot data.
+    pub(crate) fn data_view_info(&self) -> Option<&DataViewInfo> {
+        if let ObjectKind::DataView(ref d) = self.kind {
+            Some(d)
+        } else {
+            None
+        }
+    }
+
+    /// TypedArray slot data.
+    pub(crate) fn typed_array_info(&self) -> Option<&TypedArrayInfo> {
+        if let ObjectKind::TypedArray(ref t) = self.kind {
+            Some(t)
+        } else {
+            None
+        }
+    }
+
+    /// Iterator state (Array/String/Map/Set/etc. iterator instance progress).
+    pub(crate) fn iterator_state(&self) -> Option<&IteratorState> {
+        if let ObjectKind::Iterator(ref i) = self.kind {
+            Some(i)
+        } else {
+            None
+        }
+    }
+
+    /// Iterator state — mutable view (next() advances the cursor in place).
+    pub(crate) fn iterator_state_mut(&mut self) -> Option<&mut IteratorState> {
+        if let ObjectKind::Iterator(ref mut i) = self.kind {
+            Some(i)
+        } else {
+            None
+        }
+    }
+
+    /// Promise slot data.
+    pub(crate) fn promise_data(&self) -> Option<&PromiseData> {
+        if let ObjectKind::Promise(ref p) = self.kind {
+            Some(p)
+        } else {
+            None
+        }
+    }
+
+    /// Promise slot data — mutable view for state transitions and reaction queues.
+    pub(crate) fn promise_data_mut(&mut self) -> Option<&mut PromiseData> {
+        if let ObjectKind::Promise(ref mut p) = self.kind {
+            Some(p)
+        } else {
+            None
+        }
+    }
+
+    /// Arguments parameter-map slot data.
+    pub(crate) fn parameter_map(&self) -> Option<&HashMap<String, (EnvRef, String)>> {
+        if let ObjectKind::Arguments(ref m) = self.kind {
+            Some(m)
+        } else {
+            None
+        }
+    }
+
+    /// Arguments parameter-map — mutable view (delete map entry on property delete).
+    pub(crate) fn parameter_map_mut(&mut self) -> Option<&mut HashMap<String, (EnvRef, String)>> {
+        if let ObjectKind::Arguments(ref mut m) = self.kind {
+            Some(m)
+        } else {
+            None
+        }
+    }
+
+    /// Array exotic element list.
+    pub(crate) fn array_elements(&self) -> Option<&Vec<JsValue>> {
+        if let ObjectKind::Array(ref v) = self.kind {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    /// Array exotic element list — mutable view.
+    pub(crate) fn array_elements_mut(&mut self) -> Option<&mut Vec<JsValue>> {
+        if let ObjectKind::Array(ref mut v) = self.kind {
+            Some(v)
+        } else {
+            None
+        }
+    }
+
+    /// Map slot data (entry list, tombstones encoded as None).
+    pub(crate) fn map_data(&self) -> Option<&Vec<Option<(JsValue, JsValue)>>> {
+        if let ObjectKind::Map(ref m) = self.kind {
+            Some(m)
+        } else {
+            None
+        }
+    }
+
+    /// Map slot data — mutable view.
+    pub(crate) fn map_data_mut(&mut self) -> Option<&mut Vec<Option<(JsValue, JsValue)>>> {
+        if let ObjectKind::Map(ref mut m) = self.kind {
+            Some(m)
+        } else {
+            None
+        }
+    }
+
+    /// Set slot data (entry list).
+    pub(crate) fn set_data(&self) -> Option<&Vec<Option<JsValue>>> {
+        if let ObjectKind::Set(ref s) = self.kind {
+            Some(s)
+        } else {
+            None
+        }
+    }
+
+    /// Set slot data — mutable view.
+    pub(crate) fn set_data_mut(&mut self) -> Option<&mut Vec<Option<JsValue>>> {
+        if let ObjectKind::Set(ref mut s) = self.kind {
+            Some(s)
+        } else {
+            None
+        }
+    }
+
+    /// Temporal slot data (any of the Temporal kinds).
+    pub(crate) fn temporal_data(&self) -> Option<&TemporalData> {
+        if let ObjectKind::Temporal(ref t) = self.kind {
+            Some(t)
+        } else {
+            None
+        }
+    }
+
+    /// Intl slot data (any of the Intl kinds).
+    pub(crate) fn intl_data(&self) -> Option<&IntlData> {
+        if let ObjectKind::Intl(ref i) = self.kind {
+            Some(i.as_ref())
+        } else {
+            None
+        }
+    }
+
+    /// FinalizationRegistry cells (target+heldValue) + tokens (unregister keys).
+    pub(crate) fn finalization_registry(
+        &self,
+    ) -> Option<(&Vec<Option<(JsValue, JsValue)>>, &Vec<Option<JsValue>>)> {
+        if let ObjectKind::FinalizationRegistry {
+            ref cells,
+            ref tokens,
+        } = self.kind
+        {
+            Some((cells, tokens))
+        } else {
+            None
+        }
+    }
+
+    /// FinalizationRegistry cells + tokens — mutable view.
+    pub(crate) fn finalization_registry_mut(
+        &mut self,
+    ) -> Option<(
+        &mut Vec<Option<(JsValue, JsValue)>>,
+        &mut Vec<Option<JsValue>>,
+    )> {
+        if let ObjectKind::FinalizationRegistry {
+            ref mut cells,
+            ref mut tokens,
+        } = self.kind
+        {
+            Some((cells, tokens))
+        } else {
+            None
+        }
+    }
+
+    /// Backing bytes for an ArrayBuffer / SharedArrayBuffer.
+    pub fn arraybuffer_data(&self) -> Option<&Rc<RefCell<BufferData>>> {
+        self.arraybuffer().map(|b| &b.data)
+    }
+
+    /// Detached cell for a regular ArrayBuffer. `None` for SAB or non-buffers.
+    pub fn arraybuffer_detached(&self) -> Option<&Rc<Cell<bool>>> {
+        self.arraybuffer().and_then(|b| b.detached.as_ref())
+    }
+
+    /// Max byte length for a resizable / growable AB; `None` for non-resizable.
+    pub fn arraybuffer_max_byte_length(&self) -> Option<usize> {
+        self.arraybuffer().and_then(|b| b.max_byte_length)
+    }
+
+    /// True iff this is a SharedArrayBuffer.
+    pub fn arraybuffer_is_shared(&self) -> bool {
+        self.arraybuffer().is_some_and(|b| b.is_shared)
+    }
+
+    /// True iff this is an immutable ArrayBuffer (post-`sliceToImmutable`).
+    pub fn arraybuffer_is_immutable(&self) -> bool {
+        self.arraybuffer().is_some_and(|b| b.is_immutable)
+    }
+
+    /// RegExp slot data, pulled from the kind enum. `Some` iff this is a RegExp instance.
+    pub(crate) fn regexp(&self) -> Option<&RegExpData> {
+        if let ObjectKind::RegExp(ref r) = self.kind {
+            Some(r)
+        } else {
+            None
+        }
+    }
+
+    /// Wrapped-function slot data. `Some` iff this is a ShadowRealm cross-realm wrapper.
+    pub(crate) fn wrapped(&self) -> Option<&WrappedFunctionData> {
+        if let ObjectKind::WrappedFunction(ref w) = self.kind {
+            Some(w)
+        } else {
+            None
+        }
+    }
+
+    /// Bound-function slot data. `Some` iff this is a `Function.prototype.bind` result.
+    pub(crate) fn bound(&self) -> Option<&BoundFunctionData> {
+        if let ObjectKind::BoundFunction(ref b) = self.kind {
+            Some(b)
+        } else {
+            None
+        }
+    }
+
+    /// Iterator-helper / iterator-from delegation slot data.
+    pub(crate) fn iter_helper(&self) -> Option<&IterHelperData> {
+        if let ObjectKind::IterHelper(ref h) = self.kind {
+            Some(h)
+        } else {
+            None
+        }
+    }
+
+    /// Shadow-realm id for a ShadowRealm instance.
+    pub(crate) fn shadow_realm_id(&self) -> Option<usize> {
+        if let ObjectKind::ShadowRealm(id) = self.kind {
+            Some(id)
+        } else {
+            None
+        }
+    }
+
+    /// Module namespace slot data.
+    pub(crate) fn module_namespace(&self) -> Option<&ModuleNamespaceData> {
+        if let ObjectKind::ModuleNamespace(ref n) = self.kind {
+            Some(n)
+        } else {
+            None
+        }
+    }
+
+    /// Module namespace slot data — mutable view for clearing the deferred flag.
+    pub(crate) fn module_namespace_mut(&mut self) -> Option<&mut ModuleNamespaceData> {
+        if let ObjectKind::ModuleNamespace(ref mut n) = self.kind {
+            Some(n)
+        } else {
+            None
+        }
+    }
+
+    /// DisposableStack slot data.
+    pub(crate) fn disposable_stack(&self) -> Option<&DisposableStackData> {
+        if let ObjectKind::DisposableStack(ref d) = self.kind {
+            Some(d)
+        } else {
+            None
+        }
+    }
+
+    /// DisposableStack slot data — mutable view (push/drain mutate the resource list).
+    pub(crate) fn disposable_stack_mut(&mut self) -> Option<&mut DisposableStackData> {
+        if let ObjectKind::DisposableStack(ref mut d) = self.kind {
+            Some(d)
+        } else {
+            None
+        }
+    }
+
+    /// SAB shared inner state. `Some` iff this is a SharedArrayBuffer.
+    pub fn sab_shared(&self) -> Option<&Arc<SharedBufferInner>> {
+        self.arraybuffer().and_then(|b| b.sab_shared.as_ref())
+    }
+
+    /// Id of the ArrayBuffer wrapper object that backs this TypedArray or DataView,
+    /// pulled from whichever kind slot is populated. `None` for non-view objects.
+    pub fn view_buffer_object_id(&self) -> Option<u64> {
+        self.typed_array_info()
+            .as_ref()
+            .and_then(|ta| ta.buffer_object_id)
+            .or_else(|| self.data_view_info().and_then(|dv| dv.buffer_object_id))
     }
 
     fn string_exotic_value(&self, key: &str) -> Option<JsValue> {
@@ -1710,7 +2180,7 @@ impl JsObjectData {
     pub fn get_own_property_full(&self, key: &str) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
-            if let Some(ref map) = self.parameter_map
+            if let Some(map) = self.parameter_map()
                 && let Some((env_ref, param_name)) = map.get(key)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
@@ -1718,7 +2188,7 @@ impl JsObjectData {
             }
             return Some(d);
         }
-        if let Some(ref elems) = self.array_elements
+        if let Some(elems) = self.array_elements()
             && let Ok(idx) = key.parse::<usize>()
             && idx < elems.len()
             && !matches!(elems[idx], JsValue::Undefined)
@@ -1732,7 +2202,7 @@ impl JsObjectData {
                 set: None,
             });
         }
-        if let Some(ref ta) = self.typed_array_info
+        if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
             if is_valid_integer_index(ta, index) {
@@ -1781,7 +2251,7 @@ impl JsObjectData {
 
     pub fn get_own_property(&self, key: &str) -> Option<PropertyDescriptor> {
         // Module namespace exotic: §10.4.6.4 [[GetOwnProperty]]
-        if let Some(ref ns_data) = self.module_namespace
+        if let Some(ns_data) = self.module_namespace()
             && !key.starts_with("Symbol(")
         {
             if ns_data.export_names.contains(&key.to_string()) {
@@ -1810,7 +2280,7 @@ impl JsObjectData {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
             // Mapped arguments: update value from the live binding (§10.4.4.1)
-            if let Some(ref map) = self.parameter_map
+            if let Some(map) = self.parameter_map()
                 && let Some((env_ref, param_name)) = map.get(key)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
@@ -1827,7 +2297,7 @@ impl JsObjectData {
             }
             return Some(d);
         }
-        if let Some(ref elems) = self.array_elements
+        if let Some(elems) = self.array_elements()
             && let Some(idx) = parse_array_index(key)
             && (idx as usize) < elems.len()
             && !matches!(elems[idx as usize], JsValue::Undefined)
@@ -1842,7 +2312,7 @@ impl JsObjectData {
             });
         }
         // TypedArray: §10.4.5.1
-        if let Some(ref ta) = self.typed_array_info
+        if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
             if is_valid_integer_index(ta, index) {
@@ -1885,7 +2355,7 @@ impl JsObjectData {
 
     pub fn has_own_property(&self, key: &str) -> bool {
         // Module namespace exotic: [[HasProperty]] checks export list
-        if let Some(ref ns_data) = self.module_namespace
+        if let Some(ns_data) = self.module_namespace()
             && !key.starts_with("Symbol(")
         {
             return ns_data.export_names.contains(&key.to_string());
@@ -1893,7 +2363,7 @@ impl JsObjectData {
         if self.properties.contains_key(key) {
             return true;
         }
-        if let Some(ref elems) = self.array_elements
+        if let Some(elems) = self.array_elements()
             && let Some(idx) = parse_array_index(key)
             && (idx as usize) < elems.len()
             && !matches!(elems[idx as usize], JsValue::Undefined)
@@ -1901,7 +2371,7 @@ impl JsObjectData {
             return true;
         }
         // TypedArray: §10.4.5.2
-        if let Some(ref ta) = self.typed_array_info
+        if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
             return is_valid_integer_index(ta, index);
@@ -1955,7 +2425,7 @@ impl JsObjectData {
             return true;
         }
         // Module namespace exotic: §10.4.6.5 [[DefineOwnProperty]]
-        if self.module_namespace.is_some() {
+        if self.module_namespace().is_some() {
             if let Some(current) = self.get_own_property(&key) {
                 // If every field is absent, return true
                 if desc.value.is_none()
@@ -1997,10 +2467,10 @@ impl JsObjectData {
             return false;
         }
         // TypedArray: §10.4.5.3 [[DefineOwnProperty]]
-        if self.typed_array_info.is_some()
+        if self.typed_array_info().is_some()
             && let Some(index) = canonical_numeric_index_string(&key)
         {
-            let ta = self.typed_array_info.as_ref().unwrap();
+            let ta = self.typed_array_info().unwrap();
             if !is_valid_integer_index(ta, index) {
                 return false;
             }
@@ -2025,7 +2495,7 @@ impl JsObjectData {
         }
         // Check array_elements for existing array index properties
         let current_from_array = if !self.properties.contains_key(&key) {
-            if let Some(ref elems) = self.array_elements
+            if let Some(elems) = self.array_elements()
                 && let Ok(idx) = key.parse::<usize>()
                 && idx < elems.len()
             {
@@ -2124,7 +2594,7 @@ impl JsObjectData {
                 && !desc_is_accessor
                 && desc_writable == Some(false)
                 && !desc_has_value
-                && let Some(ref map) = self.parameter_map
+                && let Some(map) = self.parameter_map()
                 && let Some((env_ref, param_name)) = map.get(&key)
                 && let Some(live_val) = env_ref.borrow().get(param_name)
             {
@@ -2204,7 +2674,7 @@ impl JsObjectData {
             // handled by array_set_length() in mod.rs, which calls this function.
             // Do NOT duplicate that logic here.
             // Save key before it's moved into insert
-            let key_for_step7 = if self.parameter_map.is_some() {
+            let key_for_step7 = if self.parameter_map().is_some() {
                 Some(key.clone())
             } else {
                 None
@@ -2213,7 +2683,7 @@ impl JsObjectData {
 
             // §10.4.4.3 step 7: post-define parameter map handling
             if let Some(key_ref) = key_for_step7
-                && let Some(ref mut map) = self.parameter_map
+                && let Some(map) = self.parameter_map_mut()
                 && map.contains_key(&key_ref)
             {
                 if desc_has_get || desc_has_set {
@@ -2239,7 +2709,7 @@ impl JsObjectData {
                 return false;
             }
             // Handle parameter map for new properties
-            if let Some(ref mut map) = self.parameter_map
+            if let Some(map) = self.parameter_map_mut()
                 && map.contains_key(&key)
                 && let Some(ref val) = desc.value
                 && let Some((env_ref, param_name)) = map.get(&key)
@@ -2276,7 +2746,7 @@ impl JsObjectData {
     }
 
     pub fn set_property_value(&mut self, key: &str, value: JsValue) -> bool {
-        if let Some(ref ta) = self.typed_array_info
+        if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
             if is_valid_integer_index(ta, index) {
@@ -2347,7 +2817,7 @@ impl JsObjectData {
                         }
                     }
                     let mut did_truncate = false;
-                    if let Some(ref mut elements) = self.array_elements {
+                    if let Some(elements) = self.array_elements_mut() {
                         let prev_len = elements.len();
                         elements.truncate(actual_new_len as usize);
                         did_truncate = elements.len() < prev_len;
@@ -2365,7 +2835,7 @@ impl JsObjectData {
                 }
             }
         }
-        if let Some(ref map) = self.parameter_map
+        if let Some(map) = self.parameter_map()
             && let Some((env_ref, param_name)) = map.get(key)
         {
             let _ = env_ref.borrow_mut().set(param_name, value.clone());
@@ -2374,29 +2844,31 @@ impl JsObjectData {
             && !matches!(value, JsValue::Undefined)
             && !self.properties.contains_key(key)
             && let Some(idx_u32) = parse_array_index(key)
-            && let Some(ref mut elements) = self.array_elements
+            && self.array_elements().is_some()
         {
             let idx = idx_u32 as usize;
+            let old_len = self
+                .properties
+                .get("length")
+                .and_then(|d| d.value.as_ref())
+                .and_then(|v| {
+                    if let JsValue::Number(n) = v {
+                        Some(*n as u32)
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or(0);
+            let length_writable = self
+                .properties
+                .get("length")
+                .map(|d| d.writable != Some(false))
+                .unwrap_or(true);
+            let extensible = self.extensible;
+            let elements = self.array_elements_mut().unwrap();
             if idx <= elements.len() + 1024 {
-                let old_len = self
-                    .properties
-                    .get("length")
-                    .and_then(|d| d.value.as_ref())
-                    .and_then(|v| {
-                        if let JsValue::Number(n) = v {
-                            Some(*n as u32)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0);
-                let length_writable = self
-                    .properties
-                    .get("length")
-                    .map(|d| d.writable != Some(false))
-                    .unwrap_or(true);
                 let existed = idx < elements.len() && !matches!(elements[idx], JsValue::Undefined);
-                if !existed && !self.extensible {
+                if !existed && !extensible {
                     return false;
                 }
                 if idx_u32 >= old_len && !length_writable {
@@ -2422,7 +2894,7 @@ impl JsObjectData {
             }
         }
         // Keep array_elements in sync with properties for numeric indices
-        if let Some(ref mut elements) = self.array_elements
+        if let Some(elements) = self.array_elements_mut()
             && let Ok(idx) = key.parse::<usize>()
         {
             // Valid array indices are 0 to 2^32-2 (spec §6.1.7)
@@ -2517,7 +2989,7 @@ impl JsObjectData {
     /// canonical numeric indices, and string exotic indices). Returns `None` if
     /// the caller should continue walking the prototype chain.
     pub fn own_property_lookup(&self, key: &str) -> Option<JsValue> {
-        if let Some(ref ns_data) = self.module_namespace
+        if let Some(ns_data) = self.module_namespace()
             && let Some(binding_name) = ns_data.export_to_binding.get(key)
         {
             return Some(
@@ -2528,7 +3000,7 @@ impl JsObjectData {
                     .unwrap_or(JsValue::Undefined),
             );
         }
-        if let Some(ref map) = self.parameter_map
+        if let Some(map) = self.parameter_map()
             && let Some((env_ref, param_name)) = map.get(key)
             && let Some(val) = env_ref.borrow().get(param_name)
         {
@@ -2540,14 +3012,14 @@ impl JsObjectData {
             }
             return Some(JsValue::Undefined);
         }
-        if let Some(ref elems) = self.array_elements
+        if let Some(elems) = self.array_elements()
             && let Ok(idx) = key.parse::<usize>()
             && idx < elems.len()
             && !matches!(elems[idx], JsValue::Undefined)
         {
             return Some(elems[idx].clone());
         }
-        if let Some(ref ta) = self.typed_array_info
+        if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
             if is_valid_integer_index(ta, index) {
@@ -2568,7 +3040,7 @@ impl JsObjectData {
     pub fn own_property_descriptor_lookup(&self, key: &str) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
-            if let Some(ref map) = self.parameter_map
+            if let Some(map) = self.parameter_map()
                 && let Some((env_ref, param_name)) = map.get(key)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
@@ -2584,7 +3056,7 @@ impl JsObjectData {
             }
             return Some(d);
         }
-        if let Some(ref elems) = self.array_elements
+        if let Some(elems) = self.array_elements()
             && let Ok(idx) = key.parse::<usize>()
             && idx < elems.len()
             && !matches!(elems[idx], JsValue::Undefined)
@@ -2598,7 +3070,7 @@ impl JsObjectData {
                 set: None,
             });
         }
-        if let Some(ref ta) = self.typed_array_info
+        if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
             if is_valid_integer_index(ta, index) {
@@ -2651,7 +3123,7 @@ impl JsObjectData {
     /// §10.4.5.2, typed arrays never consult the prototype for these),
     /// and `None` to continue walking the chain.
     pub fn own_has_property(&self, key: &str) -> Option<bool> {
-        if let Some(ref ta) = self.typed_array_info
+        if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
             return Some(is_valid_integer_index(ta, index));
@@ -2684,7 +3156,7 @@ impl JsObjectData {
             }
         }
 
-        if let Some(ref ta) = self.typed_array_info {
+        if let Some(ta) = self.typed_array_info() {
             let len = ta.array_length;
             for i in 0..len {
                 let k = i.to_string();
@@ -2694,7 +3166,7 @@ impl JsObjectData {
             }
         }
 
-        if let Some(ref elems) = self.array_elements {
+        if let Some(elems) = self.array_elements() {
             for (i, value) in elems.iter().enumerate() {
                 if matches!(value, JsValue::Undefined) || i > 0xFFFF_FFFE {
                     continue;
@@ -2787,10 +3259,10 @@ pub(crate) fn typed_array_length(ta: &TypedArrayInfo) -> usize {
 /// Returns true only if the TA has an explicit length on a non-resizable buffer,
 /// or an explicit length on a SharedArrayBuffer (which can only grow, not shrink).
 pub(crate) fn is_typed_array_fixed_length(ta: &TypedArrayInfo, buffer_obj: &JsObjectData) -> bool {
-    if !ta.is_length_tracking && buffer_obj.arraybuffer_max_byte_length.is_none() {
+    if !ta.is_length_tracking && buffer_obj.arraybuffer_max_byte_length().is_none() {
         return true;
     }
-    if !ta.is_length_tracking && buffer_obj.arraybuffer_is_shared {
+    if !ta.is_length_tracking && buffer_obj.arraybuffer_is_shared() {
         return true;
     }
     false

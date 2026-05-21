@@ -156,7 +156,7 @@ fn get_zdt_fields(
         JsValue::Object(o) => {
             let snapshot = interp
                 .get_object_cell(o.id)
-                .map(|cell| cell.borrow().temporal_data.clone());
+                .map(|cell| cell.borrow().temporal_data().cloned());
             match snapshot {
                 Some(Some(TemporalData::ZonedDateTime {
                     epoch_nanoseconds,
@@ -700,14 +700,12 @@ fn create_zdt(interp: &mut Interpreter, ns: BigInt, tz: String, cal: String) -> 
             .borrow_mut()
             .prototype_id = Some(proto_id);
     }
-    interp
-        .get_object_cell_expect(obj_id)
-        .borrow_mut()
-        .temporal_data = Some(TemporalData::ZonedDateTime {
-        epoch_nanoseconds: ns,
-        time_zone: tz,
-        calendar: cal,
-    });
+    interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+        crate::interpreter::types::ObjectKind::Temporal(TemporalData::ZonedDateTime {
+            epoch_nanoseconds: ns,
+            time_zone: tz,
+            calendar: cal,
+        });
     let id = obj_id;
     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
 }
@@ -753,7 +751,7 @@ fn to_temporal_zoned_date_time_with_options(
                 Some(o) => o,
                 None => return Completion::Throw(interp.create_type_error("invalid object")),
             };
-            let data = obj.borrow().temporal_data.clone();
+            let data = obj.borrow().temporal_data().cloned();
             if let Some(TemporalData::ZonedDateTime {
                 epoch_nanoseconds,
                 time_zone,
@@ -2428,12 +2426,10 @@ impl Interpreter {
                             .borrow_mut()
                             .prototype_id = Some(proto_id);
                     }
-                    interp
-                        .get_object_cell_expect(obj_id)
-                        .borrow_mut()
-                        .temporal_data = Some(TemporalData::Instant {
-                        epoch_nanoseconds: ns,
-                    });
+                    interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+                        crate::interpreter::types::ObjectKind::Temporal(TemporalData::Instant {
+                            epoch_nanoseconds: ns,
+                        });
                     let id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
                 },
@@ -3593,7 +3589,7 @@ impl Interpreter {
                             .get_object_cell(o.id)
                             .map(|obj| {
                                 matches!(
-                                    obj.borrow().temporal_data,
+                                    obj.borrow().temporal_data(),
                                     Some(TemporalData::ZonedDateTime { .. })
                                 )
                             })

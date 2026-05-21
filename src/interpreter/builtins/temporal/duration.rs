@@ -220,7 +220,7 @@ fn to_relative_to_date(
     if let JsValue::Object(obj_ref) = val
         && let Some(obj) = interp.get_object_cell(obj_ref.id)
     {
-        let td = obj.borrow().temporal_data.clone();
+        let td = obj.borrow().temporal_data().cloned();
         if let Some(super::TemporalData::ZonedDateTime {
             epoch_nanoseconds,
             time_zone,
@@ -1682,7 +1682,7 @@ impl Interpreter {
                     let snapshot = match &this {
                         JsValue::Object(o) => interp
                             .get_object_cell(o.id)
-                            .map(|cell| cell.borrow().temporal_data.clone()),
+                            .map(|cell| cell.borrow().temporal_data().cloned()),
                         _ => None,
                     };
                     match snapshot {
@@ -2833,7 +2833,7 @@ fn get_duration_fields(
     let snapshot = match this {
         JsValue::Object(o) => interp
             .get_object_cell(o.id)
-            .map(|cell| cell.borrow().temporal_data.clone()),
+            .map(|cell| cell.borrow().temporal_data().cloned()),
         _ => None,
     };
     match snapshot {
@@ -2917,21 +2917,19 @@ pub(crate) fn create_duration_result(
             .borrow_mut()
             .prototype_id = Some(proto_id);
     }
-    interp
-        .get_object_cell_expect(obj_id)
-        .borrow_mut()
-        .temporal_data = Some(TemporalData::Duration {
-        years,
-        months,
-        weeks,
-        days,
-        hours,
-        minutes,
-        seconds,
-        milliseconds,
-        microseconds,
-        nanoseconds,
-    });
+    interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+        crate::interpreter::types::ObjectKind::Temporal(TemporalData::Duration {
+            years,
+            months,
+            weeks,
+            days,
+            hours,
+            minutes,
+            seconds,
+            milliseconds,
+            microseconds,
+            nanoseconds,
+        });
     let id = obj_id;
     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
 }
@@ -2987,7 +2985,7 @@ pub(crate) fn to_temporal_duration_record(
             milliseconds,
             microseconds,
             nanoseconds,
-        }) = &data.temporal_data
+        }) = data.temporal_data()
         {
             return Ok((
                 *years,

@@ -145,7 +145,7 @@ impl Interpreter {
                 if obj.class_name != "WeakMap" {
                     continue;
                 }
-                if let Some(ref entries) = obj.map_data {
+                if let Some(entries) = obj.map_data() {
                     for entry in entries.iter().flatten() {
                         if let JsValue::Object(key_obj) = &entry.0 {
                             let kid = key_obj.id as usize;
@@ -191,7 +191,7 @@ impl Interpreter {
             if !mark && live {
                 if let Some(obj_rc) = self.objects.get(id) {
                     let obj = obj_rc.borrow();
-                    if let Some(ref buf_data) = obj.arraybuffer_data
+                    if let Some(buf_data) = obj.arraybuffer_data()
                         && let BufferData::Owned(ref v) = *buf_data.borrow()
                     {
                         self.gc_external_bytes = self.gc_external_bytes.saturating_sub(v.len());
@@ -220,7 +220,7 @@ impl Interpreter {
             };
             let mut obj = obj_rc.borrow_mut();
             if obj.class_name == "WeakMap" {
-                if let Some(ref mut entries) = obj.map_data {
+                if let Some(entries) = obj.map_data_mut() {
                     for entry in entries.iter_mut() {
                         let dead = if let Some((JsValue::Object(key_obj), _)) = entry {
                             let kid = key_obj.id as usize;
@@ -234,7 +234,7 @@ impl Interpreter {
                     }
                 }
             } else if obj.class_name == "WeakSet"
-                && let Some(ref mut entries) = obj.set_data
+                && let Some(entries) = obj.set_data_mut()
             {
                 for entry in entries.iter_mut() {
                     let dead = if let Some(JsValue::Object(val_obj)) = entry {
@@ -272,7 +272,7 @@ impl Interpreter {
                 Self::collect_value_roots(v, worklist);
             }
         }
-        if let Some(ref elems) = obj.array_elements {
+        if let Some(elems) = obj.array_elements() {
             for v in elems {
                 Self::collect_value_roots(v, worklist);
             }
@@ -318,145 +318,185 @@ impl Interpreter {
         {
             Self::collect_env_roots(closure, worklist);
         }
-        if let Some(target_id) = obj.wrapped_target_function_id {
-            worklist.push(target_id);
-        }
-        if let Some(ref target) = obj.bound_target_function {
-            Self::collect_value_roots(target, worklist);
-        }
-        if let Some(ref bargs) = obj.bound_args {
-            for v in bargs {
-                Self::collect_value_roots(v, worklist);
-            }
-        }
-        if let Some(ref bt) = obj.bound_this {
-            Self::collect_value_roots(bt, worklist);
-        }
-        if let Some(ref map) = obj.parameter_map {
-            for (env_ref, _) in map.values() {
-                Self::collect_env_roots(env_ref, worklist);
-            }
-        }
-        if obj.class_name != "WeakMap"
-            && let Some(ref entries) = obj.map_data
-        {
-            for entry in entries.iter().flatten() {
-                Self::collect_value_roots(&entry.0, worklist);
-                Self::collect_value_roots(&entry.1, worklist);
-            }
-        }
-        if obj.class_name != "WeakSet"
-            && let Some(ref entries) = obj.set_data
-        {
-            for val in entries.iter().flatten() {
-                Self::collect_value_roots(val, worklist);
-            }
-        }
-        if let Some(tid) = obj.proxy_target_id {
-            worklist.push(tid);
-        }
-        if let Some(hid) = obj.proxy_handler_id {
-            worklist.push(hid);
-        }
-        if let Some(ref pd) = obj.promise_data {
-            match &pd.state {
-                crate::interpreter::types::PromiseState::Fulfilled(v)
-                | crate::interpreter::types::PromiseState::Rejected(v) => {
-                    Self::collect_value_roots(v, worklist);
-                }
-                crate::interpreter::types::PromiseState::Pending => {}
-            }
-            for reaction in pd
-                .fulfill_reactions
-                .iter()
-                .chain(pd.reject_reactions.iter())
-            {
-                if let Some(ref h) = reaction.handler {
-                    Self::collect_value_roots(h, worklist);
-                }
-                Self::collect_value_roots(&reaction.resolve, worklist);
-                Self::collect_value_roots(&reaction.reject, worklist);
-                if let Some(pid) = reaction.promise_id {
-                    worklist.push(pid);
-                }
-            }
-        }
-        if let Some(buf_id) = obj.view_buffer_object_id {
-            worklist.push(buf_id);
-        }
         if let Some(ref roots) = obj.gc_native_roots {
             for v in roots {
                 Self::collect_value_roots(v, worklist);
             }
         }
-        if let Some((ref iter, ref next)) = obj.wrap_iter_record {
-            Self::collect_value_roots(iter, worklist);
-            Self::collect_value_roots(next, worklist);
-        }
-        if let Some(ref v) = obj.helper_next_closure {
-            Self::collect_value_roots(v, worklist);
-        }
-        if let Some(ref v) = obj.helper_return_closure {
-            Self::collect_value_roots(v, worklist);
-        }
-        if let Some(ref state) = obj.iterator_state {
-            match state {
-                IteratorState::ArrayIterator { array_id, .. } => worklist.push(*array_id),
-                IteratorState::TypedArrayIterator { typed_array_id, .. } => {
-                    worklist.push(*typed_array_id)
+        // Kind-specific roots. This is the single point of dispatch — adding a
+        // new ObjectKind variant requires updating this match (Rust enforces
+        // exhaustiveness), eliminating the "remember to add new prototype fields
+        // to maybe_gc()" footgun previously called out in CLAUDE.md.
+        use crate::interpreter::types::{IterHelperData, ObjectKind, PromiseState};
+        match &obj.kind {
+            ObjectKind::Ordinary
+            | ObjectKind::RegExp(_)
+            | ObjectKind::ArrayBuffer(_)
+            | ObjectKind::ShadowRealm(_)
+            | ObjectKind::DisposableStack(_)
+            | ObjectKind::Temporal(_)
+            | ObjectKind::Intl(_)
+            | ObjectKind::PrimitiveWrapper(_) => {}
+            ObjectKind::Proxy(p) => {
+                if let Some(tid) = p.target_id {
+                    worklist.push(tid);
                 }
-                IteratorState::MapIterator { map_id, .. } => worklist.push(*map_id),
-                IteratorState::SetIterator { set_id, .. } => worklist.push(*set_id),
-                IteratorState::Generator {
-                    func_env,
-                    execution_state,
-                    ..
+                if let Some(hid) = p.handler_id {
+                    worklist.push(hid);
                 }
-                | IteratorState::AsyncGenerator {
-                    func_env,
-                    execution_state,
-                    ..
-                } => {
-                    Self::collect_env_roots(func_env, worklist);
-                    if let GeneratorExecutionState::SuspendedYield { prev_sent, .. } =
-                        execution_state
-                    {
-                        for v in prev_sent {
-                            Self::collect_value_roots(v, worklist);
-                        }
-                    }
-                }
-                IteratorState::StateMachineGenerator {
-                    func_env,
-                    delegated_iterator,
-                    pending_exception,
-                    pending_return,
-                    _sent_value,
-                    ..
-                }
-                | IteratorState::StateMachineAsyncGenerator {
-                    func_env,
-                    delegated_iterator,
-                    pending_exception,
-                    pending_return,
-                    _sent_value,
-                    ..
-                } => {
-                    Self::collect_env_roots(func_env, worklist);
-                    Self::collect_value_roots(_sent_value, worklist);
-                    if let Some(di) = delegated_iterator {
-                        Self::collect_value_roots(&di.iterator, worklist);
-                        Self::collect_value_roots(&di.next_method, worklist);
-                    }
-                    if let Some(v) = pending_exception {
-                        Self::collect_value_roots(v, worklist);
-                    }
-                    if let Some(v) = pending_return {
-                        Self::collect_value_roots(v, worklist);
-                    }
-                }
-                _ => {}
             }
+            ObjectKind::BoundFunction(b) => {
+                Self::collect_value_roots(&b.target, worklist);
+                Self::collect_value_roots(&b.this, worklist);
+                for v in &b.args {
+                    Self::collect_value_roots(v, worklist);
+                }
+            }
+            ObjectKind::WrappedFunction(w) => {
+                worklist.push(w.target_id);
+            }
+            ObjectKind::IterHelper(h) => match h {
+                IterHelperData::Delegation { iter, next } => {
+                    Self::collect_value_roots(iter, worklist);
+                    Self::collect_value_roots(next, worklist);
+                }
+                IterHelperData::Helper {
+                    next,
+                    return_closure,
+                    ..
+                } => {
+                    Self::collect_value_roots(next, worklist);
+                    Self::collect_value_roots(return_closure, worklist);
+                }
+            },
+            ObjectKind::TypedArray(ta) => {
+                if let Some(buf_id) = ta.buffer_object_id {
+                    worklist.push(buf_id);
+                }
+            }
+            ObjectKind::DataView(dv) => {
+                if let Some(buf_id) = dv.buffer_object_id {
+                    worklist.push(buf_id);
+                }
+            }
+            ObjectKind::Promise(pd) => {
+                match &pd.state {
+                    PromiseState::Fulfilled(v) | PromiseState::Rejected(v) => {
+                        Self::collect_value_roots(v, worklist);
+                    }
+                    PromiseState::Pending => {}
+                }
+                for reaction in pd
+                    .fulfill_reactions
+                    .iter()
+                    .chain(pd.reject_reactions.iter())
+                {
+                    if let Some(ref h) = reaction.handler {
+                        Self::collect_value_roots(h, worklist);
+                    }
+                    Self::collect_value_roots(&reaction.resolve, worklist);
+                    Self::collect_value_roots(&reaction.reject, worklist);
+                    if let Some(pid) = reaction.promise_id {
+                        worklist.push(pid);
+                    }
+                }
+            }
+            ObjectKind::Map(entries) => {
+                // WeakMap entries are visited via the ephemeron fixpoint, not strongly.
+                if obj.class_name != "WeakMap" {
+                    for entry in entries.iter().flatten() {
+                        Self::collect_value_roots(&entry.0, worklist);
+                        Self::collect_value_roots(&entry.1, worklist);
+                    }
+                }
+            }
+            ObjectKind::Set(entries) => {
+                if obj.class_name != "WeakSet" {
+                    for val in entries.iter().flatten() {
+                        Self::collect_value_roots(val, worklist);
+                    }
+                }
+            }
+            ObjectKind::FinalizationRegistry { cells, tokens: _ } => {
+                // Cells (target+heldValue) are held WEAKLY via the ephemeron pass;
+                // tokens are unregister keys, also weak. No strong roots here.
+                for entry in cells.iter().flatten() {
+                    Self::collect_value_roots(&entry.1, worklist);
+                }
+            }
+            ObjectKind::Iterator(state) => {
+                Self::collect_iterator_state_roots(state, worklist);
+            }
+            ObjectKind::Arguments(map) => {
+                for (env_ref, _) in map.values() {
+                    Self::collect_env_roots(env_ref, worklist);
+                }
+            }
+            ObjectKind::Array(_) => {
+                // Array elements are visited via the property walk above
+                // (array_elements is a separate compact storage; values are also tracked).
+            }
+            ObjectKind::ModuleNamespace(ns) => {
+                Self::collect_env_roots(&ns.env, worklist);
+            }
+        }
+    }
+
+    fn collect_iterator_state_roots(state: &IteratorState, worklist: &mut Vec<u64>) {
+        match state {
+            IteratorState::ArrayIterator { array_id, .. } => worklist.push(*array_id),
+            IteratorState::TypedArrayIterator { typed_array_id, .. } => {
+                worklist.push(*typed_array_id)
+            }
+            IteratorState::MapIterator { map_id, .. } => worklist.push(*map_id),
+            IteratorState::SetIterator { set_id, .. } => worklist.push(*set_id),
+            IteratorState::Generator {
+                func_env,
+                execution_state,
+                ..
+            }
+            | IteratorState::AsyncGenerator {
+                func_env,
+                execution_state,
+                ..
+            } => {
+                Self::collect_env_roots(func_env, worklist);
+                if let GeneratorExecutionState::SuspendedYield { prev_sent, .. } = execution_state {
+                    for v in prev_sent {
+                        Self::collect_value_roots(v, worklist);
+                    }
+                }
+            }
+            IteratorState::StateMachineGenerator {
+                func_env,
+                delegated_iterator,
+                pending_exception,
+                pending_return,
+                _sent_value,
+                ..
+            }
+            | IteratorState::StateMachineAsyncGenerator {
+                func_env,
+                delegated_iterator,
+                pending_exception,
+                pending_return,
+                _sent_value,
+                ..
+            } => {
+                Self::collect_env_roots(func_env, worklist);
+                Self::collect_value_roots(_sent_value, worklist);
+                if let Some(di) = delegated_iterator {
+                    Self::collect_value_roots(&di.iterator, worklist);
+                    Self::collect_value_roots(&di.next_method, worklist);
+                }
+                if let Some(v) = pending_exception {
+                    Self::collect_value_roots(v, worklist);
+                }
+                if let Some(v) = pending_return {
+                    Self::collect_value_roots(v, worklist);
+                }
+            }
+            _ => {}
         }
     }
 

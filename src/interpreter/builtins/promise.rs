@@ -163,7 +163,7 @@ impl Interpreter {
         // If value is a promise and its constructor matches C, return it
         if let JsValue::Object(o) = value
             && let Some(obj) = self.get_object_cell(o.id)
-            && obj.borrow().promise_data.is_some()
+            && obj.borrow().promise_data().is_some()
         {
             let ctor_val = match self.get_object_property(o.id, "constructor", value) {
                 Completion::Normal(v) => v,
@@ -760,7 +760,7 @@ impl Interpreter {
         let mut data = JsObjectData::new();
         data.prototype_id = self.realm().promise_prototype;
         data.class_name = "Promise".to_string();
-        data.promise_data = Some(PromiseData::new());
+        data.kind = crate::interpreter::types::ObjectKind::Promise(PromiseData::new());
         let id = self.alloc_object(data);
         JsValue::Object(crate::types::JsObject { id })
     }
@@ -876,7 +876,7 @@ impl Interpreter {
     pub(crate) fn fulfill_promise(&mut self, promise_id: u64, value: JsValue) {
         let reactions = if let Some(obj) = self.get_object_cell(promise_id) {
             let mut o = obj.borrow_mut();
-            if let Some(ref mut pd) = o.promise_data {
+            if let Some(pd) = o.promise_data_mut() {
                 if !matches!(pd.state, PromiseState::Pending) {
                     return;
                 }
@@ -896,7 +896,7 @@ impl Interpreter {
     pub(crate) fn reject_promise(&mut self, promise_id: u64, reason: JsValue) {
         let reactions = if let Some(obj) = self.get_object_cell(promise_id) {
             let mut o = obj.borrow_mut();
-            if let Some(ref mut pd) = o.promise_data {
+            if let Some(pd) = o.promise_data_mut() {
                 if !matches!(pd.state, PromiseState::Pending) {
                     return;
                 }
@@ -1073,7 +1073,7 @@ impl Interpreter {
         let reject_reaction2 = reject_reaction.clone();
         let state = if let Some(obj) = self.get_object_cell(promise_id) {
             let mut o = obj.borrow_mut();
-            if let Some(ref mut pd) = o.promise_data {
+            if let Some(pd) = o.promise_data_mut() {
                 pd.is_handled = true;
                 match &pd.state {
                     PromiseState::Pending => {
@@ -1110,7 +1110,7 @@ impl Interpreter {
     ) -> Completion {
         let promise_id = if let JsValue::Object(o) = promise_val {
             if let Some(obj) = self.get_object_cell(o.id) {
-                if obj.borrow().promise_data.is_some() {
+                if obj.borrow().promise_data().is_some() {
                     o.id
                 } else {
                     let err =
@@ -1176,7 +1176,7 @@ impl Interpreter {
         let reject_reaction2 = reject_reaction.clone();
         let state = if let Some(obj) = self.get_object_cell(promise_id) {
             let mut o = obj.borrow_mut();
-            if let Some(ref mut pd) = o.promise_data {
+            if let Some(pd) = o.promise_data_mut() {
                 pd.is_handled = true;
                 match &pd.state {
                     PromiseState::Pending => {
@@ -1209,7 +1209,7 @@ impl Interpreter {
         // §27.2.4.7.1 PromiseResolve(C, x): if IsPromise(x), check x.constructor === C
         if let JsValue::Object(o) = value
             && let Some(obj) = self.get_object_cell(o.id)
-            && obj.borrow().promise_data.is_some()
+            && obj.borrow().promise_data().is_some()
         {
             match self.get_object_property(o.id, "constructor", value) {
                 Completion::Normal(ctor) => {
@@ -1838,14 +1838,14 @@ impl Interpreter {
         if let JsValue::Object(o) = val
             && let Some(obj) = self.get_object_cell(o.id)
         {
-            return obj.borrow().promise_data.is_some();
+            return obj.borrow().promise_data().is_some();
         }
         false
     }
 
     pub(crate) fn get_promise_state(&self, promise_id: u64) -> Option<PromiseState> {
         if let Some(obj) = self.get_object_cell(promise_id)
-            && let Some(ref pd) = obj.borrow().promise_data
+            && let Some(pd) = obj.borrow().promise_data()
         {
             return Some(pd.state.clone());
         }

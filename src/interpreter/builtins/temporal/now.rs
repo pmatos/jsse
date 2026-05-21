@@ -58,12 +58,10 @@ impl Interpreter {
                         .borrow_mut()
                         .prototype_id = Some(proto_id);
                 }
-                interp
-                    .get_object_cell_expect(obj_id)
-                    .borrow_mut()
-                    .temporal_data = Some(TemporalData::Instant {
-                    epoch_nanoseconds: ns,
-                });
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+                    crate::interpreter::types::ObjectKind::Temporal(TemporalData::Instant {
+                        epoch_nanoseconds: ns,
+                    });
                 let id = obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             },
@@ -154,14 +152,12 @@ impl Interpreter {
                         .borrow_mut()
                         .prototype_id = Some(proto_id);
                 }
-                interp
-                    .get_object_cell_expect(obj_id)
-                    .borrow_mut()
-                    .temporal_data = Some(TemporalData::ZonedDateTime {
-                    epoch_nanoseconds: ns,
-                    time_zone: tz,
-                    calendar: "iso8601".to_string(),
-                });
+                interp.get_object_cell_expect(obj_id).borrow_mut().kind =
+                    crate::interpreter::types::ObjectKind::Temporal(TemporalData::ZonedDateTime {
+                        epoch_nanoseconds: ns,
+                        time_zone: tz,
+                        calendar: "iso8601".to_string(),
+                    });
                 let id = obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
             },

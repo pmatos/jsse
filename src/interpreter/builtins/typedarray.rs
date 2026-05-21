@@ -68,10 +68,11 @@ impl Interpreter {
                         .get_object_cell(o.id)
                         .map(|cell| {
                             let r = cell.borrow();
-                            if let Some(ref buf_data) = r.arraybuffer_data {
-                                if r.arraybuffer_is_shared {
+                            if let Some(buf_data) = r.arraybuffer_data() {
+                                if r.arraybuffer_is_shared() {
                                     Probe::Shared
-                                } else if r.arraybuffer_detached.as_ref().is_some_and(|d| d.get()) {
+                                } else if r.arraybuffer_detached().as_ref().is_some_and(|d| d.get())
+                                {
                                     Probe::Detached
                                 } else {
                                     Probe::Bytes(buffer_len(buf_data))
@@ -122,12 +123,12 @@ impl Interpreter {
                         .get_object_cell(o.id)
                         .map(|cell| {
                             let r = cell.borrow();
-                            if r.arraybuffer_data.is_some() {
-                                if r.arraybuffer_is_shared {
+                            if r.arraybuffer_data().is_some() {
+                                if r.arraybuffer_is_shared() {
                                     Probe::Shared
                                 } else {
                                     let det =
-                                        r.arraybuffer_detached.as_ref().is_some_and(|d| d.get());
+                                        r.arraybuffer_detached().as_ref().is_some_and(|d| d.get());
                                     Probe::Detached(det)
                                 }
                             } else {
@@ -175,11 +176,11 @@ impl Interpreter {
                         .get_object_cell(o.id)
                         .map(|cell| {
                             let r = cell.borrow();
-                            if r.arraybuffer_data.is_some() {
-                                if r.arraybuffer_is_shared {
+                            if r.arraybuffer_data().is_some() {
+                                if r.arraybuffer_is_shared() {
                                     Probe::Shared
                                 } else {
-                                    Probe::Resizable(r.arraybuffer_max_byte_length.is_some())
+                                    Probe::Resizable(r.arraybuffer_max_byte_length().is_some())
                                 }
                             } else {
                                 Probe::NotAB
@@ -226,11 +227,11 @@ impl Interpreter {
                         .get_object_cell(o.id)
                         .map(|cell| {
                             let r = cell.borrow();
-                            if r.arraybuffer_data.is_some() {
-                                if r.arraybuffer_is_shared {
+                            if r.arraybuffer_data().is_some() {
+                                if r.arraybuffer_is_shared() {
                                     Probe::Shared
                                 } else {
-                                    Probe::Immutable(r.arraybuffer_is_immutable)
+                                    Probe::Immutable(r.arraybuffer_is_immutable())
                                 }
                             } else {
                                 Probe::NotAB
@@ -278,15 +279,17 @@ impl Interpreter {
                         .get_object_cell(o.id)
                         .map(|cell| {
                             let r = cell.borrow();
-                            if r.arraybuffer_data.is_some() {
-                                if r.arraybuffer_is_shared {
+                            if r.arraybuffer_data().is_some() {
+                                if r.arraybuffer_is_shared() {
                                     Probe::Shared
-                                } else if r.arraybuffer_detached.as_ref().is_some_and(|d| d.get()) {
+                                } else if r.arraybuffer_detached().as_ref().is_some_and(|d| d.get())
+                                {
                                     Probe::Detached
                                 } else {
-                                    let max = r.arraybuffer_max_byte_length.unwrap_or_else(|| {
-                                        buffer_len(r.arraybuffer_data.as_ref().unwrap())
-                                    });
+                                    let max =
+                                        r.arraybuffer_max_byte_length().unwrap_or_else(|| {
+                                            buffer_len(r.arraybuffer_data().unwrap())
+                                        });
                                     Probe::Max(max)
                                 }
                             } else {
@@ -331,17 +334,17 @@ impl Interpreter {
                     {
                         {
                             let obj_ref = obj.borrow();
-                            if obj_ref.arraybuffer_data.is_none() {
+                            if obj_ref.arraybuffer_data().is_none() {
                                 return Completion::Throw(
                                     interp.create_type_error("not an ArrayBuffer"),
                                 );
                             }
-                            if obj_ref.arraybuffer_is_shared {
+                            if obj_ref.arraybuffer_is_shared() {
                                 return Completion::Throw(
                                     interp.create_type_error("not an ArrayBuffer"),
                                 );
                             }
-                            if let Some(ref det) = obj_ref.arraybuffer_detached
+                            if let Some(det) = obj_ref.arraybuffer_detached()
                                 && det.get()
                             {
                                 return Completion::Throw(
@@ -351,7 +354,7 @@ impl Interpreter {
                         }
                         let buf_len = {
                             let obj_ref = obj.borrow();
-                            buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
+                            buffer_len(obj_ref.arraybuffer_data().unwrap())
                         };
                         let len = buf_len as f64;
                         let start_arg = if let Some(a) = args.first() {
@@ -414,22 +417,22 @@ impl Interpreter {
                         };
                         if let Some(new_rc) = interp.get_object(new_id) {
                             let new_ref = new_rc.borrow();
-                            if new_ref.arraybuffer_data.is_none() {
+                            if new_ref.arraybuffer_data().is_none() {
                                 return Completion::Throw(interp.create_type_error(
                                     "species constructor must return an ArrayBuffer",
                                 ));
                             }
-                            if new_ref.arraybuffer_is_shared {
+                            if new_ref.arraybuffer_is_shared() {
                                 return Completion::Throw(interp.create_type_error(
                                     "species constructor must return an ArrayBuffer",
                                 ));
                             }
-                            if new_ref.arraybuffer_is_immutable {
+                            if new_ref.arraybuffer_is_immutable() {
                                 return Completion::Throw(interp.create_type_error(
                                     "species constructor must not return an immutable ArrayBuffer",
                                 ));
                             }
-                            if let Some(ref det) = new_ref.arraybuffer_detached
+                            if let Some(det) = new_ref.arraybuffer_detached()
                                 && det.get()
                             {
                                 return Completion::Throw(interp.create_type_error(
@@ -449,8 +452,7 @@ impl Interpreter {
                         {
                             let new_rc = interp.get_object(new_id).unwrap();
                             let new_ref = new_rc.borrow();
-                            let new_byte_len =
-                                buffer_len(new_ref.arraybuffer_data.as_ref().unwrap());
+                            let new_byte_len = buffer_len(new_ref.arraybuffer_data().unwrap());
                             if new_byte_len < new_len {
                                 return Completion::Throw(interp.create_type_error(
                                     "species constructor returned an ArrayBuffer that is too small",
@@ -460,20 +462,20 @@ impl Interpreter {
                         // Re-check source is not detached after species constructor
                         let buf_data = {
                             let obj_ref = obj.borrow();
-                            if let Some(ref det) = obj_ref.arraybuffer_detached
+                            if let Some(det) = obj_ref.arraybuffer_detached()
                                 && det.get()
                             {
                                 return Completion::Throw(
                                     interp.create_type_error("ArrayBuffer is detached"),
                                 );
                             }
-                            buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
+                            buffer_bytes(obj_ref.arraybuffer_data().unwrap())
                         };
                         // Copy data
                         if new_len > 0 {
                             let new_obj = interp.get_object_cell(new_id).unwrap();
                             let new_ref = new_obj.borrow();
-                            let new_buf = new_ref.arraybuffer_data.as_ref().unwrap();
+                            let new_buf = new_ref.arraybuffer_data().unwrap();
                             with_buffer_write(new_buf, |new_buf_ref| {
                                 new_buf_ref[..new_len]
                                     .copy_from_slice(&buf_data[start..start + new_len]);
@@ -499,8 +501,8 @@ impl Interpreter {
                     let (is_ab, is_shared) = {
                         let obj_ref = obj.borrow();
                         (
-                            obj_ref.arraybuffer_data.is_some(),
-                            obj_ref.arraybuffer_is_shared,
+                            obj_ref.arraybuffer_data().is_some(),
+                            obj_ref.arraybuffer_is_shared(),
                         )
                     };
                     if !is_ab {
@@ -515,7 +517,7 @@ impl Interpreter {
                     let new_len_arg = args.first().unwrap_or(&JsValue::Undefined);
                     let old_len = {
                         let obj_ref = obj.borrow();
-                        buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
+                        buffer_len(obj_ref.arraybuffer_data().unwrap())
                     };
                     let new_len = if matches!(new_len_arg, JsValue::Undefined) {
                         old_len
@@ -530,13 +532,13 @@ impl Interpreter {
                     let (is_detached, is_immutable, max_byte_length) = {
                         let obj_ref = obj.borrow();
                         let det = obj_ref
-                            .arraybuffer_detached
+                            .arraybuffer_detached()
                             .as_ref()
                             .is_some_and(|d| d.get());
                         (
                             det,
-                            obj_ref.arraybuffer_is_immutable,
-                            obj_ref.arraybuffer_max_byte_length,
+                            obj_ref.arraybuffer_is_immutable(),
+                            obj_ref.arraybuffer_max_byte_length(),
                         )
                     };
                     if is_detached {
@@ -562,7 +564,7 @@ impl Interpreter {
                     }
                     let old_data = {
                         let obj_ref = obj.borrow();
-                        buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
+                        buffer_bytes(obj_ref.arraybuffer_data().unwrap())
                     };
                     let old_data_len = old_data.len();
                     let mut new_data = vec![0u8; new_len];
@@ -570,11 +572,12 @@ impl Interpreter {
                     new_data[..copy_len].copy_from_slice(&old_data[..copy_len]);
                     {
                         let mut obj_ref = obj.borrow_mut();
-                        if let Some(ref det) = obj_ref.arraybuffer_detached {
-                            det.set(true);
+                        if let Some(ab) = obj_ref.arraybuffer_mut() {
+                            if let Some(ref det) = ab.detached {
+                                det.set(true);
+                            }
+                            ab.data = Rc::new(RefCell::new(BufferData::Owned(Vec::new())));
                         }
-                        obj_ref.arraybuffer_data =
-                            Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
                     interp.gc_untrack_external_bytes(old_data_len);
                     let id = interp.create_arraybuffer_resizable(new_data, max_byte_length);
@@ -598,8 +601,8 @@ impl Interpreter {
                     let (is_ab, is_shared) = {
                         let obj_ref = obj.borrow();
                         (
-                            obj_ref.arraybuffer_data.is_some(),
-                            obj_ref.arraybuffer_is_shared,
+                            obj_ref.arraybuffer_data().is_some(),
+                            obj_ref.arraybuffer_is_shared(),
                         )
                     };
                     if !is_ab {
@@ -612,7 +615,7 @@ impl Interpreter {
                     }
                     let old_len = {
                         let obj_ref = obj.borrow();
-                        buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
+                        buffer_len(obj_ref.arraybuffer_data().unwrap())
                     };
                     let new_len_arg = args.first().unwrap_or(&JsValue::Undefined);
                     let new_len = if matches!(new_len_arg, JsValue::Undefined) {
@@ -628,10 +631,10 @@ impl Interpreter {
                     let (is_detached, is_immutable) = {
                         let obj_ref = obj.borrow();
                         let det = obj_ref
-                            .arraybuffer_detached
+                            .arraybuffer_detached()
                             .as_ref()
                             .is_some_and(|d| d.get());
-                        (det, obj_ref.arraybuffer_is_immutable)
+                        (det, obj_ref.arraybuffer_is_immutable())
                     };
                     if is_detached {
                         return Completion::Throw(
@@ -645,7 +648,7 @@ impl Interpreter {
                     }
                     let old_data = {
                         let obj_ref = obj.borrow();
-                        buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
+                        buffer_bytes(obj_ref.arraybuffer_data().unwrap())
                     };
                     let old_data_len = old_data.len();
                     let mut new_data = vec![0u8; new_len];
@@ -653,11 +656,12 @@ impl Interpreter {
                     new_data[..copy_len].copy_from_slice(&old_data[..copy_len]);
                     {
                         let mut obj_ref = obj.borrow_mut();
-                        if let Some(ref det) = obj_ref.arraybuffer_detached {
-                            det.set(true);
+                        if let Some(ab) = obj_ref.arraybuffer_mut() {
+                            if let Some(ref det) = ab.detached {
+                                det.set(true);
+                            }
+                            ab.data = Rc::new(RefCell::new(BufferData::Owned(Vec::new())));
                         }
-                        obj_ref.arraybuffer_data =
-                            Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
                     interp.gc_untrack_external_bytes(old_data_len);
                     let id = interp.create_arraybuffer(new_data);
@@ -681,8 +685,8 @@ impl Interpreter {
                     let (is_ab, is_shared) = {
                         let obj_ref = obj.borrow();
                         (
-                            obj_ref.arraybuffer_data.is_some(),
-                            obj_ref.arraybuffer_is_shared,
+                            obj_ref.arraybuffer_data().is_some(),
+                            obj_ref.arraybuffer_is_shared(),
                         )
                     };
                     if !is_ab {
@@ -695,7 +699,7 @@ impl Interpreter {
                     }
                     let old_len = {
                         let obj_ref = obj.borrow();
-                        buffer_len(obj_ref.arraybuffer_data.as_ref().unwrap())
+                        buffer_len(obj_ref.arraybuffer_data().unwrap())
                     };
                     let new_len_arg = args.first().unwrap_or(&JsValue::Undefined);
                     let new_len = if matches!(new_len_arg, JsValue::Undefined) {
@@ -710,10 +714,10 @@ impl Interpreter {
                     let (is_detached, is_immutable) = {
                         let obj_ref = obj.borrow();
                         let det = obj_ref
-                            .arraybuffer_detached
+                            .arraybuffer_detached()
                             .as_ref()
                             .is_some_and(|d| d.get());
-                        (det, obj_ref.arraybuffer_is_immutable)
+                        (det, obj_ref.arraybuffer_is_immutable())
                     };
                     if is_detached {
                         return Completion::Throw(
@@ -727,7 +731,7 @@ impl Interpreter {
                     }
                     let old_data = {
                         let obj_ref = obj.borrow();
-                        buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
+                        buffer_bytes(obj_ref.arraybuffer_data().unwrap())
                     };
                     let old_data_len = old_data.len();
                     let mut new_data = vec![0u8; new_len];
@@ -736,19 +740,23 @@ impl Interpreter {
                     // Detach the source
                     {
                         let mut obj_ref = obj.borrow_mut();
-                        if let Some(ref det) = obj_ref.arraybuffer_detached {
-                            det.set(true);
+                        if let Some(ab) = obj_ref.arraybuffer_mut() {
+                            if let Some(ref det) = ab.detached {
+                                det.set(true);
+                            }
+                            ab.data = Rc::new(RefCell::new(BufferData::Owned(Vec::new())));
                         }
-                        obj_ref.arraybuffer_data =
-                            Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
                     }
                     interp.gc_untrack_external_bytes(old_data_len);
                     // Create immutable ArrayBuffer
                     let id = interp.create_arraybuffer(new_data);
-                    interp
+                    if let Some(ab) = interp
                         .get_object_cell_expect(id)
                         .borrow_mut()
-                        .arraybuffer_is_immutable = true;
+                        .arraybuffer_mut()
+                    {
+                        ab.is_immutable = true;
+                    }
                     return Completion::Normal(JsValue::Object(JsObject { id }));
                 }
                 Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
@@ -769,10 +777,10 @@ impl Interpreter {
                     let (is_ab, is_shared, is_immutable, max_byte_length) = {
                         let obj_ref = obj.borrow();
                         (
-                            obj_ref.arraybuffer_data.is_some(),
-                            obj_ref.arraybuffer_is_shared,
-                            obj_ref.arraybuffer_is_immutable,
-                            obj_ref.arraybuffer_max_byte_length,
+                            obj_ref.arraybuffer_data().is_some(),
+                            obj_ref.arraybuffer_is_shared(),
+                            obj_ref.arraybuffer_is_immutable(),
+                            obj_ref.arraybuffer_max_byte_length(),
                         )
                     };
                     if !is_ab || is_shared {
@@ -793,7 +801,7 @@ impl Interpreter {
                     // Step 5: IsDetachedBuffer — AFTER ToIndex
                     {
                         let obj_ref = obj.borrow();
-                        if let Some(ref det) = obj_ref.arraybuffer_detached
+                        if let Some(det) = obj_ref.arraybuffer_detached()
                             && det.get()
                         {
                             return Completion::Throw(
@@ -811,7 +819,7 @@ impl Interpreter {
                     }
                     let old_len = {
                         let obj_ref = obj.borrow();
-                        let buf = obj_ref.arraybuffer_data.as_ref().unwrap();
+                        let buf = obj_ref.arraybuffer_data().unwrap();
                         let old = buf.borrow().len();
                         buf.borrow_mut().resize(new_len, 0u8);
                         old
@@ -916,9 +924,16 @@ impl Interpreter {
                     let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                     o.class_name = "ArrayBuffer".to_string();
                     o.prototype_id = proto;
-                    o.arraybuffer_data = Some(buf_rc);
-                    o.arraybuffer_detached = Some(detached);
-                    o.arraybuffer_max_byte_length = max_byte_length;
+                    o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                        crate::interpreter::types::ArrayBufferData {
+                            data: buf_rc,
+                            detached: Some(detached),
+                            max_byte_length,
+                            is_shared: false,
+                            is_immutable: false,
+                            sab_shared: None,
+                        },
+                    );
                 }
                 interp.gc_track_external_bytes(buf_len);
                 let id = obj_id;
@@ -936,7 +951,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if obj_ref.typed_array_info.is_some() || obj_ref.data_view_info.is_some() {
+                    if obj_ref.typed_array_info().is_some() || obj_ref.data_view_info().is_some() {
                         return Completion::Normal(JsValue::Boolean(true));
                     }
                 }
@@ -1021,9 +1036,16 @@ impl Interpreter {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = "ArrayBuffer".to_string();
             o.prototype_id = ab_proto;
-            o.arraybuffer_data = Some(buf_rc);
-            o.arraybuffer_detached = Some(detached);
-            o.arraybuffer_max_byte_length = max_byte_length;
+            o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                crate::interpreter::types::ArrayBufferData {
+                    data: buf_rc,
+                    detached: Some(detached),
+                    max_byte_length,
+                    is_shared: false,
+                    is_immutable: false,
+                    sab_shared: None,
+                },
+            );
         }
         self.gc_track_external_bytes(data_len);
         obj_id
@@ -1036,17 +1058,17 @@ impl Interpreter {
             let old_len;
             {
                 let obj_ref = obj.borrow();
-                if obj_ref.arraybuffer_data.is_none() {
+                if obj_ref.arraybuffer_data().is_none() {
                     drop(obj_ref);
                     return Completion::Throw(self.create_type_error("not an ArrayBuffer"));
                 }
-                if obj_ref.arraybuffer_is_shared {
+                if obj_ref.arraybuffer_is_shared() {
                     drop(obj_ref);
                     return Completion::Throw(
                         self.create_type_error("Cannot detach a SharedArrayBuffer"),
                     );
                 }
-                old_len = if let Some(ref bd) = obj_ref.arraybuffer_data {
+                old_len = if let Some(bd) = obj_ref.arraybuffer_data() {
                     if let BufferData::Owned(ref v) = *bd.borrow() {
                         v.len()
                     } else {
@@ -1058,11 +1080,12 @@ impl Interpreter {
             }
             {
                 let mut obj_ref = obj.borrow_mut();
-                if let Some(ref det) = obj_ref.arraybuffer_detached {
-                    det.set(true);
+                if let Some(ab) = obj_ref.arraybuffer_mut() {
+                    if let Some(ref det) = ab.detached {
+                        det.set(true);
+                    }
+                    ab.data = Rc::new(RefCell::new(BufferData::Owned(Vec::new())));
                 }
-                obj_ref.arraybuffer_data =
-                    Some(Rc::new(RefCell::new(BufferData::Owned(Vec::new()))));
             }
             self.gc_untrack_external_bytes(old_len);
             return Completion::Normal(JsValue::Undefined);
@@ -1086,8 +1109,8 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if obj_ref.arraybuffer_is_shared
-                        && let Some(ref buf) = obj_ref.arraybuffer_data
+                    if obj_ref.arraybuffer_is_shared()
+                        && let Some(buf) = obj_ref.arraybuffer_data()
                     {
                         return Completion::Normal(JsValue::Number(buffer_len(buf) as f64));
                     }
@@ -1118,11 +1141,11 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if obj_ref.arraybuffer_is_shared
-                        && let Some(ref buf) = obj_ref.arraybuffer_data
+                    if obj_ref.arraybuffer_is_shared()
+                        && let Some(buf) = obj_ref.arraybuffer_data()
                     {
                         let max = obj_ref
-                            .arraybuffer_max_byte_length
+                            .arraybuffer_max_byte_length()
                             .unwrap_or_else(|| buffer_len(buf));
                         return Completion::Normal(JsValue::Number(max as f64));
                     }
@@ -1153,9 +1176,9 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if obj_ref.arraybuffer_is_shared {
+                    if obj_ref.arraybuffer_is_shared() {
                         return Completion::Normal(JsValue::Boolean(
-                            obj_ref.arraybuffer_max_byte_length.is_some(),
+                            obj_ref.arraybuffer_max_byte_length().is_some(),
                         ));
                     }
                 }
@@ -1187,8 +1210,8 @@ impl Interpreter {
                     let (is_shared, max_byte_length) = {
                         let obj_ref = obj.borrow();
                         (
-                            obj_ref.arraybuffer_is_shared,
-                            obj_ref.arraybuffer_max_byte_length,
+                            obj_ref.arraybuffer_is_shared(),
+                            obj_ref.arraybuffer_max_byte_length(),
                         )
                     };
                     if !is_shared {
@@ -1216,7 +1239,7 @@ impl Interpreter {
                         );
                     }
                     let obj_ref = obj.borrow();
-                    let buf = obj_ref.arraybuffer_data.as_ref().unwrap();
+                    let buf = obj_ref.arraybuffer_data().unwrap();
                     let current_len = buffer_len(buf);
                     if new_len < current_len {
                         return Completion::Throw(
@@ -1243,12 +1266,12 @@ impl Interpreter {
                 {
                     let buf_len = {
                         let obj_ref = obj.borrow();
-                        if !obj_ref.arraybuffer_is_shared {
+                        if !obj_ref.arraybuffer_is_shared() {
                             return Completion::Throw(
                                 interp.create_type_error("not a SharedArrayBuffer"),
                             );
                         }
-                        if let Some(ref buf) = obj_ref.arraybuffer_data {
+                        if let Some(buf) = obj_ref.arraybuffer_data() {
                             buffer_len(buf)
                         } else {
                             return Completion::Throw(
@@ -1316,7 +1339,7 @@ impl Interpreter {
                     };
                     if let Some(new_rc) = interp.get_object(new_id) {
                         let new_ref = new_rc.borrow();
-                        if !new_ref.arraybuffer_is_shared || new_ref.arraybuffer_data.is_none() {
+                        if !new_ref.arraybuffer_is_shared() || new_ref.arraybuffer_data().is_none() {
                             return Completion::Throw(
                                 interp.create_type_error("species constructor must return a SharedArrayBuffer"),
                             );
@@ -1334,7 +1357,7 @@ impl Interpreter {
                     {
                         let new_rc = interp.get_object(new_id).unwrap();
                         let new_ref = new_rc.borrow();
-                        let new_byte_len = buffer_len(new_ref.arraybuffer_data.as_ref().unwrap());
+                        let new_byte_len = buffer_len(new_ref.arraybuffer_data().unwrap());
                         if new_byte_len < new_len {
                             return Completion::Throw(
                                 interp.create_type_error("species constructor returned a SharedArrayBuffer that is too small"),
@@ -1345,11 +1368,11 @@ impl Interpreter {
                     if new_len > 0 {
                         let buf_data = {
                             let obj_ref = obj.borrow();
-                            buffer_bytes(obj_ref.arraybuffer_data.as_ref().unwrap())
+                            buffer_bytes(obj_ref.arraybuffer_data().unwrap())
                         };
                         let new_obj = interp.get_object_cell(new_id).unwrap();
                         let new_ref = new_obj.borrow();
-                        let new_buf = new_ref.arraybuffer_data.as_ref().unwrap();
+                        let new_buf = new_ref.arraybuffer_data().unwrap();
                         with_buffer_write(new_buf, |new_buf_ref| {
                             new_buf_ref[..new_len]
                                 .copy_from_slice(&buf_data[start..start + new_len]);
@@ -1454,11 +1477,16 @@ impl Interpreter {
                     let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                     o.class_name = "SharedArrayBuffer".to_string();
                     o.prototype_id = proto;
-                    o.arraybuffer_data = Some(buf_rc);
-                    o.arraybuffer_detached = None;
-                    o.arraybuffer_max_byte_length = max_byte_length;
-                    o.arraybuffer_is_shared = true;
-                    o.sab_shared = Some(inner);
+                    o.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                        crate::interpreter::types::ArrayBufferData {
+                            data: buf_rc,
+                            detached: None,
+                            max_byte_length,
+                            is_shared: true,
+                            is_immutable: false,
+                            sab_shared: Some(inner),
+                        },
+                    );
                 }
                 let id = obj_id;
                 Completion::Normal(JsValue::Object(JsObject { id }))
@@ -1538,7 +1566,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if let Some(ref ta) = obj_ref.typed_array_info {
+                    if let Some(ta) = obj_ref.typed_array_info() {
                         if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                             return Completion::Normal(JsValue::Number(0.0));
                         }
@@ -1570,7 +1598,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if let Some(ref ta) = obj_ref.typed_array_info {
+                    if let Some(ta) = obj_ref.typed_array_info() {
                         if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                             return Completion::Normal(JsValue::Number(0.0));
                         }
@@ -1604,7 +1632,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if let Some(ref ta) = obj_ref.typed_array_info {
+                    if let Some(ta) = obj_ref.typed_array_info() {
                         if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                             return Completion::Normal(JsValue::Number(0.0));
                         }
@@ -1637,8 +1665,8 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if obj_ref.typed_array_info.is_some()
-                        && let Some(buf_id) = obj_ref.view_buffer_object_id
+                    if obj_ref.typed_array_info().is_some()
+                        && let Some(buf_id) = obj_ref.view_buffer_object_id()
                     {
                         return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
                     }
@@ -1677,7 +1705,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -1721,7 +1749,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             ta.clone()
                         } else {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
@@ -1757,11 +1785,10 @@ impl Interpreter {
                     if let JsValue::Object(src_o) = &source
                         && let Some(src_obj) = interp.get_object_cell(src_o.id)
                     {
-                        let is_ta = src_obj.borrow().typed_array_info.is_some();
+                        let is_ta = src_obj.borrow().typed_array_info().is_some();
                         if is_ta {
                             // TypedArray-arg path
-                            let src_ta =
-                                src_obj.borrow().typed_array_info.as_ref().unwrap().clone();
+                            let src_ta = src_obj.borrow().typed_array_info().unwrap().clone();
                             if src_ta.is_detached.get() || is_typed_array_out_of_bounds(&src_ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("source typed array is detached"),
@@ -1882,9 +1909,9 @@ impl Interpreter {
                 {
                     let (ta, buf_val) = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             let bv = obj_ref
-                                .view_buffer_object_id
+                                .view_buffer_object_id()
                                 .map(|id| JsValue::Object(JsObject { id }))
                                 .unwrap_or(JsValue::Undefined);
                             (ta.clone(), bv)
@@ -1968,7 +1995,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -2049,7 +2076,7 @@ impl Interpreter {
                         {
                             let new_ta = {
                                 let obj_ref = new_obj.borrow();
-                                obj_ref.typed_array_info.as_ref().unwrap().clone()
+                                obj_ref.typed_array_info().unwrap().clone()
                             };
                             if new_ta.kind == ta.kind {
                                 let bpe = ta.kind.bytes_per_element();
@@ -2105,7 +2132,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -2208,7 +2235,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -2293,7 +2320,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -2351,7 +2378,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -2410,7 +2437,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -2469,7 +2496,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -2509,7 +2536,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -2629,7 +2656,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -2695,7 +2722,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -2775,7 +2802,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -2800,6 +2827,7 @@ impl Interpreter {
                         array_length: len,
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
+                        buffer_object_id: None,
                     };
                     for i in 0..len {
                         let val = typed_array_get_index(&ta, len - 1 - i);
@@ -2811,8 +2839,16 @@ impl Interpreter {
                         let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
                         ab.prototype_id = ab_proto;
-                        ab.arraybuffer_data = Some(new_buf_rc);
-                        ab.arraybuffer_detached = Some(new_detached);
+                        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                            crate::interpreter::types::ArrayBufferData {
+                                data: new_buf_rc,
+                                detached: Some(new_detached),
+                                max_byte_length: None,
+                                is_shared: false,
+                                is_immutable: false,
+                                sab_shared: None,
+                            },
+                        );
                     }
                     interp.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj_id;
@@ -2837,7 +2873,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -2943,6 +2979,7 @@ impl Interpreter {
                         array_length: len,
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
+                        buffer_object_id: None,
                     };
                     for (i, val) in elems.iter().enumerate() {
                         typed_array_set_index(&new_ta, i, val);
@@ -2953,8 +2990,16 @@ impl Interpreter {
                         let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
                         ab.prototype_id = ab_proto;
-                        ab.arraybuffer_data = Some(new_buf_rc);
-                        ab.arraybuffer_detached = Some(new_detached);
+                        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                            crate::interpreter::types::ArrayBufferData {
+                                data: new_buf_rc,
+                                detached: Some(new_detached),
+                                max_byte_length: None,
+                                is_shared: false,
+                                is_immutable: false,
+                                sab_shared: None,
+                            },
+                        );
                     }
                     interp.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj_id;
@@ -3098,7 +3143,7 @@ impl Interpreter {
                 {
                     let ta = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -3158,6 +3203,7 @@ impl Interpreter {
                         array_length: len as usize,
                         is_detached: new_detached.clone(),
                         is_length_tracking: false,
+                        buffer_object_id: None,
                     };
                     for k in 0..len as usize {
                         let elem = if k == actual_index as usize {
@@ -3173,8 +3219,16 @@ impl Interpreter {
                         let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
                         ab.prototype_id = ab_proto;
-                        ab.arraybuffer_data = Some(new_buf_rc);
-                        ab.arraybuffer_detached = Some(new_detached);
+                        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                            crate::interpreter::types::ArrayBufferData {
+                                data: new_buf_rc,
+                                detached: Some(new_detached),
+                                max_byte_length: None,
+                                is_shared: false,
+                                is_immutable: false,
+                                sab_shared: None,
+                            },
+                        );
                     }
                     interp.gc_track_external_bytes(buf_byte_len);
                     let ab_id = ab_obj_id;
@@ -3198,7 +3252,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if let Some(ref ta) = obj_ref.typed_array_info {
+                    if let Some(ta) = obj_ref.typed_array_info() {
                         return Completion::Normal(JsValue::String(JsString::from_str(
                             ta.kind.name(),
                         )));
@@ -3232,7 +3286,7 @@ impl Interpreter {
                 {
                     {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -3266,7 +3320,7 @@ impl Interpreter {
                 {
                     {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -3295,7 +3349,7 @@ impl Interpreter {
                 {
                     {
                         let obj_ref = obj.borrow();
-                        if let Some(ref ta) = obj_ref.typed_array_info {
+                        if let Some(ta) = obj_ref.typed_array_info() {
                             if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                                 return Completion::Throw(
                                     interp.create_type_error("typed array is detached"),
@@ -3506,7 +3560,7 @@ impl Interpreter {
                 let new_ta = if let JsValue::Object(o) = &new_ta_val
                     && let Some(obj) = interp.get_object_cell(o.id)
                 {
-                    obj.borrow().typed_array_info.as_ref().unwrap().clone()
+                    obj.borrow().typed_array_info().unwrap().clone()
                 } else {
                     return Completion::Throw(interp.create_type_error("not a TypedArray"));
                 };
@@ -3571,7 +3625,7 @@ impl Interpreter {
                 if let JsValue::Object(o) = &new_ta_val
                     && let Some(obj) = interp.get_object_cell(o.id)
                 {
-                    let new_ta = obj.borrow().typed_array_info.as_ref().unwrap().clone();
+                    let new_ta = obj.borrow().typed_array_info().unwrap().clone();
                     for (i, val) in kept.iter().enumerate() {
                         typed_array_set_index(&new_ta, i, val);
                     }
@@ -3857,7 +3911,7 @@ impl Interpreter {
                     };
                     let ta_kind = if let JsValue::Object(ref o) = target_obj {
                         interp.get_object_cell(o.id).and_then(|obj| {
-                            obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind)
+                            obj.borrow().typed_array_info().map(|ta| ta.kind)
                         })
                     } else {
                         None
@@ -3937,7 +3991,7 @@ impl Interpreter {
                     };
                     let ta_kind = if let JsValue::Object(ref o) = target_obj {
                         interp.get_object_cell(o.id).and_then(|obj| {
-                            obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind)
+                            obj.borrow().typed_array_info().map(|ta| ta.kind)
                         })
                     } else {
                         None
@@ -4011,7 +4065,7 @@ impl Interpreter {
                 let ta_kind = if let JsValue::Object(ref o) = new_obj {
                     interp
                         .get_object_cell(o.id)
-                        .and_then(|obj| obj.borrow().typed_array_info.as_ref().map(|ta| ta.kind))
+                        .and_then(|obj| obj.borrow().typed_array_info().map(|ta| ta.kind))
                 } else {
                     None
                 };
@@ -4154,11 +4208,13 @@ impl Interpreter {
                             if let Some(src_obj) = interp.get_object_cell(o.id) {
                                 let src_ref = src_obj.borrow();
                                 // Case: new XArray(arraybuffer, byteOffset?, length?)
-                                if let Some(ref ab_data) = src_ref.arraybuffer_data {
-                                    let buf_rc = ab_data.clone();
-                                    let detached = src_ref.arraybuffer_detached.clone()
+                                if let Some(ab_data) = src_ref.arraybuffer_data() {
+                                    let buf_rc = Rc::clone(ab_data);
+                                    let detached = src_ref
+                                        .arraybuffer_detached()
+                                        .cloned()
                                         .unwrap_or_else(|| Rc::new(Cell::new(false)));
-                                    let is_resizable = src_ref.arraybuffer_max_byte_length.is_some();
+                                    let is_resizable = src_ref.arraybuffer_max_byte_length().is_some();
                                     drop(src_ref);
                                     // §22.2.4.5 step 4: AllocateTypedArray (GetPrototypeFromConstructor) before ToIndex
                                     let proto = match get_proto(interp) {
@@ -4229,13 +4285,14 @@ impl Interpreter {
                                         array_length,
                                         is_detached: detached,
                                         is_length_tracking,
+                                        buffer_object_id: None,
                                     };
                                     let buf_val = first.clone();
                                     let id = interp.create_typed_array_object_with_proto(ta_info, buf_val, proto);
                                     return Completion::Normal(JsValue::Object(JsObject { id }));
                                 }
                                 // Case: new XArray(typedArray)
-                                if let Some(ref src_ta) = src_ref.typed_array_info {
+                                if let Some(src_ta) = src_ref.typed_array_info() {
                                     let src_ta = src_ta.clone();
                                     drop(src_ref);
                                     // Check content type compatibility
@@ -4267,6 +4324,7 @@ impl Interpreter {
                                         array_length: len,
                                         is_detached: new_detached.clone(),
                                         is_length_tracking: false,
+                                        buffer_object_id: None,
                                     };
                                     for i in 0..len {
                                         let val = typed_array_get_index(&src_ta, i);
@@ -4278,8 +4336,14 @@ impl Interpreter {
                                         let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
                                         ab.class_name = "ArrayBuffer".to_string();
                                         ab.prototype_id = ab_proto;
-                                        ab.arraybuffer_data = Some(new_buf_rc);
-                                        ab.arraybuffer_detached = Some(new_detached);
+                                        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(crate::interpreter::types::ArrayBufferData {
+                                            data: new_buf_rc,
+                                            detached: Some(new_detached),
+                                            max_byte_length: None,
+                                            is_shared: false,
+                                            is_immutable: false,
+                                            sab_shared: None,
+                                        });
                                     }
                                     interp.gc_track_external_bytes(buf_byte_len);
                                     let proto = match get_proto(interp) {
@@ -4311,6 +4375,7 @@ impl Interpreter {
                                     array_length: len,
                                     is_detached: new_detached.clone(),
                                     is_length_tracking: false,
+                                    buffer_object_id: None,
                                 };
                                 for (i, val) in values.iter().enumerate() {
                                     let coerced = match interp.typed_array_coerce_value(kind, val) {
@@ -4325,8 +4390,14 @@ impl Interpreter {
                                     let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
                                     ab.class_name = "ArrayBuffer".to_string();
                                     ab.prototype_id = ab_proto;
-                                    ab.arraybuffer_data = Some(new_buf_rc);
-                                    ab.arraybuffer_detached = Some(new_detached);
+                                    ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(crate::interpreter::types::ArrayBufferData {
+                                        data: new_buf_rc,
+                                        detached: Some(new_detached),
+                                        max_byte_length: None,
+                                        is_shared: false,
+                                        is_immutable: false,
+                                        sab_shared: None,
+                                    });
                                 }
                                 interp.gc_track_external_bytes(buf_byte_len);
                                 let proto = match get_proto(interp) {
@@ -4668,7 +4739,7 @@ impl Interpreter {
     ) -> Result<JsValue, JsValue> {
         let snapshot = if let JsValue::Object(o) = exemplar {
             self.get_object_cell(o.id)
-                .and_then(|cell| cell.borrow().typed_array_info.clone())
+                .and_then(|cell| cell.borrow().typed_array_info().cloned())
         } else {
             None
         };
@@ -4701,7 +4772,7 @@ impl Interpreter {
             self.get_object_cell(o.id)
                 .map(|cell| {
                     let r = cell.borrow();
-                    if let Some(ref ta) = r.typed_array_info {
+                    if let Some(ta) = r.typed_array_info() {
                         if ta.is_detached.get() {
                             KindProbe::Detached
                         } else {
@@ -4741,8 +4812,7 @@ impl Interpreter {
                 self.get_object_cell(o.id)
                     .and_then(|cell| {
                         cell.borrow()
-                            .typed_array_info
-                            .as_ref()
+                            .typed_array_info()
                             .map(|ta| typed_array_length(ta) < requested)
                     })
                     .unwrap_or(false)
@@ -4793,6 +4863,7 @@ impl Interpreter {
             array_length: len,
             is_detached: detached.clone(),
             is_length_tracking: false,
+            buffer_object_id: None,
         };
         let ab_obj_id = self.create_object_id();
         let ab_proto = self.realm().arraybuffer_prototype;
@@ -4800,8 +4871,16 @@ impl Interpreter {
             let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
             ab.class_name = "ArrayBuffer".to_string();
             ab.prototype_id = ab_proto;
-            ab.arraybuffer_data = Some(buf_rc);
-            ab.arraybuffer_detached = Some(detached);
+            ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                crate::interpreter::types::ArrayBufferData {
+                    data: buf_rc,
+                    detached: Some(detached),
+                    max_byte_length: None,
+                    is_shared: false,
+                    is_immutable: false,
+                    sab_shared: None,
+                },
+            );
         }
         self.gc_track_external_bytes(buf_byte_len);
         let ab_id = ab_obj_id;
@@ -4812,38 +4891,38 @@ impl Interpreter {
 
     pub(crate) fn create_typed_array_object(
         &mut self,
-        info: TypedArrayInfo,
+        mut info: TypedArrayInfo,
         buf_val: JsValue,
     ) -> u64 {
         let proto = self.get_typed_array_prototype(info.kind);
         let obj_id = self.create_object_id();
+        if let JsValue::Object(ref bobj) = buf_val {
+            info.buffer_object_id = Some(bobj.id);
+        }
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = info.kind.name().to_string();
             o.prototype_id = proto;
-            if let JsValue::Object(ref bobj) = buf_val {
-                o.view_buffer_object_id = Some(bobj.id);
-            }
-            o.typed_array_info = Some(info);
+            o.kind = crate::interpreter::types::ObjectKind::TypedArray(info);
         }
         obj_id
     }
 
     pub(crate) fn create_typed_array_object_with_proto(
         &mut self,
-        info: TypedArrayInfo,
+        mut info: TypedArrayInfo,
         buf_val: JsValue,
         proto_id: u64,
     ) -> u64 {
         let obj_id = self.create_object_id();
+        if let JsValue::Object(ref bobj) = buf_val {
+            info.buffer_object_id = Some(bobj.id);
+        }
         {
             let mut o = self.get_object_cell_expect(obj_id).borrow_mut();
             o.class_name = info.kind.name().to_string();
             o.prototype_id = Some(proto_id);
-            if let JsValue::Object(ref bobj) = buf_val {
-                o.view_buffer_object_id = Some(bobj.id);
-            }
-            o.typed_array_info = Some(info);
+            o.kind = crate::interpreter::types::ObjectKind::TypedArray(info);
         }
         obj_id
     }
@@ -4913,33 +4992,40 @@ impl Interpreter {
                     let new_buf = vec![0u8; buf_byte_len];
                     let new_buf_rc = Rc::new(RefCell::new(BufferData::Owned(new_buf)));
                     let new_detached = Rc::new(Cell::new(false));
-                    let ta = TypedArrayInfo {
-                        kind,
-                        buffer: new_buf_rc.clone(),
-                        byte_offset: 0,
-                        byte_length: buf_byte_len,
-                        array_length: len,
-                        is_detached: new_detached.clone(),
-                        is_length_tracking: false,
-                    };
                     let ab_obj_id = self.create_object_id();
                     let ab_proto = self.realm().arraybuffer_prototype;
                     {
                         let mut ab = self.get_object_cell_expect(ab_obj_id).borrow_mut();
                         ab.class_name = "ArrayBuffer".to_string();
                         ab.prototype_id = ab_proto;
-                        ab.arraybuffer_data = Some(new_buf_rc);
-                        ab.arraybuffer_detached = Some(new_detached);
+                        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+                            crate::interpreter::types::ArrayBufferData {
+                                data: new_buf_rc.clone(),
+                                detached: Some(new_detached.clone()),
+                                max_byte_length: None,
+                                is_shared: false,
+                                is_immutable: false,
+                                sab_shared: None,
+                            },
+                        );
                     }
                     self.gc_track_external_bytes(buf_byte_len);
-                    let ab_id = ab_obj_id;
+                    let ta = TypedArrayInfo {
+                        kind,
+                        buffer: new_buf_rc,
+                        byte_offset: 0,
+                        byte_length: buf_byte_len,
+                        array_length: len,
+                        is_detached: new_detached,
+                        is_length_tracking: false,
+                        buffer_object_id: Some(ab_obj_id),
+                    };
                     let result_id = self.create_object_id();
                     {
                         let mut r = self.get_object_cell_expect(result_id).borrow_mut();
                         r.class_name = kind.name().to_string();
                         r.prototype_id = proto;
-                        r.view_buffer_object_id = Some(ab_id);
-                        r.typed_array_info = Some(ta);
+                        r.kind = crate::interpreter::types::ObjectKind::TypedArray(ta);
                     }
                     let id = result_id;
                     return Completion::Normal(JsValue::Object(JsObject { id }));
@@ -4958,11 +5044,7 @@ impl Interpreter {
         if let JsValue::Object(ref o) = new_obj
             && let Some(obj) = self.get_object_cell(o.id)
         {
-            let ta_len = obj
-                .borrow()
-                .typed_array_info
-                .as_ref()
-                .map(|ti| ti.array_length);
+            let ta_len = obj.borrow().typed_array_info().map(|ti| ti.array_length);
             if let Some(ta_len) = ta_len {
                 if ta_len < len {
                     return Completion::Throw(
@@ -5165,8 +5247,8 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if obj_ref.data_view_info.is_some() {
-                        if let Some(buf_id) = obj_ref.view_buffer_object_id {
+                    if obj_ref.data_view_info().is_some() {
+                        if let Some(buf_id) = obj_ref.view_buffer_object_id() {
                             return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
                         }
                         return Completion::Normal(JsValue::Undefined);
@@ -5198,7 +5280,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if let Some(ref dv) = obj_ref.data_view_info {
+                    if let Some(dv) = obj_ref.data_view_info() {
                         if dv.is_detached.get() {
                             return Completion::Throw(
                                 interp.create_type_error("DataView buffer is detached"),
@@ -5244,7 +5326,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     let obj_ref = obj.borrow();
-                    if let Some(ref dv) = obj_ref.data_view_info {
+                    if let Some(dv) = obj_ref.data_view_info() {
                         if dv.is_detached.get() {
                             return Completion::Throw(
                                 interp.create_type_error("DataView buffer is detached"),
@@ -5305,7 +5387,7 @@ impl Interpreter {
                         {
                             {
                                 let obj_ref = obj.borrow();
-                                if obj_ref.data_view_info.is_none() {
+                                if obj_ref.data_view_info().is_none() {
                                     return Completion::Throw(
                                         interp.create_type_error("not a DataView"),
                                     );
@@ -5325,7 +5407,7 @@ impl Interpreter {
                             };
                             let dv = {
                                 let obj_ref = obj.borrow();
-                                obj_ref.data_view_info.as_ref().unwrap().clone()
+                                obj_ref.data_view_info().unwrap().clone()
                             };
                             if dv.is_detached.get() {
                                 return Completion::Throw(
@@ -5478,13 +5560,13 @@ impl Interpreter {
                         {
                             {
                                 let obj_ref = obj.borrow();
-                                if obj_ref.data_view_info.is_none() {
+                                if obj_ref.data_view_info().is_none() {
                                     return Completion::Throw(
                                         interp.create_type_error("not a DataView"),
                                     );
                                 }
                                 // Step 3: IsImmutableBuffer — before ToIndex/ToNumber
-                                if let Some(ref dv) = obj_ref.data_view_info
+                                if let Some(dv) = obj_ref.data_view_info()
                                     && dv.is_immutable
                                 {
                                     return Completion::Throw(interp.create_type_error(
@@ -5515,7 +5597,7 @@ impl Interpreter {
                             // Step 4-6: Re-borrow, check detach, check bounds, write
                             let dv = {
                                 let obj_ref = obj.borrow();
-                                obj_ref.data_view_info.as_ref().unwrap().clone()
+                                obj_ref.data_view_info().unwrap().clone()
                             };
                             if dv.is_detached.get() {
                                 return Completion::Throw(
@@ -5568,13 +5650,13 @@ impl Interpreter {
                         {
                             {
                                 let obj_ref = obj.borrow();
-                                if obj_ref.data_view_info.is_none() {
+                                if obj_ref.data_view_info().is_none() {
                                     return Completion::Throw(
                                         interp.create_type_error("not a DataView"),
                                     );
                                 }
                                 // Step 3: IsImmutableBuffer — before ToIndex/ToBigInt
-                                if let Some(ref dv) = obj_ref.data_view_info
+                                if let Some(dv) = obj_ref.data_view_info()
                                     && dv.is_immutable
                                 {
                                     return Completion::Throw(interp.create_type_error(
@@ -5605,7 +5687,7 @@ impl Interpreter {
                             // Step 4-6: Re-borrow, check detach, check bounds, write
                             let dv = {
                                 let obj_ref = obj.borrow();
-                                obj_ref.data_view_info.as_ref().unwrap().clone()
+                                obj_ref.data_view_info().unwrap().clone()
                             };
                             if dv.is_detached.get() {
                                 return Completion::Throw(
@@ -5776,7 +5858,7 @@ impl Interpreter {
                 {
                     let is_arraybuffer = {
                         let obj_ref = obj.borrow();
-                        obj_ref.arraybuffer_data.is_some()
+                        obj_ref.arraybuffer_data().is_some()
                     };
                     if !is_arraybuffer {
                         return Completion::Throw(interp.create_type_error(
@@ -5792,21 +5874,21 @@ impl Interpreter {
                         };
                     let (buf_rc, detached_flag, buf_len, is_resizable, buf_is_immutable) = {
                         let obj_ref = obj.borrow();
-                        if let Some(ref det) = obj_ref.arraybuffer_detached
+                        if let Some(det) = obj_ref.arraybuffer_detached()
                             && det.get()
                         {
                             return Completion::Throw(interp.create_type_error(
                                 "Cannot construct DataView from detached ArrayBuffer",
                             ));
                         }
-                        let buf = obj_ref.arraybuffer_data.as_ref().unwrap().clone();
+                        let buf = Rc::clone(obj_ref.arraybuffer_data().unwrap());
                         let det = obj_ref
-                            .arraybuffer_detached
-                            .clone()
+                            .arraybuffer_detached()
+                            .cloned()
                             .unwrap_or_else(|| Rc::new(Cell::new(false)));
                         let len = buffer_len(&buf);
-                        let resizable = obj_ref.arraybuffer_max_byte_length.is_some();
-                        let immutable = obj_ref.arraybuffer_is_immutable;
+                        let resizable = obj_ref.arraybuffer_max_byte_length().is_some();
+                        let immutable = obj_ref.arraybuffer_is_immutable();
                         (buf, det, len, resizable, immutable)
                     };
                     if byte_offset > buf_len {
@@ -5842,6 +5924,7 @@ impl Interpreter {
                         byte_length,
                         is_detached: detached_flag,
                         is_length_tracking,
+                        buffer_object_id: None,
                         is_immutable: buf_is_immutable,
                     };
                     // OrdinaryCreateFromConstructor — realm-aware prototype
@@ -5855,18 +5938,14 @@ impl Interpreter {
                     // may have detached/resized the buffer) — spec steps 11-14
                     {
                         let obj_ref = obj.borrow();
-                        if let Some(ref det) = obj_ref.arraybuffer_detached
+                        if let Some(det) = obj_ref.arraybuffer_detached()
                             && det.get()
                         {
                             return Completion::Throw(interp.create_type_error(
                                 "Cannot construct DataView from detached ArrayBuffer",
                             ));
                         }
-                        let new_buf_len = obj_ref
-                            .arraybuffer_data
-                            .as_ref()
-                            .map(buffer_len)
-                            .unwrap_or(0);
+                        let new_buf_len = obj_ref.arraybuffer_data().map(buffer_len).unwrap_or(0);
                         if byte_offset > new_buf_len {
                             return Completion::Throw(interp.create_error(
                                 "RangeError",
@@ -5879,15 +5958,16 @@ impl Interpreter {
                             );
                         }
                     }
+                    let mut dv_info = dv_info;
+                    if let JsValue::Object(ref bobj) = buf_arg {
+                        dv_info.buffer_object_id = Some(bobj.id);
+                    }
                     let result_id = interp.create_object_id();
                     {
                         let mut r = interp.get_object_cell_expect(result_id).borrow_mut();
                         r.class_name = "DataView".to_string();
                         r.prototype_id = Some(dv_proto);
-                        if let JsValue::Object(ref bobj) = buf_arg {
-                            r.view_buffer_object_id = Some(bobj.id);
-                        }
-                        r.data_view_info = Some(dv_info);
+                        r.kind = crate::interpreter::types::ObjectKind::DataView(dv_info);
                     }
                     let id = result_id;
                     return Completion::Normal(JsValue::Object(JsObject { id }));
@@ -5943,7 +6023,7 @@ fn extract_ta_and_callback(
     {
         let ta = {
             let obj_ref = obj.borrow();
-            if let Some(ref ta) = obj_ref.typed_array_info {
+            if let Some(ta) = obj_ref.typed_array_info() {
                 if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
                     return Err(Completion::Throw(
                         interp.create_type_error("typed array is detached"),
@@ -6151,7 +6231,7 @@ fn validate_uint8array(
         && let Some(obj) = interp.get_object(o.id)
     {
         let obj_ref = obj.borrow();
-        if let Some(ref ta) = obj_ref.typed_array_info {
+        if let Some(ta) = obj_ref.typed_array_info() {
             if !matches!(ta.kind, TypedArrayKind::Uint8) {
                 return Err(Completion::Throw(
                     interp.create_type_error("not a Uint8Array"),
@@ -6178,7 +6258,7 @@ fn validate_uint8array_no_detach_check(
         && let Some(obj) = interp.get_object(o.id)
     {
         let obj_ref = obj.borrow();
-        if let Some(ref ta) = obj_ref.typed_array_info {
+        if let Some(ta) = obj_ref.typed_array_info() {
             if !matches!(ta.kind, TypedArrayKind::Uint8) {
                 return Err(Completion::Throw(
                     interp.create_type_error("not a Uint8Array"),
@@ -6730,6 +6810,7 @@ fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Compl
         array_length: len,
         is_detached: detached.clone(),
         is_length_tracking: false,
+        buffer_object_id: None,
     };
     let ab_obj_id = interp.create_object_id();
     let ab_proto = interp.realm().arraybuffer_prototype;
@@ -6737,8 +6818,16 @@ fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Compl
         let mut ab = interp.get_object_cell_expect(ab_obj_id).borrow_mut();
         ab.class_name = "ArrayBuffer".to_string();
         ab.prototype_id = ab_proto;
-        ab.arraybuffer_data = Some(buf_rc);
-        ab.arraybuffer_detached = Some(detached);
+        ab.kind = crate::interpreter::types::ObjectKind::ArrayBuffer(
+            crate::interpreter::types::ArrayBufferData {
+                data: buf_rc,
+                detached: Some(detached),
+                max_byte_length: None,
+                is_shared: false,
+                is_immutable: false,
+                sab_shared: None,
+            },
+        );
     }
     interp.gc_track_external_bytes(len);
     let ab_id = ab_obj_id;

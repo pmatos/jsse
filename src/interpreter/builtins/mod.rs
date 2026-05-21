@@ -4345,7 +4345,7 @@ impl Interpreter {
                             let v_id = vo.id;
                             // Use proxy-aware [[GetPrototypeOf]]
                             let proto = if let Some(obj) = interp.get_object(v_id) {
-                                if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+                                if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
                                     match interp.proxy_get_prototype_of(v_id) {
                                         Ok(p) => p,
                                         Err(e) => return Completion::Throw(e),
@@ -4413,7 +4413,7 @@ impl Interpreter {
                         };
                         if let JsValue::Object(ref obj_ref) = o {
                             let is_proxy = interp.get_object_cell(obj_ref.id)
-                                .map(|obj| { let b = obj.borrow(); b.is_proxy() || b.proxy_revoked })
+                                .map(|obj| { let b = obj.borrow(); b.is_proxy() || b.is_proxy_revoked() })
                                 .unwrap_or(false);
                             if is_proxy {
                                 let desc_val = interp.from_property_descriptor(&desc);
@@ -4466,7 +4466,7 @@ impl Interpreter {
                         };
                         if let JsValue::Object(ref obj_ref) = o {
                             let is_proxy = interp.get_object_cell(obj_ref.id)
-                                .map(|obj| { let b = obj.borrow(); b.is_proxy() || b.proxy_revoked })
+                                .map(|obj| { let b = obj.borrow(); b.is_proxy() || b.is_proxy_revoked() })
                                 .unwrap_or(false);
                             if is_proxy {
                                 let desc_val = interp.from_property_descriptor(&desc);
@@ -4523,7 +4523,7 @@ impl Interpreter {
                                 .get_object_cell(obj_id)
                                 .map(|o| {
                                     let b = o.borrow();
-                                    b.is_proxy() || b.proxy_revoked
+                                    b.is_proxy() || b.is_proxy_revoked()
                                 })
                                 .unwrap_or(false);
                             let proto = if is_proxy {
@@ -4588,7 +4588,7 @@ impl Interpreter {
                                 .get_object_cell(obj_id)
                                 .map(|o| {
                                     let b = o.borrow();
-                                    b.is_proxy() || b.proxy_revoked
+                                    b.is_proxy() || b.is_proxy_revoked()
                                 })
                                 .unwrap_or(false);
                             let proto = if is_proxy {
@@ -4637,7 +4637,7 @@ impl Interpreter {
                             // Proxy getPrototypeOf trap
                             let res = {
                                 let _b = obj.borrow();
-                                _b.is_proxy() || _b.proxy_revoked
+                                _b.is_proxy() || _b.is_proxy_revoked()
                             };
                             if res {
                                 match interp.proxy_get_prototype_of(o.id) {
@@ -4678,7 +4678,7 @@ impl Interpreter {
                         // 4. Let status be ? O.[[SetPrototypeOf]](proto).
                         if let JsValue::Object(o) = this_val
                             && let Some(obj) = interp.get_object(o.id) {
-                                let res = { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked }; if res {
+                                let res = { let _b = obj.borrow(); _b.is_proxy() || _b.is_proxy_revoked() }; if res {
                                     match interp.proxy_set_prototype_of(o.id, &proto) {
                                         Ok(success) => {
                                             if !success {
@@ -4764,7 +4764,7 @@ impl Interpreter {
                     {
                         // Deferred namespace: trigger evaluation on [[DefineOwnProperty]]
                         {
-                            let is_deferred_ns = obj.borrow().module_namespace.as_ref().is_some_and(|ns| ns.deferred);
+                            let is_deferred_ns = obj.borrow().module_namespace().is_some_and(|ns| ns.deferred);
                             if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(&key, true)
                                 && let Err(e) = interp.ensure_deferred_namespace_evaluation(o.id) {
                                     return Completion::Throw(e);
@@ -4772,7 +4772,7 @@ impl Interpreter {
                         }
                         let obj = interp.get_object(o.id).unwrap();
                         // Proxy defineProperty trap
-                        let res = { let _b = obj.borrow(); _b.is_proxy() || _b.proxy_revoked }; if res {
+                        let res = { let _b = obj.borrow(); _b.is_proxy() || _b.is_proxy_revoked() }; if res {
                             // Re-parse descriptor so proxy trap gets a fresh copy with coerced booleans
                             let reparsed_desc = match interp.to_property_descriptor(&desc_val) {
                                 Ok(pd) => interp.from_property_descriptor(&pd),
@@ -4792,7 +4792,7 @@ impl Interpreter {
                             }
                         }
                         // Module namespace exotic: [[DefineOwnProperty]]
-                        if obj.borrow().module_namespace.is_some() {
+                        if obj.borrow().module_namespace().is_some() {
                             match interp.to_property_descriptor(&desc_val) {
                                 Ok(desc) => {
                                     let success = obj.borrow_mut().define_own_property(key, desc);
@@ -4810,7 +4810,7 @@ impl Interpreter {
                         match interp.to_property_descriptor(&desc_val) {
                             Ok(desc) => {
                                 let is_array = obj.borrow().class_name == "Array";
-                                let is_ta = obj.borrow().typed_array_info.is_some();
+                                let is_ta = obj.borrow().typed_array_info().is_some();
                                 if is_array {
                                     match interp.array_define_own_property(o.id as usize, &key, desc) {
                                         Ok(true) => {}
@@ -4876,7 +4876,7 @@ impl Interpreter {
                         {
                             let deferred_ns = interp.get_object_cell(o.id).and_then(|obj| {
                                 let b = obj.borrow();
-                                b.module_namespace.as_ref().map(|ns| ns.deferred)
+                                b.module_namespace().map(|ns| ns.deferred)
                             });
                             if deferred_ns == Some(true)
                                 && !Interpreter::is_symbol_like_namespace_key(&key, true)
@@ -4889,7 +4889,7 @@ impl Interpreter {
                         if let Some(obj) = interp.get_object_cell(o.id)
                             && {
                                 let _b = obj.borrow();
-                                _b.is_proxy() || _b.proxy_revoked
+                                _b.is_proxy() || _b.is_proxy_revoked()
                             }
                         {
                             match interp.proxy_get_own_property_descriptor(o.id, &key) {
@@ -4900,14 +4900,14 @@ impl Interpreter {
                         // Module namespace [[GetOwnProperty]] (§10.4.6.4): live binding
                         let is_ns = interp
                             .get_object_cell(o.id)
-                            .map(|obj| obj.borrow().module_namespace.is_some())
+                            .map(|obj| obj.borrow().module_namespace().is_some())
                             .unwrap_or(false);
                         if is_ns {
                             let is_export = interp
                                 .get_object(o.id)
                                 .and_then(|obj| {
                                     let b = obj.borrow();
-                                    let ns = b.module_namespace.as_ref()?;
+                                    let ns = b.module_namespace()?;
                                     Some(ns.export_names.contains(&key))
                                 })
                                 .unwrap_or(false);
@@ -5077,7 +5077,7 @@ impl Interpreter {
                             .get_object_cell(obj_id)
                             .map(|obj| {
                                 let b = obj.borrow();
-                                b.is_proxy() || b.proxy_revoked
+                                b.is_proxy() || b.is_proxy_revoked()
                             })
                             .unwrap_or(false);
                         if is_proxy {
@@ -5144,10 +5144,10 @@ impl Interpreter {
                             // TypedArray [[PreventExtensions]] — §10.4.5.2
                             {
                                 let b = obj.borrow();
-                                if let Some(ref ta) = b.typed_array_info {
+                                if let Some(ta) = b.typed_array_info() {
                                     use crate::interpreter::types::is_typed_array_fixed_length;
                                     let is_fixed = b
-                                        .view_buffer_object_id
+                                        .view_buffer_object_id()
                                         .and_then(|buf_id| interp.get_object(buf_id))
                                         .map(|buf| is_typed_array_fixed_length(ta, &buf.borrow()))
                                         .unwrap_or(true);
@@ -5163,7 +5163,7 @@ impl Interpreter {
                             // TA elements can't be made non-configurable/non-writable (§10.4.5.3)
                             {
                                 let b = obj.borrow();
-                                if let Some(ref ta) = b.typed_array_info {
+                                if let Some(ta) = b.typed_array_info() {
                                     use crate::interpreter::types::typed_array_length;
                                     if typed_array_length(ta) > 0 {
                                         return Completion::Throw(interp.create_type_error(
@@ -5233,7 +5233,7 @@ impl Interpreter {
                         // Proxy getPrototypeOf trap
                         let res = {
                             let _b = obj.borrow();
-                            _b.is_proxy() || _b.proxy_revoked
+                            _b.is_proxy() || _b.is_proxy_revoked()
                         };
                         if res {
                             match interp.proxy_get_prototype_of(o.id) {
@@ -5619,7 +5619,7 @@ impl Interpreter {
                             let mut int_keys: Vec<(u64, String)> = Vec::new();
                             let mut str_keys: Vec<String> = Vec::new();
                             let mut sym_keys: Vec<String> = Vec::new();
-                            if let Some(ref elems) = b.array_elements {
+                            if let Some(elems) = b.array_elements() {
                                 for (i, value) in elems.iter().enumerate() {
                                     if matches!(value, JsValue::Undefined) || i > 0xFFFF_FFFE {
                                         continue;
@@ -5842,7 +5842,7 @@ impl Interpreter {
                         {
                             let is_deferred_ns = obj
                                 .borrow()
-                                .module_namespace
+                                .module_namespace()
                                 .as_ref()
                                 .is_some_and(|ns| ns.deferred);
                             if is_deferred_ns
@@ -5855,7 +5855,7 @@ impl Interpreter {
                         // Proxy ownKeys trap (getOwnPropertyNames returns all string keys)
                         let res = {
                             let _b = obj.borrow();
-                            _b.is_proxy() || _b.proxy_revoked
+                            _b.is_proxy() || _b.is_proxy_revoked()
                         };
                         if res {
                             match interp.proxy_own_keys(o.id) {
@@ -5873,7 +5873,7 @@ impl Interpreter {
                         // TypedArray [[OwnPropertyKeys]]: virtual index keys
                         {
                             let b = obj.borrow();
-                            if let Some(ref ta) = b.typed_array_info {
+                            if let Some(ta) = b.typed_array_info() {
                                 let len = crate::interpreter::types::typed_array_length(ta);
                                 let property_order = b.property_order.clone();
                                 drop(b);
@@ -5982,7 +5982,7 @@ impl Interpreter {
                         if let Some(obj) = interp.get_object_cell(obj_id) {
                             let is_deferred_ns = obj
                                 .borrow()
-                                .module_namespace
+                                .module_namespace()
                                 .as_ref()
                                 .is_some_and(|ns| ns.deferred);
                             if is_deferred_ns
@@ -5993,7 +5993,7 @@ impl Interpreter {
                         }
                         // Use [[OwnPropertyKeys]] for proxy support
                         let all_keys = if let Some(obj) = interp.get_object(obj_id) {
-                            if obj.borrow().is_proxy() || obj.borrow().proxy_revoked {
+                            if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
                                 match interp.proxy_own_keys(obj_id) {
                                     Ok(keys) => {
                                         let sym_keys: Vec<JsValue> = keys
@@ -6048,7 +6048,7 @@ impl Interpreter {
                         // Proxy preventExtensions trap
                         let res = {
                             let _b = obj.borrow();
-                            _b.is_proxy() || _b.proxy_revoked
+                            _b.is_proxy() || _b.is_proxy_revoked()
                         };
                         if res {
                             match interp.proxy_prevent_extensions(o.id) {
@@ -6064,8 +6064,8 @@ impl Interpreter {
                         // TypedArray [[PreventExtensions]] — §10.4.5.2
                         {
                             let b = obj.borrow();
-                            if let Some(ref ta) = b.typed_array_info {
-                                let is_fixed = b.view_buffer_object_id
+                            if let Some(ta) = b.typed_array_info() {
+                                let is_fixed = b.view_buffer_object_id()
                                     .and_then(|buf_id| interp.get_object(buf_id))
                                     .map(|buf| {
                                         use crate::interpreter::types::is_typed_array_fixed_length;
@@ -6100,7 +6100,7 @@ impl Interpreter {
                         // Proxy isExtensible trap
                         let res = {
                             let _b = obj.borrow();
-                            _b.is_proxy() || _b.proxy_revoked
+                            _b.is_proxy() || _b.is_proxy_revoked()
                         };
                         if res {
                             match interp.proxy_is_extensible(o.id) {
@@ -6130,7 +6130,7 @@ impl Interpreter {
                             .get_object_cell(obj_id)
                             .map(|ob| {
                                 let b = ob.borrow();
-                                b.is_proxy() || b.proxy_revoked
+                                b.is_proxy() || b.is_proxy_revoked()
                             })
                             .unwrap_or(false);
                         if is_proxy {
@@ -6191,7 +6191,7 @@ impl Interpreter {
                             .get_object_cell(obj_id)
                             .map(|ob| {
                                 let b = ob.borrow();
-                                b.is_proxy() || b.proxy_revoked
+                                b.is_proxy() || b.is_proxy_revoked()
                             })
                             .unwrap_or(false);
                         if is_proxy {
@@ -6247,7 +6247,7 @@ impl Interpreter {
                             .get_object_cell(obj_id)
                             .map(|obj| {
                                 let b = obj.borrow();
-                                b.is_proxy() || b.proxy_revoked
+                                b.is_proxy() || b.is_proxy_revoked()
                             })
                             .unwrap_or(false);
                         if is_proxy {
@@ -6296,8 +6296,8 @@ impl Interpreter {
                             // TypedArray [[PreventExtensions]] — §10.4.5.2
                             {
                                 let b = obj.borrow();
-                                if let Some(ref ta) = b.typed_array_info {
-                                    let is_fixed = b.view_buffer_object_id
+                                if let Some(ta) = b.typed_array_info() {
+                                    let is_fixed = b.view_buffer_object_id()
                                         .and_then(|buf_id| interp.get_object(buf_id))
                                         .map(|buf| {
                                             use crate::interpreter::types::is_typed_array_fixed_length;
@@ -6316,7 +6316,7 @@ impl Interpreter {
                             // TA elements can't be made non-configurable (§10.4.5.3)
                             {
                                 let b = obj.borrow();
-                                if let Some(ref ta) = b.typed_array_info {
+                                if let Some(ta) = b.typed_array_info() {
                                     use crate::interpreter::types::typed_array_length;
                                     if typed_array_length(ta) > 0 {
                                         return Completion::Throw(interp.create_type_error(
@@ -6407,7 +6407,7 @@ impl Interpreter {
                         // Proxy setPrototypeOf trap
                         let res = {
                             let _b = obj.borrow();
-                            _b.is_proxy() || _b.proxy_revoked
+                            _b.is_proxy() || _b.is_proxy_revoked()
                         };
                         if res {
                             match interp.proxy_set_prototype_of(o.id, &proto) {
@@ -7511,7 +7511,7 @@ impl Interpreter {
                     {
                         let is_deferred_ns = obj
                             .borrow()
-                            .module_namespace
+                            .module_namespace()
                             .as_ref()
                             .is_some_and(|ns| ns.deferred);
                         if is_deferred_ns
@@ -7524,7 +7524,7 @@ impl Interpreter {
                     let obj = interp.get_object(o.id).unwrap();
                     let res = {
                         let _b = obj.borrow();
-                        _b.is_proxy() || _b.proxy_revoked
+                        _b.is_proxy() || _b.is_proxy_revoked()
                     };
                     if res {
                         // Re-parse descriptor so proxy trap gets a fresh copy with coerced booleans
@@ -7538,7 +7538,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     }
-                    let is_ta = obj.borrow().typed_array_info.is_some();
+                    let is_ta = obj.borrow().typed_array_info().is_some();
                     match interp.to_property_descriptor(&desc_val) {
                         Ok(desc) => {
                             if is_ta {
@@ -7604,7 +7604,7 @@ impl Interpreter {
                 {
                     let res = {
                         let _b = obj.borrow();
-                        _b.is_proxy() || _b.proxy_revoked
+                        _b.is_proxy() || _b.is_proxy_revoked()
                     };
                     if res {
                         match interp.proxy_delete_property(o.id, &key) {
@@ -7614,11 +7614,11 @@ impl Interpreter {
                     }
                     // Module namespace exotic: [[Delete]] — only for string keys (not symbols)
                     if !key.starts_with("Symbol(") {
-                        let is_ns = obj.borrow().module_namespace.is_some();
+                        let is_ns = obj.borrow().module_namespace().is_some();
                         if is_ns {
                             let export_names = obj
                                 .borrow()
-                                .module_namespace
+                                .module_namespace()
                                 .as_ref()
                                 .unwrap()
                                 .export_names
@@ -7637,11 +7637,11 @@ impl Interpreter {
                     }
                     obj_mut.properties.remove(&key);
                     obj_mut.property_order.retain(|k| k != &key);
-                    if let Some(ref mut map) = obj_mut.parameter_map {
+                    if let Some(map) = obj_mut.parameter_map_mut() {
                         map.remove(&key);
                     }
                     if let Ok(idx) = key.parse::<usize>()
-                        && let Some(ref mut elems) = obj_mut.array_elements
+                        && let Some(elems) = obj_mut.array_elements_mut()
                         && idx < elems.len()
                     {
                         elems[idx] = JsValue::Undefined;
@@ -7705,7 +7705,7 @@ impl Interpreter {
                         {
                             let deferred_ns = interp.get_object_cell(o.id).and_then(|obj| {
                                 let b = obj.borrow();
-                                b.module_namespace.as_ref().map(|ns| ns.deferred)
+                                b.module_namespace().map(|ns| ns.deferred)
                             });
                             if deferred_ns == Some(true)
                                 && !Interpreter::is_symbol_like_namespace_key(&key, true)
@@ -7717,7 +7717,7 @@ impl Interpreter {
                         if let Some(obj) = interp.get_object_cell(o.id)
                             && {
                                 let _b = obj.borrow();
-                                _b.is_proxy() || _b.proxy_revoked
+                                _b.is_proxy() || _b.is_proxy_revoked()
                             }
                         {
                             match interp.proxy_get_own_property_descriptor(o.id, &key) {
@@ -7728,14 +7728,14 @@ impl Interpreter {
                         // Module namespace [[GetOwnProperty]] (§10.4.6.4): live binding
                         let is_ns = interp
                             .get_object_cell(o.id)
-                            .map(|obj| obj.borrow().module_namespace.is_some())
+                            .map(|obj| obj.borrow().module_namespace().is_some())
                             .unwrap_or(false);
                         if is_ns {
                             let is_export = interp
                                 .get_object_cell(o.id)
                                 .and_then(|obj| {
                                     let b = obj.borrow();
-                                    let ns = b.module_namespace.as_ref()?;
+                                    let ns = b.module_namespace()?;
                                     Some(ns.export_names.contains(&key))
                                 })
                                 .unwrap_or(false);
@@ -7792,7 +7792,7 @@ impl Interpreter {
                 {
                     let res = {
                         let _b = obj.borrow();
-                        _b.is_proxy() || _b.proxy_revoked
+                        _b.is_proxy() || _b.is_proxy_revoked()
                     };
                     if res {
                         match interp.proxy_get_prototype_of(o.id) {
@@ -7856,7 +7856,7 @@ impl Interpreter {
                 {
                     let res = {
                         let _b = obj.borrow();
-                        _b.is_proxy() || _b.proxy_revoked
+                        _b.is_proxy() || _b.is_proxy_revoked()
                     };
                     if res {
                         match interp.proxy_is_extensible(o.id) {
@@ -7891,7 +7891,7 @@ impl Interpreter {
                     {
                         let is_deferred_ns = obj
                             .borrow()
-                            .module_namespace
+                            .module_namespace()
                             .as_ref()
                             .is_some_and(|ns| ns.deferred);
                         if is_deferred_ns
@@ -7903,7 +7903,7 @@ impl Interpreter {
                     let obj = interp.get_object_cell(o.id).unwrap();
                     let res = {
                         let _b = obj.borrow();
-                        _b.is_proxy() || _b.proxy_revoked
+                        _b.is_proxy() || _b.is_proxy_revoked()
                     };
                     if res {
                         match interp.proxy_own_keys(o.id) {
@@ -7917,7 +7917,7 @@ impl Interpreter {
                     // TypedArray [[OwnPropertyKeys]]: §10.4.5.6
                     {
                         let b = obj.borrow();
-                        if let Some(ref ta) = b.typed_array_info {
+                        if let Some(ta) = b.typed_array_info() {
                             let len = crate::interpreter::types::typed_array_length(ta);
                             let property_order = b.property_order.clone();
                             drop(b);
@@ -8032,7 +8032,7 @@ impl Interpreter {
                 {
                     let res = {
                         let _b = obj.borrow();
-                        _b.is_proxy() || _b.proxy_revoked
+                        _b.is_proxy() || _b.is_proxy_revoked()
                     };
                     if res {
                         match interp.proxy_prevent_extensions(o.id) {
@@ -8043,9 +8043,9 @@ impl Interpreter {
                     // TypedArray [[PreventExtensions]] — §10.4.5.2
                     {
                         let b = obj.borrow();
-                        if let Some(ref ta) = b.typed_array_info {
+                        if let Some(ta) = b.typed_array_info() {
                             let is_fixed = b
-                                .view_buffer_object_id
+                                .view_buffer_object_id()
                                 .and_then(|buf_id| interp.get_object_cell(buf_id))
                                 .map(|buf| {
                                     use crate::interpreter::types::is_typed_array_fixed_length;
@@ -8089,7 +8089,7 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object_cell(o.id)
                     && {
                         let _b = obj.borrow();
-                        _b.is_proxy() || _b.proxy_revoked
+                        _b.is_proxy() || _b.is_proxy_revoked()
                     }
                 {
                     match interp.proxy_set(o.id, &key, value.clone(), &receiver) {
@@ -8100,7 +8100,7 @@ impl Interpreter {
                 // Module namespace exotic: [[Set]] always returns false
                 if let JsValue::Object(ref o) = target
                     && let Some(obj) = interp.get_object_cell(o.id)
-                    && obj.borrow().module_namespace.is_some()
+                    && obj.borrow().module_namespace().is_some()
                 {
                     return Completion::Normal(JsValue::Boolean(false));
                 }
@@ -8108,7 +8108,7 @@ impl Interpreter {
                 if let JsValue::Object(ref o) = target {
                     let ta_info_opt = interp
                         .get_object_cell(o.id)
-                        .and_then(|obj| obj.borrow().typed_array_info.clone());
+                        .and_then(|obj| obj.borrow().typed_array_info().cloned());
                     if let Some(ta_info) = ta_info_opt
                         && let Some(index) = canonical_numeric_index_string(&key)
                     {
@@ -8143,7 +8143,7 @@ impl Interpreter {
                         if let JsValue::Object(ref r) = receiver {
                             let recv_ta_opt = interp
                                 .get_object_cell(r.id)
-                                .and_then(|obj| obj.borrow().typed_array_info.clone());
+                                .and_then(|obj| obj.borrow().typed_array_info().cloned());
                             if let Some(recv_ta) = recv_ta_opt {
                                 // Receiver is TypedArray: IntegerIndexedElementSet
                                 if !is_valid_integer_index(&recv_ta, index) {
@@ -8211,7 +8211,7 @@ impl Interpreter {
                             // TypedArray [[Set]] §10.4.5.5 via prototype chain
                             {
                                 let borrow = cur_obj.borrow();
-                                if let Some(ref ta) = borrow.typed_array_info
+                                if let Some(ta) = borrow.typed_array_info()
                                     && let Some(index) = canonical_numeric_index_string(&key)
                                 {
                                     let same = if let JsValue::Object(ref r) = receiver {
@@ -8412,7 +8412,7 @@ impl Interpreter {
                 {
                     let res = {
                         let _b = obj.borrow();
-                        _b.is_proxy() || _b.proxy_revoked
+                        _b.is_proxy() || _b.is_proxy_revoked()
                     };
                     if res {
                         match interp.proxy_set_prototype_of(o.id, &proto) {
@@ -8549,26 +8549,17 @@ impl Interpreter {
                     .borrow_mut()
                     .class_name = "Proxy".to_string();
                 if let JsValue::Object(ref t) = target
+                    && let JsValue::Object(ref h) = handler
                     && let Some(target_rc) = interp.get_object_cell(t.id)
                 {
-                    // Copy callable if target is callable
                     let callable = target_rc.borrow().callable.clone();
+                    let mut proxy = interp.get_object_cell_expect(proxy_obj_id).borrow_mut();
                     if callable.is_some() {
-                        interp
-                            .get_object_cell_expect(proxy_obj_id)
-                            .borrow_mut()
-                            .callable = callable;
+                        proxy.callable = callable;
                     }
-                    interp
-                        .get_object_cell_expect(proxy_obj_id)
-                        .borrow_mut()
-                        .proxy_target_id = Some(t.id);
-                }
-                if let JsValue::Object(ref h) = handler {
-                    interp
-                        .get_object_cell_expect(proxy_obj_id)
-                        .borrow_mut()
-                        .proxy_handler_id = Some(h.id);
+                    proxy.kind = crate::interpreter::types::ObjectKind::Proxy(
+                        crate::interpreter::types::ProxyData::active(t.id, h.id),
+                    );
                 }
                 let proxy_id = proxy_obj_id;
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: proxy_id }))
@@ -8613,25 +8604,17 @@ impl Interpreter {
                         .borrow_mut()
                         .class_name = "Proxy".to_string();
                     if let JsValue::Object(ref t) = target
+                        && let JsValue::Object(ref h) = handler
                         && let Some(target_rc) = interp.get_object_cell(t.id)
                     {
                         let callable = target_rc.borrow().callable.clone();
+                        let mut obj = interp.get_object_cell_expect(proxy_obj_id).borrow_mut();
                         if callable.is_some() {
-                            interp
-                                .get_object_cell_expect(proxy_obj_id)
-                                .borrow_mut()
-                                .callable = callable;
+                            obj.callable = callable;
                         }
-                        interp
-                            .get_object_cell_expect(proxy_obj_id)
-                            .borrow_mut()
-                            .proxy_target_id = Some(t.id);
-                    }
-                    if let JsValue::Object(ref h) = handler {
-                        interp
-                            .get_object_cell_expect(proxy_obj_id)
-                            .borrow_mut()
-                            .proxy_handler_id = Some(h.id);
+                        obj.kind = crate::interpreter::types::ObjectKind::Proxy(
+                            crate::interpreter::types::ProxyData::active(t.id, h.id),
+                        );
                     }
                     let proxy_id = proxy_obj_id;
                     let proxy_val = JsValue::Object(crate::types::JsObject { id: proxy_id });
@@ -8641,11 +8624,11 @@ impl Interpreter {
                         "".to_string(),
                         0,
                         move |interp2, _this2, _args2| {
-                            if let Some(p) = interp2.get_object_cell(proxy_id) {
-                                let mut pm = p.borrow_mut();
-                                pm.proxy_revoked = true;
-                                pm.proxy_target_id = None;
-                                pm.proxy_handler_id = None;
+                            if let Some(p) = interp2.get_object_cell(proxy_id)
+                                && let crate::interpreter::types::ObjectKind::Proxy(ref mut pd) =
+                                    p.borrow_mut().kind
+                            {
+                                pd.revoke();
                             }
                             Completion::Normal(JsValue::Undefined)
                         },
@@ -8860,13 +8843,12 @@ impl Interpreter {
                             let (target, bt, ba) = {
                                 let obj = interp2.get_object_cell(obj_id).unwrap();
                                 let b = obj.borrow();
-                                (
-                                    b.bound_target_function
-                                        .clone()
-                                        .unwrap_or(JsValue::Undefined),
-                                    b.bound_this.clone().unwrap_or(JsValue::Undefined),
-                                    b.bound_args.clone().unwrap_or_default(),
-                                )
+                                match b.bound() {
+                                    Some(bd) => {
+                                        (bd.target.clone(), bd.this.clone(), bd.args.clone())
+                                    }
+                                    None => (JsValue::Undefined, JsValue::Undefined, Vec::new()),
+                                }
                             };
                             let mut all_args = ba;
                             all_args.extend_from_slice(call_args);
@@ -8893,11 +8875,15 @@ impl Interpreter {
                     // Per spec, bound functions do not have own .prototype property
                     obj.borrow_mut().properties.remove("prototype");
                     obj.borrow_mut().property_order.retain(|k| k != "prototype");
-                    // Store all bound references in GC-traced object fields
-                    obj.borrow_mut().bound_target_function = Some(this_val.clone());
-                    obj.borrow_mut().bound_this = Some(bind_this.clone());
+                    // Store [[BoundTargetFunction]] / [[BoundThis]] / [[BoundArguments]].
                     let stored_bound_args: Vec<JsValue> = args.iter().skip(1).cloned().collect();
-                    obj.borrow_mut().bound_args = Some(stored_bound_args);
+                    obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::BoundFunction(
+                        crate::interpreter::types::BoundFunctionData {
+                            target: this_val.clone(),
+                            this: bind_this.clone(),
+                            args: stored_bound_args,
+                        },
+                    );
                     // Overwrite length with correct f64 value (handles Infinity)
                     obj.borrow_mut().insert_property(
                         "length".to_string(),
@@ -8925,8 +8911,8 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let b = obj.borrow();
-                    if b.is_proxy() || b.proxy_revoked {
-                        if b.proxy_revoked {
+                    if b.is_proxy() || b.is_proxy_revoked() {
+                        if b.is_proxy_revoked() {
                             drop(b);
                             return Completion::Throw(interp.create_type_error(
                                 "Function.prototype.toString requires that 'this' be a Function",
@@ -9023,7 +9009,7 @@ impl Interpreter {
             move |interp, this, args| {
                 let eval_realm_id = if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object_cell(o.id)
-                    && let Some(realm_id) = obj.borrow().shadow_realm_id
+                    && let Some(realm_id) = obj.borrow().shadow_realm_id()
                 {
                     realm_id
                 } else {
@@ -9060,7 +9046,7 @@ impl Interpreter {
             move |interp, this, args| {
                 let eval_realm_id = if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object_cell(o.id)
-                    && let Some(realm_id) = obj.borrow().shadow_realm_id
+                    && let Some(realm_id) = obj.borrow().shadow_realm_id()
                 {
                     realm_id
                 } else {
@@ -9199,7 +9185,7 @@ impl Interpreter {
                 {
                     let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                     o.class_name = "ShadowRealm".to_string();
-                    o.shadow_realm_id = Some(new_realm_id);
+                    o.kind = crate::interpreter::types::ObjectKind::ShadowRealm(new_realm_id);
                     if let JsValue::Object(ref p) = proto_val_for_ctor {
                         o.prototype_id = Some(p.id);
                     }

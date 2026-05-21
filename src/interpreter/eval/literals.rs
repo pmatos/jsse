@@ -60,7 +60,7 @@ impl Interpreter {
             "length".to_string(),
             PropertyDescriptor::data(JsValue::Number(len as f64), false, false, false),
         );
-        obj_data.array_elements = Some(values);
+        obj_data.kind = crate::interpreter::types::ObjectKind::Array(values);
         obj_data.extensible = false;
         let id = self.alloc_object(obj_data);
         JsValue::Object(crate::types::JsObject { id })
@@ -102,8 +102,12 @@ impl Interpreter {
                 } else {
                     crate::interpreter::builtins::regexp::regex_output_to_js_string(pattern)
                 };
-                obj.regexp_original_source = Some(source_js);
-                obj.regexp_original_flags = Some(JsString::from_str(flags));
+                obj.kind = crate::interpreter::types::ObjectKind::RegExp(
+                    crate::interpreter::types::RegExpData {
+                        source: source_js,
+                        flags: JsString::from_str(flags),
+                    },
+                );
                 obj.insert_property(
                     "lastIndex".to_string(),
                     PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
@@ -144,8 +148,11 @@ impl Interpreter {
             .or(self.realm().object_prototype);
         obj.class_name = "RegExp".to_string();
         let source_str = if pattern.is_empty() { "(?:)" } else { pattern };
-        obj.regexp_original_source = Some(JsString::from_str(source_str));
-        obj.regexp_original_flags = Some(JsString::from_str(flags));
+        obj.kind =
+            crate::interpreter::types::ObjectKind::RegExp(crate::interpreter::types::RegExpData {
+                source: JsString::from_str(source_str),
+                flags: JsString::from_str(flags),
+            });
         obj.insert_property(
             "lastIndex".to_string(),
             PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
@@ -364,13 +371,15 @@ impl Interpreter {
         if let JsValue::Object(ref o) = ctor_val
             && let Some(func_obj) = self.get_object_cell(o.id)
         {
-            func_obj.borrow_mut().is_class_constructor = true;
-            if super_val.is_some() {
-                func_obj.borrow_mut().is_derived_class_constructor = true;
+            func_obj.borrow_mut().constructor_kind = if super_val.is_some() {
                 if ctor_method.is_none() {
-                    func_obj.borrow_mut().is_default_derived_constructor = true;
+                    crate::interpreter::types::ConstructorKind::DefaultDerivedClass
+                } else {
+                    crate::interpreter::types::ConstructorKind::DerivedClass
                 }
-            }
+            } else {
+                crate::interpreter::types::ConstructorKind::Class
+            };
             // Per spec §14.6.13: class .prototype is {writable: false, enumerable: false, configurable: false}
             let func_obj_id = func_obj.borrow().id.unwrap();
             let proto_val_for_desc = self.get_property_on_id(func_obj_id, "prototype");
