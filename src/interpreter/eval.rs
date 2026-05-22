@@ -16429,6 +16429,25 @@ impl Interpreter {
                 if let JsValue::Object(o) = receiver
                     && let Some(obj) = self.get_object_cell(o.id)
                 {
+                    // Module namespace exotic receiver (§10.4.6):
+                    // OrdinarySetWithOwnDescriptor calls Receiver.[[GetOwnProperty]] before
+                    // attempting [[DefineOwnProperty]]. For a module namespace, that
+                    // [[GetOwnProperty]] (a) triggers deferred-module evaluation for
+                    // non-symbol-like keys, and (b) throws ReferenceError if the export
+                    // binding is uninitialized (TDZ). After both checks pass, [[Set]]
+                    // returns false (TypeError in strict).
+                    let is_ns = obj.borrow().module_namespace().is_some();
+                    if is_ns {
+                        if let Err(e) = self.check_namespace_tdz(o.id, key) {
+                            return Completion::Throw(e);
+                        }
+                        if strict {
+                            return Completion::Throw(self.create_type_error(&format!(
+                                "Cannot assign to read only property '{key}' of module namespace"
+                            )));
+                        }
+                        return Completion::Normal(val);
+                    }
                     let existing = obj.borrow().get_own_property_full(key);
                     match &existing {
                         Some(ed) if ed.is_accessor_descriptor() => {
