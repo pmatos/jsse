@@ -766,6 +766,152 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("transferToImmutable".to_string(), transfer_immutable_fn);
 
+        // sliceToImmutable — proposal-immutable-arraybuffer
+        // Spec ordering (deliberate): receiver checks (RequireInternalSlot, SAB) precede
+        // argument coercion. ResolveBounds runs ToNumber on start/end. Detach and
+        // currentLen-vs-final checks happen AFTER coercion to observe its side effects.
+        let slice_immutable_fn = self.create_function(JsFunction::native(
+            "sliceToImmutable".to_string(),
+            2,
+            |interp, this_val, args| {
+                // Step 1-2: RequireInternalSlot(O, [[ArrayBufferData]])
+                let JsValue::Object(o) = this_val else {
+                    return Completion::Throw(interp.create_type_error(
+                        "ArrayBuffer.prototype.sliceToImmutable called on non-object",
+                    ));
+                };
+                let Some(obj) = interp.get_object(o.id) else {
+                    return Completion::Throw(interp.create_type_error(
+                        "ArrayBuffer.prototype.sliceToImmutable called on invalid receiver",
+                    ));
+                };
+                let (is_ab, is_shared, is_detached_pre) = {
+                    let obj_ref = obj.borrow();
+                    (
+                        obj_ref.arraybuffer_data().is_some(),
+                        obj_ref.arraybuffer_is_shared(),
+                        obj_ref
+                            .arraybuffer_detached()
+                            .as_ref()
+                            .is_some_and(|d| d.get()),
+                    )
+                };
+                if !is_ab {
+                    return Completion::Throw(interp.create_type_error(
+                        "ArrayBuffer.prototype.sliceToImmutable called on non-ArrayBuffer",
+                    ));
+                }
+                // Step 3: IsSharedArrayBuffer(O) → TypeError (before argument coercion).
+                if is_shared {
+                    return Completion::Throw(interp.create_type_error(
+                        "ArrayBuffer.prototype.sliceToImmutable called on SharedArrayBuffer",
+                    ));
+                }
+                // Step 4: IsDetachedBuffer(O) → TypeError (before argument coercion).
+                if is_detached_pre {
+                    return Completion::Throw(interp.create_type_error("ArrayBuffer is detached"));
+                }
+                // Step 5: snapshot original len BEFORE coercion.
+                let len = {
+                    let obj_ref = obj.borrow();
+                    buffer_len(obj_ref.arraybuffer_data().unwrap())
+                };
+                let len_f = len as f64;
+
+                // ResolveBounds via ToIntegerOrInfinity semantics.
+                // Truncate is needed: e.g. -0.9 → 0, not (len + -0.9).
+                let resolve = |num: f64| -> usize {
+                    if num.is_nan() || num == 0.0 {
+                        return 0;
+                    }
+                    if num == f64::NEG_INFINITY {
+                        return 0;
+                    }
+                    if num == f64::INFINITY {
+                        return len;
+                    }
+                    let int_val = num.trunc();
+                    if int_val < 0.0 {
+                        ((len_f + int_val) as isize).max(0) as usize
+                    } else if int_val >= len_f {
+                        len
+                    } else {
+                        int_val as usize
+                    }
+                };
+
+                // Step 6: ResolveBounds(len, start, end). Coerce start first, then end.
+                let start_num = if let Some(a) = args.first() {
+                    match interp.to_number_value(a) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
+                    }
+                } else {
+                    0.0
+                };
+                let first = resolve(start_num);
+
+                let end_undefined = args.len() < 2 || matches!(args[1], JsValue::Undefined);
+                let end_num = if end_undefined {
+                    len_f
+                } else {
+                    match interp.to_number_value(&args[1]) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
+                    }
+                };
+                let final_to = resolve(end_num);
+
+                // Step 9: newLen = max(final - first, 0)
+                let new_len = final_to.saturating_sub(first);
+
+                // Step 11: re-check detached AFTER coercion.
+                let is_detached = {
+                    let obj_ref = obj.borrow();
+                    obj_ref
+                        .arraybuffer_detached()
+                        .as_ref()
+                        .is_some_and(|d| d.get())
+                };
+                if is_detached {
+                    return Completion::Throw(interp.create_type_error("ArrayBuffer is detached"));
+                }
+                // Step 13-14: re-read currentLen; RangeError if currentLen < final.
+                let current_len = {
+                    let obj_ref = obj.borrow();
+                    buffer_len(obj_ref.arraybuffer_data().unwrap())
+                };
+                if current_len < final_to {
+                    return Completion::Throw(interp.create_range_error(
+                        "ArrayBuffer was resized below the resolved end of the slice",
+                    ));
+                }
+
+                // Step 15: AllocateImmutableArrayBuffer with bytes [first..first+new_len].
+                let new_data = {
+                    let obj_ref = obj.borrow();
+                    let bytes = buffer_bytes(obj_ref.arraybuffer_data().unwrap());
+                    let mut dst = vec![0u8; new_len];
+                    if new_len > 0 {
+                        dst.copy_from_slice(&bytes[first..first + new_len]);
+                    }
+                    dst
+                };
+                let id = interp.create_arraybuffer(new_data);
+                if let Some(ab) = interp
+                    .get_object_cell_expect(id)
+                    .borrow_mut()
+                    .arraybuffer_mut()
+                {
+                    ab.is_immutable = true;
+                }
+                Completion::Normal(JsValue::Object(JsObject { id }))
+            },
+        ));
+        self.get_object_cell_expect(ab_proto_id)
+            .borrow_mut()
+            .insert_builtin("sliceToImmutable".to_string(), slice_immutable_fn);
+
         // resize — spec step ordering: (1) RequireInternalSlot, (2) ToIndex, (3) IsDetachedBuffer
         let resize_fn = self.create_function(JsFunction::native(
             "resize".to_string(),
@@ -1755,6 +1901,9 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
+                    if let Err(c) = check_ta_buffer_writable(interp, &ta) {
+                        return c;
+                    }
 
                     let source = args.first().cloned().unwrap_or(JsValue::Undefined);
 
@@ -2052,6 +2201,20 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
+                    // TypedArrayCreateFromConstructor(..., accessMode=~write~):
+                    // reject result backed by immutable buffer before any writes.
+                    if let JsValue::Object(new_o) = &new_ta_val {
+                        let new_info_opt = interp
+                            .get_object_cell(new_o.id)
+                            .and_then(|cell| cell.borrow().typed_array_info().cloned());
+                        if let Some(info) = new_info_opt
+                            && ta_buffer_is_immutable(interp, &info)
+                        {
+                            return Completion::Throw(
+                                interp.create_type_error("Cannot modify an immutable ArrayBuffer"),
+                            );
+                        }
+                    }
 
                     if count > 0 {
                         // Re-check detach and OOB after species create (user code may resize)
@@ -2143,6 +2306,9 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
+                    if let Err(c) = check_ta_buffer_writable(interp, &ta) {
+                        return c;
+                    }
                     let len = typed_array_length(&ta) as i64;
                     let resolve_index = |v: f64, len: i64| -> usize {
                         let vi = if v == f64::NEG_INFINITY || v < -(len as f64) - 1.0 {
@@ -2246,6 +2412,11 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
+                    // ValidateTypedArray(..., ~write~): immutability check fires before any
+                    // argument coercion so callers observe no side effects on TypeError.
+                    if let Err(c) = check_ta_buffer_writable(interp, &ta) {
+                        return c;
+                    }
                     // Step 3: compute len BEFORE coercion
                     let len = typed_array_length(&ta);
                     // Per spec: coerce value BEFORE start/end
@@ -2507,6 +2678,9 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
+                    if let Err(c) = check_ta_buffer_writable(interp, &ta) {
+                        return c;
+                    }
                     let mut lo = 0usize;
                     let mut hi = typed_array_length(&ta);
                     while lo < hi {
@@ -2547,6 +2721,9 @@ impl Interpreter {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
                         }
                     };
+                    if let Err(c) = check_ta_buffer_writable(interp, &ta) {
+                        return c;
+                    }
                     let comparefn = args.first().cloned();
                     if let Some(ref cmp) = comparefn
                         && !matches!(cmp, JsValue::Undefined)
@@ -3564,6 +3741,11 @@ impl Interpreter {
                 } else {
                     return Completion::Throw(interp.create_type_error("not a TypedArray"));
                 };
+                // TypedArrayCreateFromConstructor(..., accessMode=~write~):
+                // result must not be backed by an immutable buffer.
+                if let Err(c) = check_ta_buffer_writable(interp, &new_ta) {
+                    return c;
+                }
 
                 for i in 0..len {
                     let val = typed_array_get_index(&ta, i);
@@ -3626,6 +3808,11 @@ impl Interpreter {
                     && let Some(obj) = interp.get_object_cell(o.id)
                 {
                     let new_ta = obj.borrow().typed_array_info().unwrap().clone();
+                    // TypedArrayCreateFromConstructor(..., accessMode=~write~):
+                    // result must not be backed by an immutable buffer.
+                    if let Err(c) = check_ta_buffer_writable(interp, &new_ta) {
+                        return c;
+                    }
                     for (i, val) in kept.iter().enumerate() {
                         typed_array_set_index(&new_ta, i, val);
                     }
@@ -3909,6 +4096,9 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
+                    if let Err(c) = check_target_ta_writable(interp, &target_obj) {
+                        return c;
+                    }
                     let ta_kind = if let JsValue::Object(ref o) = target_obj {
                         interp.get_object_cell(o.id).and_then(|obj| {
                             obj.borrow().typed_array_info().map(|ta| ta.kind)
@@ -3989,6 +4179,9 @@ impl Interpreter {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
+                    if let Err(c) = check_target_ta_writable(interp, &target_obj) {
+                        return c;
+                    }
                     let ta_kind = if let JsValue::Object(ref o) = target_obj {
                         interp.get_object_cell(o.id).and_then(|obj| {
                             obj.borrow().typed_array_info().map(|ta| ta.kind)
@@ -4061,6 +4254,9 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
+                if let Err(c) = check_target_ta_writable(interp, &new_obj) {
+                    return c;
+                }
                 // Get ta_kind for coercion
                 let ta_kind = if let JsValue::Object(ref o) = new_obj {
                     interp
@@ -4650,6 +4846,9 @@ impl Interpreter {
                     Ok(ta) => ta,
                     Err(c) => return c,
                 };
+                if let Err(c) = check_ta_buffer_writable(interp, &ta) {
+                    return c;
+                }
 
                 let input = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(input, JsValue::String(_)) {
@@ -4689,6 +4888,9 @@ impl Interpreter {
                     Ok(ta) => ta,
                     Err(c) => return c,
                 };
+                if let Err(c) = check_ta_buffer_writable(interp, &ta) {
+                    return c;
+                }
 
                 let input = args.first().cloned().unwrap_or(JsValue::Undefined);
                 if !matches!(input, JsValue::String(_)) {
@@ -5080,12 +5282,18 @@ impl Interpreter {
                 "Result of the Symbol.iterator method is not an object",
             )));
         }
-        let mut values = Vec::new();
-        while let JsValue::Object(io) = &iter {
-            let next_fn = match self.get_object_property(io.id, "next", &iter) {
+        // Cache `next` once per IteratorRecord (spec §7.4.5 GetIteratorFromMethod step 3).
+        let next_fn = if let JsValue::Object(io) = &iter {
+            match self.get_object_property(io.id, "next", &iter) {
                 Completion::Normal(v) => v,
-                _ => break,
-            };
+                Completion::Throw(e) => return Err(Completion::Throw(e)),
+                _ => return Err(Completion::Throw(self.create_type_error("bad iterator"))),
+            }
+        } else {
+            return Err(Completion::Throw(self.create_type_error("bad iterator")));
+        };
+        let mut values = Vec::new();
+        while let JsValue::Object(_) = &iter {
             let result = match self.call_function(&next_fn, &iter, &[]) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(Completion::Throw(e)),
@@ -6280,6 +6488,46 @@ fn check_detached(interp: &mut Interpreter, ta: &TypedArrayInfo) -> Result<(), C
     } else {
         Ok(())
     }
+}
+
+/// Returns true iff the TypedArray's backing ArrayBuffer object has `is_immutable=true`.
+fn ta_buffer_is_immutable(interp: &Interpreter, ta: &TypedArrayInfo) -> bool {
+    let Some(buf_id) = ta.buffer_object_id else {
+        return false;
+    };
+    interp
+        .get_object_cell(buf_id)
+        .is_some_and(|cell| cell.borrow().arraybuffer_is_immutable())
+}
+
+/// Spec ValidateTypedArray(..., accessMode=~write~) — throws TypeError if the
+/// TypedArray's backing buffer is immutable.
+fn check_ta_buffer_writable(
+    interp: &mut Interpreter,
+    ta: &TypedArrayInfo,
+) -> Result<(), Completion> {
+    if ta_buffer_is_immutable(interp, ta) {
+        Err(Completion::Throw(interp.create_type_error(
+            "Cannot modify an immutable ArrayBuffer",
+        )))
+    } else {
+        Ok(())
+    }
+}
+
+/// Like check_ta_buffer_writable but accepts a JsValue (the target TA), used after
+/// TypedArrayCreateFromConstructor returns. No-op for non-TypedArray values.
+fn check_target_ta_writable(interp: &mut Interpreter, target: &JsValue) -> Result<(), Completion> {
+    let JsValue::Object(o) = target else {
+        return Ok(());
+    };
+    let info_opt = interp
+        .get_object_cell(o.id)
+        .and_then(|cell| cell.borrow().typed_array_info().cloned());
+    let Some(info) = info_opt else {
+        return Ok(());
+    };
+    check_ta_buffer_writable(interp, &info)
 }
 
 fn parse_base64_options(
