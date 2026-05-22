@@ -711,14 +711,13 @@ impl Interpreter {
                 .insert_builtin("try".to_string(), try_fn);
         }
 
-        // Promise.allKeyed (await-dictionary proposal — stub)
+        // Promise.allKeyed (await-dictionary Stage-3 proposal)
         let all_keyed_fn = self.create_function(JsFunction::native(
             "allKeyed".to_string(),
             1,
-            |interp, _this, _args| {
-                Completion::Throw(
-                    interp.create_type_error("Promise.allKeyed is not yet implemented"),
-                )
+            |interp, this, args| {
+                let promises = args.first().cloned().unwrap_or(JsValue::Undefined);
+                interp.promise_all_keyed(this, &promises)
             },
         ));
         if let JsValue::Object(ref o) = ctor
@@ -729,14 +728,13 @@ impl Interpreter {
                 .insert_builtin("allKeyed".to_string(), all_keyed_fn);
         }
 
-        // Promise.allSettledKeyed (await-dictionary proposal — stub)
+        // Promise.allSettledKeyed (await-dictionary Stage-3 proposal)
         let all_settled_keyed_fn = self.create_function(JsFunction::native(
             "allSettledKeyed".to_string(),
             1,
-            |interp, _this, _args| {
-                Completion::Throw(
-                    interp.create_type_error("Promise.allSettledKeyed is not yet implemented"),
-                )
+            |interp, this, args| {
+                let promises = args.first().cloned().unwrap_or(JsValue::Undefined);
+                interp.promise_all_settled_keyed(this, &promises)
             },
         ));
         if let JsValue::Object(ref o) = ctor
@@ -1570,6 +1568,375 @@ impl Interpreter {
 
             index += 1;
         }
+    }
+
+    /// Promise.allKeyed (await-dictionary Stage-3 proposal).
+    fn promise_all_keyed(&mut self, constructor: &JsValue, promises: &JsValue) -> Completion {
+        let cap = match self.new_promise_capability(constructor) {
+            Ok(cap) => cap,
+            Err(e) => return Completion::Throw(e),
+        };
+
+        // GetPromiseResolve(C) + IfAbruptRejectPromise
+        let ctor_id = if let JsValue::Object(o) = constructor {
+            o.id
+        } else {
+            0
+        };
+        let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
+            _ => JsValue::Undefined,
+        };
+        if !self.is_callable(&promise_resolve) {
+            let err = self.create_type_error("Promise resolve is not a function");
+            return self.if_abrupt_reject_promise(err, &cap);
+        }
+
+        // If `promises` is not an Object, reject the returned promise.
+        let promises_obj_id = match promises {
+            JsValue::Object(o) => o.id,
+            _ => {
+                let err = self.create_type_error("Promise.allKeyed argument is not an object");
+                return self.if_abrupt_reject_promise(err, &cap);
+            }
+        };
+
+        // allKeys = ? promises.[[OwnPropertyKeys]]()
+        let all_keys = match self.proxy_own_keys(promises_obj_id) {
+            Ok(k) => k,
+            Err(e) => return self.if_abrupt_reject_promise(e, &cap),
+        };
+
+        let remaining = Rc::new(Cell::new(1u64));
+        let keys: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let values: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
+
+        for key_val in all_keys {
+            let key_str = match &key_val {
+                JsValue::String(s) => s.to_rust_string(),
+                JsValue::Symbol(s) => s.to_property_key(),
+                _ => continue,
+            };
+
+            // desc = ? promises.[[GetOwnProperty]](key)
+            let desc_val = match self.proxy_get_own_property_descriptor(promises_obj_id, &key_str) {
+                Ok(v) => v,
+                Err(e) => return self.if_abrupt_reject_promise(e, &cap),
+            };
+            if matches!(desc_val, JsValue::Undefined) {
+                continue;
+            }
+            // If desc.[[Enumerable]] is false, skip.
+            let is_enumerable = match self.to_property_descriptor(&desc_val) {
+                Ok(d) => d.enumerable != Some(false),
+                Err(Some(e)) => return self.if_abrupt_reject_promise(e, &cap),
+                Err(None) => false,
+            };
+            if !is_enumerable {
+                continue;
+            }
+
+            // nextValue = ? Get(promises, key)
+            let next_value = match self.get_object_property(promises_obj_id, &key_str, promises) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
+                _ => JsValue::Undefined,
+            };
+
+            let i = values.borrow().len();
+            keys.borrow_mut().push(key_str.clone());
+            values.borrow_mut().push(JsValue::Undefined);
+            remaining.set(remaining.get() + 1);
+
+            let p = match self.call_function(&promise_resolve, constructor, &[next_value]) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
+                _ => JsValue::Undefined,
+            };
+
+            let remaining_c = remaining.clone();
+            let keys_c = keys.clone();
+            let values_c = values.clone();
+            let resolve_fn = cap.resolve.clone();
+            let already_called = Rc::new(Cell::new(false));
+            let ac = already_called.clone();
+
+            let on_fulfilled = self.create_function(JsFunction::native(
+                "".to_string(),
+                1,
+                move |interp, _this, args| {
+                    if ac.get() {
+                        return Completion::Normal(JsValue::Undefined);
+                    }
+                    ac.set(true);
+                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    values_c.borrow_mut()[i] = val;
+                    let r = remaining_c.get() - 1;
+                    remaining_c.set(r);
+                    if r == 0 {
+                        let keys_snapshot = keys_c.borrow().clone();
+                        let values_snapshot = values_c.borrow().clone();
+                        let result = interp.build_keyed_result(&keys_snapshot, &values_snapshot);
+                        if let Completion::Throw(e) =
+                            interp.call_function(&resolve_fn, &JsValue::Undefined, &[result])
+                        {
+                            return Completion::Throw(e);
+                        }
+                    }
+                    Completion::Normal(JsValue::Undefined)
+                },
+            ));
+
+            let p_id = if let JsValue::Object(ref o) = p {
+                o.id
+            } else {
+                0
+            };
+            let then_fn = match self.get_object_property(p_id, "then", &p) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
+                _ => JsValue::Undefined,
+            };
+            if let Completion::Throw(e) =
+                self.call_function(&then_fn, &p, &[on_fulfilled, cap.reject.clone()])
+            {
+                return self.if_abrupt_reject_promise(e, &cap);
+            }
+        }
+
+        // Final decrement: matches the spec's "starts at 1" pattern.
+        let r = remaining.get() - 1;
+        remaining.set(r);
+        if r == 0 {
+            let keys_snapshot = keys.borrow().clone();
+            let values_snapshot = values.borrow().clone();
+            let result = self.build_keyed_result(&keys_snapshot, &values_snapshot);
+            if let Completion::Throw(e) =
+                self.call_function(&cap.resolve, &JsValue::Undefined, &[result])
+            {
+                return self.if_abrupt_reject_promise(e, &cap);
+            }
+        }
+
+        Completion::Normal(cap.promise)
+    }
+
+    /// Promise.allSettledKeyed (await-dictionary Stage-3 proposal).
+    fn promise_all_settled_keyed(
+        &mut self,
+        constructor: &JsValue,
+        promises: &JsValue,
+    ) -> Completion {
+        let cap = match self.new_promise_capability(constructor) {
+            Ok(cap) => cap,
+            Err(e) => return Completion::Throw(e),
+        };
+
+        let ctor_id = if let JsValue::Object(o) = constructor {
+            o.id
+        } else {
+            0
+        };
+        let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
+            _ => JsValue::Undefined,
+        };
+        if !self.is_callable(&promise_resolve) {
+            let err = self.create_type_error("Promise resolve is not a function");
+            return self.if_abrupt_reject_promise(err, &cap);
+        }
+
+        let promises_obj_id = match promises {
+            JsValue::Object(o) => o.id,
+            _ => {
+                let err =
+                    self.create_type_error("Promise.allSettledKeyed argument is not an object");
+                return self.if_abrupt_reject_promise(err, &cap);
+            }
+        };
+
+        let all_keys = match self.proxy_own_keys(promises_obj_id) {
+            Ok(k) => k,
+            Err(e) => return self.if_abrupt_reject_promise(e, &cap),
+        };
+
+        let remaining = Rc::new(Cell::new(1u64));
+        let keys: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let values: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
+
+        for key_val in all_keys {
+            let key_str = match &key_val {
+                JsValue::String(s) => s.to_rust_string(),
+                JsValue::Symbol(s) => s.to_property_key(),
+                _ => continue,
+            };
+
+            let desc_val = match self.proxy_get_own_property_descriptor(promises_obj_id, &key_str) {
+                Ok(v) => v,
+                Err(e) => return self.if_abrupt_reject_promise(e, &cap),
+            };
+            if matches!(desc_val, JsValue::Undefined) {
+                continue;
+            }
+            let is_enumerable = match self.to_property_descriptor(&desc_val) {
+                Ok(d) => d.enumerable != Some(false),
+                Err(Some(e)) => return self.if_abrupt_reject_promise(e, &cap),
+                Err(None) => false,
+            };
+            if !is_enumerable {
+                continue;
+            }
+
+            let next_value = match self.get_object_property(promises_obj_id, &key_str, promises) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
+                _ => JsValue::Undefined,
+            };
+
+            let i = values.borrow().len();
+            keys.borrow_mut().push(key_str.clone());
+            values.borrow_mut().push(JsValue::Undefined);
+            remaining.set(remaining.get() + 1);
+
+            let p = match self.call_function(&promise_resolve, constructor, &[next_value]) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
+                _ => JsValue::Undefined,
+            };
+
+            let already_called = Rc::new(Cell::new(false));
+
+            let remaining_f = remaining.clone();
+            let keys_f = keys.clone();
+            let values_f = values.clone();
+            let resolve_fn_f = cap.resolve.clone();
+            let ac_f = already_called.clone();
+            let on_fulfilled = self.create_function(JsFunction::native(
+                "".to_string(),
+                1,
+                move |interp, _this, args| {
+                    if ac_f.get() {
+                        return Completion::Normal(JsValue::Undefined);
+                    }
+                    ac_f.set(true);
+                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let obj_id = interp.create_object_id();
+                    {
+                        let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
+                        o.insert_value(
+                            "status".to_string(),
+                            JsValue::String(JsString::from_str("fulfilled")),
+                        );
+                        o.insert_value("value".to_string(), val);
+                    }
+                    values_f.borrow_mut()[i] =
+                        JsValue::Object(crate::types::JsObject { id: obj_id });
+                    let r = remaining_f.get() - 1;
+                    remaining_f.set(r);
+                    if r == 0 {
+                        let keys_snapshot = keys_f.borrow().clone();
+                        let values_snapshot = values_f.borrow().clone();
+                        let result = interp.build_keyed_result(&keys_snapshot, &values_snapshot);
+                        if let Completion::Throw(e) =
+                            interp.call_function(&resolve_fn_f, &JsValue::Undefined, &[result])
+                        {
+                            return Completion::Throw(e);
+                        }
+                    }
+                    Completion::Normal(JsValue::Undefined)
+                },
+            ));
+
+            let remaining_r = remaining.clone();
+            let keys_r = keys.clone();
+            let values_r = values.clone();
+            let resolve_fn_r = cap.resolve.clone();
+            let ac_r = already_called.clone();
+            let on_rejected = self.create_function(JsFunction::native(
+                "".to_string(),
+                1,
+                move |interp, _this, args| {
+                    if ac_r.get() {
+                        return Completion::Normal(JsValue::Undefined);
+                    }
+                    ac_r.set(true);
+                    let reason = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let obj_id = interp.create_object_id();
+                    {
+                        let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
+                        o.insert_value(
+                            "status".to_string(),
+                            JsValue::String(JsString::from_str("rejected")),
+                        );
+                        o.insert_value("reason".to_string(), reason);
+                    }
+                    values_r.borrow_mut()[i] =
+                        JsValue::Object(crate::types::JsObject { id: obj_id });
+                    let r = remaining_r.get() - 1;
+                    remaining_r.set(r);
+                    if r == 0 {
+                        let keys_snapshot = keys_r.borrow().clone();
+                        let values_snapshot = values_r.borrow().clone();
+                        let result = interp.build_keyed_result(&keys_snapshot, &values_snapshot);
+                        if let Completion::Throw(e) =
+                            interp.call_function(&resolve_fn_r, &JsValue::Undefined, &[result])
+                        {
+                            return Completion::Throw(e);
+                        }
+                    }
+                    Completion::Normal(JsValue::Undefined)
+                },
+            ));
+
+            let p_id = if let JsValue::Object(ref o) = p {
+                o.id
+            } else {
+                0
+            };
+            let then_fn = match self.get_object_property(p_id, "then", &p) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
+                _ => JsValue::Undefined,
+            };
+            if let Completion::Throw(e) =
+                self.call_function(&then_fn, &p, &[on_fulfilled, on_rejected])
+            {
+                return self.if_abrupt_reject_promise(e, &cap);
+            }
+        }
+
+        let r = remaining.get() - 1;
+        remaining.set(r);
+        if r == 0 {
+            let keys_snapshot = keys.borrow().clone();
+            let values_snapshot = values.borrow().clone();
+            let result = self.build_keyed_result(&keys_snapshot, &values_snapshot);
+            if let Completion::Throw(e) =
+                self.call_function(&cap.resolve, &JsValue::Undefined, &[result])
+            {
+                return self.if_abrupt_reject_promise(e, &cap);
+            }
+        }
+
+        Completion::Normal(cap.promise)
+    }
+
+    /// Build a null-prototype object mapping `keys[i] → values[i]`.
+    /// Used by Promise.allKeyed / Promise.allSettledKeyed to produce the
+    /// CreateKeyedPromiseCombinatorResultObject result.
+    fn build_keyed_result(&mut self, keys: &[String], values: &[JsValue]) -> JsValue {
+        let id = self.create_object_id();
+        {
+            let cell = self.get_object_cell_expect(id);
+            let mut o = cell.borrow_mut();
+            o.prototype_id = None;
+            for (k, v) in keys.iter().zip(values.iter()) {
+                o.insert_value(k.clone(), v.clone());
+            }
+        }
+        JsValue::Object(crate::types::JsObject { id })
     }
 
     fn promise_race(&mut self, constructor: &JsValue, iterable: &JsValue) -> Completion {
