@@ -1627,9 +1627,11 @@ impl Interpreter {
             if matches!(desc_val, JsValue::Undefined) {
                 continue;
             }
-            // If desc.[[Enumerable]] is false, skip.
+            // Spec: process only when desc.[[Enumerable]] is true. After
+            // ToPropertyDescriptor an absent enumerable defaults to false
+            // (via CompletePropertyDescriptor), so a missing field must skip.
             let is_enumerable = match self.to_property_descriptor(&desc_val) {
-                Ok(d) => d.enumerable != Some(false),
+                Ok(d) => d.enumerable == Some(true),
                 Err(Some(e)) => return self.if_abrupt_reject_promise(e, &cap),
                 Err(None) => false,
             };
@@ -1780,8 +1782,10 @@ impl Interpreter {
             if matches!(desc_val, JsValue::Undefined) {
                 continue;
             }
+            // Spec: process only when desc.[[Enumerable]] is true (absent
+            // defaults to false via CompletePropertyDescriptor).
             let is_enumerable = match self.to_property_descriptor(&desc_val) {
-                Ok(d) => d.enumerable != Some(false),
+                Ok(d) => d.enumerable == Some(true),
                 Err(Some(e)) => return self.if_abrupt_reject_promise(e, &cap),
                 Err(None) => false,
             };
