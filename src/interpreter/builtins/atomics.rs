@@ -146,7 +146,7 @@ impl Interpreter {
                 let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let (kind, buffer, byte_offset, element_size, is_bigint) =
-                    match validate_integer_typed_array(interp, &ta_val, false) {
+                    match validate_integer_typed_array(interp, &ta_val, false, false) {
                         Ok(info) => info,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -184,7 +184,7 @@ impl Interpreter {
                 let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let value = args.get(2).cloned().unwrap_or(JsValue::Undefined);
                 let (kind, buffer, byte_offset, element_size, is_bigint) =
-                    match validate_integer_typed_array(interp, &ta_val, false) {
+                    match validate_integer_typed_array(interp, &ta_val, false, true) {
                         Ok(info) => info,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -245,7 +245,7 @@ impl Interpreter {
                 let expected_val = args.get(2).cloned().unwrap_or(JsValue::Undefined);
                 let replacement_val = args.get(3).cloned().unwrap_or(JsValue::Undefined);
                 let (kind, buffer, byte_offset, element_size, is_bigint) =
-                    match validate_integer_typed_array(interp, &ta_val, false) {
+                    match validate_integer_typed_array(interp, &ta_val, false, true) {
                         Ok(info) => info,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -339,7 +339,7 @@ impl Interpreter {
                 let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let value = args.get(2).cloned().unwrap_or(JsValue::Undefined);
                 let (_kind, _buffer, byte_offset, element_size, is_bigint) =
-                    match validate_integer_typed_array(interp, &ta_val, true) {
+                    match validate_integer_typed_array(interp, &ta_val, true, false) {
                         Ok(info) => info,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -484,7 +484,7 @@ impl Interpreter {
                 let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let (kind, _buffer, byte_offset, element_size, _is_bigint) =
-                    match validate_integer_typed_array(interp, &ta_val, true) {
+                    match validate_integer_typed_array(interp, &ta_val, true, false) {
                         Ok(info) => info,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -551,7 +551,7 @@ impl Interpreter {
                 let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
                 let value = args.get(2).cloned().unwrap_or(JsValue::Undefined);
                 let (kind, buffer, byte_offset, element_size, is_bigint) =
-                    match validate_integer_typed_array(interp, &ta_val, true) {
+                    match validate_integer_typed_array(interp, &ta_val, true, false) {
                         Ok(info) => info,
                         Err(e) => return Completion::Throw(e),
                     };
@@ -1253,6 +1253,7 @@ fn validate_integer_typed_array(
     interp: &mut Interpreter,
     ta_val: &JsValue,
     waitable: bool,
+    write_access: bool,
 ) -> Result<
     (
         TypedArrayKind,
@@ -1272,13 +1273,14 @@ fn validate_integer_typed_array(
                     info.buffer.clone(),
                     info.byte_offset,
                     info.is_detached.get(),
+                    info.buffer_object_id,
                 )
             })
         })
     } else {
         None
     };
-    if let Some((kind, buffer, byte_offset, is_detached)) = info_snapshot {
+    if let Some((kind, buffer, byte_offset, is_detached, buffer_object_id)) = info_snapshot {
         if waitable {
             if !matches!(kind, TypedArrayKind::Int32 | TypedArrayKind::BigInt64) {
                 return Err(interp.create_type_error(
@@ -1293,6 +1295,16 @@ fn validate_integer_typed_array(
                 | TypedArrayKind::Uint8Clamped
         ) {
             return Err(interp.create_type_error("Atomics operations require integer typed arrays"));
+        }
+        // ValidateTypedArray(..., ~write~): block ops on immutable buffers before
+        // argument coercion so callers observe no side effects on TypeError.
+        if write_access
+            && let Some(buf_id) = buffer_object_id
+            && interp
+                .get_object_cell(buf_id)
+                .is_some_and(|cell| cell.borrow().arraybuffer_is_immutable())
+        {
+            return Err(interp.create_type_error("Cannot modify an immutable ArrayBuffer"));
         }
         if is_detached {
             return Err(interp.create_type_error("typed array is detached"));
@@ -1343,7 +1355,7 @@ fn atomics_rmw(
     let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
     let value = args.get(2).cloned().unwrap_or(JsValue::Undefined);
     let (kind, buffer, byte_offset, element_size, is_bigint) =
-        match validate_integer_typed_array(interp, &ta_val, false) {
+        match validate_integer_typed_array(interp, &ta_val, false, true) {
             Ok(info) => info,
             Err(e) => return Completion::Throw(e),
         };

@@ -60,7 +60,9 @@ pub(crate) fn to_number(val: &JsValue) -> f64 {
 // §7.1.4.1.1 StringToNumber (uses §7.1.4.1.2 RoundMVResult via f64::parse)
 fn string_to_number(s: &JsString) -> f64 {
     let rust_str = s.to_rust_string();
-    let trimmed = rust_str.trim();
+    // ECMA-262 §12.2 WhiteSpace includes <ZWNBSP> (U+FEFF), which Rust's
+    // char::is_whitespace omits (Unicode classifies it as Format, not White_Space).
+    let trimmed = rust_str.trim_matches(|c: char| c.is_whitespace() || c == '\u{FEFF}');
     if trimmed.is_empty() {
         return 0.0;
     }
