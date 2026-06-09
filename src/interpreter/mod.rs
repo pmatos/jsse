@@ -1955,6 +1955,19 @@ impl Interpreter {
         Ok(())
     }
 
+    /// Distinguish a genuine AMBIGUOUS resolution error from a "null"
+    /// resolution (circular re-export or missing export). Per §16.2.1.6.3,
+    /// a star path that resolves to null is skipped, but one that resolves to
+    /// AMBIGUOUS propagates ambiguity.
+    fn is_ambiguous_export_error(&self, err: &JsValue) -> bool {
+        if let JsValue::Object(o) = err
+            && let JsValue::String(s) = self.get_property_on_id(o.id, "message")
+        {
+            return s.to_string().contains("Ambiguous export");
+        }
+        false
+    }
+
     fn process_star_reexport(
         &mut self,
         source: &str,
@@ -1994,10 +2007,17 @@ impl Interpreter {
                         if !existing.starts_with("*reexport:") {
                             continue;
                         }
-                        // §16.2.1.6.3 step 8d.ii: two star exports with same name
-                        // — check if they resolve to the same (module, binding)
+                        // §16.2.1.6.3 step 8d: two star exports with same name.
+                        // Resolve both paths. A path that resolves to null
+                        // (circular re-export or missing) is skipped — only two
+                        // *non-null* resolutions that disagree are ambiguous.
                         if existing != &new_reexport {
-                            let is_ambiguous = if let Some(ref mp) = module_path {
+                            enum Decision {
+                                KeepExisting,
+                                UseNew,
+                                Ambiguous,
+                            }
+                            let decision = if let Some(ref mp) = module_path {
                                 let mut v1 = HashSet::new();
                                 let r1 = self.resolve_export_binding(mp, &export_name, &mut v1);
                                 module
@@ -2012,19 +2032,50 @@ impl Interpreter {
                                     .insert(export_name.clone(), existing.clone());
                                 match (r1, r2) {
                                     (Ok((env1, name1)), Ok((env2, name2))) => {
-                                        !std::rc::Rc::ptr_eq(&env1, &env2) || name1 != name2
+                                        if std::rc::Rc::ptr_eq(&env1, &env2) && name1 == name2 {
+                                            Decision::KeepExisting
+                                        } else {
+                                            Decision::Ambiguous
+                                        }
                                     }
-                                    _ => true,
+                                    // Existing path is null (cycle/missing) but the
+                                    // new path resolves: the real binding wins.
+                                    (Err(ref e), Ok(_)) if !self.is_ambiguous_export_error(e) => {
+                                        Decision::UseNew
+                                    }
+                                    // New path is null but existing resolves: keep it.
+                                    (Ok(_), Err(ref e)) if !self.is_ambiguous_export_error(e) => {
+                                        Decision::KeepExisting
+                                    }
+                                    // Both null: nothing resolvable, keep placeholder.
+                                    (Err(ref e1), Err(ref e2))
+                                        if !self.is_ambiguous_export_error(e1)
+                                            && !self.is_ambiguous_export_error(e2) =>
+                                    {
+                                        Decision::KeepExisting
+                                    }
+                                    // A genuinely ambiguous nested resolution propagates.
+                                    _ => Decision::Ambiguous,
                                 }
                             } else {
-                                true
+                                Decision::Ambiguous
                             };
-                            if is_ambiguous {
-                                module.borrow_mut().exports.remove(&export_name);
-                                module
-                                    .borrow_mut()
-                                    .export_bindings
-                                    .insert(export_name.clone(), "*ambiguous*".to_string());
+                            match decision {
+                                Decision::KeepExisting => {}
+                                Decision::UseNew => {
+                                    module.borrow_mut().exports.insert(export_name.clone(), val);
+                                    module
+                                        .borrow_mut()
+                                        .export_bindings
+                                        .insert(export_name.clone(), new_reexport);
+                                }
+                                Decision::Ambiguous => {
+                                    module.borrow_mut().exports.remove(&export_name);
+                                    module
+                                        .borrow_mut()
+                                        .export_bindings
+                                        .insert(export_name.clone(), "*ambiguous*".to_string());
+                                }
                             }
                             continue;
                         }
