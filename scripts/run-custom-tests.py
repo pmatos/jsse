@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run custom JS tests from the tests/ directory.
 
-Each .js file is executed by jsse. A test passes if exit code is 0.
+Each .js / .mjs file is executed by jsse. A test passes if exit code is 0.
 Tests can use throw to signal failure.
 """
 
@@ -11,8 +11,14 @@ import sys
 from pathlib import Path
 
 
+def _collect_tests(root: Path) -> list[Path]:
+    files = list(root.rglob("*.js")) + list(root.rglob("*.mjs"))
+    # Skip files imported as modules by other tests (named *-dep.mjs).
+    return sorted(p for p in files if not p.name.endswith("-dep.mjs"))
+
+
 def find_tests(test_dir: Path) -> list[Path]:
-    return sorted(test_dir.rglob("*.js"))
+    return _collect_tests(test_dir)
 
 
 def main():
@@ -47,7 +53,7 @@ def main():
             if p.is_file():
                 tests.append(p)
             elif p.is_dir():
-                tests.extend(sorted(p.rglob("*.js")))
+                tests.extend(_collect_tests(p))
     else:
         tests = find_tests(Path("tests"))
 
