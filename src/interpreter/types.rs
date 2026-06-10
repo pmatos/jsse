@@ -1018,6 +1018,10 @@ pub enum JsFunction {
         source_text: Option<SourceText>,
         captured_new_target: Option<JsValue>,
         uses_arguments: bool,
+        /// Cached `IsSimpleParameterList` (§15.1.3): all params are plain
+        /// identifiers (no rest/defaults/destructuring). Computed once at
+        /// creation time from `params` so the hot call path need not rescan.
+        has_simple_params: bool,
     },
     Native(
         String,
@@ -1061,6 +1065,7 @@ impl Clone for JsFunction {
                 source_text,
                 captured_new_target,
                 uses_arguments,
+                has_simple_params,
             } => JsFunction::User {
                 name: name.clone(),
                 params: params.clone(),
@@ -1074,6 +1079,7 @@ impl Clone for JsFunction {
                 source_text: source_text.clone(),
                 captured_new_target: captured_new_target.clone(),
                 uses_arguments: *uses_arguments,
+                has_simple_params: *has_simple_params,
             },
             JsFunction::Native(name, arity, f, is_ctor) => {
                 JsFunction::Native(name.clone(), *arity, f.clone(), *is_ctor)

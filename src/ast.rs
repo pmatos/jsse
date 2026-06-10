@@ -536,6 +536,14 @@ pub fn func_uses_arguments(params: &[Pattern], body: &[Statement]) -> bool {
     params_use_arguments(params) || stmts_use_arguments(body)
 }
 
+/// A "simple" parameter list (§15.1.3 IsSimpleParameterList) is one consisting
+/// solely of single-name (identifier) bindings — no rest, defaults, or
+/// destructuring. This gates the fast parameter-binding path and mapped
+/// `arguments` objects, so it is cached on `JsFunction::User` at creation time.
+pub fn params_are_simple(params: &[Pattern]) -> bool {
+    params.iter().all(|p| matches!(p, Pattern::Identifier(_)))
+}
+
 fn params_use_arguments(params: &[Pattern]) -> bool {
     params.iter().any(pattern_uses_arguments)
 }

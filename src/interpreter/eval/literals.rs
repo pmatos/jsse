@@ -322,6 +322,7 @@ impl Interpreter {
                 source_text: class_source_text.clone(),
                 captured_new_target: None,
                 uses_arguments: func_uses_arguments(&cm.value.params, &cm.value.body),
+                has_simple_params: crate::ast::params_are_simple(&cm.value.params),
             }
         } else if super_val.is_some() {
             let default_body = vec![Statement::Expression(Expression::Call(
@@ -347,6 +348,8 @@ impl Interpreter {
                 source_text: class_source_text.clone(),
                 captured_new_target: None,
                 uses_arguments: uses_args,
+                // default derived constructor takes `...args` (rest) — not simple
+                has_simple_params: false,
             }
         } else {
             JsFunction::User {
@@ -362,6 +365,8 @@ impl Interpreter {
                 source_text: class_source_text.clone(),
                 captured_new_target: None,
                 uses_arguments: false,
+                // default base constructor has an empty (simple) parameter list
+                has_simple_params: true,
             }
         };
 
@@ -577,6 +582,7 @@ impl Interpreter {
                                 source_text: m.value.source_text.clone(),
                                 captured_new_target: None,
                                 uses_arguments: func_uses_arguments(&m.value.params, &m.value.body),
+                                has_simple_params: crate::ast::params_are_simple(&m.value.params),
                             };
                             let method_val = self.create_function(method_func);
 
@@ -751,6 +757,7 @@ impl Interpreter {
                         source_text: m.value.source_text.clone(),
                         captured_new_target: None,
                         uses_arguments: func_uses_arguments(&m.value.params, &m.value.body),
+                        has_simple_params: crate::ast::params_are_simple(&m.value.params),
                     };
                     let method_val = self.create_function(method_func);
 

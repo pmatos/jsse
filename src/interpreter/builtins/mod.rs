@@ -2592,6 +2592,7 @@ impl Interpreter {
                             source_text: Some(fn_source_text.into()),
                             captured_new_target: None,
                             uses_arguments: true, // conservative for dynamic Function()
+                            has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
                         // Create function in the Function constructor's realm
                         let old_realm = interp.current_realm_id;
@@ -3179,6 +3180,7 @@ impl Interpreter {
                             source_text: Some(fn_source_text.into()),
                             captured_new_target: None,
                             uses_arguments: true, // conservative for dynamic AsyncFunction()
+                            has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
                         let fn_val = interp.create_function(js_func);
                         // Apply GetPrototypeFromConstructor(newTarget, "%AsyncFunction.prototype%")
@@ -3336,6 +3338,7 @@ impl Interpreter {
                             source_text: Some(fn_source_text.into()),
                             captured_new_target: None,
                             uses_arguments: true, // conservative for dynamic GeneratorFunction()
+                            has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
                         let fn_val = interp.create_function(js_func);
                         // Apply GetPrototypeFromConstructor(newTarget, "%GeneratorFunction.prototype%")
@@ -3495,6 +3498,7 @@ impl Interpreter {
                             source_text: Some(fn_source_text.into()),
                             captured_new_target: None,
                             uses_arguments: true, // conservative for dynamic AsyncGeneratorFunction()
+                            has_simple_params: crate::ast::params_are_simple(&fe.params),
                         };
                         let fn_val = interp.create_function(js_func);
                         // Apply GetPrototypeFromConstructor(newTarget, "%AsyncGeneratorFunction.prototype%")

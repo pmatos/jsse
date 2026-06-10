@@ -350,6 +350,7 @@ impl Interpreter {
             source_text: f.source_text.clone(),
             captured_new_target: None,
             uses_arguments: func_uses_arguments(&f.params, &f.body),
+            has_simple_params: crate::ast::params_are_simple(&f.params),
         };
         let val = self.create_function(func);
         if is_global {
@@ -2344,6 +2345,7 @@ impl Interpreter {
                         source_text: f.source_text.clone(),
                         captured_new_target: None,
                         uses_arguments: func_uses_arguments(&f.params, &f.body),
+                        has_simple_params: crate::ast::params_are_simple(&f.params),
                     };
                     let val = self.create_function(func);
                     let _ = self.env_set(&switch_env, &f.name, val);

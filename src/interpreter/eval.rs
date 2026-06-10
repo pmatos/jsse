@@ -462,6 +462,7 @@ impl Interpreter {
                     source_text: f.source_text.clone(),
                     captured_new_target: None,
                     uses_arguments: func_uses_arguments(&f.params, &f.body),
+                    has_simple_params: crate::ast::params_are_simple(&f.params),
                 };
                 let func_val = self.create_function(func);
                 if let Some(name) = &f.name {
@@ -490,6 +491,7 @@ impl Interpreter {
                     source_text: af.source_text.clone(),
                     captured_new_target: self.new_target.clone(),
                     uses_arguments: false, // arrows never have own arguments
+                    has_simple_params: crate::ast::params_are_simple(&af.params),
                 };
                 Completion::Normal(self.create_function(func))
             }
@@ -12310,6 +12312,7 @@ impl Interpreter {
                         is_generator,
                         is_async,
                         uses_arguments,
+                        has_simple_params,
                         ..
                     } => {
                         // §10.2.1.1 PrepareForOrdinaryCall: switch to function's realm
@@ -12329,6 +12332,7 @@ impl Interpreter {
                                 args,
                                 func_val,
                                 uses_arguments,
+                                has_simple_params,
                             );
                             self.current_realm_id = caller_realm;
                             return result;
@@ -12346,8 +12350,7 @@ impl Interpreter {
                                     deletable: false,
                                 },
                             );
-                            let is_simple_ag =
-                                params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+                            let is_simple_ag = has_simple_params;
                             if uses_arguments {
                                 let env_strict_ag = func_env.borrow().strict;
                                 let use_mapped_ag = is_simple_ag && !is_strict && !env_strict_ag;
@@ -12435,8 +12438,7 @@ impl Interpreter {
                             self.get_object_cell_expect(gen_obj_id)
                                 .borrow_mut()
                                 .class_name = "AsyncGenerator".to_string();
-                            let is_simple =
-                                params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+                            let is_simple = has_simple_params;
                             let exec_env = if !is_simple {
                                 let body_env =
                                     Environment::new_function_scope(Some(func_env.clone()));
@@ -12546,8 +12548,7 @@ impl Interpreter {
                                     deletable: false,
                                 },
                             );
-                            let is_simple_g =
-                                params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+                            let is_simple_g = has_simple_params;
                             if uses_arguments {
                                 let env_strict_g = func_env.borrow().strict;
                                 let use_mapped_g = is_simple_g && !is_strict && !env_strict_g;
@@ -12635,8 +12636,7 @@ impl Interpreter {
                             self.get_object_cell_expect(gen_obj_id)
                                 .borrow_mut()
                                 .class_name = "Generator".to_string();
-                            let is_simple =
-                                params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+                            let is_simple = has_simple_params;
                             let exec_env = if !is_simple {
                                 let body_env =
                                     Environment::new_function_scope(Some(func_env.clone()));
@@ -12718,7 +12718,7 @@ impl Interpreter {
                         if is_arrow {
                             func_env.borrow_mut().is_arrow_scope = true;
                         }
-                        let is_simple = params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+                        let is_simple = has_simple_params;
                         let mut call_frame_args = JsValue::Null;
                         if !is_arrow {
                             if self.constructing_derived {
@@ -13642,6 +13642,7 @@ impl Interpreter {
                 source_text: f.source_text.clone(),
                 captured_new_target: None,
                 uses_arguments: func_uses_arguments(&f.params, &f.body),
+                has_simple_params: crate::ast::params_are_simple(&f.params),
             };
             let val = self.create_function(func);
             if is_global {
@@ -16521,6 +16522,7 @@ impl Interpreter {
         args: &[JsValue],
         func_val: &JsValue,
         uses_arguments: bool,
+        has_simple_params: bool,
     ) -> Completion {
         let gc_frame = self.gc_root_frame();
         let promise = self.create_promise_object();
@@ -16570,7 +16572,7 @@ impl Interpreter {
                 },
             );
             if uses_arguments {
-                let is_simple = params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+                let is_simple = has_simple_params;
                 let env_strict = func_env.borrow().strict;
                 let use_mapped = is_simple && !is_strict && !env_strict;
                 let param_names: Vec<String> = if use_mapped {
@@ -16605,7 +16607,7 @@ impl Interpreter {
             }
         }
         {
-            let is_simple_p = params.iter().all(|p| matches!(p, Pattern::Identifier(_)));
+            let is_simple_p = has_simple_params;
             if !is_simple_p {
                 func_env.borrow_mut().has_parameter_expressions = true;
             }
