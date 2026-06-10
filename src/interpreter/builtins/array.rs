@@ -944,7 +944,7 @@ impl Interpreter {
                 if let JsValue::Object(ref obj_ref) = o
                     && let Some(cell) = interp.get_object(obj_ref.id)
                 {
-                    let fast_ok = {
+                    let (fast_ok, proto_id) = {
                         let b = cell.borrow();
                         let len_desc = b.properties.get("length");
                         let len_writable =
@@ -956,15 +956,29 @@ impl Interpreter {
                                 None
                             }
                         });
-                        b.class_name == "Array"
+                        let ok = b.class_name == "Array"
                             && !b.is_proxy()
                             && b.extensible
                             && len_desc.is_some()
                             && len_writable
                             && desc_len == Some(len)
-                            && b.array_elements().map(|v| v.len()) == Some(len)
+                            && b.array_elements().map(|v| v.len()) == Some(len);
+                        (ok, b.prototype_id)
                     };
-                    if fast_ok {
+                    // §23.1.3.25 push performs Set(O, ToString(i), …, true) =
+                    // OrdinarySet, which walks the prototype chain. If any
+                    // appended index ToString is inherited (setter or data) we
+                    // must invoke/honour it via the slow loop rather than write
+                    // straight into the Vec — bail to the slow path.
+                    let inherited = fast_ok
+                        && proto_id.is_some_and(|pid| {
+                            (len..len + args.len()).any(|i| {
+                                interp
+                                    .get_property_descriptor_on_id(pid, &i.to_string())
+                                    .is_some()
+                            })
+                        });
+                    if fast_ok && !inherited {
                         let new_len = len + args.len();
                         {
                             let mut b = cell.borrow_mut();

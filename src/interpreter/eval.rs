@@ -3220,7 +3220,18 @@ impl Interpreter {
                     // slow path on holes, length mismatch, frozen/sealed/non-
                     // -writable-length, non-extensible, proxies, or shadowed
                     // indices so strict-throw and exotic behaviour stay correct.
-                    if let Some(idx_u32) = parse_array_index(&key) {
+                    //
+                    // NB: in this engine `JsValue::Undefined` in `array_elements`
+                    // (with no `properties` entry) is the HOLE sentinel (see
+                    // `has_own_property`/`get_own_property_full`). The fast path
+                    // therefore must not (a) treat an `Undefined` slot as a live
+                    // element to overwrite, nor (b) store `undefined` as a present
+                    // element without the `properties` presence marker the slow
+                    // path adds — doing either materialises/leaves a hole with the
+                    // wrong own-property state. Both cases bail to the slow path.
+                    if let Some(idx_u32) = parse_array_index(&key)
+                        && !matches!(final_val, JsValue::Undefined)
+                    {
                         let fast = {
                             let b = obj.borrow();
                             if b.class_name == "Array"
@@ -3228,7 +3239,13 @@ impl Interpreter {
                                 && b.array_elements().is_some()
                                 && !b.properties.contains_key(&key)
                             {
-                                let elems_len = b.array_elements().unwrap().len();
+                                let elems = b.array_elements().unwrap();
+                                let elems_len = elems.len();
+                                let idx = idx_u32 as usize;
+                                // Overwrite is only sound on a genuinely live slot
+                                // (not the hole sentinel).
+                                let slot_is_hole =
+                                    idx < elems_len && matches!(elems[idx], JsValue::Undefined);
                                 let len_desc = b.properties.get("length");
                                 let cur_len = len_desc
                                     .and_then(|d| d.value.as_ref())
@@ -3242,16 +3259,31 @@ impl Interpreter {
                                     .unwrap_or(0);
                                 let length_writable =
                                     len_desc.map(|d| d.writable != Some(false)).unwrap_or(false);
-                                Some((elems_len, cur_len, length_writable, b.extensible))
+                                Some((
+                                    elems_len,
+                                    cur_len,
+                                    length_writable,
+                                    b.extensible,
+                                    slot_is_hole,
+                                    b.prototype_id,
+                                ))
                             } else {
                                 None
                             }
                         };
-                        if let Some((elems_len, cur_len, length_writable, extensible)) = fast {
+                        if let Some((
+                            elems_len,
+                            cur_len,
+                            length_writable,
+                            extensible,
+                            slot_is_hole,
+                            proto_id,
+                        )) = fast
+                        {
                             let idx = idx_u32 as usize;
-                            if idx < elems_len {
-                                // In-bounds overwrite: slot already live, no length
-                                // / extensible / shape change needed.
+                            if idx < elems_len && !slot_is_hole {
+                                // In-bounds overwrite of a live slot: no length /
+                                // extensible / shape / prototype involvement.
                                 obj.borrow_mut().array_elements_mut().unwrap()[idx] =
                                     final_val.clone();
                                 return Completion::Normal(final_val);
@@ -3261,6 +3293,13 @@ impl Interpreter {
                                 && extensible
                                 && length_writable
                                 && idx_u32 < 0xFFFF_FFFF
+                                // OrdinarySet walks the prototype chain when the
+                                // receiver has no own property for this index.
+                                // If the index ToString is inherited (setter or
+                                // data) we must honour it via the slow path.
+                                && !proto_id.is_some_and(|pid| {
+                                    self.get_property_descriptor_on_id(pid, &key).is_some()
+                                })
                             {
                                 // Append at end: push and bump length + shape.
                                 let mut b = obj.borrow_mut();
@@ -3271,9 +3310,9 @@ impl Interpreter {
                                 b.shape_id = crate::interpreter::types::fresh_shape_id();
                                 return Completion::Normal(final_val);
                             }
-                            // Otherwise (hole creation, length mismatch, frozen/
-                            // sealed/non-writable-length, non-extensible): fall
-                            // through to the slow path below.
+                            // Otherwise (hole creation/overwrite, length mismatch,
+                            // frozen/sealed/non-writable-length, non-extensible,
+                            // inherited index): fall through to the slow path.
                         }
                     }
                     // Proxy set trap
