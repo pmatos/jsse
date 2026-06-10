@@ -3230,7 +3230,7 @@ impl JsObjectData {
 
 // §7.1.4.1 CanonicalNumericIndexString
 /// Check if a string is an array index (non-negative integer < 2^32-1).
-fn parse_array_index(key: &str) -> Option<u32> {
+pub(crate) fn parse_array_index(key: &str) -> Option<u32> {
     if key.is_empty() {
         return None;
     }

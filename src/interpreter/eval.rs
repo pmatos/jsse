@@ -3238,6 +3238,111 @@ impl Interpreter {
                             other => return other,
                         }
                     };
+                    // Fast path for dense ordinary Array indexed writes: in-bounds
+                    // overwrite or append-at-end directly into the backing Vec,
+                    // bypassing the setter/prototype/Set machinery. Bails to the
+                    // slow path on holes, length mismatch, frozen/sealed/non-
+                    // -writable-length, non-extensible, proxies, or shadowed
+                    // indices so strict-throw and exotic behaviour stay correct.
+                    //
+                    // NB: in this engine `JsValue::Undefined` in `array_elements`
+                    // (with no `properties` entry) is the HOLE sentinel (see
+                    // `has_own_property`/`get_own_property_full`). The fast path
+                    // therefore must not (a) treat an `Undefined` slot as a live
+                    // element to overwrite, nor (b) store `undefined` as a present
+                    // element without the `properties` presence marker the slow
+                    // path adds — doing either materialises/leaves a hole with the
+                    // wrong own-property state. Both cases bail to the slow path.
+                    if let Some(idx_u32) = parse_array_index(&key)
+                        && !matches!(final_val, JsValue::Undefined)
+                    {
+                        let fast = {
+                            let b = obj.borrow();
+                            if b.class_name == "Array"
+                                && !b.is_proxy()
+                                && b.array_elements().is_some()
+                                && !b.properties.contains_key(&key)
+                            {
+                                let elems = b.array_elements().unwrap();
+                                let elems_len = elems.len();
+                                let idx = idx_u32 as usize;
+                                // Overwrite is only sound on a genuinely live slot
+                                // (not the hole sentinel).
+                                let slot_is_hole =
+                                    idx < elems_len && matches!(elems[idx], JsValue::Undefined);
+                                let len_desc = b.properties.get("length");
+                                let cur_len = len_desc
+                                    .and_then(|d| d.value.as_ref())
+                                    .and_then(|v| {
+                                        if let JsValue::Number(n) = v {
+                                            Some(*n as u32)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or(0);
+                                let length_writable =
+                                    len_desc.map(|d| d.writable != Some(false)).unwrap_or(false);
+                                Some((
+                                    elems_len,
+                                    cur_len,
+                                    length_writable,
+                                    b.extensible,
+                                    slot_is_hole,
+                                    b.prototype_id,
+                                ))
+                            } else {
+                                None
+                            }
+                        };
+                        if let Some((
+                            elems_len,
+                            cur_len,
+                            length_writable,
+                            extensible,
+                            slot_is_hole,
+                            proto_id,
+                        )) = fast
+                        {
+                            let idx = idx_u32 as usize;
+                            if idx < elems_len && !slot_is_hole {
+                                // In-bounds overwrite of a live slot: no length /
+                                // extensible / shape / prototype involvement.
+                                obj.borrow_mut().array_elements_mut().unwrap()[idx] =
+                                    final_val.clone();
+                                return Completion::Normal(final_val);
+                            } else if idx == elems_len
+                                && idx_u32 >= cur_len
+                                && cur_len as usize == elems_len
+                                && extensible
+                                && length_writable
+                                && idx_u32 < 0xFFFF_FFFF
+                                // OrdinarySet walks the prototype chain when the
+                                // receiver has no own property for this index.
+                                // If the index ToString is inherited (setter or
+                                // data), or a Proxy sits anywhere in the chain,
+                                // we must honour the proto via the slow path's
+                                // OrdinarySet/proxy_set — a bare Proxy exposes no
+                                // own descriptor here, so check it explicitly.
+                                && !proto_id.is_some_and(|pid| {
+                                    self.has_proxy_in_prototype_chain(pid)
+                                        || self.get_property_descriptor_on_id(pid, &key).is_some()
+                                })
+                            {
+                                // Append at end: push and bump length + shape.
+                                let mut b = obj.borrow_mut();
+                                b.array_elements_mut().unwrap().push(final_val.clone());
+                                if let Some(len_desc) = b.properties.get_mut("length") {
+                                    len_desc.value = Some(JsValue::Number((idx_u32 + 1) as f64));
+                                }
+                                b.shape_id = crate::interpreter::types::fresh_shape_id();
+                                return Completion::Normal(final_val);
+                            }
+                            // Otherwise (hole creation/overwrite, length mismatch,
+                            // frozen/sealed/non-writable-length, non-extensible,
+                            // inherited index): fall through to the slow path.
+                        }
+                    }
                     // Proxy set trap
                     if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
                         let receiver = obj_val.clone();
