@@ -1953,7 +1953,7 @@ impl Interpreter {
         // keyed by the body's Rc pointer identity. The body Rc is stable across
         // function-object clones, so repeated calls reuse the analysis. ASTs are
         // immutable post-parse, so the cache cannot go stale.
-        let key = Rc::as_ptr(body) as *const Vec<Statement>;
+        let key = Rc::as_ptr(body);
         let analysis = match self.hoist_cache.get(&key) {
             Some(a) => a.clone(),
             None => {
