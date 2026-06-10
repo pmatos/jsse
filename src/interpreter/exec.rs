@@ -2,6 +2,20 @@ use super::*;
 
 impl Interpreter {
     pub(crate) fn exec_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
+        self.exec_statements_cached(stmts, env, None)
+    }
+
+    /// Core statement-sequence executor. `analysis`, when `Some`, supplies the
+    /// pre-computed hoisting *name collection* for this function body (#72),
+    /// letting us skip the per-statement var-hoisting walk and the Annex-B name
+    /// collection. The Annex-B post-processing (which reads live env state) and
+    /// function-declaration hoisting (fresh closures) always run.
+    pub(crate) fn exec_statements_cached(
+        &mut self,
+        stmts: &[Statement],
+        env: &EnvRef,
+        analysis: Option<&Rc<HoistAnalysis>>,
+    ) -> Completion {
         // Hoist var and function declarations
         let var_scope = Environment::find_var_scope(env);
         let is_global = var_scope.borrow().global_object_id.is_some();
@@ -13,10 +27,29 @@ impl Interpreter {
             return err;
         }
 
+        // Hoist var declarations. When a cached analysis is present, declare from
+        // its precomputed name set instead of re-walking the AST — this exactly
+        // replicates the leaf logic of `hoist_pattern` (declare into `var_scope`,
+        // skip if a binding already exists, global vs non-global path).
+        if let Some(analysis) = analysis {
+            for name in &analysis.var_names {
+                if !var_scope.borrow().bindings.contains_key(name) {
+                    if is_global {
+                        self.env_declare_global_var(&var_scope, name);
+                    } else {
+                        var_scope.borrow_mut().declare(name, BindingKind::Var);
+                    }
+                }
+            }
+        } else {
+            for stmt in stmts {
+                // Recursively hoist var declarations from all sub-statements
+                self.hoist_vars_from_stmt(stmt, &var_scope, is_global);
+            }
+        }
         for stmt in stmts {
-            // Recursively hoist var declarations from all sub-statements
-            self.hoist_vars_from_stmt(stmt, &var_scope, is_global);
-            // Check for function declarations (including inside labels)
+            // Check for function declarations (including inside labels). This
+            // builds fresh closures per call and is never cached.
             if let Some(f) = Self::unwrap_labeled_function(stmt) {
                 self.hoist_function_decl(f, env, is_global);
             }
@@ -30,9 +63,20 @@ impl Interpreter {
         // create var bindings for function declarations inside blocks.
         // Skip names that conflict with parameters or lexical bindings.
         if !is_block_scope && !env.borrow().strict {
-            let mut all_annexb = Vec::new();
-            let mut blocked = Vec::new();
-            Self::collect_annexb_function_names(stmts, &mut all_annexb, &mut blocked);
+            // Only the raw name collection is cacheable; the post-processing
+            // below inspects live env/parameter/lexical state and must run per
+            // call. With a cached analysis, reuse its collected names. The
+            // original code discards the `blocked` accumulator after the collect
+            // call; only the `names` (`all_annexb`) feed post-processing.
+            let all_annexb = match analysis {
+                Some(analysis) => analysis.annexb_names.clone(),
+                None => {
+                    let mut names = Vec::new();
+                    let mut blocked = Vec::new();
+                    Self::collect_annexb_function_names(stmts, &mut names, &mut blocked);
+                    names
+                }
+            };
             if !all_annexb.is_empty() {
                 let mut registered = Vec::new();
                 // Collect top-level var/function names from statements

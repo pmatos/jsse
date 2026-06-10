@@ -1949,7 +1949,29 @@ impl Interpreter {
                 return vm::run_chunk(self, &chunk, exec_env, this_val.clone());
             }
         }
-        self.exec_statements(body, exec_env)
+        // #72: cache the hoisting *name collection* for this function body,
+        // keyed by the body's Rc pointer identity. The body Rc is stable across
+        // function-object clones, so repeated calls reuse the analysis. ASTs are
+        // immutable post-parse, so the cache cannot go stale.
+        let key = Rc::as_ptr(body);
+        let analysis = match self.hoist_cache.get(&key) {
+            Some(a) => a.clone(),
+            None => {
+                let mut var_set = std::collections::HashSet::new();
+                Self::collect_var_names_from_stmts(body, &mut var_set);
+                let mut names = Vec::new();
+                let mut blocked = Vec::new();
+                Self::collect_annexb_function_names(body, &mut names, &mut blocked);
+                let a = Rc::new(HoistAnalysis {
+                    var_names: var_set.into_iter().collect(),
+                    annexb_names: names,
+                    _body: body.clone(),
+                });
+                self.hoist_cache.insert(key, a.clone());
+                a
+            }
+        };
+        self.exec_statements_cached(body, exec_env, Some(&analysis))
     }
 
     pub(super) fn eval_binary(

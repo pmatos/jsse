@@ -54,6 +54,25 @@ fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
     None
 }
 
+/// Cached output of the var/Annex-B hoisting *name collection* for a single
+/// function body, keyed by the body's `Rc` pointer identity (#72).
+///
+/// Only the raw name collection is cached. The Annex-B post-processing that
+/// inspects live env/parameter/lexical state still runs per call, and function
+/// declarations are never cached as values (fresh closures are built per call).
+/// The body `Rc` is pinned to prevent pointer (ABA) reuse from aliasing a
+/// freed body onto a fresh one with the same address.
+pub(crate) struct HoistAnalysis {
+    /// Deduped output of `collect_var_names_from_stmts`.
+    pub(crate) var_names: Vec<String>,
+    /// Raw `names` output of `collect_annexb_function_names`. (The companion
+    /// `blocked` accumulator is internal to the walk and discarded afterwards
+    /// by the original code, so it is intentionally not cached.)
+    pub(crate) annexb_names: Vec<String>,
+    /// Pins the body so its `Rc::as_ptr` key cannot be reused for another body.
+    _body: Rc<Vec<Statement>>,
+}
+
 pub struct Interpreter {
     pub(crate) realms: Vec<Realm>,
     pub(crate) current_realm_id: usize,
@@ -137,6 +156,11 @@ pub struct Interpreter {
     pub(crate) call_ic_fast_dispatch_count: std::cell::Cell<u64>,
     pub(crate) bytecode_enabled: bool,
     pub(crate) bytecode_chunks_executed: usize,
+    /// Per-function-body hoisting-analysis cache keyed by body `Rc` identity
+    /// (#72). The key `*const Vec<Statement>` is used purely as an identity —
+    /// never dereferenced. Cannot go stale: ASTs are immutable post-parse and
+    /// the keyed body is pinned in the value.
+    pub(crate) hoist_cache: FxHashMap<*const Vec<Statement>, Rc<HoistAnalysis>>,
 }
 
 pub(crate) struct CallFrame {
@@ -284,6 +308,7 @@ impl Interpreter {
             call_ic_fast_dispatch_count: std::cell::Cell::new(0),
             bytecode_enabled: false,
             bytecode_chunks_executed: 0,
+            hoist_cache: FxHashMap::default(),
         };
         interp.setup_globals();
         interp
