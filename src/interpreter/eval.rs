@@ -3296,9 +3296,13 @@ impl Interpreter {
                                 // OrdinarySet walks the prototype chain when the
                                 // receiver has no own property for this index.
                                 // If the index ToString is inherited (setter or
-                                // data) we must honour it via the slow path.
+                                // data), or a Proxy sits anywhere in the chain,
+                                // we must honour the proto via the slow path's
+                                // OrdinarySet/proxy_set — a bare Proxy exposes no
+                                // own descriptor here, so check it explicitly.
                                 && !proto_id.is_some_and(|pid| {
-                                    self.get_property_descriptor_on_id(pid, &key).is_some()
+                                    self.has_proxy_in_prototype_chain(pid)
+                                        || self.get_property_descriptor_on_id(pid, &key).is_some()
                                 })
                             {
                                 // Append at end: push and bump length + shape.
