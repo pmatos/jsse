@@ -842,6 +842,126 @@ fn ic_invalidates_on_delete_property() {
 }
 
 #[test]
+fn ic_records_proto_data_after_repeated_dot_access() {
+    // Hot loop reads `o.x` where `x` lives on the immediate prototype as a
+    // data property, not on `o` itself. After warmup the depth-1 ProtoData IC
+    // must be hitting (proves the probe serves the value directly from the
+    // prototype without re-walking the chain on every read).
+    let interp = run_script(
+        r#"
+        var proto = {x: 42};
+        var o = Object.create(proto);
+        var sum = 0;
+        for (var i = 0; i < 100; i++) {
+            sum += o.x;
+        }
+        "#,
+    );
+    assert_eq!(
+        global_number(&interp, "sum"),
+        4200.0,
+        "behavioral correctness"
+    );
+    assert!(
+        interp.ic_hit_count() > 0,
+        "expected depth-1 ProtoData IC hits after 100-iteration hot loop on \
+         o.x (x on the immediate prototype); got 0"
+    );
+}
+
+#[test]
+fn ic_proto_data_invalidates_on_prototype_swap() {
+    // CRITICAL: reassigning `[[Prototype]]` does NOT bump the receiver's
+    // shape_id. If the ProtoData hit arm validated only the receiver shape, it
+    // would serve the OLD prototype's value after the swap. The explicit
+    // `prototype_id == proto_id` guard must force a miss and re-resolution.
+    let interp = run_script(
+        r#"
+        var a = {x: 1};
+        var b = {x: 2};
+        var o = Object.create(a);
+        var first = 0;
+        for (var i = 0; i < 20; i++) first += o.x;   // populate ProtoData on `a`
+        Object.setPrototypeOf(o, b);
+        var post = o.x;                              // must now see b.x === 2
+        var result = first + "|" + post;
+        "#,
+    );
+    assert_eq!(
+        global_string(&interp, "result"),
+        "20|2",
+        "after Object.setPrototypeOf the read must reflect the new prototype, \
+         not the stale cached one"
+    );
+}
+
+#[test]
+fn ic_proto_data_invalidates_on_proto_property_change() {
+    // Mutating the prototype's property structure (delete) bumps the
+    // prototype's shape_id → the cached proto_shape_id no longer matches → the
+    // probe must miss and observe the new (absent) state.
+    let interp = run_script(
+        r#"
+        var proto = {x: 5};
+        var o = Object.create(proto);
+        var sum = 0;
+        for (var i = 0; i < 20; i++) sum += o.x;     // populate ProtoData
+        delete proto.x;
+        var post = (typeof o.x === "undefined") ? "gone" : "still:" + o.x;
+        var result = sum + "|" + post;
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "100|gone");
+}
+
+#[test]
+fn ic_proto_data_shadowed_by_own_property() {
+    // Adding an own property to the receiver bumps the receiver's shape_id →
+    // the cached (proto-resolved) slot misses → the closer own value wins.
+    let interp = run_script(
+        r#"
+        var proto = {x: 1};
+        var o = Object.create(proto);
+        var first = 0;
+        for (var i = 0; i < 20; i++) first += o.x;   // populate ProtoData (=1)
+        o.x = 99;                                    // shadow on the receiver
+        var post = o.x;
+        var result = first + "|" + post;
+        "#,
+    );
+    assert_eq!(
+        global_string(&interp, "result"),
+        "20|99",
+        "an own property added to the receiver must shadow the cached \
+         prototype data value"
+    );
+}
+
+#[test]
+fn ic_proto_accessor_not_served_as_data() {
+    // The property resolves on the immediate prototype as an ACCESSOR, not a
+    // data descriptor. classify_for_prop_ic must NOT record it as ProtoData,
+    // so every read invokes the getter (observed via the side-effect counter).
+    let interp = run_script(
+        r#"
+        var calls = 0;
+        var proto = {};
+        Object.defineProperty(proto, 'x', { get: function() { calls++; return 7; }, configurable: true });
+        var o = Object.create(proto);
+        var sum = 0;
+        for (var i = 0; i < 10; i++) sum += o.x;
+        var result = sum + "|" + calls;
+        "#,
+    );
+    assert_eq!(
+        global_string(&interp, "result"),
+        "70|10",
+        "a prototype accessor must be invoked on every read (10 getter calls), \
+         never cached as ProtoData"
+    );
+}
+
+#[test]
 fn call_ic_records_after_repeated_call() {
     // Phase 3 tracer: the call site `f()` repeatedly invokes the same plain
     // user function. After the first call, the IC slot must be Mono and

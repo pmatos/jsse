@@ -501,12 +501,13 @@ impl Interpreter {
     /// site is not IC-able under the v1 narrow scope. Caller uses this after
     /// the slow path returns successfully. Issue #71, plan Step 11.
     ///
-    /// v1 scope:
+    /// Scope:
     /// - Object must NOT be a proxy / module-namespace / typed-array.
-    /// - Property must resolve as own data (→ `OwnData`) or be absent up to
-    ///   the immediate prototype (→ `Missing`).
-    /// - Own accessors, proto-chain hits, and depth>1 misses return `None`
-    ///   (caller leaves the slot Empty rather than caching).
+    /// - Property must resolve as own data (→ `OwnData`), as a depth-1
+    ///   prototype data descriptor (→ `ProtoData`), or be absent when the
+    ///   immediate prototype is null (→ `Missing`).
+    /// - Own accessors, depth-1 prototype *accessors*, and depth>1 hits/misses
+    ///   return `None` (caller leaves the slot Empty rather than caching).
     fn classify_for_prop_ic(
         &self,
         obj_id: u64,
@@ -535,18 +536,57 @@ impl Interpreter {
             return None;
         }
         // Absent on receiver — only cacheable if the immediate prototype is
-        // null (depth-1 Missing). Anything deeper stays uncached for v1.
-        if obj.prototype_id.is_none() {
-            return Some(PropIcSlot::Mono {
-                obj_id,
-                obj_shape_id: obj.shape_id,
-                kind: PropIcKind::Missing {
-                    proto_id: None,
-                    proto_shape_id: 0,
-                },
-            });
+        // null (depth-1 Missing) or the immediate prototype carries the
+        // property as a plain data descriptor (depth-1 ProtoData). Anything
+        // deeper stays uncached.
+        let proto_id = match obj.prototype_id {
+            None => {
+                return Some(PropIcSlot::Mono {
+                    obj_id,
+                    obj_shape_id: obj.shape_id,
+                    kind: PropIcKind::Missing {
+                        proto_id: None,
+                        proto_shape_id: 0,
+                    },
+                });
+            }
+            Some(pid) => pid,
+        };
+        // Depth-1 prototype lookup. Drop the receiver borrow first so the
+        // prototype borrow below can never alias it (proto could be the same
+        // slot in pathological setups, though that would be a self-cycle).
+        drop(obj);
+        let proto_rc = self.get_object(proto_id)?;
+        let proto = proto_rc.borrow();
+        // The prototype must be an ordinary object whose own data property can
+        // be fetched directly. A proxy/module-namespace/typed-array prototype
+        // would require trap/index logic the probe doesn't perform.
+        if proto.proxy().is_some()
+            || proto.module_namespace().is_some()
+            || proto.typed_array_info().is_some()
+        {
+            return None;
         }
-        None
+        match proto.properties.get(key) {
+            // Depth-1 data descriptor on the immediate prototype.
+            Some(d) if d.is_data_descriptor() => {
+                // Re-read the receiver shape (the borrow was dropped above).
+                let obj_shape_id = obj_rc.borrow().shape_id;
+                Some(PropIcSlot::Mono {
+                    obj_id,
+                    obj_shape_id,
+                    kind: PropIcKind::ProtoData {
+                        proto_id,
+                        proto_shape_id: proto.shape_id,
+                    },
+                })
+            }
+            // Depth-1 accessor — excluded (no getter invocation in the probe).
+            Some(_) => None,
+            // Absent on the immediate prototype → resolves deeper than depth-1
+            // (or is missing). Not cacheable in this narrow scope.
+            None => None,
+        }
     }
 
     pub(super) fn eval_member(
@@ -784,9 +824,42 @@ impl Interpreter {
                                     return Completion::Normal(JsValue::Undefined);
                                 }
                             }
-                            // OwnAccessor / ProtoData / TypedArrayElement not
-                            // recorded in the v1 narrow scope; they'd be
-                            // unreachable here. Safe to fall through.
+                            PropIcKind::ProtoData {
+                                proto_id,
+                                proto_shape_id,
+                            } => {
+                                // CRITICAL: reassigning `[[Prototype]]`
+                                // (`__proto__` / `Object.setPrototypeOf`) sets
+                                // `prototype_id` directly WITHOUT bumping the
+                                // receiver's shape_id, so the receiver-shape
+                                // match above is NOT sufficient. We must also
+                                // confirm the receiver still points at the same
+                                // prototype, then confirm that prototype's shape
+                                // is unchanged (so the property hasn't been
+                                // added/removed/reordered/flipped on it).
+                                let cur_proto = obj_rc.borrow().prototype_id;
+                                if cur_proto == Some(proto_id)
+                                    && let Some(proto_rc) = self.get_object(proto_id)
+                                {
+                                    let val = {
+                                        let pb = proto_rc.borrow();
+                                        if pb.shape_id == proto_shape_id {
+                                            pb.properties.get(&key).and_then(|d| d.value.clone())
+                                        } else {
+                                            None
+                                        }
+                                    };
+                                    if let Some(v) = val {
+                                        self.ic_hit_count.set(self.ic_hit_count.get() + 1);
+                                        return Completion::Normal(v);
+                                    }
+                                }
+                                // Proto swapped, proto shape advanced, or the
+                                // descriptor lost its value — fall through.
+                            }
+                            // OwnAccessor / TypedArrayElement not recorded in
+                            // this narrow scope; they'd be unreachable here.
+                            // Safe to fall through.
                             _ => {}
                         }
                     }
