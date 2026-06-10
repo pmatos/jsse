@@ -41,10 +41,10 @@ pub(crate) enum PropIcSlot {
 /// for the probe to dispatch without re-walking proxy/module-ns/typed-array
 /// detection or the prototype chain.
 ///
-/// Phase-2 v1 only constructs `OwnData` and `Missing`. `OwnAccessor`,
-/// `ProtoData`, and `TypedArrayElement` are reserved for follow-up cycles
-/// (the probe path already handles them defensively, so adding the recording
-/// hook later is a small change).
+/// Constructs `OwnData`, `Missing`, and depth-1 `ProtoData`. `OwnAccessor`
+/// and `TypedArrayElement` are reserved for follow-up cycles (the probe path
+/// already handles them defensively, so adding the recording hook later is a
+/// small change).
 #[allow(dead_code)]
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PropIcKind {
@@ -57,8 +57,10 @@ pub(crate) enum PropIcKind {
     /// Probe re-fetches the descriptor and invokes the getter.
     OwnAccessor,
     /// Property resolved on the immediate prototype (depth 1) as a data
-    /// descriptor. Probe verifies BOTH the receiver shape AND the prototype
-    /// shape before re-fetching.
+    /// descriptor. Probe verifies the receiver shape, the receiver's current
+    /// `prototype_id` (a proto swap does NOT bump the receiver shape), AND the
+    /// prototype's shape before re-fetching the value from the prototype's own
+    /// data property.
     ProtoData { proto_id: u64, proto_shape_id: u64 },
     /// Property is absent up to and including the immediate prototype.
     /// Probe verifies the prototype shape (or `proto_id == None`) and
