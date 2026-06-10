@@ -40,7 +40,12 @@ impl Interpreter {
         self.gc_requested = false;
         self.gc_alloc_count = 0;
         let obj_count = self.objects.capacity() as usize;
-        let mut marks = vec![false; obj_count];
+        // Reuse the mark bitmap buffer across collections to avoid per-GC
+        // allocation churn. clear()+resize(_, false) yields an all-false buffer
+        // (invariant required by mark/sweep) while keeping the backing capacity.
+        let mut marks = std::mem::take(&mut self.gc_marks);
+        marks.clear();
+        marks.resize(obj_count, false);
 
         // Collect roots from all realms
         let mut worklist: Vec<u64> = Vec::new();
@@ -249,6 +254,8 @@ impl Interpreter {
                 }
             }
         }
+        // Return the buffer to the interpreter so its capacity is reused next GC.
+        self.gc_marks = marks;
     }
 
     fn collect_value_roots(val: &JsValue, worklist: &mut Vec<u64>) {

@@ -86,6 +86,8 @@ pub struct Interpreter {
     gc_bytes_since_gc: usize,
     gc_external_bytes: usize,
     gc_threshold_bytes: usize,
+    // Reusable mark bitmap scratch buffer, cleared+resized each GC collection.
+    gc_marks: Vec<bool>,
     generator_context: Option<GeneratorContext>,
     pub(crate) destructuring_yield: bool,
     pub(crate) pending_iter_close: Vec<JsValue>,
@@ -248,6 +250,7 @@ impl Interpreter {
             gc_bytes_since_gc: 0,
             gc_external_bytes: 0,
             gc_threshold_bytes: GC_INITIAL_THRESHOLD_BYTES,
+            gc_marks: Vec::new(),
             generator_context: None,
             destructuring_yield: false,
             pending_iter_close: Vec::new(),
