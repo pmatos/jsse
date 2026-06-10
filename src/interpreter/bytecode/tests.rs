@@ -450,6 +450,173 @@ fn add_string_and_number_falls_through_to_string_concat() {
     }
 }
 
+// ----- if / else statement lowering -----
+
+/// Asserts the bytecode path produces the same `__r` value as the
+/// tree-walker AND that the bytecode path actually executed a chunk.
+fn assert_parity_number(source: &str, expected: f64) {
+    let (ast_v, ast_count) = eval_with_mode(source, false);
+    let (bc_v, bc_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0, "{source}: AST mode must not run chunks");
+    assert!(bc_count >= 1, "{source}: bytecode path must run a chunk");
+    match (&ast_v, &bc_v) {
+        (JsValue::Number(a), JsValue::Number(b)) => {
+            assert_eq!(*a, expected, "{source}: AST value");
+            assert_eq!(*b, expected, "{source}: bytecode value");
+        }
+        _ => panic!("{source}: expected Number({expected}), got ast={ast_v:?} bc={bc_v:?}"),
+    }
+}
+
+// NOTE: `var`/`let` declarations are not yet compilable, so a body that
+// contains one bails the WHOLE body to the tree-walker. To exercise the
+// bytecode path these tests use a parameter for input plus `return` in the
+// branches — both of which the compiler supports.
+
+#[test]
+fn if_true_takes_consequent_branch() {
+    // (a) if(true) taken branch
+    let source = "var __r = (function(n){ if (true) return 10; return 0; })(0);";
+    assert_parity_number(source, 10.0);
+}
+
+#[test]
+fn if_false_takes_else_branch() {
+    // (b) if(false) with else
+    let source = "var __r = (function(n){ if (false) return 10; else return 20; })(0);";
+    assert_parity_number(source, 20.0);
+}
+
+#[test]
+fn if_false_no_else_skips() {
+    // (c) if with no else (falsy → skip body, fall through to the tail return)
+    let source = "var __r = (function(n){ if (false) return 99; return n; })(5);";
+    assert_parity_number(source, 5.0);
+}
+
+#[test]
+fn nested_if_else() {
+    // (d) nested if/else (branches are blocks containing nested if/else)
+    let nested = "(function(n){ \
+        if (n > 10) { if (n > 20) { return 1; } else { return 2; } } \
+        else { return 3; } })";
+    assert_parity_number(&format!("var __r = {nested}(15);"), 2.0);
+    assert_parity_number(&format!("var __r = {nested}(25);"), 1.0);
+    assert_parity_number(&format!("var __r = {nested}(5);"), 3.0);
+}
+
+#[test]
+fn if_branch_contains_return() {
+    // (e) if whose branch contains a return.
+    // `return` inside a block IS supported (Return + Block arms), so this
+    // must take the bytecode path and match the tree-walker.
+    let source = "var __r = (function(n){ if (n > 0) { return 1; } return -1; })(5);";
+    assert_parity_number(source, 1.0);
+
+    let source_neg = "var __r = (function(n){ if (n > 0) { return 1; } return -1; })(-5);";
+    assert_parity_number(source_neg, -1.0);
+
+    // return in the else branch as well
+    let source_else = "var __r = (function(n){ if (n > 0) { return 1; } else { return 2; } })(-5);";
+    assert_parity_number(source_else, 2.0);
+}
+
+#[test]
+fn if_truthiness_coercion_matches_tree_walker() {
+    // (f) truthiness coercion via JumpIfFalse's to_boolean: 0, "", NaN → falsy.
+    // if(0) → falsy → else
+    assert_parity_number(
+        "var __r = (function(){ if (0) return 1; else return 2; })();",
+        2.0,
+    );
+    // if("") → falsy → else
+    assert_parity_number(
+        "var __r = (function(){ if ('') return 1; else return 2; })();",
+        2.0,
+    );
+    // if(NaN) → falsy → else (NaN produced via 0/0 — a compilable expression)
+    assert_parity_number(
+        "var __r = (function(){ if (0/0) return 1; else return 2; })();",
+        2.0,
+    );
+    // if({}) → truthy → consequent. An object literal is NOT a compilable
+    // expression, so the body bails to the tree-walker. Assert the value is
+    // still correct in both modes (the parity helper requires bytecode to
+    // run, which it won't here).
+    let src = "var __r = (function(){ if ({}) return 1; else return 2; })();";
+    let (ast_v, _) = eval_with_mode(src, false);
+    let (bc_v, bc_count) = eval_with_mode(src, true);
+    assert_eq!(bc_count, 0, "object-literal test must bail to AST");
+    assert!(
+        matches!(ast_v, JsValue::Number(n) if n == 1.0),
+        "ast {ast_v:?}"
+    );
+    assert!(
+        matches!(bc_v, JsValue::Number(n) if n == 1.0),
+        "bc {bc_v:?}"
+    );
+}
+
+#[test]
+fn compile_body_if_lowers_via_vm_directly() {
+    use crate::ast::{BinaryOp, IfStatement};
+    // if (1 < 2) return 10; else return 20;
+    let body = vec![Statement::If(IfStatement {
+        test: Expression::Binary(
+            BinaryOp::Lt,
+            Box::new(Expression::Literal(Literal::Number(1.0))),
+            Box::new(Expression::Literal(Literal::Number(2.0))),
+        ),
+        consequent: Box::new(Statement::Return(Some(Expression::Literal(
+            Literal::Number(10.0),
+        )))),
+        alternate: Some(Box::new(Statement::Return(Some(Expression::Literal(
+            Literal::Number(20.0),
+        ))))),
+    })];
+    let chunk = compile_body(&body).expect("compile if/else");
+    match run(chunk) {
+        Completion::Return(JsValue::Number(n)) => assert_eq!(n, 10.0),
+        other => panic!("expected Return(Number(10.0)), got {other:?}"),
+    }
+}
+
+#[test]
+fn if_with_unsupported_branch_bails_to_unsupported() {
+    use super::compiler::CompileError;
+    use crate::ast::IfStatement;
+    // The consequent is a `Throw`, which the compiler does not support, so
+    // compile_body must return Err(Unsupported) rather than mis-compiling.
+    let body = vec![Statement::If(IfStatement {
+        test: Expression::Literal(Literal::Boolean(true)),
+        consequent: Box::new(Statement::Throw(Expression::Literal(Literal::Number(1.0)))),
+        alternate: None,
+    })];
+    match compile_body(&body) {
+        Err(CompileError::Unsupported(_)) => {}
+        other => panic!("expected Err(Unsupported), got {other:?}"),
+    }
+}
+
+#[test]
+fn if_with_unsupported_alternate_bails_to_unsupported() {
+    use super::compiler::CompileError;
+    use crate::ast::IfStatement;
+    let body = vec![Statement::If(IfStatement {
+        test: Expression::Literal(Literal::Boolean(false)),
+        consequent: Box::new(Statement::Return(Some(Expression::Literal(
+            Literal::Number(1.0),
+        )))),
+        alternate: Some(Box::new(Statement::Throw(Expression::Literal(
+            Literal::Number(2.0),
+        )))),
+    })];
+    match compile_body(&body) {
+        Err(CompileError::Unsupported(_)) => {}
+        other => panic!("expected Err(Unsupported), got {other:?}"),
+    }
+}
+
 #[test]
 fn load_undefined_then_return_completes_with_undefined() {
     let chunk = Chunk {

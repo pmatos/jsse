@@ -266,6 +266,40 @@ impl Compiler {
                 self.pop_n(1);
                 Ok(())
             }
+            Statement::Block(body) => {
+                // A block is statement-level and net-zero on the stack; each
+                // contained statement balances itself. Any unsupported nested
+                // statement propagates the error so the whole body bails.
+                for s in body {
+                    self.compile_statement(s)?;
+                }
+                Ok(())
+            }
+            Statement::If(if_stmt) => {
+                // Lowering (mirrors `Conditional`'s JumpIfFalse discipline):
+                //   <test>
+                //   JumpIfFalse else_target   ; JumpIfFalse POPS the test value
+                //   <consequent>
+                //   [Jump end_target]         ; only when an alternate exists
+                // else_target:
+                //   [<alternate>]
+                // end_target:
+                // Branches are statements (net-zero on the stack), so unlike
+                // the ternary expression nothing is re-pushed at the merge.
+                self.compile_expr(&if_stmt.test)?;
+                self.pop_n(1); // JumpIfFalse consumes the test value
+                let else_target = self.emit_jump(Op::JumpIfFalse);
+                self.compile_statement(&if_stmt.consequent)?;
+                if let Some(alternate) = &if_stmt.alternate {
+                    let end_target = self.emit_jump(Op::Jump);
+                    self.patch_jump(else_target)?;
+                    self.compile_statement(alternate)?;
+                    self.patch_jump(end_target)?;
+                } else {
+                    self.patch_jump(else_target)?;
+                }
+                Ok(())
+            }
             Statement::Return(None) => {
                 self.emit(Op::ReturnUndefined);
                 Ok(())
