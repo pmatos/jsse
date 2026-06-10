@@ -965,12 +965,23 @@ impl Interpreter {
                             && b.array_elements().map(|v| v.len()) == Some(len);
                         (ok, b.prototype_id)
                     };
+                    // §23.1.3.25 push performs Set, which creates *present* data
+                    // properties. In this engine a `JsValue::Undefined` slot in
+                    // `array_elements` with no `properties` entry is the HOLE
+                    // sentinel (see the indexed-write fast path in eval.rs and
+                    // `get_own_property_full`), so writing `undefined` straight
+                    // into the Vec would make `push(undefined)` create a hole
+                    // instead of a present element. Bail to the slow path when any
+                    // argument is `undefined`; the slow path adds the presence
+                    // marker.
+                    let has_undefined_arg = args.iter().any(|a| matches!(a, JsValue::Undefined));
                     // §23.1.3.25 push performs Set(O, ToString(i), …, true) =
                     // OrdinarySet, which walks the prototype chain. If any
                     // appended index ToString is inherited (setter or data) we
                     // must invoke/honour it via the slow loop rather than write
                     // straight into the Vec — bail to the slow path.
                     let inherited = fast_ok
+                        && !has_undefined_arg
                         && proto_id.is_some_and(|pid| {
                             (len..len + args.len()).any(|i| {
                                 interp
@@ -978,7 +989,7 @@ impl Interpreter {
                                     .is_some()
                             })
                         });
-                    if fast_ok && !inherited {
+                    if fast_ok && !has_undefined_arg && !inherited {
                         let new_len = len + args.len();
                         {
                             let mut b = cell.borrow_mut();
