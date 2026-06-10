@@ -18,6 +18,13 @@ struct Compiler {
     names: Vec<std::rc::Rc<str>>,
     current_stack: u16,
     max_stack: u16,
+    /// Highest byte offset targeted by any patched forward jump. When this
+    /// equals the final code length, some branch falls through to the very end
+    /// of the chunk, so `finish` must append a trailing `ReturnUndefined` even
+    /// when the last *emitted* opcode is a `Return` — otherwise that branch
+    /// runs `pc` off the end of `code` and panics in the VM dispatch loop. The
+    /// motivating case is a one-armed `if` whose consequent ends in `return`.
+    max_jump_target: usize,
 }
 
 impl Compiler {
@@ -28,6 +35,7 @@ impl Compiler {
             names: Vec::new(),
             current_stack: 0,
             max_stack: 0,
+            max_jump_target: 0,
         }
     }
 
@@ -76,6 +84,7 @@ impl Compiler {
         // Offset is from the byte AFTER the 2-byte operand to the current code length.
         let from = patch + 2;
         let to = self.code.len();
+        self.max_jump_target = self.max_jump_target.max(to);
         let delta = to as isize - from as isize;
         if !(i16::MIN as isize..=i16::MAX as isize).contains(&delta) {
             return Err(CompileError::Unsupported("jump offset overflow"));
@@ -315,7 +324,12 @@ impl Compiler {
     }
 
     fn finish(mut self) -> Chunk {
-        if !ends_with_return(&self.code) {
+        // Emit a trailing `ReturnUndefined` unless the chunk already ends in a
+        // return AND no branch falls through to the end. A forward jump whose
+        // target is the end of the chunk (e.g. the false arm of a one-armed
+        // `if` whose consequent ends in `return`) would otherwise run `pc` past
+        // the last byte of `code` and panic in the VM dispatch loop.
+        if !ends_with_return(&self.code) || self.max_jump_target >= self.code.len() {
             self.emit(Op::ReturnUndefined);
         }
         Chunk {

@@ -618,6 +618,57 @@ fn if_with_unsupported_alternate_bails_to_unsupported() {
 }
 
 #[test]
+fn compile_body_one_armed_if_returning_consequent_false_path_is_safe() {
+    use crate::ast::IfStatement;
+    // Regression (PR #159): a one-armed `if` whose consequent ends in `return`,
+    // as the LAST statement of the body. The false arm's `JumpIfFalse` targets
+    // the end of the chunk, so `finish()` must append a trailing
+    // `ReturnUndefined` — otherwise the VM runs `pc` off the end of `code` and
+    // panics. With a constant-false test the consequent never runs, so the
+    // chunk must complete as `Return(Undefined)`.
+    let body = vec![Statement::If(IfStatement {
+        test: Expression::Literal(Literal::Boolean(false)),
+        consequent: Box::new(Statement::Return(Some(Expression::Literal(
+            Literal::Number(1.0),
+        )))),
+        alternate: None,
+    })];
+    let chunk = compile_body(&body).expect("compile one-armed if");
+    match run(chunk) {
+        Completion::Return(JsValue::Undefined) => {}
+        other => panic!("expected Return(Undefined) on false path, got {other:?}"),
+    }
+}
+
+#[test]
+fn end_to_end_one_armed_if_last_statement_both_paths() {
+    // Same regression via the real bytecode path. The true path returns the
+    // consequent's value; the false path falls through to the implicit
+    // `ReturnUndefined`. Both must match the tree-walker and not panic.
+    let true_src = "var __r = (function(x){ if (x) return 1; })(true);";
+    let (av, ac) = eval_with_mode(true_src, false);
+    let (bv, bc) = eval_with_mode(true_src, true);
+    assert_eq!(ac, 0, "AST mode must not run chunks");
+    assert!(bc >= 1, "bytecode path must run (true)");
+    assert!(
+        matches!(av, JsValue::Number(n) if n == 1.0),
+        "ast true {av:?}"
+    );
+    assert!(
+        matches!(bv, JsValue::Number(n) if n == 1.0),
+        "bc true {bv:?}"
+    );
+
+    let false_src = "var __r = (function(x){ if (x) return 1; })(false);";
+    let (av2, ac2) = eval_with_mode(false_src, false);
+    let (bv2, bc2) = eval_with_mode(false_src, true);
+    assert_eq!(ac2, 0, "AST mode must not run chunks");
+    assert!(bc2 >= 1, "bytecode path must run (false)");
+    assert!(matches!(av2, JsValue::Undefined), "ast false {av2:?}");
+    assert!(matches!(bv2, JsValue::Undefined), "bc false {bv2:?}");
+}
+
+#[test]
 fn load_undefined_then_return_completes_with_undefined() {
     let chunk = Chunk {
         code: vec![Op::LoadUndefined as u8, Op::Return as u8],
