@@ -1618,7 +1618,7 @@ impl Interpreter {
 
         // @@toStringTag = "Temporal"
         {
-            let key = "Symbol(Symbol.toStringTag)".to_string();
+            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
             let desc = PropertyDescriptor {
                 value: Some(JsValue::String(JsString::from_str("Temporal"))),
                 writable: Some(false),

@@ -2,6 +2,7 @@ use crate::ast::*;
 use crate::interpreter::PropertyMap;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
 use crate::interpreter::helpers::same_value;
+use crate::interpreter::key_intern::intern_key;
 use crate::types::{JsString, JsValue};
 use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
@@ -1544,7 +1545,7 @@ pub struct JsObjectData {
     /// `Interpreter::alloc_object` at allocation time and never reassigned.
     pub id: Option<u64>,
     pub properties: PropertyMap,
-    pub property_order: Vec<String>,
+    pub property_order: Vec<Rc<str>>,
     pub prototype_id: Option<u64>,
     pub callable: Option<JsFunction>,
     pub class_name: String,
@@ -2667,19 +2668,28 @@ impl JsObjectData {
                 }
             };
 
-            if !self.property_order.contains(&key) {
-                self.property_order.push(key.clone());
+            // Intern once; the same Rc<str> is shared between property_order and
+            // the property map so the two stored copies share one allocation.
+            // Compare by value (not pointer): integer-index keys are not interned
+            // and get a fresh Rc each time, so ptr_eq would miss existing entries.
+            let ikey = intern_key(&key);
+            if !self
+                .property_order
+                .iter()
+                .any(|k| k.as_ref() == ikey.as_ref())
+            {
+                self.property_order.push(Rc::clone(&ikey));
             }
             // NOTE: Array length shrinking semantics (ArraySetLength §10.4.2.4) are
             // handled by array_set_length() in mod.rs, which calls this function.
             // Do NOT duplicate that logic here.
             // Save key before it's moved into insert
             let key_for_step7 = if self.parameter_map().is_some() {
-                Some(key.clone())
+                Some(key)
             } else {
                 None
             };
-            self.properties.insert(key, merged);
+            self.properties.insert(ikey, merged);
 
             // §10.4.4.3 step 7: post-define parameter map handling
             if let Some(key_ref) = key_for_step7
@@ -2716,7 +2726,10 @@ impl JsObjectData {
             {
                 let _ = env_ref.borrow_mut().set(param_name, val.clone());
             }
-            self.property_order.push(key.clone());
+            // New property: intern once and share the Rc<str> between
+            // property_order and the property map (one allocation, not two).
+            let ikey = intern_key(&key);
+            self.property_order.push(Rc::clone(&ikey));
             // For new property, fill in defaults per spec
             let is_accessor = desc.is_accessor_descriptor();
             let new_desc = PropertyDescriptor {
@@ -2733,7 +2746,7 @@ impl JsObjectData {
                 enumerable: desc.enumerable.or(Some(false)),
                 configurable: desc.configurable.or(Some(false)),
             };
-            self.properties.insert(key, new_desc);
+            self.properties.insert(ikey, new_desc);
         }
         // Issue #71 (Step 5): reaching this point means either an existing
         // property was redefined (line ~2296 `properties.insert(key, merged)`)
@@ -2793,10 +2806,10 @@ impl JsObjectData {
                         .filter_map(|k| {
                             k.parse::<u64>()
                                 .ok()
-                                .filter(|&idx| idx <= 0xFFFF_FFFE && idx.to_string() == *k)
+                                .filter(|&idx| idx <= 0xFFFF_FFFE && idx.to_string() == **k)
                                 .map(|idx| idx as u32)
                                 .filter(|&idx| idx >= new_len_u32)
-                                .map(|idx| (idx, k.clone()))
+                                .map(|idx| (idx, k.to_string()))
                         })
                         .collect();
                     idx_keys.sort_by_key(|a| std::cmp::Reverse(a.0));
@@ -2812,7 +2825,7 @@ impl JsObjectData {
                             break;
                         } else {
                             self.properties.remove(k.as_str());
-                            self.property_order.retain(|p| p != k);
+                            self.property_order.retain(|p| p.as_ref() != k.as_str());
                             did_remove = true;
                         }
                     }
@@ -2945,9 +2958,10 @@ impl JsObjectData {
             if !self.extensible {
                 return false;
             }
-            self.property_order.push(key.to_string());
+            let ikey = intern_key(key);
+            self.property_order.push(Rc::clone(&ikey));
             self.properties
-                .insert(key.to_string(), PropertyDescriptor::data_default(value));
+                .insert(ikey, PropertyDescriptor::data_default(value));
             // Issue #71 (Step 5): new own property added — structural mutation.
             // The earlier `properties.get_mut(key)` branch (in-place update)
             // does NOT bump; only this insert branch does.
@@ -2957,24 +2971,27 @@ impl JsObjectData {
     }
 
     pub fn insert_value(&mut self, key: String, value: JsValue) {
+        let key = intern_key(&key);
         if !self.properties.contains_key(&key) {
-            self.property_order.push(key.clone());
+            self.property_order.push(Rc::clone(&key));
         }
         self.properties
             .insert(key, PropertyDescriptor::data_default(value));
     }
 
     pub fn insert_builtin(&mut self, key: String, value: JsValue) {
+        let key = intern_key(&key);
         if !self.properties.contains_key(&key) {
-            self.property_order.push(key.clone());
+            self.property_order.push(Rc::clone(&key));
         }
         self.properties
             .insert(key, PropertyDescriptor::data(value, true, false, true));
     }
 
     pub fn insert_property(&mut self, key: String, desc: PropertyDescriptor) {
+        let key = intern_key(&key);
         if !self.properties.contains_key(&key) {
-            self.property_order.push(key.clone());
+            self.property_order.push(Rc::clone(&key));
         }
         self.properties.insert(key, desc);
     }
@@ -3187,11 +3204,11 @@ impl JsObjectData {
             }
             if let Some(desc) = self.properties.get(k) {
                 let is_enumerable = desc.enumerable != Some(false);
-                if seen.insert(k.clone()) && is_enumerable {
+                if seen.insert(k.to_string()) && is_enumerable {
                     if let Some(idx) = parse_array_index(k) {
-                        index_keys.push((idx, k.clone()));
+                        index_keys.push((idx, k.to_string()));
                     } else {
-                        string_keys.push(k.clone());
+                        string_keys.push(k.to_string());
                     }
                 }
             }

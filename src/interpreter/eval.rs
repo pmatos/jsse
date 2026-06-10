@@ -724,7 +724,7 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                         obj_mut.properties.remove(&key);
-                        obj_mut.property_order.retain(|k| k != &key);
+                        obj_mut.property_order.retain(|k| &**k != key.as_str());
                         if let Some(map) = obj_mut.parameter_map_mut() {
                             map.remove(&key);
                         }
@@ -790,7 +790,7 @@ impl Interpreter {
                             }
                             drop(gb);
                             global.borrow_mut().properties.remove(name);
-                            global.borrow_mut().property_order.retain(|k| k != name);
+                            global.borrow_mut().property_order.retain(|k| &**k != name);
                             self.realm().global_env.borrow_mut().bindings.remove(name);
                             return Completion::Normal(JsValue::Boolean(true));
                         }
@@ -12888,7 +12888,7 @@ impl Interpreter {
                 if let Some(obj) = self.get_object_cell(o.id) {
                     let class = obj.borrow().class_name.clone();
                     let has_callable = obj.borrow().callable.is_some();
-                    let keys: Vec<String> = obj
+                    let keys: Vec<Rc<str>> = obj
                         .borrow()
                         .property_order
                         .iter()
@@ -14637,7 +14637,7 @@ impl Interpreter {
                             .get(k)
                             .is_some_and(|d| d.configurable == Some(false))
                     })
-                    .cloned()
+                    .map(|k| k.to_string())
                     .collect();
                 let c: Vec<String> = b
                     .property_order
@@ -14647,7 +14647,7 @@ impl Interpreter {
                             .get(k)
                             .is_some_and(|d| d.configurable != Some(false))
                     })
-                    .cloned()
+                    .map(|k| k.to_string())
                     .collect();
                 (nc, c)
             };
@@ -15438,7 +15438,7 @@ impl Interpreter {
                 return Ok(false);
             }
             m.properties.remove(key);
-            m.property_order.retain(|k| k != key);
+            m.property_order.retain(|k| &**k != key);
             if let Some(elems) = m.array_elements_mut()
                 && let Ok(idx) = key.parse::<usize>()
                 && idx < elems.len()
@@ -16038,20 +16038,20 @@ impl Interpreter {
 
             for k in &b.property_order {
                 if k.starts_with("Symbol(") {
-                    sym_keys.push(k.clone());
+                    sym_keys.push(k.to_string());
                 } else if let Ok(n) = k.parse::<u64>() {
-                    if n.to_string() == *k {
+                    if n.to_string() == **k {
                         // This is an integer index - add/overwrite (string char indices take precedence, but we let btreemap handle uniqueness)
-                        int_keys_set.insert(n, k.clone());
+                        int_keys_set.insert(n, k.to_string());
                     } else {
-                        str_keys.push(k.clone());
+                        str_keys.push(k.to_string());
                     }
                 } else {
                     // Skip "length" for string wrappers - it's virtual, added separately
-                    if is_string_wrapper && k == "length" {
+                    if is_string_wrapper && &**k == "length" {
                         continue;
                     }
-                    str_keys.push(k.clone());
+                    str_keys.push(k.to_string());
                 }
             }
 

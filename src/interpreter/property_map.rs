@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use smallvec::SmallVec;
 
@@ -22,10 +23,15 @@ pub struct PropertyMap {
 // The inline variant is intentionally large — eliminating the heap allocation
 // for small objects is the entire point of issue #68. Boxing it would defeat
 // the optimisation.
+// Keys are `Rc<str>` (issue #74): the same interned `Rc<str>` is shared with
+// `JsObjectData.property_order`, so the two stored copies of a property name
+// share one allocation. `Rc<str>` derefs to `&str`, so read-side lookups taking
+// `&str` are unchanged, and `Rc<str>: Borrow<str>` lets the spilled `HashMap`
+// be queried with `&str` keys.
 #[allow(clippy::large_enum_variant)]
 enum PropertyMapInner {
-    Inline(SmallVec<[(String, PropertyDescriptor); INLINE_CAP]>),
-    Spilled(HashMap<String, PropertyDescriptor>),
+    Inline(SmallVec<[(Rc<str>, PropertyDescriptor); INLINE_CAP]>),
+    Spilled(HashMap<Rc<str>, PropertyDescriptor>),
 }
 
 impl PropertyMap {
@@ -37,26 +43,35 @@ impl PropertyMap {
 
     pub fn contains_key(&self, key: &str) -> bool {
         match &self.inner {
-            PropertyMapInner::Inline(v) => v.iter().any(|(k, _)| k == key),
+            PropertyMapInner::Inline(v) => v.iter().any(|(k, _)| k.as_ref() == key),
             PropertyMapInner::Spilled(m) => m.contains_key(key),
         }
     }
 
     pub fn get(&self, key: &str) -> Option<&PropertyDescriptor> {
         match &self.inner {
-            PropertyMapInner::Inline(v) => v.iter().find(|(k, _)| k == key).map(|(_, d)| d),
+            PropertyMapInner::Inline(v) => {
+                v.iter().find(|(k, _)| k.as_ref() == key).map(|(_, d)| d)
+            }
             PropertyMapInner::Spilled(m) => m.get(key),
         }
     }
 
     pub fn get_mut(&mut self, key: &str) -> Option<&mut PropertyDescriptor> {
         match &mut self.inner {
-            PropertyMapInner::Inline(v) => v.iter_mut().find(|(k, _)| k == key).map(|(_, d)| d),
+            PropertyMapInner::Inline(v) => v
+                .iter_mut()
+                .find(|(k, _)| k.as_ref() == key)
+                .map(|(_, d)| d),
             PropertyMapInner::Spilled(m) => m.get_mut(key),
         }
     }
 
-    pub fn insert(&mut self, key: String, value: PropertyDescriptor) -> Option<PropertyDescriptor> {
+    pub fn insert(
+        &mut self,
+        key: Rc<str>,
+        value: PropertyDescriptor,
+    ) -> Option<PropertyDescriptor> {
         match &mut self.inner {
             PropertyMapInner::Inline(v) => {
                 if let Some(slot) = v.iter_mut().find(|(k, _)| *k == key) {
@@ -68,7 +83,7 @@ impl PropertyMap {
                 } else {
                     // Spill: drain inline entries into a fresh randomised HashMap,
                     // then add the new entry.
-                    let mut map: HashMap<String, PropertyDescriptor> =
+                    let mut map: HashMap<Rc<str>, PropertyDescriptor> =
                         HashMap::with_capacity(INLINE_CAP + 1);
                     for (k, d) in v.drain(..) {
                         map.insert(k, d);
@@ -85,7 +100,7 @@ impl PropertyMap {
     pub fn remove(&mut self, key: &str) -> Option<PropertyDescriptor> {
         match &mut self.inner {
             PropertyMapInner::Inline(v) => {
-                let pos = v.iter().position(|(k, _)| k == key)?;
+                let pos = v.iter().position(|(k, _)| k.as_ref() == key)?;
                 Some(v.remove(pos).1)
             }
             PropertyMapInner::Spilled(m) => m.remove(key),
@@ -100,7 +115,7 @@ impl PropertyMap {
         PropertyMapIter { inner }
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = &String> {
+    pub fn keys(&self) -> impl Iterator<Item = &Rc<str>> {
         self.iter().map(|(k, _)| k)
     }
 
@@ -120,12 +135,12 @@ pub struct PropertyMapIter<'a> {
 }
 
 enum PropertyMapIterInner<'a> {
-    Inline(std::slice::Iter<'a, (String, PropertyDescriptor)>),
-    Spilled(std::collections::hash_map::Iter<'a, String, PropertyDescriptor>),
+    Inline(std::slice::Iter<'a, (Rc<str>, PropertyDescriptor)>),
+    Spilled(std::collections::hash_map::Iter<'a, Rc<str>, PropertyDescriptor>),
 }
 
 impl<'a> Iterator for PropertyMapIter<'a> {
-    type Item = (&'a String, &'a PropertyDescriptor);
+    type Item = (&'a Rc<str>, &'a PropertyDescriptor);
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.inner {
@@ -140,6 +155,10 @@ mod tests {
     use super::*;
     use crate::interpreter::types::JsObjectData;
     use crate::types::JsValue;
+
+    fn key(s: impl AsRef<str>) -> Rc<str> {
+        Rc::from(s.as_ref())
+    }
 
     fn desc(n: f64) -> PropertyDescriptor {
         PropertyDescriptor::data_default(JsValue::Number(n))
@@ -160,7 +179,7 @@ mod tests {
     fn inline_insert_and_get() {
         let mut m = PropertyMap::new();
         for i in 0..INLINE_CAP {
-            assert!(m.insert(format!("k{i}"), desc(i as f64)).is_none());
+            assert!(m.insert(key(format!("k{i}")), desc(i as f64)).is_none());
         }
         assert!(is_inline(&m));
         for i in 0..INLINE_CAP {
@@ -174,10 +193,10 @@ mod tests {
     fn one_past_capacity_triggers_spill() {
         let mut m = PropertyMap::new();
         for i in 0..INLINE_CAP {
-            m.insert(format!("k{i}"), desc(i as f64));
+            m.insert(key(format!("k{i}")), desc(i as f64));
         }
         assert!(is_inline(&m));
-        m.insert(format!("k{INLINE_CAP}"), desc(INLINE_CAP as f64));
+        m.insert(key(format!("k{INLINE_CAP}")), desc(INLINE_CAP as f64));
         assert!(!is_inline(&m));
         for i in 0..=INLINE_CAP {
             assert!(
@@ -191,11 +210,9 @@ mod tests {
     fn duplicate_insert_returns_previous_and_no_spill() {
         let mut m = PropertyMap::new();
         for i in 0..INLINE_CAP {
-            m.insert(format!("k{i}"), desc(i as f64));
+            m.insert(key(format!("k{i}")), desc(i as f64));
         }
-        let prev = m
-            .insert("k0".to_string(), desc(99.0))
-            .expect("had previous");
+        let prev = m.insert(key("k0"), desc(99.0)).expect("had previous");
         assert_eq!(num(&prev), 0.0);
         assert!(is_inline(&m));
         assert_eq!(num(m.get("k0").expect("present")), 99.0);
@@ -205,7 +222,7 @@ mod tests {
     fn remove_after_spill_keeps_spilled() {
         let mut m = PropertyMap::new();
         for i in 0..=INLINE_CAP {
-            m.insert(format!("k{i}"), desc(i as f64));
+            m.insert(key(format!("k{i}")), desc(i as f64));
         }
         assert!(!is_inline(&m));
         for i in 0..=INLINE_CAP {
@@ -219,7 +236,7 @@ mod tests {
     fn iter_visits_all_entries_in_both_modes() {
         let mut m = PropertyMap::new();
         for i in 0..3 {
-            m.insert(format!("k{i}"), desc(i as f64));
+            m.insert(key(format!("k{i}")), desc(i as f64));
         }
         let mut seen: Vec<(String, f64)> = m
             .iter()
@@ -229,7 +246,7 @@ mod tests {
                 } else {
                     -1.0
                 };
-                (k.clone(), n)
+                (k.to_string(), n)
             })
             .collect();
         seen.sort_by(|a, b| a.0.cmp(&b.0));
@@ -239,7 +256,7 @@ mod tests {
         );
 
         for i in 3..=INLINE_CAP {
-            m.insert(format!("k{i}"), desc(i as f64));
+            m.insert(key(format!("k{i}")), desc(i as f64));
         }
         assert!(!is_inline(&m));
         let mut seen: Vec<(String, f64)> = m
@@ -250,7 +267,7 @@ mod tests {
                 } else {
                     -1.0
                 };
-                (k.clone(), n)
+                (k.to_string(), n)
             })
             .collect();
         seen.sort_by(|a, b| a.0.cmp(&b.0));
@@ -272,14 +289,14 @@ mod tests {
     #[test]
     fn get_mut_in_both_modes() {
         let mut m = PropertyMap::new();
-        m.insert("a".to_string(), desc(1.0));
+        m.insert(key("a"), desc(1.0));
         if let Some(d) = m.get_mut("a") {
             d.value = Some(JsValue::Number(7.0));
         }
         assert_eq!(num(m.get("a").expect("present")), 7.0);
 
         for i in 0..INLINE_CAP {
-            m.insert(format!("k{i}"), desc(i as f64));
+            m.insert(key(format!("k{i}")), desc(i as f64));
         }
         assert!(!is_inline(&m));
         if let Some(d) = m.get_mut("a") {
@@ -291,18 +308,18 @@ mod tests {
     #[test]
     fn keys_includes_symbols_in_both_modes() {
         let mut m = PropertyMap::new();
-        m.insert("Symbol(foo)".to_string(), desc(1.0));
-        m.insert("plain".to_string(), desc(2.0));
-        let keys: Vec<&String> = m.keys().collect();
-        assert!(keys.iter().any(|k| k.as_str() == "Symbol(foo)"));
-        assert!(keys.iter().any(|k| k.as_str() == "plain"));
+        m.insert(key("Symbol(foo)"), desc(1.0));
+        m.insert(key("plain"), desc(2.0));
+        let keys: Vec<&Rc<str>> = m.keys().collect();
+        assert!(keys.iter().any(|k| k.as_ref() == "Symbol(foo)"));
+        assert!(keys.iter().any(|k| k.as_ref() == "plain"));
         for i in 0..INLINE_CAP {
-            m.insert(format!("k{i}"), desc(i as f64));
+            m.insert(key(format!("k{i}")), desc(i as f64));
         }
         assert!(!is_inline(&m));
-        let keys: Vec<&String> = m.keys().collect();
+        let keys: Vec<&Rc<str>> = m.keys().collect();
         assert!(
-            keys.iter().any(|k| k.as_str() == "Symbol(foo)"),
+            keys.iter().any(|k| k.as_ref() == "Symbol(foo)"),
             "Symbol key lost on spill"
         );
     }

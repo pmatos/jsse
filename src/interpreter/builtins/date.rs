@@ -48,7 +48,7 @@ fn date_to_locale_string(
                             .borrow()
                             .properties
                             .iter()
-                            .map(|(k, pd)| (k.clone(), pd.clone()))
+                            .map(|(k, pd)| (k.to_string(), pd.clone()))
                             .collect();
                         let new_obj_id = interp.create_object_id();
                         for (k, pd) in pds {

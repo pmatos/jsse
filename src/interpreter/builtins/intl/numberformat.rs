@@ -3049,7 +3049,7 @@ impl Interpreter {
 
                         if let Some(obj) = interp.get_object_cell(o.id) {
                             obj.borrow_mut().properties.insert(
-                                "[[BoundFormat]]".to_string(),
+                                crate::interpreter::key_intern::intern_key("[[BoundFormat]]"),
                                 PropertyDescriptor::data(format_fn.clone(), false, false, false),
                             );
                         }

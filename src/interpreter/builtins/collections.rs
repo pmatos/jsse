@@ -2765,7 +2765,7 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            let key = "Symbol(Symbol.toStringTag)".to_string();
+            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
             self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .property_order
@@ -3007,7 +3007,7 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            let key = "Symbol(Symbol.toStringTag)".to_string();
+            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
             self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .property_order

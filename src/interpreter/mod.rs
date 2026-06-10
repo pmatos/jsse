@@ -27,6 +27,7 @@ mod gc;
 pub(crate) mod generator_analysis;
 pub(crate) mod generator_transform;
 pub(crate) mod ic;
+pub(crate) mod key_intern;
 mod object_arena;
 mod property_map;
 pub(crate) use property_map::PropertyMap;
@@ -4760,10 +4761,10 @@ impl Interpreter {
                 .filter_map(|k| {
                     k.parse::<u64>()
                         .ok()
-                        .filter(|&idx| idx <= 0xFFFF_FFFE && idx.to_string() == *k)
+                        .filter(|&idx| idx <= 0xFFFF_FFFE && idx.to_string() == **k)
                         .map(|idx| idx as u32)
                         .filter(|&idx| idx >= new_len && idx < old_len)
-                        .map(|idx| (idx, k.clone()))
+                        .map(|idx| (idx, k.to_string()))
                 })
                 .collect();
             idx_keys.sort_by_key(|a| std::cmp::Reverse(a.0));
@@ -4779,7 +4780,7 @@ impl Interpreter {
                     break;
                 } else {
                     obj.properties.remove(k.as_str());
-                    obj.property_order.retain(|p| p != k);
+                    obj.property_order.retain(|p| p.as_ref() != k.as_str());
                 }
             }
 
