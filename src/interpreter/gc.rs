@@ -522,3 +522,107 @@ impl Interpreter {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn obj(id: u64) -> JsValue {
+        JsValue::Object(crate::types::JsObject { id })
+    }
+
+    /// Sort + dedup a worklist so tests can compare against an expected set
+    /// without depending on push order or accidental duplicates.
+    fn as_set(mut worklist: Vec<u64>) -> Vec<u64> {
+        worklist.sort_unstable();
+        worklist.dedup();
+        worklist
+    }
+
+    #[test]
+    fn collect_value_roots_pushes_only_objects() {
+        let mut worklist = Vec::new();
+        Interpreter::collect_value_roots(&obj(42), &mut worklist);
+        assert_eq!(worklist, vec![42]);
+
+        let mut worklist = Vec::new();
+        Interpreter::collect_value_roots(&JsValue::Undefined, &mut worklist);
+        Interpreter::collect_value_roots(&JsValue::Number(3.0), &mut worklist);
+        Interpreter::collect_value_roots(&JsValue::Boolean(true), &mut worklist);
+        assert!(worklist.is_empty());
+    }
+
+    #[test]
+    fn trace_object_fields_roots_prototype_and_data_properties() {
+        let mut data = JsObjectData::new();
+        data.prototype_id = Some(7);
+        data.properties.insert(
+            "x".to_string(),
+            PropertyDescriptor::data(obj(8), true, true, true),
+        );
+        data.properties.insert(
+            "n".to_string(),
+            PropertyDescriptor::data(JsValue::Number(1.0), true, true, true),
+        );
+
+        let mut worklist = Vec::new();
+        Interpreter::trace_object_fields(&data, &mut worklist);
+        assert_eq!(as_set(worklist), vec![7, 8]);
+    }
+
+    #[test]
+    fn trace_object_fields_roots_accessor_get_and_set() {
+        let mut data = JsObjectData::new();
+        data.properties.insert(
+            "acc".to_string(),
+            PropertyDescriptor::accessor(Some(obj(10)), Some(obj(11)), true, true),
+        );
+
+        let mut worklist = Vec::new();
+        Interpreter::trace_object_fields(&data, &mut worklist);
+        assert_eq!(as_set(worklist), vec![10, 11]);
+    }
+
+    #[test]
+    fn trace_object_fields_roots_array_elements_and_native_roots() {
+        let mut data = JsObjectData::new();
+        data.kind = ObjectKind::Array(vec![obj(20), JsValue::Number(0.0), obj(21)]);
+        data.gc_native_roots = Some(vec![obj(22)]);
+
+        let mut worklist = Vec::new();
+        Interpreter::trace_object_fields(&data, &mut worklist);
+        assert_eq!(as_set(worklist), vec![20, 21, 22]);
+    }
+
+    #[test]
+    fn collect_env_roots_walks_parent_chain_and_terminates_on_cycle() {
+        // (a) child binds "a"=Object(30), parent binds "b"=Object(31) → {30,31}
+        let parent = Environment::new(None);
+        parent.borrow_mut().bindings.insert(
+            "b".to_string(),
+            Binding::new(obj(31), BindingKind::Var, true),
+        );
+        let child = Environment::new(Some(parent.clone()));
+        child.borrow_mut().bindings.insert(
+            "a".to_string(),
+            Binding::new(obj(30), BindingKind::Var, true),
+        );
+
+        let mut worklist = Vec::new();
+        Interpreter::collect_env_roots(&child, &mut worklist);
+        assert_eq!(as_set(worklist), vec![30, 31]);
+
+        // (b) self-referential env (parent points to itself) binds "c"=Object(32)
+        // → terminates without infinite loop, contains 32 exactly once.
+        let cyclic = Environment::new(None);
+        cyclic.borrow_mut().bindings.insert(
+            "c".to_string(),
+            Binding::new(obj(32), BindingKind::Var, true),
+        );
+        cyclic.borrow_mut().parent = Some(cyclic.clone());
+
+        let mut worklist = Vec::new();
+        Interpreter::collect_env_roots(&cyclic, &mut worklist);
+        assert_eq!(worklist, vec![32]);
+    }
+}
