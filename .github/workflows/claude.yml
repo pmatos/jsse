@@ -6,7 +6,13 @@ on:
   pull_request_review_comment:
     types: [created]
   issues:
-    types: [opened, assigned]
+    # Only `opened`: on `opened`, github.actor IS the issue author, so the
+    # `github.actor == 'pmatos'` gate below means pmatos authored the text.
+    # `assigned` is deliberately excluded — on that activity type github.actor is
+    # the *assigner*, so a maintainer triaging an untrusted user's @claude issue
+    # would run the privileged job on attacker-authored body/title (a confused
+    # deputy). See issue #138.
+    types: [opened]
   pull_request_review:
     types: [submitted]
 
@@ -15,14 +21,22 @@ jobs:
     # SECURITY: the `if:` below is the trust gate that prevents untrusted users
     # from triggering this workflow. This job holds `id-token: write` and
     # consumes `secrets.CLAUDE_CODE_OAUTH_TOKEN`, so a stray trigger from a fork
-    # commenter is a direct prompt-injection / secret-exfil surface. Do not relax
-    # the author_association allowlist or drop a clause without re-walking the
-    # threat model — see PR #113 / issue #139.
+    # commenter is a direct prompt-injection / secret-exfil surface. The gate is
+    # pinned to the single maintainer (`github.actor == 'pmatos'`) rather than an
+    # `author_association` allowlist, because `COLLABORATOR` also covers Read /
+    # Triage roles that cannot push code. Do not widen the actor check, drop a
+    # clause, or re-add the `issues: assigned` trigger without re-walking the
+    # threat model (on `assigned`, github.actor is the assigner, not the issue
+    # author) — see PR #113 / issues #138, #139.
+    # When external collaborators are added, replace the literal with a curated
+    # actor allowlist (or layer claude-code-action's own allowlist on top).
     if: |
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
-      (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
-      (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.review.author_association)) ||
-      (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')) && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.issue.author_association))
+      github.actor == 'pmatos' && (
+        (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude')) ||
+        (github.event_name == 'pull_request_review' && contains(github.event.review.body, '@claude')) ||
+        (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
+      )
     runs-on: ubuntu-latest
     permissions:
       contents: read
