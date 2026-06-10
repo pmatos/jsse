@@ -12,6 +12,12 @@ on:
 
 jobs:
   claude:
+    # SECURITY: the `if:` below is the trust gate that prevents untrusted users
+    # from triggering this workflow. This job holds `id-token: write` and
+    # consumes `secrets.CLAUDE_CODE_OAUTH_TOKEN`, so a stray trigger from a fork
+    # commenter is a direct prompt-injection / secret-exfil surface. Do not relax
+    # the author_association allowlist or drop a clause without re-walking the
+    # threat model — see PR #113 / issue #139.
     if: |
       (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
       (github.event_name == 'pull_request_review_comment' && contains(github.event.comment.body, '@claude') && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR"]'), github.event.comment.author_association)) ||
