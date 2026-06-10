@@ -932,7 +932,7 @@ impl Interpreter {
                                             JsValue::Number(index as f64),
                                             elem,
                                         ]);
-                                        if let Some(obj) = interp.get_object(o.id) {
+                                        if let Some(obj) = interp.get_object_cell(o.id) {
                                             obj.borrow_mut().kind =
                                                 crate::interpreter::types::ObjectKind::Iterator(
                                                     IteratorState::ArrayIterator {
@@ -948,7 +948,7 @@ impl Interpreter {
                                         );
                                     }
                                 };
-                                if let Some(obj) = interp.get_object(o.id) {
+                                if let Some(obj) = interp.get_object_cell(o.id) {
                                     obj.borrow_mut().kind =
                                         crate::interpreter::types::ObjectKind::Iterator(
                                             IteratorState::ArrayIterator {
@@ -970,7 +970,7 @@ impl Interpreter {
                                     && is_typed_array_out_of_bounds(ta)
                                 {
                                     drop(borrowed);
-                                    if let Some(obj) = interp.get_object(o.id) {
+                                    if let Some(obj) = interp.get_object_cell(o.id) {
                                         obj.borrow_mut().kind =
                                             crate::interpreter::types::ObjectKind::Iterator(
                                                 IteratorState::ArrayIterator {
