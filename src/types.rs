@@ -13,6 +13,25 @@ pub enum JsValue {
     Object(JsObject),
 }
 
+/// Eight-way value tag, used by sites that need exhaustive enum dispatch
+/// while remaining decoupled from the underlying `JsValue` representation.
+/// The future NaN-boxed `JsValue` (issue #69) will continue to expose this
+/// kind via `JsValue::discriminant()` so sites like `Display`,
+/// `JSON.stringify`, and `strict_equality` keep compile-time exhaustiveness.
+// Consumers land in follow-up #69 NaN-box migration PRs.
+#[allow(dead_code)]
+#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
+pub enum ValueKind {
+    Undefined,
+    Null,
+    Boolean,
+    Number,
+    String,
+    Symbol,
+    BigInt,
+    Object,
+}
+
 // UTF-16 code unit string per spec §6.1.4
 // Uses Arc<Vec<u16>> so cloning (e.g. env.get) is O(1).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -89,6 +108,160 @@ pub struct JsBigInt {
 #[derive(Clone, Debug)]
 pub struct JsObject {
     pub id: u64,
+}
+
+// Constructor / accessor surface for `JsValue`. The methods here are
+// representation-neutral: a future NaN-boxed storage (issue #69) will
+// re-implement them in terms of bit operations while keeping the same
+// signatures, so callers do not need to change.
+// Consumers land in follow-up #69 NaN-box migration PRs.
+#[allow(dead_code)]
+impl JsValue {
+    pub const UNDEFINED: JsValue = JsValue::Undefined;
+    pub const NULL: JsValue = JsValue::Null;
+    pub const TRUE: JsValue = JsValue::Boolean(true);
+    pub const FALSE: JsValue = JsValue::Boolean(false);
+
+    pub fn boolean(b: bool) -> Self {
+        JsValue::Boolean(b)
+    }
+
+    /// Construct a Number value. NaN canonicalisation lands here in Phase 3
+    /// (issue #69) — for now this is a thin wrapper.
+    pub fn number(n: f64) -> Self {
+        JsValue::Number(n)
+    }
+
+    pub fn string(s: JsString) -> Self {
+        JsValue::String(s)
+    }
+
+    /// Sugar for `JsValue::string(JsString::from_str(s))`.
+    pub fn from_str(s: &str) -> Self {
+        JsValue::String(JsString::from_str(s))
+    }
+
+    pub fn symbol(s: JsSymbol) -> Self {
+        JsValue::Symbol(s)
+    }
+
+    pub fn bigint(b: JsBigInt) -> Self {
+        JsValue::BigInt(b)
+    }
+
+    pub fn object(id: u64) -> Self {
+        JsValue::Object(JsObject { id })
+    }
+
+    // ----- typed accessors --------------------------------------------------
+    // Copy-typed payloads return by value. Heap-payload variants (String,
+    // Symbol, BigInt) provide both a clone-returning form (`as_string` etc.)
+    // and a callback-borrowing form (`with_string` etc.). Under the future
+    // NaN-box layout (issue #69), borrow-returning accessors of the form
+    // `&JsString` are unsound (no Rust-level borrowee exists), so the
+    // `with_*` form is the only zero-refcount-bump path.
+
+    pub fn as_boolean(&self) -> Option<bool> {
+        match self {
+            JsValue::Boolean(b) => Some(*b),
+            _ => None,
+        }
+    }
+
+    pub fn as_number(&self) -> Option<f64> {
+        match self {
+            JsValue::Number(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    pub fn as_object_id(&self) -> Option<u64> {
+        match self {
+            JsValue::Object(o) => Some(o.id),
+            _ => None,
+        }
+    }
+
+    /// Cloning accessor — under the future NaN-box this becomes an Arc
+    /// refcount bump, so it stays O(1).
+    pub fn as_string(&self) -> Option<JsString> {
+        match self {
+            JsValue::String(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn as_symbol(&self) -> Option<JsSymbol> {
+        match self {
+            JsValue::Symbol(s) => Some(s.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn as_bigint(&self) -> Option<JsBigInt> {
+        match self {
+            JsValue::BigInt(b) => Some(b.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn with_string<R>(&self, f: impl FnOnce(&[u16]) -> R) -> Option<R> {
+        match self {
+            JsValue::String(s) => Some(f(&s.code_units)),
+            _ => None,
+        }
+    }
+
+    pub fn with_symbol<R>(&self, f: impl FnOnce(&JsSymbol) -> R) -> Option<R> {
+        match self {
+            JsValue::Symbol(s) => Some(f(s)),
+            _ => None,
+        }
+    }
+
+    pub fn with_bigint<R>(&self, f: impl FnOnce(&num_bigint::BigInt) -> R) -> Option<R> {
+        match self {
+            JsValue::BigInt(b) => Some(f(&b.value)),
+            _ => None,
+        }
+    }
+
+    pub fn into_string(self) -> Option<JsString> {
+        match self {
+            JsValue::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn into_bigint(self) -> Option<JsBigInt> {
+        match self {
+            JsValue::BigInt(b) => Some(b),
+            _ => None,
+        }
+    }
+
+    /// Eight-way value tag for exhaustive dispatch. See `ValueKind`.
+    pub fn discriminant(&self) -> ValueKind {
+        match self {
+            JsValue::Undefined => ValueKind::Undefined,
+            JsValue::Null => ValueKind::Null,
+            JsValue::Boolean(_) => ValueKind::Boolean,
+            JsValue::Number(_) => ValueKind::Number,
+            JsValue::String(_) => ValueKind::String,
+            JsValue::Symbol(_) => ValueKind::Symbol,
+            JsValue::BigInt(_) => ValueKind::BigInt,
+            JsValue::Object(_) => ValueKind::Object,
+        }
+    }
+
+    /// Alias for `discriminant()` — the canonical `ValueKind` accessor.
+    pub fn kind(&self) -> ValueKind {
+        self.discriminant()
+    }
+
+    pub fn is_object(&self) -> bool {
+        matches!(self, JsValue::Object(_))
+    }
 }
 
 // §6.1.6.1 — Number type operations
@@ -490,5 +663,130 @@ mod tests {
             format!("{}", JsValue::String(JsString::from_str("hi"))),
             "hi"
         );
+    }
+
+    // ----- JsValue method surface (issue #69 NaN-box migration) -------------
+
+    #[test]
+    fn value_constructors() {
+        assert!(matches!(JsValue::UNDEFINED, JsValue::Undefined));
+        assert!(matches!(JsValue::NULL, JsValue::Null));
+        assert!(matches!(JsValue::TRUE, JsValue::Boolean(true)));
+        assert!(matches!(JsValue::FALSE, JsValue::Boolean(false)));
+        assert_eq!(JsValue::boolean(true).as_boolean(), Some(true));
+        assert_eq!(JsValue::number(3.5).as_number(), Some(3.5));
+        assert_eq!(JsValue::object(7).as_object_id(), Some(7));
+        assert_eq!(
+            JsValue::from_str("hi")
+                .as_string()
+                .unwrap()
+                .to_rust_string(),
+            "hi"
+        );
+        assert_eq!(
+            JsValue::string(JsString::from_str("yo"))
+                .as_string()
+                .unwrap()
+                .to_rust_string(),
+            "yo"
+        );
+        let sym = JsSymbol {
+            id: 1,
+            description: Some(JsString::from_str("s")),
+        };
+        assert_eq!(JsValue::symbol(sym).as_symbol().unwrap().id, 1);
+        let big = JsBigInt {
+            value: num_bigint::BigInt::from(42),
+        };
+        assert_eq!(
+            JsValue::bigint(big).as_bigint().unwrap().value,
+            num_bigint::BigInt::from(42)
+        );
+    }
+
+    #[test]
+    fn typed_accessors_return_none_on_mismatch() {
+        let n = JsValue::Number(1.0);
+        assert_eq!(n.as_boolean(), None);
+        assert_eq!(n.as_object_id(), None);
+        assert!(n.as_string().is_none());
+        assert!(n.as_symbol().is_none());
+        assert!(n.as_bigint().is_none());
+        assert_eq!(JsValue::Boolean(true).as_number(), None);
+    }
+
+    #[test]
+    fn with_accessors() {
+        let s = JsValue::from_str("abc");
+        assert_eq!(s.with_string(|cu| cu.len()), Some(3));
+        assert_eq!(JsValue::Null.with_string(|cu| cu.len()), None);
+
+        let sym = JsValue::Symbol(JsSymbol {
+            id: 9,
+            description: None,
+        });
+        assert_eq!(sym.with_symbol(|s| s.id), Some(9));
+        assert_eq!(JsValue::Null.with_symbol(|s| s.id), None);
+
+        let big = JsValue::BigInt(JsBigInt {
+            value: num_bigint::BigInt::from(5),
+        });
+        assert_eq!(
+            big.with_bigint(|b| b.clone()),
+            Some(num_bigint::BigInt::from(5))
+        );
+        assert_eq!(JsValue::Null.with_bigint(|b| b.clone()), None);
+    }
+
+    #[test]
+    fn into_accessors() {
+        let s = JsValue::from_str("x");
+        assert_eq!(s.into_string().unwrap().to_rust_string(), "x");
+        assert!(JsValue::Null.into_string().is_none());
+
+        let big = JsValue::BigInt(JsBigInt {
+            value: num_bigint::BigInt::from(11),
+        });
+        assert_eq!(
+            big.into_bigint().unwrap().value,
+            num_bigint::BigInt::from(11)
+        );
+        assert!(JsValue::Number(1.0).into_bigint().is_none());
+    }
+
+    #[test]
+    fn discriminant_and_kind() {
+        let cases = [
+            (JsValue::Undefined, ValueKind::Undefined),
+            (JsValue::Null, ValueKind::Null),
+            (JsValue::Boolean(true), ValueKind::Boolean),
+            (JsValue::Number(1.0), ValueKind::Number),
+            (JsValue::from_str("s"), ValueKind::String),
+            (
+                JsValue::Symbol(JsSymbol {
+                    id: 0,
+                    description: None,
+                }),
+                ValueKind::Symbol,
+            ),
+            (
+                JsValue::BigInt(JsBigInt {
+                    value: num_bigint::BigInt::from(0),
+                }),
+                ValueKind::BigInt,
+            ),
+            (JsValue::object(1), ValueKind::Object),
+        ];
+        for (v, expected) in &cases {
+            assert_eq!(v.discriminant(), *expected);
+            assert_eq!(v.kind(), *expected);
+        }
+    }
+
+    #[test]
+    fn is_object_predicate() {
+        assert!(JsValue::object(3).is_object());
+        assert!(!JsValue::Null.is_object());
+        assert!(!JsValue::Number(0.0).is_object());
     }
 }
