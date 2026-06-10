@@ -3214,6 +3214,68 @@ impl Interpreter {
                             other => return other,
                         }
                     };
+                    // Fast path for dense ordinary Array indexed writes: in-bounds
+                    // overwrite or append-at-end directly into the backing Vec,
+                    // bypassing the setter/prototype/Set machinery. Bails to the
+                    // slow path on holes, length mismatch, frozen/sealed/non-
+                    // -writable-length, non-extensible, proxies, or shadowed
+                    // indices so strict-throw and exotic behaviour stay correct.
+                    if let Some(idx_u32) = parse_array_index(&key) {
+                        let fast = {
+                            let b = obj.borrow();
+                            if b.class_name == "Array"
+                                && !b.is_proxy()
+                                && b.array_elements().is_some()
+                                && !b.properties.contains_key(&key)
+                            {
+                                let elems_len = b.array_elements().unwrap().len();
+                                let len_desc = b.properties.get("length");
+                                let cur_len = len_desc
+                                    .and_then(|d| d.value.as_ref())
+                                    .and_then(|v| {
+                                        if let JsValue::Number(n) = v {
+                                            Some(*n as u32)
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or(0);
+                                let length_writable =
+                                    len_desc.map(|d| d.writable != Some(false)).unwrap_or(false);
+                                Some((elems_len, cur_len, length_writable, b.extensible))
+                            } else {
+                                None
+                            }
+                        };
+                        if let Some((elems_len, cur_len, length_writable, extensible)) = fast {
+                            let idx = idx_u32 as usize;
+                            if idx < elems_len {
+                                // In-bounds overwrite: slot already live, no length
+                                // / extensible / shape change needed.
+                                obj.borrow_mut().array_elements_mut().unwrap()[idx] =
+                                    final_val.clone();
+                                return Completion::Normal(final_val);
+                            } else if idx == elems_len
+                                && idx_u32 >= cur_len
+                                && cur_len as usize == elems_len
+                                && extensible
+                                && length_writable
+                                && idx_u32 < 0xFFFF_FFFF
+                            {
+                                // Append at end: push and bump length + shape.
+                                let mut b = obj.borrow_mut();
+                                b.array_elements_mut().unwrap().push(final_val.clone());
+                                if let Some(len_desc) = b.properties.get_mut("length") {
+                                    len_desc.value = Some(JsValue::Number((idx_u32 + 1) as f64));
+                                }
+                                b.shape_id = crate::interpreter::types::fresh_shape_id();
+                                return Completion::Normal(final_val);
+                            }
+                            // Otherwise (hole creation, length mismatch, frozen/
+                            // sealed/non-writable-length, non-extensible): fall
+                            // through to the slow path below.
+                        }
+                    }
                     // Proxy set trap
                     if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
                         let receiver = obj_val.clone();

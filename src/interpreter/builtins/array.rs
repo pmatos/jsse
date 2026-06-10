@@ -812,7 +812,11 @@ fn array_species_create(
                 interp.create_range_error("Invalid array length"),
             ));
         }
-        let arr = interp.create_array(Vec::new());
+        // Pre-size the backing Vec (capacity only — `create_array` populates by
+        // iterating, and the passed Vec is empty, so behaviour is unchanged).
+        // Cap guards against hostile huge lengths, mirroring
+        // `create_array_with_length` which deliberately avoids huge allocations.
+        let arr = interp.create_array(Vec::with_capacity(length.min(1 << 16)));
         set_length(interp, &arr, length);
         return Ok(arr);
     }
@@ -878,7 +882,11 @@ fn array_species_create(
                 interp.create_range_error("Invalid array length"),
             ));
         }
-        let arr = interp.create_array(Vec::new());
+        // Pre-size the backing Vec (capacity only — `create_array` populates by
+        // iterating, and the passed Vec is empty, so behaviour is unchanged).
+        // Cap guards against hostile huge lengths, mirroring
+        // `create_array_with_length` which deliberately avoids huge allocations.
+        let arr = interp.create_array(Vec::with_capacity(length.min(1 << 16)));
         set_length(interp, &arr, length);
         return Ok(arr);
     }
@@ -927,6 +935,51 @@ impl Interpreter {
                 // Step 5: If len + argCount > 2^53 - 1, throw TypeError
                 if (len + args.len()) as u64 > 9007199254740991 {
                     return Completion::Throw(interp.create_type_error("Invalid array length"));
+                }
+                // Fast path for genuine dense Arrays: append directly into the
+                // backing Vec, bypassing per-element Set (proxy/setter/typed-array
+                // checks + len.to_string()). Falls through to the slow loop on any
+                // guard miss so proxies, array-likes/arguments, frozen/non-writable
+                // -length, and sparse arrays keep correct behaviour.
+                if let JsValue::Object(ref obj_ref) = o
+                    && let Some(cell) = interp.get_object(obj_ref.id)
+                {
+                    let fast_ok = {
+                        let b = cell.borrow();
+                        let len_desc = b.properties.get("length");
+                        let len_writable =
+                            len_desc.map(|d| d.writable != Some(false)).unwrap_or(false);
+                        let desc_len = len_desc.and_then(|d| d.value.as_ref()).and_then(|v| {
+                            if let JsValue::Number(n) = v {
+                                Some(*n as usize)
+                            } else {
+                                None
+                            }
+                        });
+                        b.class_name == "Array"
+                            && !b.is_proxy()
+                            && b.extensible
+                            && len_desc.is_some()
+                            && len_writable
+                            && desc_len == Some(len)
+                            && b.array_elements().map(|v| v.len()) == Some(len)
+                    };
+                    if fast_ok {
+                        let new_len = len + args.len();
+                        {
+                            let mut b = cell.borrow_mut();
+                            let elements = b.array_elements_mut().unwrap();
+                            elements.reserve(args.len());
+                            for arg in args {
+                                elements.push(arg.clone());
+                            }
+                            if let Some(len_desc) = b.properties.get_mut("length") {
+                                len_desc.value = Some(JsValue::Number(new_len as f64));
+                            }
+                            b.shape_id = crate::interpreter::types::fresh_shape_id();
+                        }
+                        return Completion::Normal(JsValue::Number(new_len as f64));
+                    }
                 }
                 for arg in args {
                     if let Err(e) = obj_set_throw(interp, &o, &len.to_string(), arg.clone()) {
