@@ -1805,7 +1805,7 @@ impl Interpreter {
 
         // @@toStringTag
         {
-            let key = "Symbol(Symbol.toStringTag)".to_string();
+            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
             let desc = PropertyDescriptor {
                 value: Some(JsValue::String(JsString::from_str(
                     "Temporal.ZonedDateTime",
@@ -2231,7 +2231,13 @@ impl Interpreter {
                         if let JsValue::Object(ref o) = options_arg {
                             let keys: Vec<String> = interp
                                 .get_object_cell(o.id)
-                                .map(|rc| rc.borrow().properties.keys().cloned().collect())
+                                .map(|rc| {
+                                    rc.borrow()
+                                        .properties
+                                        .keys()
+                                        .map(|k| k.to_string())
+                                        .collect()
+                                })
                                 .unwrap_or_default();
                             for key in keys {
                                 let val = match interp.get_object_property(o.id, &key, &options_arg)

@@ -392,18 +392,19 @@ pub(crate) fn enumerable_own_keys(
             .property_order
             .iter()
             .filter(|k| {
-                if result.contains(k) {
+                let ks: &str = k;
+                if result.iter().any(|r| r.as_str() == ks) {
                     return false;
                 }
-                if is_string_wrapper && *k == "length" {
+                if is_string_wrapper && ks == "length" {
                     return false;
                 }
-                !k.starts_with("Symbol(")
+                !ks.starts_with("Symbol(")
                     && b.properties
-                        .get(k)
+                        .get(ks)
                         .is_some_and(|d| d.enumerable != Some(false))
             })
-            .cloned()
+            .map(|k| k.to_string())
             .collect();
         if !result.is_empty() {
             result.extend(sort_own_keys(keys));
@@ -996,7 +997,7 @@ fn json_internalize_apply(
                         && let Some(tobj) = interp.get_object_cell(t.id)
                     {
                         tobj.borrow_mut().properties.remove(key);
-                        tobj.borrow_mut().property_order.retain(|k| k != key);
+                        tobj.borrow_mut().property_order.retain(|k| &**k != key);
                     }
                 }
                 Err(e) => return Err(e),
@@ -1061,7 +1062,7 @@ fn json_internalize_apply(
         }
         if let JsValue::Undefined = &new_val {
             cell.borrow_mut().properties.remove(key);
-            cell.borrow_mut().property_order.retain(|k| k != key);
+            cell.borrow_mut().property_order.retain(|k| &**k != key);
             // Also clear dense array storage so get_property doesn't find stale values
             if let Ok(idx) = key.parse::<usize>() {
                 let mut b = cell.borrow_mut();

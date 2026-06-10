@@ -345,7 +345,7 @@ impl Interpreter {
 
                     if let Some(obj) = interp.get_object_cell(o.id) {
                         obj.borrow_mut().properties.insert(
-                            "[[BoundCompare]]".to_string(),
+                            crate::interpreter::key_intern::intern_key("[[BoundCompare]]"),
                             PropertyDescriptor::data(compare_fn.clone(), false, false, false),
                         );
                     }

@@ -215,9 +215,10 @@ impl Interpreter {
             if let Some(go) = self.get_object_cell(gid) {
                 let mut g = go.borrow_mut();
                 if !g.properties.contains_key(name) {
-                    g.property_order.push(name.to_string());
+                    let key = crate::interpreter::key_intern::intern_key(name);
+                    g.property_order.push(Rc::clone(&key));
                     g.properties.insert(
-                        name.to_string(),
+                        key,
                         PropertyDescriptor::data(JsValue::Undefined, true, true, false),
                     );
                 }
@@ -242,9 +243,10 @@ impl Interpreter {
             if let Some(go) = self.get_object_cell(gid) {
                 let mut g = go.borrow_mut();
                 if !g.properties.contains_key(name) {
-                    g.property_order.push(name.to_string());
+                    let key = crate::interpreter::key_intern::intern_key(name);
+                    g.property_order.push(Rc::clone(&key));
                     g.properties.insert(
-                        name.to_string(),
+                        key,
                         PropertyDescriptor::data(JsValue::Undefined, true, true, true),
                     );
                 }
@@ -318,10 +320,11 @@ impl Interpreter {
                 existing.is_none() || existing.is_some_and(|d| d.configurable == Some(true));
             if need_full_desc {
                 let desc = PropertyDescriptor::data(value, true, true, configurable);
+                let key = crate::interpreter::key_intern::intern_key(name);
                 if !g.properties.contains_key(name) {
-                    g.property_order.push(name.to_string());
+                    g.property_order.push(Rc::clone(&key));
                 }
-                g.properties.insert(name.to_string(), desc);
+                g.properties.insert(key, desc);
             } else {
                 g.set_property_value(name, value);
             }

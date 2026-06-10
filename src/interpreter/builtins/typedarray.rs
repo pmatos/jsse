@@ -1536,7 +1536,7 @@ impl Interpreter {
         // @@toStringTag
         {
             let tag = JsValue::String(JsString::from_str("SharedArrayBuffer"));
-            let sym_key = "Symbol(Symbol.toStringTag)".to_string();
+            let sym_key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
             let desc = PropertyDescriptor::data(tag, false, false, true);
             self.get_object_cell_expect(sab_proto_id)
                 .borrow_mut()

@@ -2432,7 +2432,7 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            let key = "Symbol(Symbol.toStringTag)".to_string();
+            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
             self.get_object_cell_expect(math_obj_id)
                 .borrow_mut()
                 .property_order
@@ -3716,8 +3716,9 @@ impl Interpreter {
                         true,
                         false,
                     );
-                    o.property_order.push("rawJSON".to_string());
-                    o.properties.insert("rawJSON".to_string(), desc);
+                    let key = crate::interpreter::key_intern::intern_key("rawJSON");
+                    o.property_order.push(std::rc::Rc::clone(&key));
+                    o.properties.insert(key, desc);
                 }
                 interp
                     .get_object_cell_expect(obj_id)
@@ -3766,7 +3767,7 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            let key = "Symbol(Symbol.toStringTag)".to_string();
+            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
             self.get_object_cell_expect(json_obj_id)
                 .borrow_mut()
                 .property_order
@@ -5176,7 +5177,7 @@ impl Interpreter {
                                 let b = obj.borrow();
                                 b.properties
                                     .iter()
-                                    .map(|(k, d)| (k.clone(), d.clone()))
+                                    .map(|(k, d)| (k.to_string(), d.clone()))
                                     .collect()
                             };
                             for (key, desc) in keys_and_descs {
@@ -5631,25 +5632,25 @@ impl Interpreter {
                                 }
                             }
                             for k in &b.property_order {
-                                if is_string_wrapper && k == "length" {
+                                if is_string_wrapper && &**k == "length" {
                                     continue;
                                 }
                                 if k.starts_with("Symbol(") {
-                                    sym_keys.push(k.clone());
+                                    sym_keys.push(k.to_string());
                                 } else if let Ok(n) = k.parse::<u64>() {
-                                    if n.to_string() == *k {
-                                        int_keys.push((n, k.clone()));
+                                    if n.to_string() == **k {
+                                        int_keys.push((n, k.to_string()));
                                     } else {
-                                        str_keys.push(k.clone());
+                                        str_keys.push(k.to_string());
                                     }
                                 } else {
-                                    str_keys.push(k.clone());
+                                    str_keys.push(k.to_string());
                                 }
                             }
                             // Also pick up symbol keys that may not be in property_order
                             for k in b.properties.keys() {
                                 if k.starts_with("Symbol(") && !b.property_order.contains(k) {
-                                    sym_keys.push(k.clone());
+                                    sym_keys.push(k.to_string());
                                 }
                             }
                             int_keys.sort_by_key(|(n, _)| *n);
@@ -5887,7 +5888,7 @@ impl Interpreter {
                                     }
                                     if let Ok(n) = k.parse::<u64>()
                                         && n < 0xFFFFFFFF
-                                        && n.to_string() == *k
+                                        && n.to_string() == **k
                                     {
                                         continue; // skip numeric indices
                                     }
@@ -5913,7 +5914,7 @@ impl Interpreter {
                             .property_order
                             .iter()
                             .filter(|k| !k.starts_with("Symbol("))
-                            .cloned()
+                            .map(|k| k.to_string())
                             .collect();
                         drop(b);
                         // Sort: integer indices first (already added char indices), then string keys
@@ -6011,11 +6012,13 @@ impl Interpreter {
                                     .property_order
                                     .iter()
                                     .filter(|k| k.starts_with("Symbol("))
-                                    .cloned()
+                                    .map(|k| k.to_string())
                                     .collect();
                                 for k in b.properties.keys() {
-                                    if k.starts_with("Symbol(") && !sym_keys.contains(k) {
-                                        sym_keys.push(k.clone());
+                                    if k.starts_with("Symbol(")
+                                        && !sym_keys.iter().any(|s| s.as_str() == &**k)
+                                    {
+                                        sym_keys.push(k.to_string());
                                     }
                                 }
                                 sym_keys
@@ -6325,8 +6328,12 @@ impl Interpreter {
                                     }
                                 }
                             }
-                            let keys: Vec<String> =
-                                obj.borrow().properties.keys().cloned().collect();
+                            let keys: Vec<String> = obj
+                                .borrow()
+                                .properties
+                                .keys()
+                                .map(|k| k.to_string())
+                                .collect();
                             for key in keys {
                                 let new_desc = PropertyDescriptor {
                                     configurable: Some(false),
@@ -7636,7 +7643,7 @@ impl Interpreter {
                         return Completion::Normal(JsValue::Boolean(false));
                     }
                     obj_mut.properties.remove(&key);
-                    obj_mut.property_order.retain(|k| k != &key);
+                    obj_mut.property_order.retain(|k| &**k != key.as_str());
                     if let Some(map) = obj_mut.parameter_map_mut() {
                         map.remove(&key);
                     }
@@ -7929,14 +7936,14 @@ impl Interpreter {
                             let mut symbols: Vec<(String, usize)> = Vec::new();
                             for (pos, k) in property_order.iter().enumerate() {
                                 if k.starts_with("Symbol(") {
-                                    symbols.push((k.clone(), pos));
+                                    symbols.push((k.to_string(), pos));
                                 } else if let Ok(n) = k.parse::<u64>()
                                     && n < 0xFFFFFFFF
-                                    && n.to_string() == *k
+                                    && n.to_string() == **k
                                 {
                                     // Skip numeric indices, already handled above
                                 } else {
-                                    strings.push((k.clone(), pos));
+                                    strings.push((k.to_string(), pos));
                                 }
                             }
                             for (s, _) in &strings {
@@ -7966,7 +7973,8 @@ impl Interpreter {
                     }
                     let property_order = obj.borrow().property_order.clone();
                     // Collect keys already in property_order into virtual_indices set for dedup
-                    let existing_keys: HashSet<String> = property_order.iter().cloned().collect();
+                    let existing_keys: HashSet<String> =
+                        property_order.iter().map(|k| k.to_string()).collect();
                     // OrdinaryOwnPropertyKeys: indices ascending, then strings, then symbols
                     let mut indices: Vec<(u32, usize)> = Vec::new();
                     let mut strings: Vec<(String, usize)> = Vec::new();
@@ -7980,14 +7988,14 @@ impl Interpreter {
                     }
                     for (pos, k) in property_order.iter().enumerate() {
                         if k.starts_with("Symbol(") {
-                            symbols.push((k.clone(), pos));
+                            symbols.push((k.to_string(), pos));
                         } else if let Ok(n) = k.parse::<u64>()
                             && n < 0xFFFFFFFF
-                            && n.to_string() == *k
+                            && n.to_string() == **k
                         {
                             indices.push((n as u32, pos));
                         } else {
-                            strings.push((k.clone(), pos));
+                            strings.push((k.to_string(), pos));
                         }
                     }
                     indices.sort_by_key(|&(n, _)| n);
@@ -8495,7 +8503,7 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            let key = "Symbol(Symbol.toStringTag)".to_string();
+            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
             self.get_object_cell_expect(reflect_obj_id)
                 .borrow_mut()
                 .property_order
@@ -8874,7 +8882,9 @@ impl Interpreter {
                     }
                     // Per spec, bound functions do not have own .prototype property
                     obj.borrow_mut().properties.remove("prototype");
-                    obj.borrow_mut().property_order.retain(|k| k != "prototype");
+                    obj.borrow_mut()
+                        .property_order
+                        .retain(|k| &**k != "prototype");
                     // Store [[BoundTargetFunction]] / [[BoundThis]] / [[BoundArguments]].
                     let stored_bound_args: Vec<JsValue> = args.iter().skip(1).cloned().collect();
                     obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::BoundFunction(
