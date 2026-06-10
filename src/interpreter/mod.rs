@@ -4218,6 +4218,7 @@ impl Interpreter {
                     source_text: f.source_text.clone(),
                     captured_new_target: None,
                     uses_arguments: func_uses_arguments(&f.params, &f.body),
+                    has_simple_params: crate::ast::params_are_simple(&f.params),
                 };
                 let val = self.create_function(func);
                 let _ = self.env_set(env, &f.name, val);
@@ -4266,6 +4267,7 @@ impl Interpreter {
                     source_text: f.source_text.clone(),
                     captured_new_target: None,
                     uses_arguments: func_uses_arguments(&f.params, &f.body),
+                    has_simple_params: crate::ast::params_are_simple(&f.params),
                 };
                 let val = self.create_function(func);
                 env.borrow_mut().initialize_binding(&name, val);
@@ -4445,6 +4447,7 @@ impl Interpreter {
                     source_text: func.source_text.clone(),
                     captured_new_target: None,
                     uses_arguments: func_uses_arguments(&func.params, &func.body),
+                    has_simple_params: crate::ast::params_are_simple(&func.params),
                 };
                 let fn_obj = self.create_function(js_func);
                 if !func.name.is_empty() {
