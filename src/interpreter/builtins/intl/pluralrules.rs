@@ -341,6 +341,7 @@ impl Interpreter {
                         locale,
                         plural_type,
                         notation,
+                        compact_display,
                         minimum_integer_digits,
                         minimum_fraction_digits,
                         maximum_fraction_digits,
@@ -401,6 +402,21 @@ impl Interpreter {
                                     true,
                                 ),
                             );
+                        // compactDisplay is surfaced only when notation is "compact" (§17.4).
+                        if let Some(cd) = &compact_display {
+                            interp
+                                .get_object_cell_expect(result_id)
+                                .borrow_mut()
+                                .insert_property(
+                                    "compactDisplay".to_string(),
+                                    PropertyDescriptor::data(
+                                        JsValue::String(JsString::from_str(cd)),
+                                        true,
+                                        true,
+                                        true,
+                                    ),
+                                );
+                        }
                         interp
                             .get_object_cell_expect(result_id)
                             .borrow_mut()
@@ -637,6 +653,25 @@ impl Interpreter {
                     Ok(Some(v)) => v,
                     Ok(None) => "standard".to_string(),
                     Err(e) => return Completion::Throw(e),
+                };
+
+                // compactDisplay — must be read immediately after notation per spec
+                // (its getter always runs); [[CompactDisplay]] is only retained when
+                // notation is "compact".
+                let compact_display_opt = match interp.intl_get_option(
+                    &options,
+                    "compactDisplay",
+                    &["short", "long"],
+                    Some("short"),
+                ) {
+                    Ok(Some(v)) => Some(v),
+                    Ok(None) => Some("short".to_string()),
+                    Err(e) => return Completion::Throw(e),
+                };
+                let compact_display = if notation == "compact" {
+                    compact_display_opt
+                } else {
+                    None
                 };
 
                 let minimum_integer_digits = match interp.intl_get_number_option(
@@ -1008,6 +1043,7 @@ impl Interpreter {
                     locale,
                     plural_type,
                     notation,
+                    compact_display,
                     minimum_integer_digits,
                     minimum_fraction_digits,
                     maximum_fraction_digits,
