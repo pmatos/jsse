@@ -564,11 +564,11 @@ mod tests {
         let mut data = JsObjectData::new();
         data.prototype_id = Some(7);
         data.properties.insert(
-            "x".to_string(),
+            "x".into(),
             PropertyDescriptor::data(obj(8), true, true, true),
         );
         data.properties.insert(
-            "n".to_string(),
+            "n".into(),
             PropertyDescriptor::data(JsValue::Number(1.0), true, true, true),
         );
 
@@ -581,7 +581,7 @@ mod tests {
     fn trace_object_fields_roots_accessor_get_and_set() {
         let mut data = JsObjectData::new();
         data.properties.insert(
-            "acc".to_string(),
+            "acc".into(),
             PropertyDescriptor::accessor(Some(obj(10)), Some(obj(11)), true, true),
         );
 
