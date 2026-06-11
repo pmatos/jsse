@@ -1402,6 +1402,8 @@ pub(crate) enum IntlData {
         locale: String,
         plural_type: String,
         notation: String,
+        /// [[CompactDisplay]] — Some only when notation is "compact" (§17.4).
+        compact_display: Option<String>,
         minimum_integer_digits: u32,
         minimum_fraction_digits: u32,
         maximum_fraction_digits: u32,
