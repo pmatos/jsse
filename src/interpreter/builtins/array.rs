@@ -101,6 +101,27 @@ fn obj_set_throw(
                 Err(e) => return Err(e),
             }
         }
+        // OrdinarySet (§10.1.9.2): when the receiver has no own property for the
+        // key, the parent is consulted. If a Proxy sits in the prototype chain,
+        // its [[Set]] trap must run with the original receiver — a bare Proxy
+        // prototype exposes no own descriptor, so the descriptor walk below would
+        // otherwise skip the trap and wrongly create an own property. proxy_set is
+        // a full proxy-aware OrdinarySet, so delegating the whole [[Set]] here also
+        // honours inherited setters / non-writable data along the way.
+        {
+            let has_own = interp
+                .get_object_cell(obj_ref.id)
+                .is_some_and(|cell| cell.borrow().has_own_property(key));
+            if !has_own && interp.has_proxy_in_prototype_chain(obj_ref.id) {
+                return match interp.proxy_set(obj_ref.id, key, value, o) {
+                    Ok(true) => Ok(()),
+                    Ok(false) => Err(interp.create_type_error(&format!(
+                        "Cannot assign to read only property '{key}'"
+                    ))),
+                    Err(e) => Err(e),
+                };
+            }
+        }
         // Check for setter in prototype chain
         {
             let desc = interp.get_property_descriptor_on_id(obj_ref.id, key);
@@ -980,14 +1001,21 @@ impl Interpreter {
                     // appended index ToString is inherited (setter or data) we
                     // must invoke/honour it via the slow loop rather than write
                     // straight into the Vec — bail to the slow path.
+                    // A bare Proxy prototype exposes no own descriptor, so the
+                    // get_property_descriptor_on_id probe below would miss it and
+                    // the fast path would write straight into the Vec, skipping the
+                    // proxy [[Set]] trap (issue #166). Bail to the slow path (which
+                    // routes through obj_set_throw → proxy_set) whenever a Proxy is
+                    // anywhere in the prototype chain.
                     let inherited = fast_ok
                         && !has_undefined_arg
                         && proto_id.is_some_and(|pid| {
-                            (len..len + args.len()).any(|i| {
-                                interp
-                                    .get_property_descriptor_on_id(pid, &i.to_string())
-                                    .is_some()
-                            })
+                            interp.has_proxy_in_prototype_chain(pid)
+                                || (len..len + args.len()).any(|i| {
+                                    interp
+                                        .get_property_descriptor_on_id(pid, &i.to_string())
+                                        .is_some()
+                                })
                         });
                     if fast_ok && !has_undefined_arg && !inherited {
                         let new_len = len + args.len();

@@ -15482,7 +15482,7 @@ impl Interpreter {
         }
     }
 
-    fn has_proxy_in_prototype_chain(&self, obj_id: u64) -> bool {
+    pub(crate) fn has_proxy_in_prototype_chain(&self, obj_id: u64) -> bool {
         let mut current = Some(obj_id);
         while let Some(id) = current {
             if self.get_proxy_info(id).is_some() {
