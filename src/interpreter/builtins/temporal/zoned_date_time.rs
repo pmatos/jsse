@@ -3418,7 +3418,20 @@ impl Interpreter {
                         let start_ns = get_start_of_day(&tz, today_days as i128);
                         let end_ns = get_start_of_day(&tz, tomorrow_days as i128);
                         let day_length_ns = end_ns - start_ns;
-                        let day_progress_ns = total_ns - start_ns;
+                        // Per spec (Temporal.ZonedDateTime.prototype.round, day
+                        // branch): when midnight occurs twice (a backward offset
+                        // shift), an instant whose wall-clock falls late on the
+                        // calendar date can lie in a *discontiguous piece* — by
+                        // instant it sits at/after the next day's earliest
+                        // start-of-day, so total_ns - start_ns would overshoot the
+                        // day. The spec clamps such an instant to endNs - 1 before
+                        // measuring progress, keeping it within its wall-clock day.
+                        let clamped_ns = if total_ns >= end_ns {
+                            end_ns - 1
+                        } else {
+                            total_ns
+                        };
+                        let day_progress_ns = clamped_ns - start_ns;
                         let rounded_day_ns =
                             round_ns_to_increment(day_progress_ns, day_length_ns, &rounding_mode);
                         start_ns + rounded_day_ns
