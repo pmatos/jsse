@@ -12,11 +12,14 @@ on:
 
 jobs:
   claude-review:
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
+    # Skip automated review for bot-authored PRs (e.g. Dependabot).
+    # anthropics/claude-code-action@v1 refuses non-human actors and aborts the
+    # run with a failing check ("Workflow initiated by non-human actor: ...
+    # Add bot to allowed_bots list"); an AI review of a dependency-bump lockfile
+    # adds little value, and this job holds `id-token: write` plus the
+    # CLAUDE_CODE_OAUTH_TOKEN secret, so it is better not to run it on
+    # bot-authored PRs at all than to allow-list them in. See issue #177.
+    if: github.event.pull_request.user.type != 'Bot'
 
     runs-on: ubuntu-latest
     permissions:
