@@ -385,6 +385,9 @@ pub struct Realm {
     pub(crate) intl_number_format_ctor: Option<JsValue>,
     pub(crate) intl_date_time_format_ctor: Option<JsValue>,
     pub(crate) intl_duration_format_ctor: Option<JsValue>,
+    /// ECMA-402 %Intl%.[[FallbackSymbol]]: a fresh per-realm Symbol with
+    /// description "IntlLegacyConstructedSymbol", minted lazily on first use.
+    pub(crate) intl_fallback_symbol: Option<JsValue>,
     pub(crate) error_prototype: Option<u64>,
     pub(crate) type_error_prototype: Option<u64>,
     pub(crate) range_error_prototype: Option<u64>,
@@ -481,6 +484,7 @@ impl Realm {
             intl_number_format_ctor: None,
             intl_date_time_format_ctor: None,
             intl_duration_format_ctor: None,
+            intl_fallback_symbol: None,
             error_prototype: None,
             type_error_prototype: None,
             range_error_prototype: None,

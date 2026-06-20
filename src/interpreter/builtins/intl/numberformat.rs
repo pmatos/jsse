@@ -6,6 +6,51 @@ use icu::decimal::options::{DecimalFormatterOptions, GroupingStrategy};
 use icu::decimal::{DecimalFormatter, DecimalFormatterPreferences};
 use icu::locale::Locale as IcuLocale;
 
+/// ECMA-402 UnwrapNumberFormat: resolve the receiver of an Intl.NumberFormat
+/// prototype method to the object carrying the [[InitializedNumberFormat]]
+/// slot. If `this` lacks the slot but is an instance of %NumberFormat%, read
+/// %Intl%.[[FallbackSymbol]] via the ordinary [[Get]] (so Proxy traps fire)
+/// and require the result to carry the slot; otherwise throw a TypeError.
+fn unwrap_nf(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, JsValue> {
+    if let JsValue::Object(o) = this {
+        let has_slot = interp
+            .get_object_cell(o.id)
+            .map(|c| matches!(c.borrow().intl_data(), Some(IntlData::NumberFormat { .. })))
+            .unwrap_or(false);
+        if has_slot {
+            return Ok(this.clone());
+        }
+        let ctor = interp.realm().intl_number_format_ctor.clone();
+        if let Some(ctor) = ctor
+            && matches!(
+                interp.ordinary_has_instance(&ctor, this),
+                Completion::Normal(JsValue::Boolean(true))
+            )
+        {
+            let key = match interp.intl_fallback_symbol() {
+                JsValue::Symbol(s) => s.to_property_key(),
+                _ => unreachable!(),
+            };
+            let fb = match interp.get_object_property(o.id, &key, this) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => JsValue::Undefined,
+            };
+            if let JsValue::Object(fo) = &fb {
+                let fb_has_slot = interp
+                    .get_object_cell(fo.id)
+                    .map(|c| matches!(c.borrow().intl_data(), Some(IntlData::NumberFormat { .. })))
+                    .unwrap_or(false);
+                if fb_has_slot {
+                    return Ok(fb);
+                }
+            }
+        }
+    }
+    Err(interp
+        .create_type_error("Intl.NumberFormat.prototype method called on incompatible receiver"))
+}
+
 fn locale_nan_string(locale: &str) -> &'static str {
     let lang = locale
         .split('-')
@@ -2934,6 +2979,11 @@ impl Interpreter {
             "get format".to_string(),
             0,
             |interp, this, _args| {
+                let recv = match unwrap_nf(interp, this) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let this = &recv;
                 if let JsValue::Object(o) = this {
                     enum Probe {
                         NotNf,
@@ -3074,6 +3124,11 @@ impl Interpreter {
             "formatToParts".to_string(),
             1,
             |interp, this, args| {
+                let recv = match unwrap_nf(interp, this) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let this = &recv;
                 if let JsValue::Object(o) = this {
                     let nf_data = {
                         if let Some(obj) = interp.get_object_cell(o.id) {
@@ -3195,6 +3250,11 @@ impl Interpreter {
             "formatRange".to_string(),
             2,
             |interp, this, args| {
+                let recv = match unwrap_nf(interp, this) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let this = &recv;
                 if let JsValue::Object(o) = this {
                     let nf_present = interp.get_object_cell(o.id).is_some_and(|cell| {
                         matches!(
@@ -3393,6 +3453,11 @@ impl Interpreter {
             "formatRangeToParts".to_string(),
             2,
             |interp, this, args| {
+                let recv = match unwrap_nf(interp, this) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let this = &recv;
                 if let JsValue::Object(o) = this {
                     let nf_present = interp
                         .get_object_cell(o.id)
@@ -3557,6 +3622,11 @@ impl Interpreter {
             "resolvedOptions".to_string(),
             0,
             |interp, this, _args| {
+                let recv = match unwrap_nf(interp, this) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let this = &recv;
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object_cell(o.id)
                 {
@@ -4448,6 +4518,44 @@ impl Interpreter {
                     rounding_priority,
                     trailing_zero_display,
                 }));
+
+                // ECMA-402 ChainNumberFormat: when called without `new` on a
+                // receiver that is an instance of %NumberFormat%, stash the
+                // freshly-initialized formatter under %Intl%.[[FallbackSymbol]]
+                // and return the receiver instead of a fresh object.
+                if interp.new_target.is_none()
+                    && let JsValue::Object(recv) = _this
+                {
+                    let recv_id = recv.id;
+                    let ctor = interp.realm().intl_number_format_ctor.clone();
+                    if let Some(ctor) = ctor
+                        && matches!(
+                            interp.ordinary_has_instance(&ctor, _this),
+                            Completion::Normal(JsValue::Boolean(true))
+                        )
+                    {
+                        let key = match interp.intl_fallback_symbol() {
+                            JsValue::Symbol(s) => s.to_property_key(),
+                            _ => unreachable!(),
+                        };
+                        let desc = crate::interpreter::types::PropertyDescriptor::data(
+                            JsValue::Object(crate::types::JsObject { id: obj_id }),
+                            false,
+                            false,
+                            false,
+                        );
+                        let defined = interp
+                            .get_object_cell_expect(recv_id)
+                            .borrow_mut()
+                            .define_own_property(key, desc);
+                        if !defined {
+                            return Completion::Throw(interp.create_type_error(
+                                "Cannot define [[FallbackSymbol]] property on receiver",
+                            ));
+                        }
+                        return Completion::Normal(_this.clone());
+                    }
+                }
 
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },

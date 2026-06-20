@@ -782,6 +782,26 @@ impl Interpreter {
         "en".to_string()
     }
 
+    /// ECMA-402 %Intl%.[[FallbackSymbol]] for the current realm.
+    /// Mints a fresh Symbol with description "IntlLegacyConstructedSymbol" on
+    /// first use and caches it on the realm so it is stable within the realm
+    /// and distinct across realms.
+    pub(crate) fn intl_fallback_symbol(&mut self) -> JsValue {
+        if let Some(s) = self.realm().intl_fallback_symbol.clone() {
+            return s;
+        }
+        let id = self.next_symbol_id;
+        self.next_symbol_id += 1;
+        let sym = JsValue::Symbol(crate::types::JsSymbol {
+            id,
+            description: Some(crate::types::JsString::from_str(
+                "IntlLegacyConstructedSymbol",
+            )),
+        });
+        self.realm_mut().intl_fallback_symbol = Some(sym.clone());
+        sym
+    }
+
     pub(crate) fn intl_construct_number_format(
         &mut self,
         locales: &JsValue,
