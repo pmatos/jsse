@@ -562,10 +562,6 @@ impl Interpreter {
                             if let Some(ref cv) = cause_val {
                                 $o.insert_builtin("cause".to_string(), cv.clone());
                             }
-                            $o.insert_builtin(
-                                "stack".to_string(),
-                                JsValue::String(JsString::from_str("")),
-                            );
                         };
                     }
 
@@ -666,6 +662,142 @@ impl Interpreter {
                 "message".to_string(),
                 JsValue::String(JsString::from_str("")),
             );
+
+            // error-stack-accessor: Error.prototype.stack is an own accessor of
+            // %Error.prototype% only; NativeError/AggregateError/SuppressedError
+            // prototypes inherit it. §sec-get/set-error.prototype.stack.
+            let stack_getter = self.create_function(JsFunction::native(
+                "get stack".to_string(),
+                0,
+                |interp, this_val, _args| {
+                    // 2. If E is not an Object, throw a TypeError exception.
+                    let o_id = match this_val {
+                        JsValue::Object(o) => o.id,
+                        _ => {
+                            return Completion::Throw(interp.create_type_error(
+                                "Error.prototype.stack getter called on non-object",
+                            ));
+                        }
+                    };
+                    // 3. If E does not have an [[ErrorData]] internal slot,
+                    //    return undefined. [[ErrorData]] is modeled as
+                    //    class_name.contains("Error") (same as Error.isError);
+                    //    read directly off the receiver so Proxy traps don't fire.
+                    let has_error_data = interp
+                        .get_object(o_id)
+                        .is_some_and(|obj| obj.borrow().class_name.contains("Error"));
+                    if !has_error_data {
+                        return Completion::Normal(JsValue::Undefined);
+                    }
+                    // 4. Return an implementation-defined trace string.
+                    Completion::Normal(JsValue::String(JsString::from_str("")))
+                },
+            ));
+            // Capture %Error.prototype% per-realm for the SameValue check.
+            let stack_home_id = error_prototype_id;
+            let stack_setter = self.create_function(JsFunction::native(
+                "set stack".to_string(),
+                1,
+                move |interp, this_val, args| {
+                    let v = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    // 2. If E is not an Object, throw a TypeError exception.
+                    let o_id = match this_val {
+                        JsValue::Object(o) => o.id,
+                        _ => {
+                            return Completion::Throw(interp.create_type_error(
+                                "Error.prototype.stack setter called on non-object",
+                            ));
+                        }
+                    };
+                    // 3. If v is not a String, throw a TypeError exception.
+                    //    (A String wrapper object is not a String value.)
+                    if !matches!(v, JsValue::String(_)) {
+                        return Completion::Throw(interp.create_type_error(
+                            "Error.prototype.stack setter requires a string value",
+                        ));
+                    }
+                    // SetterThatIgnoresPrototypeProperties:
+                    // 2. If SameValue(this, home) is true, throw a TypeError.
+                    if Some(o_id) == stack_home_id {
+                        return Completion::Throw(interp.create_type_error(
+                            "Error.prototype.stack setter cannot set on %Error.prototype%",
+                        ));
+                    }
+                    // 3. desc = this.[[GetOwnProperty]]("stack") — route through
+                    //    the real internal methods so Proxy traps fire.
+                    let is_proxy = interp
+                        .get_object_cell(o_id)
+                        .is_some_and(|cell| cell.borrow().is_proxy());
+                    if is_proxy {
+                        let desc = match interp.proxy_get_own_property_descriptor(o_id, "stack") {
+                            Ok(d) => d,
+                            Err(e) => return Completion::Throw(e),
+                        };
+                        if matches!(desc, JsValue::Undefined) {
+                            // 4a. CreateDataPropertyOrThrow (fires defineProperty trap).
+                            return match array::create_data_property_or_throw(
+                                interp, this_val, "stack", v,
+                            ) {
+                                Ok(()) => Completion::Normal(JsValue::Undefined),
+                                Err(e) => Completion::Throw(e),
+                            };
+                        }
+                        // 5a. Set(this, "stack", v, true) (fires set trap).
+                        return match interp.proxy_set(o_id, "stack", v, this_val) {
+                            Ok(true) => Completion::Normal(JsValue::Undefined),
+                            Ok(false) => Completion::Throw(
+                                interp.create_type_error("Cannot set property 'stack'"),
+                            ),
+                            Err(e) => Completion::Throw(e),
+                        };
+                    }
+                    let own = interp
+                        .get_object_cell(o_id)
+                        .and_then(|cell| cell.borrow().get_own_property("stack"));
+                    match own {
+                        // 4a. CreateDataPropertyOrThrow.
+                        None => {
+                            match array::create_data_property_or_throw(interp, this_val, "stack", v)
+                            {
+                                Ok(()) => Completion::Normal(JsValue::Undefined),
+                                Err(e) => Completion::Throw(e),
+                            }
+                        }
+                        // 5a. Set(this, "stack", v, true) with receiver == this.
+                        Some(desc) => {
+                            if desc.is_accessor_descriptor() {
+                                match desc.set {
+                                    Some(setter_fn) if !matches!(setter_fn, JsValue::Undefined) => {
+                                        match interp.call_function(&setter_fn, this_val, &[v]) {
+                                            Completion::Normal(_) => {
+                                                Completion::Normal(JsValue::Undefined)
+                                            }
+                                            other => other,
+                                        }
+                                    }
+                                    _ => Completion::Throw(interp.create_type_error(
+                                        "Cannot set property 'stack' which has only a getter",
+                                    )),
+                                }
+                            } else if desc.writable == Some(false) {
+                                Completion::Throw(interp.create_type_error(
+                                    "Cannot assign to read only property 'stack'",
+                                ))
+                            } else {
+                                if let Some(cell) = interp.get_object_cell(o_id) {
+                                    cell.borrow_mut().set_property_value("stack", v);
+                                }
+                                Completion::Normal(JsValue::Undefined)
+                            }
+                        }
+                    }
+                },
+            ));
+            ep.borrow_mut().insert_property(
+                "stack".to_string(),
+                PropertyDescriptor::accessor(Some(stack_getter), Some(stack_setter), false, true),
+            );
+
             // Set constructor on Error.prototype_id
             if let Some(error_ctor) = self.get_global_var("Error") {
                 ep.borrow_mut()
@@ -853,10 +985,6 @@ impl Interpreter {
                             if let Some(ref cv) = cause_val {
                                 $o.insert_builtin("cause".to_string(), cv.clone());
                             }
-                            $o.insert_builtin(
-                                "stack".to_string(),
-                                JsValue::String(JsString::from_str("")),
-                            );
                         };
                     }
 
@@ -965,10 +1093,6 @@ impl Interpreter {
                         }
                         o.insert_builtin("error".to_string(), error_val.clone());
                         o.insert_builtin("suppressed".to_string(), suppressed_val.clone());
-                        o.insert_builtin(
-                            "stack".to_string(),
-                            JsValue::String(JsString::from_str("")),
-                        );
                     }
                     let id = obj_id;
                     Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
@@ -1085,10 +1209,6 @@ impl Interpreter {
                                 if let Some(ref cv) = cause_val {
                                     $o.insert_builtin("cause".to_string(), cv.clone());
                                 }
-                                $o.insert_builtin(
-                                    "stack".to_string(),
-                                    JsValue::String(JsString::from_str("")),
-                                );
                             };
                         }
 

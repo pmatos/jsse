@@ -239,12 +239,14 @@ pub(crate) fn create_data_property_or_throw(
             };
         }
         if interp.get_object_cell(obj_ref.id).is_some() {
-            // Check extensibility — if object is not extensible and property doesn't exist, fail
-            let not_extensible = !interp
-                .get_object_cell_expect(obj_ref.id)
-                .borrow()
-                .extensible;
-            if not_extensible && !interp.has_property_on_id(obj_ref.id, key) {
+            // Check extensibility — CreateDataProperty fails when the object is
+            // not extensible and lacks an OWN property of this key (an inherited
+            // property must not satisfy the check; cf. OrdinaryDefineOwnProperty).
+            let (not_extensible, has_own) = {
+                let borrow = interp.get_object_cell_expect(obj_ref.id).borrow();
+                (!borrow.extensible, borrow.has_own_property(key))
+            };
+            if not_extensible && !has_own {
                 return Err(interp.create_type_error(&format!(
                     "Cannot add property {key}, object is not extensible"
                 )));

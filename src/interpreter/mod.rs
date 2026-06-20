@@ -1325,6 +1325,11 @@ impl Interpreter {
 
     /// Iterative prototype-chain walk of `has_property`. TypedArray canonical
     /// numeric indices short-circuit the walk (per §10.4.5.2).
+    // Documented chain-walking HasProperty primitive (sibling of
+    // `own_has_property`); retained as the canonical API even when currently
+    // uncalled — CreateDataProperty's extensibility guard now correctly uses
+    // the own-only variant.
+    #[allow(dead_code)]
     pub(crate) fn has_property_on_id(&self, start_id: u64, key: &str) -> bool {
         let mut current = Some(start_id);
         while let Some(id) = current {
