@@ -30,7 +30,21 @@ fn number_to_plural_operands(n: f64) -> PluralOperands {
     PluralOperands::from(&decimal)
 }
 
-fn number_to_plural_operands_with_notation(n: f64, notation: &str) -> PluralOperands {
+/// Builds CLDR plural operands for `n` under the given `notation`.
+///
+/// `compact_display` mirrors ECMA-402 `PluralRuleSelect(locale, type, notation,
+/// compactDisplay, s)`: it is threaded through so `select`/`selectRange` match
+/// the spec's selection signature. Under CLDR/ICU4X the plural operands
+/// (including the compact exponent `c`) are identical for `"short"` and `"long"`
+/// compact forms ("1K" and "1 thousand" share the same operands), so the
+/// parameter does not affect operand construction — it is intentionally
+/// unconsumed here. (Verified: node and icu_plurals report identical categories
+/// for short vs long.)
+fn number_to_plural_operands_with_notation(
+    n: f64,
+    notation: &str,
+    _compact_display: Option<&str>,
+) -> PluralOperands {
     if n.is_nan() || n.is_infinite() {
         return PluralOperands::from(0u64);
     }
@@ -192,6 +206,7 @@ impl Interpreter {
                         locale,
                         plural_type,
                         notation,
+                        compact_display,
                         ..
                     }) = data
                     {
@@ -227,7 +242,11 @@ impl Interpreter {
                             }
                         };
 
-                        let operands = number_to_plural_operands_with_notation(n, &notation);
+                        let operands = number_to_plural_operands_with_notation(
+                            n,
+                            &notation,
+                            compact_display.as_deref(),
+                        );
                         let cat = rules.category_for(operands);
                         return Completion::Normal(JsValue::String(JsString::from_str(
                             plural_category_to_str(cat),
@@ -258,6 +277,8 @@ impl Interpreter {
                     if let Some(IntlData::PluralRules {
                         locale,
                         plural_type,
+                        notation,
+                        compact_display,
                         ..
                     }) = data
                     {
@@ -308,8 +329,16 @@ impl Interpreter {
                             }
                         };
 
-                        let start_ops = number_to_plural_operands(start_n);
-                        let end_ops = number_to_plural_operands(end_n);
+                        let start_ops = number_to_plural_operands_with_notation(
+                            start_n,
+                            &notation,
+                            compact_display.as_deref(),
+                        );
+                        let end_ops = number_to_plural_operands_with_notation(
+                            end_n,
+                            &notation,
+                            compact_display.as_deref(),
+                        );
                         let cat = range_rules.category_for_range(start_ops, end_ops);
                         return Completion::Normal(JsValue::String(JsString::from_str(
                             plural_category_to_str(cat),
