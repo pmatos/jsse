@@ -20,29 +20,33 @@ fn unwrap_nf(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, JsValu
         if has_slot {
             return Ok(this.clone());
         }
-        let ctor = interp.realm().intl_number_format_ctor.clone();
-        if let Some(ctor) = ctor
-            && matches!(
-                interp.ordinary_has_instance(&ctor, this),
-                Completion::Normal(JsValue::Boolean(true))
-            )
-        {
-            let key = match interp.intl_fallback_symbol() {
-                JsValue::Symbol(s) => s.to_property_key(),
-                _ => unreachable!(),
-            };
-            let fb = match interp.get_object_property(o.id, &key, this) {
-                Completion::Normal(v) => v,
+        if let Some(ctor) = interp.realm().intl_number_format_ctor.clone() {
+            // ? OrdinaryHasInstance(%NumberFormat%, this) — propagate abrupt completions.
+            let is_instance = match interp.ordinary_has_instance(&ctor, this) {
+                Completion::Normal(JsValue::Boolean(b)) => b,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => false,
             };
-            if let JsValue::Object(fo) = &fb {
-                let fb_has_slot = interp
-                    .get_object_cell(fo.id)
-                    .map(|c| matches!(c.borrow().intl_data(), Some(IntlData::NumberFormat { .. })))
-                    .unwrap_or(false);
-                if fb_has_slot {
-                    return Ok(fb);
+            if is_instance {
+                let key = match interp.intl_fallback_symbol() {
+                    JsValue::Symbol(s) => s.to_property_key(),
+                    _ => unreachable!(),
+                };
+                let fb = match interp.get_object_property(o.id, &key, this) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => JsValue::Undefined,
+                };
+                if let JsValue::Object(fo) = &fb {
+                    let fb_has_slot = interp
+                        .get_object_cell(fo.id)
+                        .map(|c| {
+                            matches!(c.borrow().intl_data(), Some(IntlData::NumberFormat { .. }))
+                        })
+                        .unwrap_or(false);
+                    if fb_has_slot {
+                        return Ok(fb);
+                    }
                 }
             }
         }
@@ -4527,33 +4531,56 @@ impl Interpreter {
                     && let JsValue::Object(recv) = _this
                 {
                     let recv_id = recv.id;
-                    let ctor = interp.realm().intl_number_format_ctor.clone();
-                    if let Some(ctor) = ctor
-                        && matches!(
-                            interp.ordinary_has_instance(&ctor, _this),
-                            Completion::Normal(JsValue::Boolean(true))
-                        )
-                    {
-                        let key = match interp.intl_fallback_symbol() {
-                            JsValue::Symbol(s) => s.to_property_key(),
-                            _ => unreachable!(),
+                    if let Some(ctor) = interp.realm().intl_number_format_ctor.clone() {
+                        // ? OrdinaryHasInstance(%NumberFormat%, this) — an abrupt
+                        // completion (e.g. revoked Proxy / throwing getPrototypeOf
+                        // trap) must propagate, not fall through to a fresh object.
+                        let is_instance = match interp.ordinary_has_instance(&ctor, _this) {
+                            Completion::Normal(JsValue::Boolean(b)) => b,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => false,
                         };
-                        let desc = crate::interpreter::types::PropertyDescriptor::data(
-                            JsValue::Object(crate::types::JsObject { id: obj_id }),
-                            false,
-                            false,
-                            false,
-                        );
-                        let defined = interp
-                            .get_object_cell_expect(recv_id)
-                            .borrow_mut()
-                            .define_own_property(key, desc);
-                        if !defined {
-                            return Completion::Throw(interp.create_type_error(
-                                "Cannot define [[FallbackSymbol]] property on receiver",
-                            ));
+                        if is_instance {
+                            let key = match interp.intl_fallback_symbol() {
+                                JsValue::Symbol(s) => s.to_property_key(),
+                                _ => unreachable!(),
+                            };
+                            let desc = crate::interpreter::types::PropertyDescriptor::data(
+                                JsValue::Object(crate::types::JsObject { id: obj_id }),
+                                false,
+                                false,
+                                false,
+                            );
+                            // ? DefinePropertyOrThrow(this, [[FallbackSymbol]], desc):
+                            // route through the receiver's [[DefineOwnProperty]] so a
+                            // Proxy's defineProperty trap fires and a later [[Get]] in
+                            // Unwrap can observe the chained formatter.
+                            let is_proxy = interp
+                                .get_object_cell(recv_id)
+                                .map(|c| {
+                                    let b = c.borrow();
+                                    b.is_proxy() || b.is_proxy_revoked()
+                                })
+                                .unwrap_or(false);
+                            let defined = if is_proxy {
+                                let desc_val = interp.from_property_descriptor(&desc);
+                                match interp.proxy_define_own_property(recv_id, key, &desc_val) {
+                                    Ok(b) => b,
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            } else {
+                                interp
+                                    .get_object_cell_expect(recv_id)
+                                    .borrow_mut()
+                                    .define_own_property(key, desc)
+                            };
+                            if !defined {
+                                return Completion::Throw(interp.create_type_error(
+                                    "Cannot define [[FallbackSymbol]] property on receiver",
+                                ));
+                            }
+                            return Completion::Normal(_this.clone());
                         }
-                        return Completion::Normal(_this.clone());
                     }
                 }
 
