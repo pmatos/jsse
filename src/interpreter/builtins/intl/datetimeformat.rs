@@ -4169,7 +4169,68 @@ fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, 
     parts
 }
 
+/// ECMA-402 UnwrapDateTimeFormat: resolve the receiver of an Intl.DateTimeFormat
+/// prototype method to the object carrying the [[InitializedDateTimeFormat]]
+/// slot. If `this` lacks the slot but is an instance of %DateTimeFormat%, read
+/// %Intl%.[[FallbackSymbol]] via the ordinary [[Get]] (so Proxy traps fire) and
+/// require the result to carry the slot; otherwise throw a TypeError.
+fn unwrap_dtf(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, JsValue> {
+    if let JsValue::Object(o) = this {
+        let has_slot = interp
+            .get_object_cell(o.id)
+            .map(|c| {
+                matches!(
+                    c.borrow().intl_data(),
+                    Some(IntlData::DateTimeFormat { .. })
+                )
+            })
+            .unwrap_or(false);
+        if has_slot {
+            return Ok(this.clone());
+        }
+        let ctor = interp.realm().intl_date_time_format_ctor.clone();
+        // ? OrdinaryHasInstance(%DateTimeFormat%, this) — propagate abrupt completions.
+        let is_instance = match &ctor {
+            Some(c) => match interp.ordinary_has_instance(c, this) {
+                Completion::Normal(JsValue::Boolean(b)) => b,
+                Completion::Throw(e) => return Err(e),
+                _ => false,
+            },
+            None => false,
+        };
+        if is_instance {
+            let key = match interp.intl_fallback_symbol() {
+                JsValue::Symbol(s) => s.to_property_key(),
+                _ => unreachable!(),
+            };
+            let fb = match interp.get_object_property(o.id, &key, this) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => JsValue::Undefined,
+            };
+            if let JsValue::Object(fo) = &fb {
+                let fb_has_slot = interp
+                    .get_object_cell(fo.id)
+                    .map(|c| {
+                        matches!(
+                            c.borrow().intl_data(),
+                            Some(IntlData::DateTimeFormat { .. })
+                        )
+                    })
+                    .unwrap_or(false);
+                if fb_has_slot {
+                    return Ok(fb);
+                }
+            }
+        }
+    }
+    Err(interp
+        .create_type_error("Intl.DateTimeFormat.prototype method called on incompatible receiver"))
+}
+
 fn extract_dtf_data(interp: &mut Interpreter, this: &JsValue) -> Result<DtfOptions, JsValue> {
+    let recv = unwrap_dtf(interp, this)?;
+    let this = &recv;
     if let JsValue::Object(o) = this
         && let Some(obj) = interp.get_object_cell(o.id)
     {
@@ -4741,6 +4802,11 @@ impl Interpreter {
             "get format".to_string(),
             0,
             |interp, this, _args| {
+                let recv = match unwrap_dtf(interp, this) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let this = &recv;
                 if let JsValue::Object(o) = this {
                     enum Probe {
                         NotDtf,
@@ -5747,6 +5813,67 @@ impl Interpreter {
                             has_explicit_components: has_date_time_component || has_style,
                         },
                     ));
+
+                // ECMA-402 ChainDateTimeFormat: when called without `new` on a
+                // receiver that is an instance of %DateTimeFormat%, stash the
+                // freshly-initialized formatter under %Intl%.[[FallbackSymbol]]
+                // and return the receiver instead of a fresh object.
+                if interp.new_target.is_none()
+                    && let JsValue::Object(recv) = _this
+                {
+                    let recv_id = recv.id;
+                    if let Some(ctor) = interp.realm().intl_date_time_format_ctor.clone() {
+                        // ? OrdinaryHasInstance(%DateTimeFormat%, this) — an abrupt
+                        // completion (e.g. revoked Proxy / throwing getPrototypeOf
+                        // trap) must propagate, not fall through to a fresh object.
+                        let is_instance = match interp.ordinary_has_instance(&ctor, _this) {
+                            Completion::Normal(JsValue::Boolean(b)) => b,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => false,
+                        };
+                        if is_instance {
+                            let key = match interp.intl_fallback_symbol() {
+                                JsValue::Symbol(s) => s.to_property_key(),
+                                _ => unreachable!(),
+                            };
+                            let desc = crate::interpreter::types::PropertyDescriptor::data(
+                                JsValue::Object(crate::types::JsObject { id: obj_id }),
+                                false,
+                                false,
+                                false,
+                            );
+                            // ? DefinePropertyOrThrow(this, [[FallbackSymbol]], desc):
+                            // route through the receiver's [[DefineOwnProperty]] so a
+                            // Proxy's defineProperty trap fires and a later [[Get]] in
+                            // Unwrap can observe the chained formatter.
+                            let is_proxy = interp
+                                .get_object_cell(recv_id)
+                                .map(|c| {
+                                    let b = c.borrow();
+                                    b.is_proxy() || b.is_proxy_revoked()
+                                })
+                                .unwrap_or(false);
+                            let defined = if is_proxy {
+                                let desc_val = interp.from_property_descriptor(&desc);
+                                match interp.proxy_define_own_property(recv_id, key, &desc_val) {
+                                    Ok(b) => b,
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            } else {
+                                interp
+                                    .get_object_cell_expect(recv_id)
+                                    .borrow_mut()
+                                    .define_own_property(key, desc)
+                            };
+                            if !defined {
+                                return Completion::Throw(interp.create_type_error(
+                                    "Cannot define [[FallbackSymbol]] property on receiver",
+                                ));
+                            }
+                            return Completion::Normal(_this.clone());
+                        }
+                    }
+                }
 
                 Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
             },
