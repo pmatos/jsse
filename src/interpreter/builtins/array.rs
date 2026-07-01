@@ -1649,11 +1649,7 @@ impl Interpreter {
                 } else {
                     0.0
                 };
-                let k = if relative_start < 0.0 {
-                    (len as f64 + relative_start).max(0.0) as usize
-                } else {
-                    (relative_start as i64).min(len) as usize
-                };
+                let k = resolve_relative_index(relative_start, len as usize);
                 let relative_end = if let Some(v) = args.get(1) {
                     if matches!(v, JsValue::Undefined) {
                         len as f64
@@ -1666,11 +1662,7 @@ impl Interpreter {
                 } else {
                     len as f64
                 };
-                let fin = if relative_end < 0.0 {
-                    (len as f64 + relative_end).max(0.0) as usize
-                } else {
-                    (relative_end as i64).min(len) as usize
-                };
+                let fin = resolve_relative_index(relative_end, len as usize);
                 let count = fin.saturating_sub(k);
                 let a = match array_species_create(interp, &o, count) {
                     Ok(v) => v,
@@ -2484,11 +2476,7 @@ impl Interpreter {
                 } else {
                     0.0
                 };
-                let actual_start = if relative_start < 0.0 {
-                    (len as f64 + relative_start).max(0.0) as usize
-                } else {
-                    (relative_start as i64).min(len) as usize
-                };
+                let actual_start = resolve_relative_index(relative_start, len as usize);
                 let insert_count = if args.len() > 2 { args.len() - 2 } else { 0 };
                 let actual_delete_count = if args.is_empty() {
                     0usize
@@ -2657,11 +2645,7 @@ impl Interpreter {
                 } else {
                     0.0
                 };
-                let actual_start = if relative_start < 0.0 {
-                    (len as f64 + relative_start).max(0.0) as usize
-                } else {
-                    (relative_start as i64).min(len) as usize
-                };
+                let actual_start = resolve_relative_index(relative_start, len as usize);
                 let actual_delete_count = if args.is_empty() {
                     0usize
                 } else if args.len() == 1 {
@@ -2729,11 +2713,7 @@ impl Interpreter {
                 } else {
                     0.0
                 };
-                let k = if relative_start < 0.0 {
-                    (len as f64 + relative_start).max(0.0) as usize
-                } else {
-                    (relative_start as i64).min(len) as usize
-                };
+                let k = resolve_relative_index(relative_start, len as usize);
                 let relative_end = if let Some(v) = args.get(2) {
                     if matches!(v, JsValue::Undefined) {
                         len as f64
@@ -2746,11 +2726,7 @@ impl Interpreter {
                 } else {
                     len as f64
                 };
-                let fin = if relative_end < 0.0 {
-                    (len as f64 + relative_end).max(0.0) as usize
-                } else {
-                    (relative_end as i64).min(len) as usize
-                };
+                let fin = resolve_relative_index(relative_end, len as usize);
                 for i in k..fin {
                     if let Err(e) = obj_set_throw(interp, &o, &i.to_string(), value.clone()) {
                         return Completion::Throw(e);
@@ -3240,11 +3216,7 @@ impl Interpreter {
                 } else {
                     0.0
                 };
-                let to_val = if relative_target < 0.0 {
-                    (len as f64 + relative_target).max(0.0) as i64
-                } else {
-                    (relative_target as i64).min(len)
-                };
+                let to_val = resolve_relative_index(relative_target, len as usize) as i64;
                 let relative_start = if let Some(v) = args.get(1) {
                     match interp.to_number_value(v) {
                         Ok(n) => to_integer_or_infinity(n),
@@ -3253,11 +3225,7 @@ impl Interpreter {
                 } else {
                     0.0
                 };
-                let from = if relative_start < 0.0 {
-                    (len as f64 + relative_start).max(0.0) as i64
-                } else {
-                    (relative_start as i64).min(len)
-                };
+                let from = resolve_relative_index(relative_start, len as usize) as i64;
                 let relative_end = if let Some(v) = args.get(2) {
                     if matches!(v, JsValue::Undefined) {
                         len as f64
@@ -3270,11 +3238,7 @@ impl Interpreter {
                 } else {
                     len as f64
                 };
-                let fin = if relative_end < 0.0 {
-                    (len as f64 + relative_end).max(0.0) as i64
-                } else {
-                    (relative_end as i64).min(len)
-                };
+                let fin = resolve_relative_index(relative_end, len as usize) as i64;
                 let count = (fin - from).min(len - to_val);
                 if count <= 0 {
                     return Completion::Normal(o);
