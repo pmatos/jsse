@@ -1009,8 +1009,7 @@ fn json_internalize_apply(
                     if let JsValue::Object(t) = &interp.get_proxy_target_val(obj_id)
                         && let Some(tobj) = interp.get_object_cell(t.id)
                     {
-                        tobj.borrow_mut().properties.remove(key);
-                        tobj.borrow_mut().property_order.retain(|k| &**k != key);
+                        tobj.borrow_mut().remove_property(key);
                     }
                 }
                 Err(e) => return Err(e),
@@ -1074,8 +1073,7 @@ fn json_internalize_apply(
             return Ok(());
         }
         if let JsValue::Undefined = &new_val {
-            cell.borrow_mut().properties.remove(key);
-            cell.borrow_mut().property_order.retain(|k| &**k != key);
+            cell.borrow_mut().remove_property(key);
             // Also clear dense array storage so get_property doesn't find stale values
             if let Ok(idx) = key.parse::<usize>() {
                 let mut b = cell.borrow_mut();

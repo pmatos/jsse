@@ -4836,8 +4836,7 @@ impl Interpreter {
                     actual_new_len = idx + 1;
                     break;
                 } else {
-                    obj.properties.remove(k.as_str());
-                    obj.property_order.retain(|p| p.as_ref() != k.as_str());
+                    obj.remove_property(k.as_str());
                 }
             }
 

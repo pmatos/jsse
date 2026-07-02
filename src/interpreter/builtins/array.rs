@@ -706,8 +706,7 @@ fn from_async_store_arraylike_and_continue(
 fn obj_delete(interp: &mut Interpreter, o: &JsValue, key: &str) {
     if let Some(cell) = get_obj(interp, o) {
         let mut borrow = cell.borrow_mut();
-        borrow.properties.remove(key);
-        borrow.property_order.retain(|k| &**k != key);
+        borrow.remove_property(key);
         if let Some(elems) = borrow.array_elements_mut()
             && let Ok(idx) = key.parse::<usize>()
             && idx < elems.len()

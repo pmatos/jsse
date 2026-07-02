@@ -725,8 +725,7 @@ impl Interpreter {
                             }
                             return Completion::Normal(JsValue::Boolean(false));
                         }
-                        obj_mut.properties.remove(&key);
-                        obj_mut.property_order.retain(|k| &**k != key.as_str());
+                        obj_mut.remove_property(&key);
                         if let Some(map) = obj_mut.parameter_map_mut() {
                             map.remove(&key);
                         }
@@ -791,8 +790,7 @@ impl Interpreter {
                                 return Completion::Normal(JsValue::Boolean(false));
                             }
                             drop(gb);
-                            global.borrow_mut().properties.remove(name);
-                            global.borrow_mut().property_order.retain(|k| &**k != name);
+                            global.borrow_mut().remove_property(name);
                             self.realm().global_env.borrow_mut().bindings.remove(name);
                             return Completion::Normal(JsValue::Boolean(true));
                         }
@@ -15565,8 +15563,7 @@ impl Interpreter {
             {
                 return Ok(false);
             }
-            m.properties.remove(key);
-            m.property_order.retain(|k| &**k != key);
+            m.remove_property(key);
             if let Some(elems) = m.array_elements_mut()
                 && let Ok(idx) = key.parse::<usize>()
                 && idx < elems.len()

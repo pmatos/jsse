@@ -481,8 +481,7 @@ impl Interpreter {
                 }
                 return Completion::Normal(JsValue::Boolean(false));
             }
-            obj_mut.properties.remove(key);
-            obj_mut.property_order.retain(|k| &**k != key);
+            obj_mut.remove_property(key);
             if let Some(map) = obj_mut.parameter_map_mut() {
                 map.remove(key);
             }
