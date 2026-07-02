@@ -1781,6 +1781,43 @@ impl ProxyData {
     }
 }
 
+/// Generate `pub(crate) fn $name(&self) -> Option<&$ty>` and optionally a
+/// paired `fn $mut_name(&mut self) -> Option<&mut $ty>` for the common
+/// `ObjectKind::$variant(T)` accessor pattern.
+///
+/// Avoids 30+ structurally identical methods; each variant that needs a
+/// different shape (boxed deref, struct variant, Copy return) is written out
+/// by hand below.
+macro_rules! kind_accessor {
+    // Immutable + mutable pair.
+    ($name:ident, $mut_name:ident, $variant:ident, $ty:ty) => {
+        pub(crate) fn $name(&self) -> Option<&$ty> {
+            if let ObjectKind::$variant(ref x) = self.kind {
+                Some(x)
+            } else {
+                None
+            }
+        }
+        pub(crate) fn $mut_name(&mut self) -> Option<&mut $ty> {
+            if let ObjectKind::$variant(ref mut x) = self.kind {
+                Some(x)
+            } else {
+                None
+            }
+        }
+    };
+    // Immutable-only.
+    ($name:ident, $variant:ident, $ty:ty) => {
+        pub(crate) fn $name(&self) -> Option<&$ty> {
+            if let ObjectKind::$variant(ref x) = self.kind {
+                Some(x)
+            } else {
+                None
+            }
+        }
+    };
+}
+
 impl JsObjectData {
     pub(crate) fn new() -> Self {
         Self {
@@ -1807,14 +1844,33 @@ impl JsObjectData {
         }
     }
 
-    /// Proxy slot data. `Some` for any proxy, active or revoked.
-    pub(crate) fn proxy(&self) -> Option<&ProxyData> {
-        if let ObjectKind::Proxy(ref p) = self.kind {
-            Some(p)
-        } else {
-            None
-        }
-    }
+    kind_accessor!(proxy, Proxy, ProxyData);
+    kind_accessor!(arraybuffer, arraybuffer_mut, ArrayBuffer, ArrayBufferData);
+    kind_accessor!(data_view_info, DataView, DataViewInfo);
+    kind_accessor!(typed_array_info, TypedArray, TypedArrayInfo);
+    kind_accessor!(iterator_state, iterator_state_mut, Iterator, IteratorState);
+    kind_accessor!(promise_data, promise_data_mut, Promise, PromiseData);
+    kind_accessor!(parameter_map, parameter_map_mut, Arguments, HashMap<String, (EnvRef, String)>);
+    kind_accessor!(array_elements, array_elements_mut, Array, Vec<JsValue>);
+    kind_accessor!(map_data, map_data_mut, Map, Vec<Option<(JsValue, JsValue)>>);
+    kind_accessor!(set_data, set_data_mut, Set, Vec<Option<JsValue>>);
+    kind_accessor!(temporal_data, Temporal, TemporalData);
+    kind_accessor!(regexp, RegExp, RegExpData);
+    kind_accessor!(wrapped, WrappedFunction, WrappedFunctionData);
+    kind_accessor!(bound, BoundFunction, BoundFunctionData);
+    kind_accessor!(iter_helper, IterHelper, IterHelperData);
+    kind_accessor!(
+        module_namespace,
+        module_namespace_mut,
+        ModuleNamespace,
+        ModuleNamespaceData
+    );
+    kind_accessor!(
+        disposable_stack,
+        disposable_stack_mut,
+        DisposableStack,
+        DisposableStackData
+    );
 
     /// True iff this is an *active* (non-revoked) proxy. Preserves pre-bundling semantics.
     pub fn is_proxy(&self) -> bool {
@@ -1847,159 +1903,6 @@ impl JsObjectData {
     /// True iff this is a synthesized default derived constructor.
     pub fn is_default_derived_constructor(&self) -> bool {
         matches!(self.constructor_kind, ConstructorKind::DefaultDerivedClass)
-    }
-
-    /// ArrayBuffer / SharedArrayBuffer slot data (any kind), pulled from `kind`.
-    pub(crate) fn arraybuffer(&self) -> Option<&ArrayBufferData> {
-        if let ObjectKind::ArrayBuffer(ref ab) = self.kind {
-            Some(ab)
-        } else {
-            None
-        }
-    }
-
-    /// ArrayBuffer slot data — mutable view for in-place mutation (resize/detach/toImmutable).
-    pub(crate) fn arraybuffer_mut(&mut self) -> Option<&mut ArrayBufferData> {
-        if let ObjectKind::ArrayBuffer(ref mut ab) = self.kind {
-            Some(ab)
-        } else {
-            None
-        }
-    }
-
-    /// DataView slot data.
-    pub(crate) fn data_view_info(&self) -> Option<&DataViewInfo> {
-        if let ObjectKind::DataView(ref d) = self.kind {
-            Some(d)
-        } else {
-            None
-        }
-    }
-
-    /// TypedArray slot data.
-    pub(crate) fn typed_array_info(&self) -> Option<&TypedArrayInfo> {
-        if let ObjectKind::TypedArray(ref t) = self.kind {
-            Some(t)
-        } else {
-            None
-        }
-    }
-
-    /// Iterator state (Array/String/Map/Set/etc. iterator instance progress).
-    pub(crate) fn iterator_state(&self) -> Option<&IteratorState> {
-        if let ObjectKind::Iterator(ref i) = self.kind {
-            Some(i)
-        } else {
-            None
-        }
-    }
-
-    /// Iterator state — mutable view (next() advances the cursor in place).
-    pub(crate) fn iterator_state_mut(&mut self) -> Option<&mut IteratorState> {
-        if let ObjectKind::Iterator(ref mut i) = self.kind {
-            Some(i)
-        } else {
-            None
-        }
-    }
-
-    /// Promise slot data.
-    pub(crate) fn promise_data(&self) -> Option<&PromiseData> {
-        if let ObjectKind::Promise(ref p) = self.kind {
-            Some(p)
-        } else {
-            None
-        }
-    }
-
-    /// Promise slot data — mutable view for state transitions and reaction queues.
-    pub(crate) fn promise_data_mut(&mut self) -> Option<&mut PromiseData> {
-        if let ObjectKind::Promise(ref mut p) = self.kind {
-            Some(p)
-        } else {
-            None
-        }
-    }
-
-    /// Arguments parameter-map slot data.
-    pub(crate) fn parameter_map(&self) -> Option<&HashMap<String, (EnvRef, String)>> {
-        if let ObjectKind::Arguments(ref m) = self.kind {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Arguments parameter-map — mutable view (delete map entry on property delete).
-    pub(crate) fn parameter_map_mut(&mut self) -> Option<&mut HashMap<String, (EnvRef, String)>> {
-        if let ObjectKind::Arguments(ref mut m) = self.kind {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Array exotic element list.
-    pub(crate) fn array_elements(&self) -> Option<&Vec<JsValue>> {
-        if let ObjectKind::Array(ref v) = self.kind {
-            Some(v)
-        } else {
-            None
-        }
-    }
-
-    /// Array exotic element list — mutable view.
-    pub(crate) fn array_elements_mut(&mut self) -> Option<&mut Vec<JsValue>> {
-        if let ObjectKind::Array(ref mut v) = self.kind {
-            Some(v)
-        } else {
-            None
-        }
-    }
-
-    /// Map slot data (entry list, tombstones encoded as None).
-    pub(crate) fn map_data(&self) -> Option<&Vec<Option<(JsValue, JsValue)>>> {
-        if let ObjectKind::Map(ref m) = self.kind {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Map slot data — mutable view.
-    pub(crate) fn map_data_mut(&mut self) -> Option<&mut Vec<Option<(JsValue, JsValue)>>> {
-        if let ObjectKind::Map(ref mut m) = self.kind {
-            Some(m)
-        } else {
-            None
-        }
-    }
-
-    /// Set slot data (entry list).
-    pub(crate) fn set_data(&self) -> Option<&Vec<Option<JsValue>>> {
-        if let ObjectKind::Set(ref s) = self.kind {
-            Some(s)
-        } else {
-            None
-        }
-    }
-
-    /// Set slot data — mutable view.
-    pub(crate) fn set_data_mut(&mut self) -> Option<&mut Vec<Option<JsValue>>> {
-        if let ObjectKind::Set(ref mut s) = self.kind {
-            Some(s)
-        } else {
-            None
-        }
-    }
-
-    /// Temporal slot data (any of the Temporal kinds).
-    pub(crate) fn temporal_data(&self) -> Option<&TemporalData> {
-        if let ObjectKind::Temporal(ref t) = self.kind {
-            Some(t)
-        } else {
-            None
-        }
     }
 
     /// Intl slot data (any of the Intl kinds).
@@ -2069,82 +1972,10 @@ impl JsObjectData {
         self.arraybuffer().is_some_and(|b| b.is_immutable)
     }
 
-    /// RegExp slot data, pulled from the kind enum. `Some` iff this is a RegExp instance.
-    pub(crate) fn regexp(&self) -> Option<&RegExpData> {
-        if let ObjectKind::RegExp(ref r) = self.kind {
-            Some(r)
-        } else {
-            None
-        }
-    }
-
-    /// Wrapped-function slot data. `Some` iff this is a ShadowRealm cross-realm wrapper.
-    pub(crate) fn wrapped(&self) -> Option<&WrappedFunctionData> {
-        if let ObjectKind::WrappedFunction(ref w) = self.kind {
-            Some(w)
-        } else {
-            None
-        }
-    }
-
-    /// Bound-function slot data. `Some` iff this is a `Function.prototype.bind` result.
-    pub(crate) fn bound(&self) -> Option<&BoundFunctionData> {
-        if let ObjectKind::BoundFunction(ref b) = self.kind {
-            Some(b)
-        } else {
-            None
-        }
-    }
-
-    /// Iterator-helper / iterator-from delegation slot data.
-    pub(crate) fn iter_helper(&self) -> Option<&IterHelperData> {
-        if let ObjectKind::IterHelper(ref h) = self.kind {
-            Some(h)
-        } else {
-            None
-        }
-    }
-
-    /// Shadow-realm id for a ShadowRealm instance.
+    /// Shadow-realm id for a ShadowRealm instance. Copy return, so cannot use the macro.
     pub(crate) fn shadow_realm_id(&self) -> Option<usize> {
         if let ObjectKind::ShadowRealm(id) = self.kind {
             Some(id)
-        } else {
-            None
-        }
-    }
-
-    /// Module namespace slot data.
-    pub(crate) fn module_namespace(&self) -> Option<&ModuleNamespaceData> {
-        if let ObjectKind::ModuleNamespace(ref n) = self.kind {
-            Some(n)
-        } else {
-            None
-        }
-    }
-
-    /// Module namespace slot data — mutable view for clearing the deferred flag.
-    pub(crate) fn module_namespace_mut(&mut self) -> Option<&mut ModuleNamespaceData> {
-        if let ObjectKind::ModuleNamespace(ref mut n) = self.kind {
-            Some(n)
-        } else {
-            None
-        }
-    }
-
-    /// DisposableStack slot data.
-    pub(crate) fn disposable_stack(&self) -> Option<&DisposableStackData> {
-        if let ObjectKind::DisposableStack(ref d) = self.kind {
-            Some(d)
-        } else {
-            None
-        }
-    }
-
-    /// DisposableStack slot data — mutable view (push/drain mutate the resource list).
-    pub(crate) fn disposable_stack_mut(&mut self) -> Option<&mut DisposableStackData> {
-        if let ObjectKind::DisposableStack(ref mut d) = self.kind {
-            Some(d)
         } else {
             None
         }
@@ -3862,4 +3693,153 @@ pub(crate) struct SetRecord {
     pub(crate) has: JsValue,
     pub(crate) keys: JsValue,
     pub(crate) size: f64,
+}
+
+#[cfg(test)]
+mod kind_accessor_tests {
+    use super::*;
+
+    fn obj_with_kind(kind: ObjectKind) -> JsObjectData {
+        let mut obj = JsObjectData::new();
+        obj.kind = kind;
+        obj
+    }
+
+    // --- array_elements / array_elements_mut ---
+
+    #[test]
+    fn array_elements_some_for_array_kind() {
+        let obj = obj_with_kind(ObjectKind::Array(vec![JsValue::Undefined]));
+        assert!(obj.array_elements().is_some());
+        assert_eq!(obj.array_elements().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn array_elements_none_for_ordinary() {
+        let obj = JsObjectData::new();
+        assert!(obj.array_elements().is_none());
+    }
+
+    #[test]
+    fn array_elements_mut_allows_push() {
+        let mut obj = obj_with_kind(ObjectKind::Array(Vec::new()));
+        obj.array_elements_mut()
+            .unwrap()
+            .push(JsValue::Boolean(true));
+        assert_eq!(obj.array_elements().unwrap().len(), 1);
+    }
+
+    // --- set_data / set_data_mut ---
+
+    #[test]
+    fn set_data_some_for_set_kind() {
+        let obj = obj_with_kind(ObjectKind::Set(vec![Some(JsValue::Number(1.0))]));
+        assert!(obj.set_data().is_some());
+        assert_eq!(obj.set_data().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn set_data_none_for_non_set_kind() {
+        let obj = obj_with_kind(ObjectKind::Array(Vec::new()));
+        assert!(obj.set_data().is_none());
+    }
+
+    #[test]
+    fn set_data_mut_allows_push() {
+        let mut obj = obj_with_kind(ObjectKind::Set(Vec::new()));
+        obj.set_data_mut().unwrap().push(None);
+        assert_eq!(obj.set_data().unwrap().len(), 1);
+    }
+
+    // --- map_data / map_data_mut ---
+
+    #[test]
+    fn map_data_some_for_map_kind() {
+        let entry = Some((JsValue::Number(1.0), JsValue::Boolean(false)));
+        let obj = obj_with_kind(ObjectKind::Map(vec![entry]));
+        assert!(obj.map_data().is_some());
+        assert_eq!(obj.map_data().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn map_data_none_for_non_map_kind() {
+        let obj = JsObjectData::new();
+        assert!(obj.map_data().is_none());
+    }
+
+    #[test]
+    fn map_data_mut_allows_push() {
+        let mut obj = obj_with_kind(ObjectKind::Map(Vec::new()));
+        obj.map_data_mut()
+            .unwrap()
+            .push(Some((JsValue::Number(0.0), JsValue::Undefined)));
+        assert_eq!(obj.map_data().unwrap().len(), 1);
+    }
+
+    // --- bound ---
+
+    #[test]
+    fn bound_some_for_bound_function_kind() {
+        let data = BoundFunctionData {
+            target: JsValue::Undefined,
+            this: JsValue::Undefined,
+            args: vec![],
+        };
+        let obj = obj_with_kind(ObjectKind::BoundFunction(data));
+        assert!(obj.bound().is_some());
+    }
+
+    #[test]
+    fn bound_none_for_ordinary() {
+        let obj = JsObjectData::new();
+        assert!(obj.bound().is_none());
+    }
+
+    // --- regexp ---
+
+    #[test]
+    fn regexp_some_for_regexp_kind() {
+        let data = RegExpData {
+            source: JsString::from_str("foo"),
+            flags: JsString::from_str(""),
+        };
+        let obj = obj_with_kind(ObjectKind::RegExp(data));
+        assert!(obj.regexp().is_some());
+    }
+
+    #[test]
+    fn regexp_none_for_non_regexp_kind() {
+        let obj = JsObjectData::new();
+        assert!(obj.regexp().is_none());
+    }
+
+    // --- Mutual exclusion: accessor returns None when a *different* macro-generated kind is set ---
+
+    #[test]
+    fn set_data_none_when_map_kind_is_set() {
+        let obj = obj_with_kind(ObjectKind::Map(Vec::new()));
+        assert!(obj.set_data().is_none());
+        assert!(obj.map_data().is_some());
+    }
+
+    #[test]
+    fn array_elements_none_when_set_kind_is_set() {
+        let obj = obj_with_kind(ObjectKind::Set(Vec::new()));
+        assert!(obj.array_elements().is_none());
+        assert!(obj.set_data().is_some());
+    }
+
+    // --- shadow_realm_id (Copy return — hand-written, not macro) ---
+
+    #[test]
+    fn shadow_realm_id_some_for_shadow_realm_kind() {
+        let obj = obj_with_kind(ObjectKind::ShadowRealm(42));
+        assert_eq!(obj.shadow_realm_id(), Some(42));
+    }
+
+    #[test]
+    fn shadow_realm_id_none_for_ordinary() {
+        let obj = JsObjectData::new();
+        assert!(obj.shadow_realm_id().is_none());
+    }
 }
