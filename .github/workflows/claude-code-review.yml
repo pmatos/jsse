@@ -10,6 +10,12 @@ on:
     #   - "src/**/*.js"
     #   - "src/**/*.jsx"
 
+env:
+  # Force Node.js 24 for any JS-based actions still pinned to Node 20
+  # (e.g. oven-sh/setup-bun pulled in transitively by anthropics/claude-code-action).
+  # Node 20 is removed from runners on 2026-09-16.
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   claude-review:
     # Skip automated review for bot-authored PRs (e.g. Dependabot).
@@ -24,8 +30,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
-      issues: read
+      pull-requests: write # required so the review can post PR comments
+      issues: write # required for the `gh pr comment` no-issues summary
       id-token: write
 
     steps:
@@ -41,7 +47,12 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment'
+          # The code-review plugin: (1) only posts when invoked with `--comment`
+          # (otherwise it prints a terminal summary and stops); (2) spawns sub-agents
+          # (Task); (3) posts inline findings via the action's github_inline_comment
+          # MCP tool (and the no-issues summary via `gh pr comment`), reading git
+          # history for context. Grant all three or the run ends "success" silently.
+          claude_args: '--allowedTools "Task,Read,Grep,Glob,Bash(gh:*),Bash(git:*),mcp__github_inline_comment__create_inline_comment"'
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
-
