@@ -1,0 +1,43 @@
+name: Workflow Lint
+
+# These workflows are security-critical (trust gates, id-token: write,
+# CLAUDE_CODE_OAUTH_TOKEN). actionlint catches YAML/expression/shell bugs;
+# zizmor audits for injection, over-broad permissions, and unpinned actions.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  workflow-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          persist-credentials: false
+
+      - name: actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.7
+        run: |
+          curl -fsSL -o actionlint.tar.gz \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          tar -xzf actionlint.tar.gz actionlint
+          ./actionlint -color
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+
+      - name: zizmor
+        env:
+          # Enables zizmor's online audits (e.g. stale-action-ref checks).
+          GH_TOKEN: ${{ github.token }}
+        run: uvx zizmor@1.26.1 .github/workflows/

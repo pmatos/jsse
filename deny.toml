@@ -1,0 +1,46 @@
+# cargo-deny configuration — supply-chain gate that Dependabot alone does not
+# provide: it scans the RUSTSEC advisory DB, enforces an allow-list of licenses,
+# and rejects crates pulled from unexpected registries/git sources.
+#
+# Run locally with:  cargo deny check advisories bans licenses sources
+# See https://embarkstudios.github.io/cargo-deny/ for the full schema.
+
+[graph]
+# Evaluate the crate graph with all features enabled so no dependency escapes
+# the checks by hiding behind an off-by-default feature.
+all-features = true
+
+[advisories]
+version = 2
+# Add RUSTSEC IDs here with a justification only when an advisory is triaged as
+# not applicable; keep the list empty so new advisories fail loudly by default.
+ignore = []
+
+[licenses]
+version = 2
+# The allow-list is exactly the permissive licenses currently in the crate
+# graph. A dependency bump that introduces any other license (notably anything
+# copyleft) will fail this check by design, surfacing it for a manual decision
+# instead of silently shipping — add the new license here once reviewed.
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Unicode-3.0",
+  "BSL-1.0",
+  "Unlicense",
+]
+confidence-threshold = 0.8
+exceptions = []
+
+[bans]
+# Duplicate versions and wildcard requirements are worth surfacing but should
+# not hard-fail CI on transitive noise outside our control.
+multiple-versions = "warn"
+wildcards = "warn"
+allow = []
+deny = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

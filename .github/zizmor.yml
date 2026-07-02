@@ -1,0 +1,22 @@
+# zizmor audit configuration.
+#
+# Every other finding is fixed in the workflows themselves (SHA-pinned actions,
+# least-privilege permissions, persist-credentials: false on read-only
+# checkouts). The two ignores below are deliberate, documented exceptions.
+
+rules:
+  # claude.yml's @claude responder can be asked to implement changes and push a
+  # branch; claude-code-action manages its own git credentials, and this job
+  # uploads no artifacts, so persisted checkout credentials cannot leak. Leaving
+  # checkout auth at its default here avoids breaking the push path. Revisit if
+  # the action's auth model changes.
+  artipacked:
+    ignore:
+      - claude.yml
+
+  # semgrep/semgrep-action is archived. Migrating off it (to the semgrep CLI /
+  # container) changes an existing, green scan job, so it is tracked as a
+  # separate follow-up rather than bundled into this hardening change.
+  archived-uses:
+    ignore:
+      - semgrep.yml

@@ -10,19 +10,29 @@ env:
   CARGO_TERM_COLOR: always
   TEST262_SAMPLE_SEED: 262023
 
+# Least-privilege default for all jobs; widen per-job only when needed.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref (a new push obsoletes in-flight CI).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           submodules: recursive
+          persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable
         with:
           components: clippy, rustfmt
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
       - name: Check formatting
         run: cargo fmt --check
@@ -36,7 +46,7 @@ jobs:
       - name: Run unit tests
         run: cargo test
 
-      - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
 
       - name: Run Python script tests
         run: uv run python -m unittest discover -s scripts -p 'test_*.py'
@@ -52,4 +62,4 @@ jobs:
             test262/test/language/expressions/dynamic-import/import-attributes/
 
       - name: Run test262 (10% sample, fixed seed ${{ env.TEST262_SAMPLE_SEED }})
-        run: uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 --sample 0.1 --seed $TEST262_SAMPLE_SEED
+        run: uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 --sample 0.1 --seed "$TEST262_SAMPLE_SEED"

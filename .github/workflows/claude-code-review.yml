@@ -16,6 +16,12 @@ env:
   # Node 20 is removed from runners on 2026-09-16.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
+# A new push to the PR (synchronize) supersedes any in-flight review of the
+# prior head, so cancel the stale run rather than post a review of old code.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   claude-review:
     # Skip automated review for bot-authored PRs (e.g. Dependabot).
@@ -36,13 +42,14 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Run Claude Code Review
         id: claude-review
-        uses: anthropics/claude-code-action@v1
+        uses: anthropics/claude-code-action@6c0083bb7289c31716797a039b6367b3079cc46e # v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
