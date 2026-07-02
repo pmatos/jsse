@@ -1201,6 +1201,27 @@ impl Interpreter {
         func_val
     }
 
+    /// Create a native method and install it as a non-enumerable, writable,
+    /// configurable own property of `target_id` — the shape every spec
+    /// builtin method has (§ Ordinary Object Internal Methods). Replaces the
+    /// two-step `create_function` + `insert_builtin` dance repeated at every
+    /// builtin call site. Returns the created function value for callers
+    /// that also need to reference it directly (e.g. reusing the same
+    /// function under a second name).
+    pub(crate) fn define_method(
+        &mut self,
+        target_id: u64,
+        name: &str,
+        len: usize,
+        f: impl Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion + 'static,
+    ) -> JsValue {
+        let func = self.create_function(JsFunction::native(name.to_string(), len, f));
+        self.get_object_cell_expect(target_id)
+            .borrow_mut()
+            .insert_builtin(name.to_string(), func.clone());
+        func
+    }
+
     /// Get a fresh `Rc::clone` of the slot's `Rc<RefCell<…>>` if live.
     /// New callers should prefer `get_object_cell` / `get_object_cell_expect`
     /// (returns `&RefCell<…>`) to avoid the per-call `Rc::clone`; this

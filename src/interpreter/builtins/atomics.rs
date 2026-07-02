@@ -59,185 +59,132 @@ impl Interpreter {
         let atomics_id = atomics_obj_id;
 
         // Atomics.add
-        let add_fn = self.create_function(JsFunction::native(
-            "add".to_string(),
-            3,
-            |interp, _this, args| {
-                atomics_rmw(
-                    interp,
-                    args,
-                    |old, val| old.wrapping_add(val),
-                    |old, val| old.wrapping_add(val),
-                )
-            },
-        ));
-        self.get_object_cell_expect(atomics_obj_id)
-            .borrow_mut()
-            .insert_builtin("add".to_string(), add_fn);
+        self.define_method(atomics_obj_id, "add", 3, |interp, _this, args| {
+            atomics_rmw(
+                interp,
+                args,
+                |old, val| old.wrapping_add(val),
+                |old, val| old.wrapping_add(val),
+            )
+        });
 
         // Atomics.sub
-        let sub_fn = self.create_function(JsFunction::native(
-            "sub".to_string(),
-            3,
-            |interp, _this, args| {
-                atomics_rmw(
-                    interp,
-                    args,
-                    |old, val| old.wrapping_sub(val),
-                    |old, val| old.wrapping_sub(val),
-                )
-            },
-        ));
-        self.get_object_cell_expect(atomics_obj_id)
-            .borrow_mut()
-            .insert_builtin("sub".to_string(), sub_fn);
+        self.define_method(atomics_obj_id, "sub", 3, |interp, _this, args| {
+            atomics_rmw(
+                interp,
+                args,
+                |old, val| old.wrapping_sub(val),
+                |old, val| old.wrapping_sub(val),
+            )
+        });
 
         // Atomics.and
-        let and_fn = self.create_function(JsFunction::native(
-            "and".to_string(),
-            3,
-            |interp, _this, args| {
-                atomics_rmw(interp, args, |old, val| old & val, |old, val| old & val)
-            },
-        ));
-        self.get_object_cell_expect(atomics_obj_id)
-            .borrow_mut()
-            .insert_builtin("and".to_string(), and_fn);
+        self.define_method(atomics_obj_id, "and", 3, |interp, _this, args| {
+            atomics_rmw(interp, args, |old, val| old & val, |old, val| old & val)
+        });
 
         // Atomics.or
-        let or_fn = self.create_function(JsFunction::native(
-            "or".to_string(),
-            3,
-            |interp, _this, args| {
-                atomics_rmw(interp, args, |old, val| old | val, |old, val| old | val)
-            },
-        ));
-        self.get_object_cell_expect(atomics_obj_id)
-            .borrow_mut()
-            .insert_builtin("or".to_string(), or_fn);
+        self.define_method(atomics_obj_id, "or", 3, |interp, _this, args| {
+            atomics_rmw(interp, args, |old, val| old | val, |old, val| old | val)
+        });
 
         // Atomics.xor
-        let xor_fn = self.create_function(JsFunction::native(
-            "xor".to_string(),
-            3,
-            |interp, _this, args| {
-                atomics_rmw(interp, args, |old, val| old ^ val, |old, val| old ^ val)
-            },
-        ));
-        self.get_object_cell_expect(atomics_obj_id)
-            .borrow_mut()
-            .insert_builtin("xor".to_string(), xor_fn);
+        self.define_method(atomics_obj_id, "xor", 3, |interp, _this, args| {
+            atomics_rmw(interp, args, |old, val| old ^ val, |old, val| old ^ val)
+        });
 
         // Atomics.exchange
-        let exchange_fn = self.create_function(JsFunction::native(
-            "exchange".to_string(),
-            3,
-            |interp, _this, args| atomics_rmw(interp, args, |_old, val| val, |_old, val| val),
-        ));
-        self.get_object_cell_expect(atomics_obj_id)
-            .borrow_mut()
-            .insert_builtin("exchange".to_string(), exchange_fn);
+        self.define_method(atomics_obj_id, "exchange", 3, |interp, _this, args| {
+            atomics_rmw(interp, args, |_old, val| val, |_old, val| val)
+        });
 
         // Atomics.load
-        let load_fn = self.create_function(JsFunction::native(
-            "load".to_string(),
-            2,
-            |interp, _this, args| {
-                let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let (kind, buffer, byte_offset, element_size, is_bigint) =
-                    match validate_integer_typed_array(interp, &ta_val, false, false) {
-                        Ok(info) => info,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                let byte_index =
-                    match validate_atomic_access(interp, &ta_val, &index_val, element_size) {
-                        Ok(i) => i,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                if let Err(e) = check_ta_detached(interp, &ta_val) {
-                    return Completion::Throw(e);
+        self.define_method(atomics_obj_id, "load", 2, |interp, _this, args| {
+            let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            let (kind, buffer, byte_offset, element_size, is_bigint) =
+                match validate_integer_typed_array(interp, &ta_val, false, false) {
+                    Ok(info) => info,
+                    Err(e) => return Completion::Throw(e),
+                };
+            let byte_index = match validate_atomic_access(interp, &ta_val, &index_val, element_size)
+            {
+                Ok(i) => i,
+                Err(e) => return Completion::Throw(e),
+            };
+            if let Err(e) = check_ta_detached(interp, &ta_val) {
+                return Completion::Throw(e);
+            }
+            let offset = byte_offset + byte_index;
+            if let Some((sab, _ta_byte_offset)) = get_sab_info(interp, &ta_val) {
+                return atomic_load_shared(&sab, offset, kind, is_bigint);
+            }
+            (*buffer.borrow()).with_read(|buf| {
+                if is_bigint {
+                    Completion::Normal(read_bigint_from_buffer(buf, offset, kind))
+                } else {
+                    Completion::Normal(read_number_from_buffer(buf, offset, kind))
                 }
-                let offset = byte_offset + byte_index;
-                if let Some((sab, _ta_byte_offset)) = get_sab_info(interp, &ta_val) {
-                    return atomic_load_shared(&sab, offset, kind, is_bigint);
-                }
-                (*buffer.borrow()).with_read(|buf| {
-                    if is_bigint {
-                        Completion::Normal(read_bigint_from_buffer(buf, offset, kind))
-                    } else {
-                        Completion::Normal(read_number_from_buffer(buf, offset, kind))
-                    }
-                })
-            },
-        ));
-        self.get_object_cell_expect(atomics_obj_id)
-            .borrow_mut()
-            .insert_builtin("load".to_string(), load_fn);
+            })
+        });
 
         // Atomics.store
-        let store_fn = self.create_function(JsFunction::native(
-            "store".to_string(),
-            3,
-            |interp, _this, args| {
-                let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let value = args.get(2).cloned().unwrap_or(JsValue::Undefined);
-                let (kind, buffer, byte_offset, element_size, is_bigint) =
-                    match validate_integer_typed_array(interp, &ta_val, false, true) {
-                        Ok(info) => info,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                let byte_index =
-                    match validate_atomic_access(interp, &ta_val, &index_val, element_size) {
-                        Ok(i) => i,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                let (converted, return_val) = if is_bigint {
-                    let v = match interp.to_bigint_value(&value) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    (v.clone(), v)
-                } else {
-                    let n = match interp.to_number_value(&value) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let int_val = if n.is_nan() || n == 0.0 {
-                        0.0
-                    } else if n.is_infinite() {
-                        n
-                    } else {
-                        n.trunc()
-                    };
-                    (JsValue::Number(n), JsValue::Number(int_val))
+        self.define_method(atomics_obj_id, "store", 3, |interp, _this, args| {
+            let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            let value = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+            let (kind, buffer, byte_offset, element_size, is_bigint) =
+                match validate_integer_typed_array(interp, &ta_val, false, true) {
+                    Ok(info) => info,
+                    Err(e) => return Completion::Throw(e),
                 };
-                if let Err(e) = check_ta_detached(interp, &ta_val) {
-                    return Completion::Throw(e);
+            let byte_index = match validate_atomic_access(interp, &ta_val, &index_val, element_size)
+            {
+                Ok(i) => i,
+                Err(e) => return Completion::Throw(e),
+            };
+            let (converted, return_val) = if is_bigint {
+                let v = match interp.to_bigint_value(&value) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                (v.clone(), v)
+            } else {
+                let n = match interp.to_number_value(&value) {
+                    Ok(n) => n,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let int_val = if n.is_nan() || n == 0.0 {
+                    0.0
+                } else if n.is_infinite() {
+                    n
+                } else {
+                    n.trunc()
+                };
+                (JsValue::Number(n), JsValue::Number(int_val))
+            };
+            if let Err(e) = check_ta_detached(interp, &ta_val) {
+                return Completion::Throw(e);
+            }
+            let offset = byte_offset + byte_index;
+            if let Some((sab, _ta_byte_offset)) = get_sab_info(interp, &ta_val) {
+                atomic_store_shared(&sab, offset, kind, is_bigint, &converted);
+                return Completion::Normal(return_val);
+            }
+            (*buffer.borrow_mut()).with_write(|buf| {
+                if is_bigint {
+                    write_bigint_to_buffer(buf, offset, kind, &converted);
+                } else {
+                    write_number_to_buffer(buf, offset, kind, &converted);
                 }
-                let offset = byte_offset + byte_index;
-                if let Some((sab, _ta_byte_offset)) = get_sab_info(interp, &ta_val) {
-                    atomic_store_shared(&sab, offset, kind, is_bigint, &converted);
-                    return Completion::Normal(return_val);
-                }
-                (*buffer.borrow_mut()).with_write(|buf| {
-                    if is_bigint {
-                        write_bigint_to_buffer(buf, offset, kind, &converted);
-                    } else {
-                        write_number_to_buffer(buf, offset, kind, &converted);
-                    }
-                });
-                Completion::Normal(return_val)
-            },
-        ));
-        self.get_object_cell_expect(atomics_obj_id)
-            .borrow_mut()
-            .insert_builtin("store".to_string(), store_fn);
+            });
+            Completion::Normal(return_val)
+        });
 
         // Atomics.compareExchange
-        let cmpxchg_fn = self.create_function(JsFunction::native(
-            "compareExchange".to_string(),
+        self.define_method(
+            atomics_obj_id,
+            "compareExchange",
             4,
             |interp, _this, args| {
                 let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
@@ -307,503 +254,460 @@ impl Interpreter {
                     }
                 })
             },
-        ));
-        self.get_object_cell_expect(atomics_obj_id)
-            .borrow_mut()
-            .insert_builtin("compareExchange".to_string(), cmpxchg_fn);
+        );
 
         // Atomics.isLockFree
-        let is_lock_free_fn = self.create_function(JsFunction::native(
-            "isLockFree".to_string(),
-            1,
-            |interp, _this, args| {
-                let size_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let size = match interp.to_number_value(&size_val) {
-                    Ok(n) => n,
-                    Err(e) => return Completion::Throw(e),
-                };
-                let result = matches!(size as u64, 1 | 2 | 4 | 8) && size == (size as u64) as f64;
-                Completion::Normal(JsValue::Boolean(result))
-            },
-        ));
-        self.get_object_cell_expect(atomics_obj_id)
-            .borrow_mut()
-            .insert_builtin("isLockFree".to_string(), is_lock_free_fn);
+        self.define_method(atomics_obj_id, "isLockFree", 1, |interp, _this, args| {
+            let size_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let size = match interp.to_number_value(&size_val) {
+                Ok(n) => n,
+                Err(e) => return Completion::Throw(e),
+            };
+            let result = matches!(size as u64, 1 | 2 | 4 | 8) && size == (size as u64) as f64;
+            Completion::Normal(JsValue::Boolean(result))
+        });
 
         // Atomics.wait
-        let wait_fn = self.create_function(JsFunction::native(
-            "wait".to_string(),
-            4,
-            |interp, _this, args| {
-                let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let value = args.get(2).cloned().unwrap_or(JsValue::Undefined);
-                let (_kind, _buffer, byte_offset, element_size, is_bigint) =
-                    match validate_integer_typed_array(interp, &ta_val, true, false) {
-                        Ok(info) => info,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                // Step 3: IsSharedArrayBuffer check — before index/value/timeout
-                let sab_info = get_sab_info(interp, &ta_val);
-                if sab_info.is_none() {
-                    return Completion::Throw(
-                        interp.create_type_error("Atomics.wait requires a shared typed array"),
-                    );
-                }
-                let (sab, _ta_byte_offset) = sab_info.unwrap();
-                let byte_index =
-                    match validate_atomic_access(interp, &ta_val, &index_val, element_size) {
-                        Ok(i) => i,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                let converted = if is_bigint {
-                    match interp.to_bigint_value(&value) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
-                    }
-                } else {
-                    match interp.to_number_value(&value) {
-                        Ok(n) => JsValue::Number(n),
-                        Err(e) => return Completion::Throw(e),
-                    }
+        self.define_method(atomics_obj_id, "wait", 4, |interp, _this, args| {
+            let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            let value = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+            let (_kind, _buffer, byte_offset, element_size, is_bigint) =
+                match validate_integer_typed_array(interp, &ta_val, true, false) {
+                    Ok(info) => info,
+                    Err(e) => return Completion::Throw(e),
                 };
-                let timeout_val = args.get(3).cloned().unwrap_or(JsValue::Undefined);
-                let timeout = if matches!(timeout_val, JsValue::Undefined) {
-                    f64::INFINITY
-                } else {
-                    match interp.to_number_value(&timeout_val) {
-                        Ok(n) => {
-                            if n.is_nan() {
-                                f64::INFINITY
-                            } else {
-                                n.max(0.0)
-                            }
-                        }
-                        Err(e) => return Completion::Throw(e),
-                    }
-                };
-
-                let offset = byte_offset + byte_index;
-
-                let current_matches = if is_bigint {
-                    let current = sab
-                        .with_atomic_ptr::<i64, _>(offset, 8, |ptr| unsafe {
-                            AtomicI64::from_ptr(ptr).load(Ordering::SeqCst)
-                        })
-                        .unwrap_or(0);
-                    let expected = match &converted {
-                        JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
-                        _ => 0,
-                    };
-                    current == expected
-                } else {
-                    let current = sab
-                        .with_atomic_ptr::<i32, _>(offset, 4, |ptr| unsafe {
-                            AtomicI32::from_ptr(ptr).load(Ordering::SeqCst)
-                        })
-                        .unwrap_or(0);
-                    let expected = match &converted {
-                        JsValue::Number(n) => *n as i32,
-                        _ => 0,
-                    };
-                    current == expected
-                };
-
-                if !current_matches {
-                    return Completion::Normal(JsValue::String(JsString::from_str("not-equal")));
+            // Step 3: IsSharedArrayBuffer check — before index/value/timeout
+            let sab_info = get_sab_info(interp, &ta_val);
+            if sab_info.is_none() {
+                return Completion::Throw(
+                    interp.create_type_error("Atomics.wait requires a shared typed array"),
+                );
+            }
+            let (sab, _ta_byte_offset) = sab_info.unwrap();
+            let byte_index = match validate_atomic_access(interp, &ta_val, &index_val, element_size)
+            {
+                Ok(i) => i,
+                Err(e) => return Completion::Throw(e),
+            };
+            let converted = if is_bigint {
+                match interp.to_bigint_value(&value) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
                 }
-
-                // §25.4.12 step 14-15: AgentCanSuspend() check
-                if !interp.can_block {
-                    return Completion::Throw(
-                        interp.create_type_error("Atomics.wait cannot block on the main thread"),
-                    );
+            } else {
+                match interp.to_number_value(&value) {
+                    Ok(n) => JsValue::Number(n),
+                    Err(e) => return Completion::Throw(e),
                 }
-
-                if timeout == 0.0 {
-                    return Completion::Normal(JsValue::String(JsString::from_str("timed-out")));
-                }
-
-                let pair = Arc::new((Mutex::new(false), Condvar::new()));
-                let key = (sab.id, offset);
-                {
-                    let mut map = WAITER_MAP.lock().unwrap();
-                    map.entry(key).or_default().push(WaiterEntry {
-                        notified: pair.clone(),
-                    });
-                }
-
-                let (lock, cvar) = &*pair;
-                let mut notified = lock.lock().unwrap();
-                let result = if timeout == f64::INFINITY {
-                    while !*notified {
-                        notified = cvar.wait(notified).unwrap();
-                    }
-                    "ok"
-                } else {
-                    let duration = std::time::Duration::from_millis(timeout as u64);
-                    let deadline = std::time::Instant::now() + duration;
-                    while !*notified {
-                        let remaining =
-                            deadline.saturating_duration_since(std::time::Instant::now());
-                        if remaining.is_zero() {
-                            break;
-                        }
-                        let (guard, timeout_result) =
-                            cvar.wait_timeout(notified, remaining).unwrap();
-                        notified = guard;
-                        if timeout_result.timed_out() && !*notified {
-                            break;
+            };
+            let timeout_val = args.get(3).cloned().unwrap_or(JsValue::Undefined);
+            let timeout = if matches!(timeout_val, JsValue::Undefined) {
+                f64::INFINITY
+            } else {
+                match interp.to_number_value(&timeout_val) {
+                    Ok(n) => {
+                        if n.is_nan() {
+                            f64::INFINITY
+                        } else {
+                            n.max(0.0)
                         }
                     }
-                    if *notified { "ok" } else { "timed-out" }
-                };
+                    Err(e) => return Completion::Throw(e),
+                }
+            };
 
-                if !*notified {
-                    let mut map = WAITER_MAP.lock().unwrap();
-                    if let Some(waiters) = map.get_mut(&key) {
-                        waiters.retain(|w| !Arc::ptr_eq(&w.notified, &pair));
-                        if waiters.is_empty() {
-                            map.remove(&key);
-                        }
+            let offset = byte_offset + byte_index;
+
+            let current_matches = if is_bigint {
+                let current = sab
+                    .with_atomic_ptr::<i64, _>(offset, 8, |ptr| unsafe {
+                        AtomicI64::from_ptr(ptr).load(Ordering::SeqCst)
+                    })
+                    .unwrap_or(0);
+                let expected = match &converted {
+                    JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
+                    _ => 0,
+                };
+                current == expected
+            } else {
+                let current = sab
+                    .with_atomic_ptr::<i32, _>(offset, 4, |ptr| unsafe {
+                        AtomicI32::from_ptr(ptr).load(Ordering::SeqCst)
+                    })
+                    .unwrap_or(0);
+                let expected = match &converted {
+                    JsValue::Number(n) => *n as i32,
+                    _ => 0,
+                };
+                current == expected
+            };
+
+            if !current_matches {
+                return Completion::Normal(JsValue::String(JsString::from_str("not-equal")));
+            }
+
+            // §25.4.12 step 14-15: AgentCanSuspend() check
+            if !interp.can_block {
+                return Completion::Throw(
+                    interp.create_type_error("Atomics.wait cannot block on the main thread"),
+                );
+            }
+
+            if timeout == 0.0 {
+                return Completion::Normal(JsValue::String(JsString::from_str("timed-out")));
+            }
+
+            let pair = Arc::new((Mutex::new(false), Condvar::new()));
+            let key = (sab.id, offset);
+            {
+                let mut map = WAITER_MAP.lock().unwrap();
+                map.entry(key).or_default().push(WaiterEntry {
+                    notified: pair.clone(),
+                });
+            }
+
+            let (lock, cvar) = &*pair;
+            let mut notified = lock.lock().unwrap();
+            let result = if timeout == f64::INFINITY {
+                while !*notified {
+                    notified = cvar.wait(notified).unwrap();
+                }
+                "ok"
+            } else {
+                let duration = std::time::Duration::from_millis(timeout as u64);
+                let deadline = std::time::Instant::now() + duration;
+                while !*notified {
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    let (guard, timeout_result) = cvar.wait_timeout(notified, remaining).unwrap();
+                    notified = guard;
+                    if timeout_result.timed_out() && !*notified {
+                        break;
                     }
                 }
+                if *notified { "ok" } else { "timed-out" }
+            };
 
-                Completion::Normal(JsValue::String(JsString::from_str(result)))
-            },
-        ));
-        self.get_object_cell_expect(atomics_obj_id)
-            .borrow_mut()
-            .insert_builtin("wait".to_string(), wait_fn);
-
-        // Atomics.notify
-        let notify_fn = self.create_function(JsFunction::native(
-            "notify".to_string(),
-            3,
-            |interp, _this, args| {
-                let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let (kind, _buffer, byte_offset, element_size, _is_bigint) =
-                    match validate_integer_typed_array(interp, &ta_val, true, false) {
-                        Ok(info) => info,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                let _ = kind;
-                let byte_index =
-                    match validate_atomic_access(interp, &ta_val, &index_val, element_size) {
-                        Ok(i) => i,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                let count_val = args.get(2).cloned().unwrap_or(JsValue::Undefined);
-                let count: usize = if matches!(count_val, JsValue::Undefined) {
-                    usize::MAX
-                } else {
-                    let c = match interp.to_number_value(&count_val) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    if c.is_nan() || c <= 0.0 {
-                        0
-                    } else if c.is_infinite() {
-                        usize::MAX
-                    } else {
-                        c.trunc().max(0.0) as usize
-                    }
-                };
-
-                let sab_info = get_sab_info(interp, &ta_val);
-                if sab_info.is_none() {
-                    return Completion::Normal(JsValue::Number(0.0));
-                }
-                let (sab, _ta_byte_offset) = sab_info.unwrap();
-                let offset = byte_offset + byte_index;
-                let key = (sab.id, offset);
-
-                let mut woken = 0usize;
+            if !*notified {
                 let mut map = WAITER_MAP.lock().unwrap();
                 if let Some(waiters) = map.get_mut(&key) {
-                    let to_wake = count.min(waiters.len());
-                    for entry in waiters.drain(..to_wake) {
-                        let (lock, cvar) = &*entry.notified;
-                        let mut notified = lock.lock().unwrap();
-                        *notified = true;
-                        cvar.notify_one();
-                        woken += 1;
-                    }
+                    waiters.retain(|w| !Arc::ptr_eq(&w.notified, &pair));
                     if waiters.is_empty() {
                         map.remove(&key);
                     }
                 }
+            }
 
-                Completion::Normal(JsValue::Number(woken as f64))
-            },
-        ));
-        self.get_object_cell_expect(atomics_obj_id)
-            .borrow_mut()
-            .insert_builtin("notify".to_string(), notify_fn);
+            Completion::Normal(JsValue::String(JsString::from_str(result)))
+        });
+
+        // Atomics.notify
+        self.define_method(atomics_obj_id, "notify", 3, |interp, _this, args| {
+            let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            let (kind, _buffer, byte_offset, element_size, _is_bigint) =
+                match validate_integer_typed_array(interp, &ta_val, true, false) {
+                    Ok(info) => info,
+                    Err(e) => return Completion::Throw(e),
+                };
+            let _ = kind;
+            let byte_index = match validate_atomic_access(interp, &ta_val, &index_val, element_size)
+            {
+                Ok(i) => i,
+                Err(e) => return Completion::Throw(e),
+            };
+            let count_val = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+            let count: usize = if matches!(count_val, JsValue::Undefined) {
+                usize::MAX
+            } else {
+                let c = match interp.to_number_value(&count_val) {
+                    Ok(n) => n,
+                    Err(e) => return Completion::Throw(e),
+                };
+                if c.is_nan() || c <= 0.0 {
+                    0
+                } else if c.is_infinite() {
+                    usize::MAX
+                } else {
+                    c.trunc().max(0.0) as usize
+                }
+            };
+
+            let sab_info = get_sab_info(interp, &ta_val);
+            if sab_info.is_none() {
+                return Completion::Normal(JsValue::Number(0.0));
+            }
+            let (sab, _ta_byte_offset) = sab_info.unwrap();
+            let offset = byte_offset + byte_index;
+            let key = (sab.id, offset);
+
+            let mut woken = 0usize;
+            let mut map = WAITER_MAP.lock().unwrap();
+            if let Some(waiters) = map.get_mut(&key) {
+                let to_wake = count.min(waiters.len());
+                for entry in waiters.drain(..to_wake) {
+                    let (lock, cvar) = &*entry.notified;
+                    let mut notified = lock.lock().unwrap();
+                    *notified = true;
+                    cvar.notify_one();
+                    woken += 1;
+                }
+                if waiters.is_empty() {
+                    map.remove(&key);
+                }
+            }
+
+            Completion::Normal(JsValue::Number(woken as f64))
+        });
 
         // Atomics.waitAsync
-        let wait_async_fn = self.create_function(JsFunction::native(
-            "waitAsync".to_string(),
-            4,
-            |interp, _this, args| {
-                let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let value = args.get(2).cloned().unwrap_or(JsValue::Undefined);
-                let (kind, buffer, byte_offset, element_size, is_bigint) =
-                    match validate_integer_typed_array(interp, &ta_val, true, false) {
-                        Ok(info) => info,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                // Step 3: IsSharedArrayBuffer check — before index/value/timeout
-                let buffer_is_shared = if let JsValue::Object(o) = &ta_val
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let obj_ref = obj.borrow();
-                    if obj_ref.typed_array_info().is_some() {
-                        if let Some(buf_id) = obj_ref.view_buffer_object_id()
-                            && let Some(buf_obj) = interp.get_object_cell(buf_id)
-                        {
-                            buf_obj.borrow().arraybuffer_is_shared()
-                        } else {
-                            false
-                        }
+        self.define_method(atomics_obj_id, "waitAsync", 4, |interp, _this, args| {
+            let ta_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let index_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            let value = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+            let (kind, buffer, byte_offset, element_size, is_bigint) =
+                match validate_integer_typed_array(interp, &ta_val, true, false) {
+                    Ok(info) => info,
+                    Err(e) => return Completion::Throw(e),
+                };
+            // Step 3: IsSharedArrayBuffer check — before index/value/timeout
+            let buffer_is_shared = if let JsValue::Object(o) = &ta_val
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let obj_ref = obj.borrow();
+                if obj_ref.typed_array_info().is_some() {
+                    if let Some(buf_id) = obj_ref.view_buffer_object_id()
+                        && let Some(buf_obj) = interp.get_object_cell(buf_id)
+                    {
+                        buf_obj.borrow().arraybuffer_is_shared()
                     } else {
                         false
                     }
                 } else {
                     false
-                };
-                if !buffer_is_shared {
-                    return Completion::Throw(
-                        interp.create_type_error("Atomics.waitAsync requires a shared typed array"),
-                    );
                 }
-                let _ = kind;
-                let byte_index =
-                    match validate_atomic_access(interp, &ta_val, &index_val, element_size) {
-                        Ok(i) => i,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                let converted = if is_bigint {
-                    match interp.to_bigint_value(&value) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
-                    }
-                } else {
-                    match interp.to_number_value(&value) {
-                        Ok(n) => JsValue::Number(n),
-                        Err(e) => return Completion::Throw(e),
-                    }
-                };
-                let timeout_val = args.get(3).cloned().unwrap_or(JsValue::Undefined);
-                let timeout = if matches!(timeout_val, JsValue::Undefined) {
-                    f64::INFINITY
-                } else {
-                    match interp.to_number_value(&timeout_val) {
-                        Ok(n) => {
-                            if n.is_nan() {
-                                f64::INFINITY
-                            } else {
-                                n.max(0.0)
-                            }
-                        }
-                        Err(e) => return Completion::Throw(e),
-                    }
-                };
-
-                let offset = byte_offset + byte_index;
-                let current_matches = (*buffer.borrow()).with_read(|buf| {
-                    if is_bigint {
-                        let current = read_bigint_raw_bytes(buf, offset, kind);
-                        let expected = bigint_to_raw_bytes(kind, &converted);
-                        current == expected
-                    } else {
-                        let current = read_number_raw_bytes(buf, offset, kind);
-                        let expected = number_to_raw_bytes(kind, &converted);
-                        current == expected
-                    }
-                });
-
-                let result_id = interp.create_object_id();
-                if !current_matches {
-                    interp
-                        .get_object_cell_expect(result_id)
-                        .borrow_mut()
-                        .insert_property(
-                            "async".to_string(),
-                            PropertyDescriptor::data(JsValue::Boolean(false), true, true, true),
-                        );
-                    interp
-                        .get_object_cell_expect(result_id)
-                        .borrow_mut()
-                        .insert_property(
-                            "value".to_string(),
-                            PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str("not-equal")),
-                                true,
-                                true,
-                                true,
-                            ),
-                        );
-                } else if timeout <= 0.0 {
-                    interp
-                        .get_object_cell_expect(result_id)
-                        .borrow_mut()
-                        .insert_property(
-                            "async".to_string(),
-                            PropertyDescriptor::data(JsValue::Boolean(false), true, true, true),
-                        );
-                    interp
-                        .get_object_cell_expect(result_id)
-                        .borrow_mut()
-                        .insert_property(
-                            "value".to_string(),
-                            PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str("timed-out")),
-                                true,
-                                true,
-                                true,
-                            ),
-                        );
-                } else {
-                    let sab_info = get_sab_info(interp, &ta_val);
-                    let (resolve_fn, _reject_fn, promise_val) = interp.create_promise_parts();
-                    interp.gc_root_value(&resolve_fn);
-                    let gc_frame_promise = interp.gc_root_frame();
-                    interp.gc_root_value(&promise_val);
-
-                    if let Some((sab, _)) = sab_info {
-                        let key = (sab.id, offset);
-                        let pair = Arc::new((Mutex::new(false), Condvar::new()));
-                        {
-                            let mut map = WAITER_MAP.lock().unwrap();
-                            map.entry(key).or_default().push(WaiterEntry {
-                                notified: pair.clone(),
-                            });
-                        }
-                        let pair_clone = pair.clone();
-                        let resolve_clone = resolve_fn.clone();
-                        let timeout_ms = timeout;
-                        let pending = interp.agent_async_completions.clone();
-                        let pending_jobs = interp.scheduler.pending_async_jobs_handle();
-                        let pending_promise_ids =
-                            interp.scheduler.pending_async_promise_ids_handle();
-                        let promise_id = if let JsValue::Object(ref o) = promise_val {
-                            o.id
+            } else {
+                false
+            };
+            if !buffer_is_shared {
+                return Completion::Throw(
+                    interp.create_type_error("Atomics.waitAsync requires a shared typed array"),
+                );
+            }
+            let _ = kind;
+            let byte_index = match validate_atomic_access(interp, &ta_val, &index_val, element_size)
+            {
+                Ok(i) => i,
+                Err(e) => return Completion::Throw(e),
+            };
+            let converted = if is_bigint {
+                match interp.to_bigint_value(&value) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                }
+            } else {
+                match interp.to_number_value(&value) {
+                    Ok(n) => JsValue::Number(n),
+                    Err(e) => return Completion::Throw(e),
+                }
+            };
+            let timeout_val = args.get(3).cloned().unwrap_or(JsValue::Undefined);
+            let timeout = if matches!(timeout_val, JsValue::Undefined) {
+                f64::INFINITY
+            } else {
+                match interp.to_number_value(&timeout_val) {
+                    Ok(n) => {
+                        if n.is_nan() {
+                            f64::INFINITY
                         } else {
-                            0
-                        };
-                        if promise_id != 0 {
-                            pending_promise_ids.lock().unwrap().insert(promise_id);
+                            n.max(0.0)
                         }
-                        pending_jobs.fetch_add(1, Ordering::SeqCst);
-                        std::thread::spawn(move || {
-                            let (lock, cvar) = &*pair_clone;
-                            let mut notified = lock.lock().unwrap();
-                            let result_str = if timeout_ms == f64::INFINITY {
-                                while !*notified {
-                                    notified = cvar.wait(notified).unwrap();
-                                }
-                                "ok"
-                            } else {
-                                let duration = std::time::Duration::from_millis(timeout_ms as u64);
-                                let deadline = std::time::Instant::now() + duration;
-                                while !*notified {
-                                    let remaining = deadline
-                                        .saturating_duration_since(std::time::Instant::now());
-                                    if remaining.is_zero() {
-                                        break;
-                                    }
-                                    let (guard, _) =
-                                        cvar.wait_timeout(notified, remaining).unwrap();
-                                    notified = guard;
-                                }
-                                if *notified { "ok" } else { "timed-out" }
-                            };
-                            if !*notified {
-                                let mut map = WAITER_MAP.lock().unwrap();
-                                if let Some(waiters) = map.get_mut(&key) {
-                                    waiters.retain(|w| !Arc::ptr_eq(&w.notified, &pair_clone));
-                                    if waiters.is_empty() {
-                                        map.remove(&key);
-                                    }
-                                }
-                            }
-                            let result_val = JsValue::String(JsString::from_str(result_str));
-                            let resolve = resolve_clone;
-                            let (ref mtx, ref completion_cvar) = *pending;
-                            mtx.lock()
-                                .unwrap()
-                                .push(Box::new(move |interp: &mut Interpreter| {
-                                    let _ = interp.call_function(
-                                        &resolve,
-                                        &JsValue::Undefined,
-                                        &[result_val],
-                                    );
-                                    interp.gc_unroot_value(&resolve);
-                                    if promise_id != 0 {
-                                        pending_promise_ids.lock().unwrap().remove(&promise_id);
-                                    }
-                                    pending_jobs.fetch_sub(1, Ordering::SeqCst);
-                                }));
-                            completion_cvar.notify_one();
+                    }
+                    Err(e) => return Completion::Throw(e),
+                }
+            };
+
+            let offset = byte_offset + byte_index;
+            let current_matches = (*buffer.borrow()).with_read(|buf| {
+                if is_bigint {
+                    let current = read_bigint_raw_bytes(buf, offset, kind);
+                    let expected = bigint_to_raw_bytes(kind, &converted);
+                    current == expected
+                } else {
+                    let current = read_number_raw_bytes(buf, offset, kind);
+                    let expected = number_to_raw_bytes(kind, &converted);
+                    current == expected
+                }
+            });
+
+            let result_id = interp.create_object_id();
+            if !current_matches {
+                interp
+                    .get_object_cell_expect(result_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "async".to_string(),
+                        PropertyDescriptor::data(JsValue::Boolean(false), true, true, true),
+                    );
+                interp
+                    .get_object_cell_expect(result_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "value".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::String(JsString::from_str("not-equal")),
+                            true,
+                            true,
+                            true,
+                        ),
+                    );
+            } else if timeout <= 0.0 {
+                interp
+                    .get_object_cell_expect(result_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "async".to_string(),
+                        PropertyDescriptor::data(JsValue::Boolean(false), true, true, true),
+                    );
+                interp
+                    .get_object_cell_expect(result_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "value".to_string(),
+                        PropertyDescriptor::data(
+                            JsValue::String(JsString::from_str("timed-out")),
+                            true,
+                            true,
+                            true,
+                        ),
+                    );
+            } else {
+                let sab_info = get_sab_info(interp, &ta_val);
+                let (resolve_fn, _reject_fn, promise_val) = interp.create_promise_parts();
+                interp.gc_root_value(&resolve_fn);
+                let gc_frame_promise = interp.gc_root_frame();
+                interp.gc_root_value(&promise_val);
+
+                if let Some((sab, _)) = sab_info {
+                    let key = (sab.id, offset);
+                    let pair = Arc::new((Mutex::new(false), Condvar::new()));
+                    {
+                        let mut map = WAITER_MAP.lock().unwrap();
+                        map.entry(key).or_default().push(WaiterEntry {
+                            notified: pair.clone(),
                         });
                     }
-
-                    interp
-                        .get_object_cell_expect(result_id)
-                        .borrow_mut()
-                        .insert_property(
-                            "async".to_string(),
-                            PropertyDescriptor::data(JsValue::Boolean(true), true, true, true),
-                        );
-                    interp
-                        .get_object_cell_expect(result_id)
-                        .borrow_mut()
-                        .insert_property(
-                            "value".to_string(),
-                            PropertyDescriptor::data(promise_val.clone(), true, true, true),
-                        );
-                    // resolve_fn stays rooted until completion callback runs
-                    interp.gc_unroot_frame(gc_frame_promise);
+                    let pair_clone = pair.clone();
+                    let resolve_clone = resolve_fn.clone();
+                    let timeout_ms = timeout;
+                    let pending = interp.agent_async_completions.clone();
+                    let pending_jobs = interp.scheduler.pending_async_jobs_handle();
+                    let pending_promise_ids = interp.scheduler.pending_async_promise_ids_handle();
+                    let promise_id = if let JsValue::Object(ref o) = promise_val {
+                        o.id
+                    } else {
+                        0
+                    };
+                    if promise_id != 0 {
+                        pending_promise_ids.lock().unwrap().insert(promise_id);
+                    }
+                    pending_jobs.fetch_add(1, Ordering::SeqCst);
+                    std::thread::spawn(move || {
+                        let (lock, cvar) = &*pair_clone;
+                        let mut notified = lock.lock().unwrap();
+                        let result_str = if timeout_ms == f64::INFINITY {
+                            while !*notified {
+                                notified = cvar.wait(notified).unwrap();
+                            }
+                            "ok"
+                        } else {
+                            let duration = std::time::Duration::from_millis(timeout_ms as u64);
+                            let deadline = std::time::Instant::now() + duration;
+                            while !*notified {
+                                let remaining =
+                                    deadline.saturating_duration_since(std::time::Instant::now());
+                                if remaining.is_zero() {
+                                    break;
+                                }
+                                let (guard, _) = cvar.wait_timeout(notified, remaining).unwrap();
+                                notified = guard;
+                            }
+                            if *notified { "ok" } else { "timed-out" }
+                        };
+                        if !*notified {
+                            let mut map = WAITER_MAP.lock().unwrap();
+                            if let Some(waiters) = map.get_mut(&key) {
+                                waiters.retain(|w| !Arc::ptr_eq(&w.notified, &pair_clone));
+                                if waiters.is_empty() {
+                                    map.remove(&key);
+                                }
+                            }
+                        }
+                        let result_val = JsValue::String(JsString::from_str(result_str));
+                        let resolve = resolve_clone;
+                        let (ref mtx, ref completion_cvar) = *pending;
+                        mtx.lock()
+                            .unwrap()
+                            .push(Box::new(move |interp: &mut Interpreter| {
+                                let _ = interp.call_function(
+                                    &resolve,
+                                    &JsValue::Undefined,
+                                    &[result_val],
+                                );
+                                interp.gc_unroot_value(&resolve);
+                                if promise_id != 0 {
+                                    pending_promise_ids.lock().unwrap().remove(&promise_id);
+                                }
+                                pending_jobs.fetch_sub(1, Ordering::SeqCst);
+                            }));
+                        completion_cvar.notify_one();
+                    });
                 }
-                let id = result_id;
-                Completion::Normal(JsValue::Object(JsObject { id }))
-            },
-        ));
-        self.get_object_cell_expect(atomics_obj_id)
-            .borrow_mut()
-            .insert_builtin("waitAsync".to_string(), wait_async_fn);
+
+                interp
+                    .get_object_cell_expect(result_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "async".to_string(),
+                        PropertyDescriptor::data(JsValue::Boolean(true), true, true, true),
+                    );
+                interp
+                    .get_object_cell_expect(result_id)
+                    .borrow_mut()
+                    .insert_property(
+                        "value".to_string(),
+                        PropertyDescriptor::data(promise_val.clone(), true, true, true),
+                    );
+                // resolve_fn stays rooted until completion callback runs
+                interp.gc_unroot_frame(gc_frame_promise);
+            }
+            let id = result_id;
+            Completion::Normal(JsValue::Object(JsObject { id }))
+        });
 
         // Atomics.pause
-        let pause_fn =
-            self.create_function(JsFunction::native(
-                "pause".to_string(),
-                0,
-                |interp, _this, args| {
-                    if let Some(arg) = args.first()
-                        && !matches!(arg, JsValue::Undefined)
-                    {
-                        let n = if let JsValue::Number(n) = arg {
-                            *n
-                        } else {
-                            return Completion::Throw(interp.create_type_error(
-                                "Atomics.pause requires a non-negative integer",
-                            ));
-                        };
-                        if n.is_nan() || n.is_infinite() || n != n.trunc() || n < 0.0 {
-                            return Completion::Throw(interp.create_type_error(
-                                "Atomics.pause requires a non-negative integer",
-                            ));
-                        }
-                    }
-                    Completion::Normal(JsValue::Undefined)
-                },
-            ));
-        self.get_object_cell_expect(atomics_obj_id)
-            .borrow_mut()
-            .insert_builtin("pause".to_string(), pause_fn);
+        self.define_method(atomics_obj_id, "pause", 0, |interp, _this, args| {
+            if let Some(arg) = args.first()
+                && !matches!(arg, JsValue::Undefined)
+            {
+                let n = if let JsValue::Number(n) = arg {
+                    *n
+                } else {
+                    return Completion::Throw(
+                        interp.create_type_error("Atomics.pause requires a non-negative integer"),
+                    );
+                };
+                if n.is_nan() || n.is_infinite() || n != n.trunc() || n < 0.0 {
+                    return Completion::Throw(
+                        interp.create_type_error("Atomics.pause requires a non-negative integer"),
+                    );
+                }
+            }
+            Completion::Normal(JsValue::Undefined)
+        });
 
         // @@toStringTag
         {
