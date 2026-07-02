@@ -2074,20 +2074,6 @@ impl Interpreter {
                     } else {
                         typed_array_length(&ta) as i64
                     };
-                    let resolve_idx = |v: f64, len: i64| -> usize {
-                        let vi = if v == f64::NEG_INFINITY || v <= -(len as f64) - 1.0 {
-                            i64::MIN / 2
-                        } else if v == f64::INFINITY || v > len as f64 {
-                            i64::MAX / 2
-                        } else {
-                            v as i64
-                        };
-                        (if vi < 0 {
-                            (len + vi).max(0)
-                        } else {
-                            vi.min(len)
-                        }) as usize
-                    };
                     let begin = {
                         let n = to_integer(if let Some(a) = args.first() {
                             match interp.to_number_value(a) {
@@ -2097,7 +2083,7 @@ impl Interpreter {
                         } else {
                             0.0
                         });
-                        resolve_idx(n, src_len)
+                        resolve_relative_index(n, src_len as usize)
                     };
                     let end_is_undefined =
                         args.len() <= 1 || matches!(args.get(1), Some(JsValue::Undefined));
@@ -2110,7 +2096,7 @@ impl Interpreter {
                         } else {
                             src_len as f64
                         };
-                        resolve_idx(n, src_len)
+                        resolve_relative_index(n, src_len as usize)
                     };
                     let new_len = end.saturating_sub(begin);
                     let bpe = ta.kind.bytes_per_element();
@@ -2156,20 +2142,6 @@ impl Interpreter {
                         }
                     };
                     let len = typed_array_length(&ta) as i64;
-                    let resolve_idx = |v: f64, len: i64| -> usize {
-                        let vi = if v == f64::NEG_INFINITY || v <= -(len as f64) - 1.0 {
-                            i64::MIN / 2
-                        } else if v == f64::INFINITY || v > len as f64 {
-                            i64::MAX / 2
-                        } else {
-                            v as i64
-                        };
-                        (if vi < 0 {
-                            (len + vi).max(0)
-                        } else {
-                            vi.min(len)
-                        }) as usize
-                    };
                     let begin = {
                         let n = to_integer(if let Some(a) = args.first() {
                             match interp.to_number_value(a) {
@@ -2179,7 +2151,7 @@ impl Interpreter {
                         } else {
                             0.0
                         });
-                        resolve_idx(n, len)
+                        resolve_relative_index(n, len as usize)
                     };
                     let end = {
                         let n = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
@@ -2190,7 +2162,7 @@ impl Interpreter {
                         } else {
                             len as f64
                         };
-                        resolve_idx(n, len)
+                        resolve_relative_index(n, len as usize)
                     };
                     let count = end.saturating_sub(begin);
 
@@ -2310,20 +2282,6 @@ impl Interpreter {
                         return c;
                     }
                     let len = typed_array_length(&ta) as i64;
-                    let resolve_index = |v: f64, len: i64| -> usize {
-                        let vi = if v == f64::NEG_INFINITY || v < -(len as f64) - 1.0 {
-                            i64::MIN / 2
-                        } else if v == f64::INFINITY || v > len as f64 {
-                            i64::MAX / 2
-                        } else {
-                            v as i64
-                        };
-                        (if vi < 0 {
-                            (len + vi).max(0)
-                        } else {
-                            vi.min(len)
-                        }) as usize
-                    };
                     let target = {
                         let n = match interp
                             .to_number_value(args.first().unwrap_or(&JsValue::Undefined))
@@ -2331,7 +2289,7 @@ impl Interpreter {
                             Ok(n) => n,
                             Err(e) => return Completion::Throw(e),
                         };
-                        resolve_index(to_integer(n), len)
+                        resolve_relative_index(to_integer(n), len as usize)
                     };
                     let start = {
                         let n = match interp
@@ -2340,7 +2298,7 @@ impl Interpreter {
                             Ok(n) => n,
                             Err(e) => return Completion::Throw(e),
                         };
-                        resolve_index(to_integer(n), len)
+                        resolve_relative_index(to_integer(n), len as usize)
                     };
                     let end = {
                         let n = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
@@ -2351,7 +2309,7 @@ impl Interpreter {
                         } else {
                             len as f64
                         };
-                        resolve_index(n, len)
+                        resolve_relative_index(n, len as usize)
                     };
                     // Re-check detach and OOB after coercion
                     if ta.is_detached.get() || is_typed_array_out_of_bounds(&ta) {
@@ -2435,11 +2393,7 @@ impl Interpreter {
                         } else {
                             0.0
                         });
-                        if v < 0.0 {
-                            ((len_f + v) as isize).max(0) as usize
-                        } else {
-                            (v as usize).min(len)
-                        }
+                        resolve_relative_index(v, len)
                     };
                     let end = {
                         let v = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
@@ -2450,11 +2404,7 @@ impl Interpreter {
                         } else {
                             len_f
                         };
-                        if v < 0.0 {
-                            ((len_f + v) as isize).max(0) as usize
-                        } else {
-                            (v as usize).min(len)
-                        }
+                        resolve_relative_index(v, len)
                     };
                     // Re-check detach and OOB after coercion (buffer may have been resized)
                     if ta.is_detached.get() {

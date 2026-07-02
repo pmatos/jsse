@@ -1,5 +1,18 @@
 use super::*;
 
+// Resolves a spec "relative index" argument (already passed through ToIntegerOrInfinity)
+// against a length, per the clamp used by e.g. Array.prototype.slice, String.prototype.slice,
+// and the %TypedArray%.prototype equivalents:
+//   if n < 0, max(len + n, 0); else min(n, len)
+pub(crate) fn resolve_relative_index(n: f64, len: usize) -> usize {
+    let len = len as f64;
+    if n < 0.0 {
+        (len + n).max(0.0) as usize
+    } else {
+        n.min(len) as usize
+    }
+}
+
 pub(crate) fn to_integer_or_infinity(n: f64) -> f64 {
     if n.is_nan() || n == 0.0 {
         0.0
@@ -2288,5 +2301,53 @@ fn hex_val(b: u8) -> Result<u8, String> {
         b'a'..=b'f' => Ok(b - b'a' + 10),
         b'A'..=b'F' => Ok(b - b'A' + 10),
         _ => Err("URI malformed".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod resolve_relative_index_tests {
+    use super::resolve_relative_index;
+
+    #[test]
+    fn in_range_positive_index_is_unchanged() {
+        assert_eq!(resolve_relative_index(3.0, 10), 3);
+    }
+
+    #[test]
+    fn negative_index_counts_back_from_length() {
+        assert_eq!(resolve_relative_index(-3.0, 10), 7);
+    }
+
+    #[test]
+    fn positive_index_beyond_length_clamps_to_length() {
+        assert_eq!(resolve_relative_index(100.0, 10), 10);
+    }
+
+    #[test]
+    fn negative_index_beyond_length_clamps_to_zero() {
+        assert_eq!(resolve_relative_index(-100.0, 10), 0);
+    }
+
+    #[test]
+    fn negative_index_exactly_at_length_boundary_clamps_to_zero() {
+        // n == -(len) - 1 is the boundary where two previously-duplicated
+        // implementations of this clamp disagreed on `<` vs `<=`; both landed on 0.
+        assert_eq!(resolve_relative_index(-11.0, 10), 0);
+    }
+
+    #[test]
+    fn positive_infinity_clamps_to_length() {
+        assert_eq!(resolve_relative_index(f64::INFINITY, 10), 10);
+    }
+
+    #[test]
+    fn negative_infinity_clamps_to_zero() {
+        assert_eq!(resolve_relative_index(f64::NEG_INFINITY, 10), 0);
+    }
+
+    #[test]
+    fn zero_length_clamps_everything_to_zero() {
+        assert_eq!(resolve_relative_index(-1.0, 0), 0);
+        assert_eq!(resolve_relative_index(5.0, 0), 0);
     }
 }

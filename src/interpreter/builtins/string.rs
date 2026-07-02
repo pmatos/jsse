@@ -469,16 +469,8 @@ impl Interpreter {
                         },
                         _ => len,
                     };
-                    let from = if int_start < 0.0 {
-                        (len + int_start).max(0.0) as usize
-                    } else {
-                        int_start.min(len) as usize
-                    };
-                    let to = if int_end < 0.0 {
-                        (len + int_end).max(0.0) as usize
-                    } else {
-                        int_end.min(len) as usize
-                    };
+                    let from = resolve_relative_index(int_start, len as usize);
+                    let to = resolve_relative_index(int_end, len as usize);
                     let from = from.min(units.len());
                     let to = to.min(units.len());
                     if from >= to {
