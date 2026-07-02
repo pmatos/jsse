@@ -7102,8 +7102,7 @@ impl Interpreter {
                     {
                         return Completion::Normal(JsValue::Boolean(false));
                     }
-                    obj_mut.properties.remove(&key);
-                    obj_mut.property_order.retain(|k| &**k != key.as_str());
+                    obj_mut.remove_property(&key);
                     if let Some(map) = obj_mut.parameter_map_mut() {
                         map.remove(&key);
                     }
@@ -8041,7 +8040,7 @@ impl Interpreter {
         if let JsValue::Object(ref pf) = proxy_fn
             && let Some(proxy_func_obj) = self.get_object_cell(pf.id)
         {
-            proxy_func_obj.borrow_mut().properties.remove("prototype");
+            proxy_func_obj.borrow_mut().remove_property("prototype");
         }
 
         // Proxy.revocable(target, handler)
@@ -8341,10 +8340,7 @@ impl Interpreter {
                         obj.borrow_mut().prototype_id = target_obj.borrow().prototype_id;
                     }
                     // Per spec, bound functions do not have own .prototype property
-                    obj.borrow_mut().properties.remove("prototype");
-                    obj.borrow_mut()
-                        .property_order
-                        .retain(|k| &**k != "prototype");
+                    obj.borrow_mut().remove_property("prototype");
                     // Store [[BoundTargetFunction]] / [[BoundThis]] / [[BoundArguments]].
                     let stored_bound_args: Vec<JsValue> = args.iter().skip(1).cloned().collect();
                     obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::BoundFunction(

@@ -2667,8 +2667,7 @@ impl JsObjectData {
                             actual_new_len = idx + 1;
                             break;
                         } else {
-                            self.properties.remove(k.as_str());
-                            self.property_order.retain(|p| p.as_ref() != k.as_str());
+                            self.remove_property(k.as_str());
                             did_remove = true;
                         }
                     }
@@ -2837,6 +2836,19 @@ impl JsObjectData {
             self.property_order.push(Rc::clone(&key));
         }
         self.properties.insert(key, desc);
+    }
+
+    /// Remove `key` from the object, keeping `properties` and `property_order`
+    /// in sync. The mirror of [`insert_property`]: the two structures must move
+    /// together, and this is the single place that guarantees it. Returns the
+    /// removed descriptor, or `None` if the key was absent (in which case the
+    /// order list is left untouched).
+    pub fn remove_property(&mut self, key: &str) -> Option<PropertyDescriptor> {
+        let removed = self.properties.remove(key);
+        if removed.is_some() {
+            self.property_order.retain(|k| &**k != key);
+        }
+        removed
     }
 
     pub fn get_property_value(&self, key: &str) -> Option<JsValue> {
@@ -3841,5 +3853,92 @@ mod kind_accessor_tests {
     fn shadow_realm_id_none_for_ordinary() {
         let obj = JsObjectData::new();
         assert!(obj.shadow_realm_id().is_none());
+    }
+}
+
+#[cfg(test)]
+mod property_bag_tests {
+    use super::*;
+
+    fn keys(obj: &JsObjectData) -> Vec<String> {
+        obj.property_order.iter().map(|k| k.to_string()).collect()
+    }
+
+    #[test]
+    fn remove_property_clears_both_map_and_order() {
+        let mut obj = JsObjectData::new();
+        obj.insert_property(
+            "a".into(),
+            PropertyDescriptor::data_default(JsValue::Number(1.0)),
+        );
+        obj.insert_property(
+            "b".into(),
+            PropertyDescriptor::data_default(JsValue::Number(2.0)),
+        );
+
+        let removed = obj.remove_property("a");
+
+        assert!(removed.is_some(), "returns the removed descriptor");
+        assert!(!obj.properties.contains_key("a"), "gone from property map");
+        assert_eq!(keys(&obj), vec!["b"], "gone from property_order too");
+    }
+
+    #[test]
+    fn remove_property_preserves_order_of_survivors() {
+        let mut obj = JsObjectData::new();
+        for k in ["a", "b", "c", "d"] {
+            obj.insert_property(
+                k.into(),
+                PropertyDescriptor::data_default(JsValue::Undefined),
+            );
+        }
+
+        obj.remove_property("b");
+
+        // Deleting a middle key must not disturb the relative order of the rest.
+        assert_eq!(keys(&obj), vec!["a", "c", "d"]);
+        assert!(!obj.properties.contains_key("b"));
+    }
+
+    #[test]
+    fn remove_property_returns_the_stored_descriptor() {
+        let mut obj = JsObjectData::new();
+        obj.insert_property(
+            "x".into(),
+            PropertyDescriptor::data(JsValue::Number(42.0), false, true, false),
+        );
+
+        let removed = obj.remove_property("x").expect("descriptor returned");
+
+        assert!(matches!(removed.value, Some(JsValue::Number(n)) if n == 42.0));
+        assert_eq!(removed.writable, Some(false));
+        assert_eq!(removed.enumerable, Some(true));
+        assert_eq!(removed.configurable, Some(false));
+    }
+
+    #[test]
+    fn remove_absent_key_is_a_noop() {
+        let mut obj = JsObjectData::new();
+        obj.insert_property(
+            "a".into(),
+            PropertyDescriptor::data_default(JsValue::Undefined),
+        );
+
+        assert!(obj.remove_property("missing").is_none());
+        assert_eq!(keys(&obj), vec!["a"], "order untouched");
+        assert!(obj.properties.contains_key("a"), "map untouched");
+    }
+
+    #[test]
+    fn second_remove_returns_none() {
+        let mut obj = JsObjectData::new();
+        obj.insert_property(
+            "a".into(),
+            PropertyDescriptor::data_default(JsValue::Undefined),
+        );
+
+        assert!(obj.remove_property("a").is_some());
+        assert!(obj.remove_property("a").is_none());
+        assert!(keys(&obj).is_empty());
     }
 }
