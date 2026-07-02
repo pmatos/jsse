@@ -89,6 +89,66 @@ fn write_case_file(dir: &Path, name: &str, source: &str) -> PathBuf {
 }
 
 #[test]
+fn define_method_installs_a_correctly_shaped_builtin() {
+    let mut interp = Interpreter::new();
+    let target_id = interp.create_object_id();
+
+    interp.define_method(target_id, "greet", 1, |_interp, _this, args| {
+        let name = match args.first() {
+            Some(JsValue::String(s)) => s.to_rust_string(),
+            _ => "world".to_string(),
+        };
+        Completion::Normal(JsValue::String(JsString::from_str(&format!(
+            "hello {name}"
+        ))))
+    });
+
+    let desc = interp
+        .get_object_cell_expect(target_id)
+        .borrow()
+        .get_own_property("greet")
+        .expect("greet property installed");
+    assert_eq!(desc.writable, Some(true), "builtins must stay writable");
+    assert_eq!(
+        desc.enumerable,
+        Some(false),
+        "builtins must not be enumerable"
+    );
+    assert_eq!(
+        desc.configurable,
+        Some(true),
+        "builtins must stay configurable"
+    );
+    let greet_fn = desc.value.expect("greet has a function value");
+
+    // define_method must still route through create_function, so name/length bookkeeping
+    // (used by Function.prototype.toString, .length, etc.) isn't lost.
+    let JsValue::Object(fn_obj) = &greet_fn else {
+        panic!("expected greet to be a function object")
+    };
+    let fn_cell = interp.get_object_cell_expect(fn_obj.id);
+    match fn_cell.borrow().get_own_property("name").unwrap().value {
+        Some(JsValue::String(ref s)) => assert_eq!(s.to_rust_string(), "greet"),
+        ref other => panic!("expected name string, got {other:?}"),
+    }
+    match fn_cell.borrow().get_own_property("length").unwrap().value {
+        Some(JsValue::Number(n)) => assert_eq!(n, 1.0),
+        ref other => panic!("expected length number, got {other:?}"),
+    }
+
+    let target_val = JsValue::Object(crate::types::JsObject { id: target_id });
+    let result = interp.call_function(
+        &greet_fn,
+        &target_val,
+        &[JsValue::String(JsString::from_str("jsse"))],
+    );
+    match result {
+        Completion::Normal(JsValue::String(s)) => assert_eq!(s.to_rust_string(), "hello jsse"),
+        other => panic!("unexpected completion: {other:?}"),
+    }
+}
+
+#[test]
 fn microtask_queue_drains_before_run_returns() {
     let interp = run_script(
         r#"
