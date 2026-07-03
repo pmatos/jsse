@@ -16,6 +16,12 @@ env:
   # Node 20 is removed from runners on 2026-09-16.
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
+# A new push to the PR (synchronize) supersedes any in-flight review of the
+# prior head, so cancel the stale run rather than post a review of old code.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   claude-review:
     # Skip automated review for bot-authored PRs (e.g. Dependabot).
@@ -39,6 +45,7 @@ jobs:
         uses: actions/checkout@v7
         with:
           fetch-depth: 1
+          persist-credentials: false
 
       - name: Run Claude Code Review
         id: claude-review

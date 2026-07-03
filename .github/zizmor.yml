@@ -1,0 +1,32 @@
+# zizmor audit configuration.
+#
+# Most hardening is in the workflows themselves (least-privilege permissions,
+# persist-credentials: false on read-only checkouts). The settings below are
+# deliberate, documented policy choices.
+
+rules:
+  # Actions are pinned to version tags (e.g. @v7), not commit SHAs, for
+  # readability and easy review; Dependabot's github-actions updater keeps the
+  # tags current. Relax zizmor's default hash-pin requirement to ref-pin so tag
+  # pins pass, while still failing on the genuinely dangerous cases: an action
+  # pinned to a mutable branch or to no ref at all.
+  unpinned-uses:
+    config:
+      policies:
+        "*": ref-pin
+
+  # claude.yml's @claude responder can be asked to implement changes and push a
+  # branch; claude-code-action manages its own git credentials, and this job
+  # uploads no artifacts, so persisted checkout credentials cannot leak. Leaving
+  # checkout auth at its default here avoids breaking the push path. Revisit if
+  # the action's auth model changes.
+  artipacked:
+    ignore:
+      - claude.yml
+
+  # semgrep/semgrep-action is archived. Migrating off it (to the semgrep CLI /
+  # container) changes an existing, green scan job, so it is tracked as a
+  # separate follow-up rather than bundled into this hardening change.
+  archived-uses:
+    ignore:
+      - semgrep.yml
