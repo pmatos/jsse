@@ -1271,3 +1271,117 @@ fn define_own_property_bumps_shape_on_data_to_accessor_swap() {
         "data→accessor swap is the canonical IC-invalidating shape change"
     );
 }
+
+#[test]
+fn array_prototype_methods_have_correctly_shaped_builtins() {
+    // Characterization test for the setup_array_prototype → define_method refactor:
+    // pins the (name, length) contract and the writable/non-enumerable/configurable
+    // shape §10.2.4 requires of every own method, independent of how each method is
+    // installed internally.
+    const EXPECTED: &[(&str, f64)] = &[
+        ("push", 1.0),
+        ("pop", 0.0),
+        ("shift", 0.0),
+        ("unshift", 1.0),
+        ("indexOf", 1.0),
+        ("lastIndexOf", 1.0),
+        ("includes", 1.0),
+        ("join", 1.0),
+        ("toString", 0.0),
+        ("toLocaleString", 0.0),
+        ("concat", 1.0),
+        ("slice", 2.0),
+        ("reverse", 0.0),
+        ("toReversed", 0.0),
+        ("forEach", 1.0),
+        ("map", 1.0),
+        ("filter", 1.0),
+        ("reduce", 1.0),
+        ("reduceRight", 1.0),
+        ("some", 1.0),
+        ("every", 1.0),
+        ("find", 1.0),
+        ("findIndex", 1.0),
+        ("findLast", 1.0),
+        ("findLastIndex", 1.0),
+        ("splice", 2.0),
+        ("toSpliced", 2.0),
+        ("fill", 1.0),
+        ("sort", 1.0),
+        ("toSorted", 1.0),
+        ("flat", 0.0),
+        ("flatMap", 1.0),
+        ("copyWithin", 2.0),
+        ("at", 1.0),
+        ("with", 2.0),
+        ("entries", 0.0),
+        ("keys", 0.0),
+        ("values", 0.0),
+    ];
+
+    let interp = run_script("");
+    let proto_id = interp
+        .realm()
+        .array_prototype
+        .expect("array_prototype installed");
+    let proto_cell = interp.get_object_cell_expect(proto_id);
+
+    for (name, len) in EXPECTED {
+        let desc = proto_cell
+            .borrow()
+            .get_own_property(name)
+            .unwrap_or_else(|| panic!("Array.prototype.{name} installed"));
+        assert_eq!(
+            desc.writable,
+            Some(true),
+            "Array.prototype.{name} must stay writable"
+        );
+        assert_eq!(
+            desc.enumerable,
+            Some(false),
+            "Array.prototype.{name} must not be enumerable"
+        );
+        assert_eq!(
+            desc.configurable,
+            Some(true),
+            "Array.prototype.{name} must stay configurable"
+        );
+        let JsValue::Object(fn_obj) = desc.value.expect("method has a function value") else {
+            panic!("Array.prototype.{name} is not a function object")
+        };
+        let fn_cell = interp.get_object_cell_expect(fn_obj.id);
+        match fn_cell.borrow().get_own_property("name").unwrap().value {
+            Some(JsValue::String(ref s)) => assert_eq!(s.to_rust_string(), *name),
+            ref other => panic!("Array.prototype.{name}: expected name string, got {other:?}"),
+        }
+        match fn_cell.borrow().get_own_property("length").unwrap().value {
+            Some(JsValue::Number(n)) => assert_eq!(n, *len, "Array.prototype.{name}.length"),
+            ref other => panic!("Array.prototype.{name}: expected length number, got {other:?}"),
+        }
+    }
+
+    // Array.prototype[@@iterator] must be the very same function object as .values (§23.1.3.35).
+    let iterator_key = interp
+        .get_symbol_iterator_key()
+        .expect("well-known @@iterator key registered");
+    let values_desc = proto_cell
+        .borrow()
+        .get_own_property("values")
+        .expect("values installed");
+    let iterator_desc = proto_cell
+        .borrow()
+        .get_own_property(&iterator_key)
+        .expect("@@iterator installed");
+    let (JsValue::Object(values_obj), JsValue::Object(iterator_obj)) = (
+        values_desc.value.expect("values has a function value"),
+        iterator_desc
+            .value
+            .expect("@@iterator has a function value"),
+    ) else {
+        panic!("expected both values and @@iterator to be function objects")
+    };
+    assert_eq!(
+        values_obj.id, iterator_obj.id,
+        "Array.prototype[@@iterator] must be identical to Array.prototype.values"
+    );
+}
