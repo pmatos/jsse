@@ -942,178 +942,205 @@ impl Interpreter {
             );
 
         // Array.prototype.push
-        let push_fn = self.create_function(JsFunction::native(
-            "push".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let mut len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                // Step 5: If len + argCount > 2^53 - 1, throw TypeError
-                if (len + args.len()) as u64 > 9007199254740991 {
-                    return Completion::Throw(interp.create_type_error("Invalid array length"));
-                }
-                // Fast path for genuine dense Arrays: append directly into the
-                // backing Vec, bypassing per-element Set (proxy/setter/typed-array
-                // checks + len.to_string()). Falls through to the slow loop on any
-                // guard miss so proxies, array-likes/arguments, frozen/non-writable
-                // -length, and sparse arrays keep correct behaviour.
-                if let JsValue::Object(ref obj_ref) = o
-                    && let Some(cell) = interp.get_object(obj_ref.id)
-                {
-                    let (fast_ok, proto_id) = {
-                        let b = cell.borrow();
-                        let len_desc = b.properties.get("length");
-                        let len_writable =
-                            len_desc.map(|d| d.writable != Some(false)).unwrap_or(false);
-                        let desc_len = len_desc.and_then(|d| d.value.as_ref()).and_then(|v| {
-                            if let JsValue::Number(n) = v {
-                                Some(*n as usize)
-                            } else {
-                                None
-                            }
-                        });
-                        let ok = b.class_name == "Array"
-                            && !b.is_proxy()
-                            && b.extensible
-                            && len_desc.is_some()
-                            && len_writable
-                            && desc_len == Some(len)
-                            && b.array_elements().map(|v| v.len()) == Some(len);
-                        (ok, b.prototype_id)
-                    };
-                    // §23.1.3.25 push performs Set, which creates *present* data
-                    // properties. In this engine a `JsValue::Undefined` slot in
-                    // `array_elements` with no `properties` entry is the HOLE
-                    // sentinel (see the indexed-write fast path in eval.rs and
-                    // `get_own_property_full`), so writing `undefined` straight
-                    // into the Vec would make `push(undefined)` create a hole
-                    // instead of a present element. Bail to the slow path when any
-                    // argument is `undefined`; the slow path adds the presence
-                    // marker.
-                    let has_undefined_arg = args.iter().any(|a| matches!(a, JsValue::Undefined));
-                    // §23.1.3.25 push performs Set(O, ToString(i), …, true) =
-                    // OrdinarySet, which walks the prototype chain. If any
-                    // appended index ToString is inherited (setter or data) we
-                    // must invoke/honour it via the slow loop rather than write
-                    // straight into the Vec — bail to the slow path.
-                    // A bare Proxy prototype exposes no own descriptor, so the
-                    // get_property_descriptor_on_id probe below would miss it and
-                    // the fast path would write straight into the Vec, skipping the
-                    // proxy [[Set]] trap (issue #166). Bail to the slow path (which
-                    // routes through obj_set_throw → proxy_set) whenever a Proxy is
-                    // anywhere in the prototype chain.
-                    let inherited = fast_ok
-                        && !has_undefined_arg
-                        && proto_id.is_some_and(|pid| {
-                            interp.has_proxy_in_prototype_chain(pid)
-                                || (len..len + args.len()).any(|i| {
-                                    interp
-                                        .get_property_descriptor_on_id(pid, &i.to_string())
-                                        .is_some()
-                                })
-                        });
-                    if fast_ok && !has_undefined_arg && !inherited {
-                        let new_len = len + args.len();
-                        {
-                            let mut b = cell.borrow_mut();
-                            let elements = b.array_elements_mut().unwrap();
-                            elements.reserve(args.len());
-                            for arg in args {
-                                elements.push(arg.clone());
-                            }
-                            if let Some(len_desc) = b.properties.get_mut("length") {
-                                len_desc.value = Some(JsValue::Number(new_len as f64));
-                            }
-                            b.shape_id = crate::interpreter::types::fresh_shape_id();
+        self.define_method(proto_id, "push", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let mut len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            // Step 5: If len + argCount > 2^53 - 1, throw TypeError
+            if (len + args.len()) as u64 > 9007199254740991 {
+                return Completion::Throw(interp.create_type_error("Invalid array length"));
+            }
+            // Fast path for genuine dense Arrays: append directly into the
+            // backing Vec, bypassing per-element Set (proxy/setter/typed-array
+            // checks + len.to_string()). Falls through to the slow loop on any
+            // guard miss so proxies, array-likes/arguments, frozen/non-writable
+            // -length, and sparse arrays keep correct behaviour.
+            if let JsValue::Object(ref obj_ref) = o
+                && let Some(cell) = interp.get_object(obj_ref.id)
+            {
+                let (fast_ok, proto_id) = {
+                    let b = cell.borrow();
+                    let len_desc = b.properties.get("length");
+                    let len_writable = len_desc.map(|d| d.writable != Some(false)).unwrap_or(false);
+                    let desc_len = len_desc.and_then(|d| d.value.as_ref()).and_then(|v| {
+                        if let JsValue::Number(n) = v {
+                            Some(*n as usize)
+                        } else {
+                            None
                         }
-                        return Completion::Normal(JsValue::Number(new_len as f64));
+                    });
+                    let ok = b.class_name == "Array"
+                        && !b.is_proxy()
+                        && b.extensible
+                        && len_desc.is_some()
+                        && len_writable
+                        && desc_len == Some(len)
+                        && b.array_elements().map(|v| v.len()) == Some(len);
+                    (ok, b.prototype_id)
+                };
+                // §23.1.3.25 push performs Set, which creates *present* data
+                // properties. In this engine a `JsValue::Undefined` slot in
+                // `array_elements` with no `properties` entry is the HOLE
+                // sentinel (see the indexed-write fast path in eval.rs and
+                // `get_own_property_full`), so writing `undefined` straight
+                // into the Vec would make `push(undefined)` create a hole
+                // instead of a present element. Bail to the slow path when any
+                // argument is `undefined`; the slow path adds the presence
+                // marker.
+                let has_undefined_arg = args.iter().any(|a| matches!(a, JsValue::Undefined));
+                // §23.1.3.25 push performs Set(O, ToString(i), …, true) =
+                // OrdinarySet, which walks the prototype chain. If any
+                // appended index ToString is inherited (setter or data) we
+                // must invoke/honour it via the slow loop rather than write
+                // straight into the Vec — bail to the slow path.
+                // A bare Proxy prototype exposes no own descriptor, so the
+                // get_property_descriptor_on_id probe below would miss it and
+                // the fast path would write straight into the Vec, skipping the
+                // proxy [[Set]] trap (issue #166). Bail to the slow path (which
+                // routes through obj_set_throw → proxy_set) whenever a Proxy is
+                // anywhere in the prototype chain.
+                let inherited = fast_ok
+                    && !has_undefined_arg
+                    && proto_id.is_some_and(|pid| {
+                        interp.has_proxy_in_prototype_chain(pid)
+                            || (len..len + args.len()).any(|i| {
+                                interp
+                                    .get_property_descriptor_on_id(pid, &i.to_string())
+                                    .is_some()
+                            })
+                    });
+                if fast_ok && !has_undefined_arg && !inherited {
+                    let new_len = len + args.len();
+                    {
+                        let mut b = cell.borrow_mut();
+                        let elements = b.array_elements_mut().unwrap();
+                        elements.reserve(args.len());
+                        for arg in args {
+                            elements.push(arg.clone());
+                        }
+                        if let Some(len_desc) = b.properties.get_mut("length") {
+                            len_desc.value = Some(JsValue::Number(new_len as f64));
+                        }
+                        b.shape_id = crate::interpreter::types::fresh_shape_id();
                     }
+                    return Completion::Normal(JsValue::Number(new_len as f64));
                 }
-                for arg in args {
-                    if let Err(e) = obj_set_throw(interp, &o, &len.to_string(), arg.clone()) {
-                        return Completion::Throw(e);
-                    }
-                    len += 1;
-                }
-                if let Err(e) = set_length_throw(interp, &o, len) {
+            }
+            for arg in args {
+                if let Err(e) = obj_set_throw(interp, &o, &len.to_string(), arg.clone()) {
                     return Completion::Throw(e);
                 }
-                Completion::Normal(JsValue::Number(len as f64))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("push".to_string(), push_fn);
+                len += 1;
+            }
+            if let Err(e) = set_length_throw(interp, &o, len) {
+                return Completion::Throw(e);
+            }
+            Completion::Normal(JsValue::Number(len as f64))
+        });
 
         // Array.prototype.pop
-        let pop_fn = self.create_function(JsFunction::native(
-            "pop".to_string(),
-            0,
-            |interp, this_val, _args: &[JsValue]| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if len == 0 {
-                    if let Err(e) = set_length_throw(interp, &o, 0) {
-                        return Completion::Throw(e);
-                    }
-                    return Completion::Normal(JsValue::Undefined);
-                }
-                let idx = (len - 1).to_string();
-                let val = match obj_get(interp, &o, &idx) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if let Err(e) = obj_delete_throw(interp, &o, &idx) {
+        self.define_method(proto_id, "pop", 0, |interp, this_val, _args: &[JsValue]| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            if len == 0 {
+                if let Err(e) = set_length_throw(interp, &o, 0) {
                     return Completion::Throw(e);
                 }
-                if let Err(e) = set_length_throw(interp, &o, len - 1) {
-                    return Completion::Throw(e);
-                }
-                Completion::Normal(val)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("pop".to_string(), pop_fn);
+                return Completion::Normal(JsValue::Undefined);
+            }
+            let idx = (len - 1).to_string();
+            let val = match obj_get(interp, &o, &idx) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            if let Err(e) = obj_delete_throw(interp, &o, &idx) {
+                return Completion::Throw(e);
+            }
+            if let Err(e) = set_length_throw(interp, &o, len - 1) {
+                return Completion::Throw(e);
+            }
+            Completion::Normal(val)
+        });
 
         // Array.prototype.shift
-        let shift_fn = self.create_function(JsFunction::native(
-            "shift".to_string(),
-            0,
-            |interp, this_val, _args| {
-                let o = match to_object_val(interp, this_val) {
+        self.define_method(proto_id, "shift", 0, |interp, this_val, _args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            if len == 0 {
+                if let Err(e) = set_length_throw(interp, &o, 0) {
+                    return Completion::Throw(e);
+                }
+                return Completion::Normal(JsValue::Undefined);
+            }
+            let first = match obj_get(interp, &o, "0") {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            for k in 1..len {
+                let from = k.to_string();
+                let to = (k - 1).to_string();
+                let from_present = match obj_has_throw(interp, &o, &from) {
                     Ok(v) => v,
-                    Err(c) => return c,
+                    Err(e) => return Completion::Throw(e),
                 };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if len == 0 {
-                    if let Err(e) = set_length_throw(interp, &o, 0) {
+                if from_present {
+                    let val = match obj_get(interp, &o, &from) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    if let Err(e) = obj_set_throw(interp, &o, &to, val) {
                         return Completion::Throw(e);
                     }
-                    return Completion::Normal(JsValue::Undefined);
+                } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
+                    return Completion::Throw(e);
                 }
-                let first = match obj_get(interp, &o, "0") {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                for k in 1..len {
+            }
+            if let Err(e) = obj_delete_throw(interp, &o, &(len - 1).to_string()) {
+                return Completion::Throw(e);
+            }
+            if let Err(e) = set_length_throw(interp, &o, len - 1) {
+                return Completion::Throw(e);
+            }
+            Completion::Normal(first)
+        });
+
+        // Array.prototype.unshift
+        self.define_method(proto_id, "unshift", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let arg_count = args.len();
+            // If len + argCount > 2^53-1, throw TypeError
+            if (len + arg_count) as u64 > 9007199254740991 {
+                return Completion::Throw(interp.create_type_error("Invalid array length"));
+            }
+            if arg_count > 0 {
+                // Shift existing elements
+                for k in (0..len).rev() {
                     let from = k.to_string();
-                    let to = (k - 1).to_string();
+                    let to = (k + arg_count).to_string();
                     let from_present = match obj_has_throw(interp, &o, &from) {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
@@ -1130,555 +1157,358 @@ impl Interpreter {
                         return Completion::Throw(e);
                     }
                 }
-                if let Err(e) = obj_delete_throw(interp, &o, &(len - 1).to_string()) {
-                    return Completion::Throw(e);
-                }
-                if let Err(e) = set_length_throw(interp, &o, len - 1) {
-                    return Completion::Throw(e);
-                }
-                Completion::Normal(first)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("shift".to_string(), shift_fn);
-
-        // Array.prototype.unshift
-        let unshift_fn = self.create_function(JsFunction::native(
-            "unshift".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let arg_count = args.len();
-                // If len + argCount > 2^53-1, throw TypeError
-                if (len + arg_count) as u64 > 9007199254740991 {
-                    return Completion::Throw(interp.create_type_error("Invalid array length"));
-                }
-                if arg_count > 0 {
-                    // Shift existing elements
-                    for k in (0..len).rev() {
-                        let from = k.to_string();
-                        let to = (k + arg_count).to_string();
-                        let from_present = match obj_has_throw(interp, &o, &from) {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        if from_present {
-                            let val = match obj_get(interp, &o, &from) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                            if let Err(e) = obj_set_throw(interp, &o, &to, val) {
-                                return Completion::Throw(e);
-                            }
-                        } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
-                            return Completion::Throw(e);
-                        }
-                    }
-                    for (j, arg) in args.iter().enumerate() {
-                        if let Err(e) = obj_set_throw(interp, &o, &j.to_string(), arg.clone()) {
-                            return Completion::Throw(e);
-                        }
+                for (j, arg) in args.iter().enumerate() {
+                    if let Err(e) = obj_set_throw(interp, &o, &j.to_string(), arg.clone()) {
+                        return Completion::Throw(e);
                     }
                 }
-                let new_len = len + arg_count;
-                if let Err(e) = set_length_throw(interp, &o, new_len) {
-                    return Completion::Throw(e);
-                }
-                Completion::Normal(JsValue::Number(new_len as f64))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("unshift".to_string(), unshift_fn);
+            }
+            let new_len = len + arg_count;
+            if let Err(e) = set_length_throw(interp, &o, new_len) {
+                return Completion::Throw(e);
+            }
+            Completion::Normal(JsValue::Number(new_len as f64))
+        });
 
         // Array.prototype.indexOf
-        let indexof_fn = self.create_function(JsFunction::native(
-            "indexOf".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if len == 0 {
-                    return Completion::Normal(JsValue::Number(-1.0));
+        self.define_method(proto_id, "indexOf", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            if len == 0 {
+                return Completion::Normal(JsValue::Number(-1.0));
+            }
+            let search = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let n = if args.len() >= 2 {
+                match interp.to_number_value(&args[1]) {
+                    Ok(v) => to_integer_or_infinity(v),
+                    Err(e) => return Completion::Throw(e),
                 }
-                let search = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let n = if args.len() >= 2 {
-                    match interp.to_number_value(&args[1]) {
-                        Ok(v) => to_integer_or_infinity(v),
-                        Err(e) => return Completion::Throw(e),
-                    }
-                } else {
-                    0.0
-                };
-                if n >= len as f64 {
-                    return Completion::Normal(JsValue::Number(-1.0));
-                }
-                let k = if n >= 0.0 {
-                    n as usize
-                } else {
-                    let calc = len as f64 + n;
-                    if calc < 0.0 { 0 } else { calc as usize }
-                };
-                for i in k..len {
-                    let pk = i.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let elem = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                            if strict_equality(&elem, &search) {
-                                return Completion::Normal(JsValue::Number(i as f64));
-                            }
+            } else {
+                0.0
+            };
+            if n >= len as f64 {
+                return Completion::Normal(JsValue::Number(-1.0));
+            }
+            let k = if n >= 0.0 {
+                n as usize
+            } else {
+                let calc = len as f64 + n;
+                if calc < 0.0 { 0 } else { calc as usize }
+            };
+            for i in k..len {
+                let pk = i.to_string();
+                match obj_has_throw(interp, &o, &pk) {
+                    Ok(true) => {
+                        let elem = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                        if strict_equality(&elem, &search) {
+                            return Completion::Normal(JsValue::Number(i as f64));
                         }
-                        Err(e) => return Completion::Throw(e),
-                        _ => {}
                     }
+                    Err(e) => return Completion::Throw(e),
+                    _ => {}
                 }
-                Completion::Normal(JsValue::Number(-1.0))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("indexOf".to_string(), indexof_fn);
+            }
+            Completion::Normal(JsValue::Number(-1.0))
+        });
 
         // Array.prototype.lastIndexOf
-        let lastindexof_fn = self.create_function(JsFunction::native(
-            "lastIndexOf".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if len == 0 {
+        self.define_method(proto_id, "lastIndexOf", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            if len == 0 {
+                return Completion::Normal(JsValue::Number(-1.0));
+            }
+            let search = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let n = if args.len() >= 2 {
+                match interp.to_number_value(&args[1]) {
+                    Ok(v) => to_integer_or_infinity(v),
+                    Err(e) => return Completion::Throw(e),
+                }
+            } else {
+                len as f64 - 1.0
+            };
+            let k = if n >= 0.0 {
+                (n as usize).min(len - 1)
+            } else {
+                let calc = len as f64 + n;
+                if calc < 0.0 {
                     return Completion::Normal(JsValue::Number(-1.0));
                 }
-                let search = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let n = if args.len() >= 2 {
-                    match interp.to_number_value(&args[1]) {
-                        Ok(v) => to_integer_or_infinity(v),
-                        Err(e) => return Completion::Throw(e),
-                    }
-                } else {
-                    len as f64 - 1.0
-                };
-                let k = if n >= 0.0 {
-                    (n as usize).min(len - 1)
-                } else {
-                    let calc = len as f64 + n;
-                    if calc < 0.0 {
-                        return Completion::Normal(JsValue::Number(-1.0));
-                    }
-                    calc as usize
-                };
-                for i in (0..=k).rev() {
-                    let pk = i.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let elem = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                            if strict_equality(&elem, &search) {
-                                return Completion::Normal(JsValue::Number(i as f64));
-                            }
+                calc as usize
+            };
+            for i in (0..=k).rev() {
+                let pk = i.to_string();
+                match obj_has_throw(interp, &o, &pk) {
+                    Ok(true) => {
+                        let elem = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                        if strict_equality(&elem, &search) {
+                            return Completion::Normal(JsValue::Number(i as f64));
                         }
-                        Err(e) => return Completion::Throw(e),
-                        _ => {}
                     }
+                    Err(e) => return Completion::Throw(e),
+                    _ => {}
                 }
-                Completion::Normal(JsValue::Number(-1.0))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("lastIndexOf".to_string(), lastindexof_fn);
+            }
+            Completion::Normal(JsValue::Number(-1.0))
+        });
 
         // Array.prototype.includes
-        let includes_fn = self.create_function(JsFunction::native(
-            "includes".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
+        self.define_method(proto_id, "includes", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            if len == 0 {
+                return Completion::Normal(JsValue::Boolean(false));
+            }
+            let search = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let n = if args.len() >= 2 {
+                match interp.to_number_value(&args[1]) {
+                    Ok(v) => to_integer_or_infinity(v),
+                    Err(e) => return Completion::Throw(e),
+                }
+            } else {
+                0.0
+            };
+            let k = if n >= 0.0 {
+                n as usize
+            } else {
+                let calc = len as f64 + n;
+                if calc < 0.0 { 0 } else { calc as usize }
+            };
+            for i in k..len {
+                let elem = match obj_get(interp, &o, &i.to_string()) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if len == 0 {
-                    return Completion::Normal(JsValue::Boolean(false));
+                if same_value_zero(&elem, &search) {
+                    return Completion::Normal(JsValue::Boolean(true));
                 }
-                let search = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let n = if args.len() >= 2 {
-                    match interp.to_number_value(&args[1]) {
-                        Ok(v) => to_integer_or_infinity(v),
-                        Err(e) => return Completion::Throw(e),
-                    }
-                } else {
-                    0.0
-                };
-                let k = if n >= 0.0 {
-                    n as usize
-                } else {
-                    let calc = len as f64 + n;
-                    if calc < 0.0 { 0 } else { calc as usize }
-                };
-                for i in k..len {
-                    let elem = match obj_get(interp, &o, &i.to_string()) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
-                    if same_value_zero(&elem, &search) {
-                        return Completion::Normal(JsValue::Boolean(true));
-                    }
-                }
-                Completion::Normal(JsValue::Boolean(false))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("includes".to_string(), includes_fn);
+            }
+            Completion::Normal(JsValue::Boolean(false))
+        });
 
         // Array.prototype.join
-        let join_fn = self.create_function(JsFunction::native(
-            "join".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let sep = if let Some(s) = args.first() {
-                    if matches!(s, JsValue::Undefined) {
-                        ",".to_string()
-                    } else {
-                        match interp.to_string_value(s) {
-                            Ok(s) => s,
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    }
-                } else {
+        self.define_method(proto_id, "join", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let sep = if let Some(s) = args.first() {
+                if matches!(s, JsValue::Undefined) {
                     ",".to_string()
-                };
-                let mut parts = Vec::with_capacity(len);
-                for i in 0..len {
-                    let elem = match obj_get(interp, &o, &i.to_string()) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
-                    if elem.is_undefined() || elem.is_null() {
-                        parts.push(String::new());
-                    } else {
-                        match interp.to_string_value(&elem) {
-                            Ok(s) => parts.push(s),
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    }
-                }
-                Completion::Normal(JsValue::String(JsString::from_str(&parts.join(&sep))))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("join".to_string(), join_fn);
-
-        // Array.prototype.toString
-        let tostring_fn = self.create_function(JsFunction::native(
-            "toString".to_string(),
-            0,
-            |interp, this_val, _args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                // Look for a "join" method
-                let join_fn = match obj_get(interp, &o, "join") {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if interp.is_callable(&join_fn) {
-                    return interp.call_function(&join_fn, &o, &[]);
-                }
-                // Fall back to intrinsic %Object.prototype.toString%
-                if let Some(intrinsic_tostring) = interp.realm().object_prototype_tostring.clone() {
-                    return interp.call_function(&intrinsic_tostring, &o, &[]);
-                }
-                Completion::Normal(JsValue::String(JsString::from_str("[object Array]")))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("toString".to_string(), tostring_fn);
-
-        // Array.prototype.toLocaleString
-        let to_locale_string_fn = self.create_function(JsFunction::native(
-            "toLocaleString".to_string(),
-            0,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let separator = ",";
-                let locales = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let pass_args = vec![locales, options];
-                let mut parts: Vec<String> = Vec::with_capacity(len);
-                for k in 0..len {
-                    let next_element = match obj_get(interp, &o, &k.to_string()) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
-                    if matches!(next_element, JsValue::Undefined | JsValue::Null) {
-                        parts.push(String::new());
-                    } else {
-                        let element_obj = match interp.to_object(&next_element) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        let JsValue::Object(ref obj_ref) = element_obj else {
-                            unreachable!()
-                        };
-                        let to_locale_str_method = match interp.get_object_property(
-                            obj_ref.id,
-                            "toLocaleString",
-                            &next_element,
-                        ) {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        };
-                        if interp.is_callable(&to_locale_str_method) {
-                            match interp.call_function(
-                                &to_locale_str_method,
-                                &next_element,
-                                &pass_args,
-                            ) {
-                                Completion::Normal(v) => match interp.to_string_value(&v) {
-                                    Ok(s) => parts.push(s),
-                                    Err(e) => return Completion::Throw(e),
-                                },
-                                other => return other,
-                            }
-                        } else {
-                            let err = interp.create_type_error("toLocaleString is not a function");
-                            return Completion::Throw(err);
-                        }
-                    }
-                }
-                Completion::Normal(JsValue::String(JsString::from_str(&parts.join(separator))))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("toLocaleString".to_string(), to_locale_string_fn);
-
-        // Array.prototype.concat
-        let concat_fn = self.create_function(JsFunction::native(
-            "concat".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let a = match array_species_create(interp, &o, 0) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let gc_frame = interp.gc_root_frame();
-                interp.gc_root_value(&a);
-                let mut n: usize = 0;
-                let items: Vec<JsValue> = std::iter::once(o).chain(args.iter().cloned()).collect();
-                for item in &items {
-                    // IsConcatSpreadable (§23.1.3.1.1)
-                    let spreadable = if let JsValue::Object(obj_ref) = item {
-                        let sym_key = interp.get_symbol_key("isConcatSpreadable");
-                        let spreadable_val = if let Some(key) = &sym_key {
-                            match interp.get_object_property(obj_ref.id, key, item) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                other => return other,
-                            }
-                        } else {
-                            JsValue::Undefined
-                        };
-                        if !matches!(spreadable_val, JsValue::Undefined) {
-                            interp.to_boolean_val(&spreadable_val)
-                        } else {
-                            // 4. Return ? IsArray(O)
-                            match is_array_check(interp, obj_ref.id) {
-                                Ok(v) => v,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        }
-                    } else {
-                        false
-                    };
-                    if spreadable {
-                        let len = match length_of_array_like(interp, item) {
-                            Ok(v) => v,
-                            Err(c) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return c;
-                            }
-                        };
-                        if (n as u64) + (len as u64) > 9007199254740991 {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(
-                                interp
-                                    .create_type_error("Array length exceeds the allowed maximum"),
-                            );
-                        }
-                        for k in 0..len {
-                            let pk = k.to_string();
-                            let exists = match obj_has_throw(interp, item, &pk) {
-                                Ok(b) => b,
-                                Err(e) => {
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return Completion::Throw(e);
-                                }
-                            };
-                            if exists {
-                                let val = if let JsValue::Object(obj_ref) = item {
-                                    match interp.get_object_property(obj_ref.id, &pk, item) {
-                                        Completion::Normal(v) => v,
-                                        Completion::Throw(e) => {
-                                            interp.gc_unroot_frame(gc_frame);
-                                            return Completion::Throw(e);
-                                        }
-                                        other => {
-                                            interp.gc_unroot_frame(gc_frame);
-                                            return other;
-                                        }
-                                    }
-                                } else {
-                                    match obj_get(interp, item, &pk) {
-                                        Ok(v) => v,
-                                        Err(c) => {
-                                            interp.gc_unroot_frame(gc_frame);
-                                            return c;
-                                        }
-                                    }
-                                };
-                                if let Err(e) =
-                                    create_data_property_or_throw(interp, &a, &n.to_string(), val)
-                                {
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            n += 1;
-                        }
-                    } else {
-                        if n as u64 >= 9007199254740991 {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(
-                                interp
-                                    .create_type_error("Array length exceeds the allowed maximum"),
-                            );
-                        }
-                        if let Err(e) =
-                            create_data_property_or_throw(interp, &a, &n.to_string(), item.clone())
-                        {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(e);
-                        }
-                        n += 1;
-                    }
-                }
-                if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::Number(n as f64)) {
-                    interp.gc_unroot_frame(gc_frame);
-                    return Completion::Throw(e);
-                }
-                interp.gc_unroot_frame(gc_frame);
-                Completion::Normal(a)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("concat".to_string(), concat_fn);
-
-        // Array.prototype.slice
-        let slice_fn = self.create_function(JsFunction::native(
-            "slice".to_string(),
-            2,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                } as i64;
-                let relative_start = if let Some(v) = args.first() {
-                    match interp.to_number_value(v) {
-                        Ok(n) => to_integer_or_infinity(n),
+                } else {
+                    match interp.to_string_value(s) {
+                        Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
                     }
-                } else {
-                    0.0
+                }
+            } else {
+                ",".to_string()
+            };
+            let mut parts = Vec::with_capacity(len);
+            for i in 0..len {
+                let elem = match obj_get(interp, &o, &i.to_string()) {
+                    Ok(v) => v,
+                    Err(c) => return c,
                 };
-                let k = resolve_relative_index(relative_start, len as usize);
-                let relative_end = if let Some(v) = args.get(1) {
-                    if matches!(v, JsValue::Undefined) {
-                        len as f64
+                if elem.is_undefined() || elem.is_null() {
+                    parts.push(String::new());
+                } else {
+                    match interp.to_string_value(&elem) {
+                        Ok(s) => parts.push(s),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                }
+            }
+            Completion::Normal(JsValue::String(JsString::from_str(&parts.join(&sep))))
+        });
+
+        // Array.prototype.toString
+        self.define_method(proto_id, "toString", 0, |interp, this_val, _args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            // Look for a "join" method
+            let join_fn = match obj_get(interp, &o, "join") {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            if interp.is_callable(&join_fn) {
+                return interp.call_function(&join_fn, &o, &[]);
+            }
+            // Fall back to intrinsic %Object.prototype.toString%
+            if let Some(intrinsic_tostring) = interp.realm().object_prototype_tostring.clone() {
+                return interp.call_function(&intrinsic_tostring, &o, &[]);
+            }
+            Completion::Normal(JsValue::String(JsString::from_str("[object Array]")))
+        });
+
+        // Array.prototype.toLocaleString
+        self.define_method(proto_id, "toLocaleString", 0, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let separator = ",";
+            let locales = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            let pass_args = vec![locales, options];
+            let mut parts: Vec<String> = Vec::with_capacity(len);
+            for k in 0..len {
+                let next_element = match obj_get(interp, &o, &k.to_string()) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
+                if matches!(next_element, JsValue::Undefined | JsValue::Null) {
+                    parts.push(String::new());
+                } else {
+                    let element_obj = match interp.to_object(&next_element) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let JsValue::Object(ref obj_ref) = element_obj else {
+                        unreachable!()
+                    };
+                    let to_locale_str_method = match interp.get_object_property(
+                        obj_ref.id,
+                        "toLocaleString",
+                        &next_element,
+                    ) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    if interp.is_callable(&to_locale_str_method) {
+                        match interp.call_function(&to_locale_str_method, &next_element, &pass_args)
+                        {
+                            Completion::Normal(v) => match interp.to_string_value(&v) {
+                                Ok(s) => parts.push(s),
+                                Err(e) => return Completion::Throw(e),
+                            },
+                            other => return other,
+                        }
                     } else {
-                        match interp.to_number_value(v) {
-                            Ok(n) => to_integer_or_infinity(n),
+                        let err = interp.create_type_error("toLocaleString is not a function");
+                        return Completion::Throw(err);
+                    }
+                }
+            }
+            Completion::Normal(JsValue::String(JsString::from_str(&parts.join(separator))))
+        });
+
+        // Array.prototype.concat
+        self.define_method(proto_id, "concat", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let a = match array_species_create(interp, &o, 0) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let gc_frame = interp.gc_root_frame();
+            interp.gc_root_value(&a);
+            let mut n: usize = 0;
+            let items: Vec<JsValue> = std::iter::once(o).chain(args.iter().cloned()).collect();
+            for item in &items {
+                // IsConcatSpreadable (§23.1.3.1.1)
+                let spreadable = if let JsValue::Object(obj_ref) = item {
+                    let sym_key = interp.get_symbol_key("isConcatSpreadable");
+                    let spreadable_val = if let Some(key) = &sym_key {
+                        match interp.get_object_property(obj_ref.id, key, item) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            other => return other,
+                        }
+                    } else {
+                        JsValue::Undefined
+                    };
+                    if !matches!(spreadable_val, JsValue::Undefined) {
+                        interp.to_boolean_val(&spreadable_val)
+                    } else {
+                        // 4. Return ? IsArray(O)
+                        match is_array_check(interp, obj_ref.id) {
+                            Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         }
                     }
                 } else {
-                    len as f64
+                    false
                 };
-                let fin = resolve_relative_index(relative_end, len as usize);
-                let count = fin.saturating_sub(k);
-                let a = match array_species_create(interp, &o, count) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let gc_frame = interp.gc_root_frame();
-                interp.gc_root_value(&a);
-                let mut n: usize = 0;
-                for i in k..fin {
-                    let pk = i.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let val = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => {
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return c;
+                if spreadable {
+                    let len = match length_of_array_like(interp, item) {
+                        Ok(v) => v,
+                        Err(c) => {
+                            interp.gc_unroot_frame(gc_frame);
+                            return c;
+                        }
+                    };
+                    if (n as u64) + (len as u64) > 9007199254740991 {
+                        interp.gc_unroot_frame(gc_frame);
+                        return Completion::Throw(
+                            interp.create_type_error("Array length exceeds the allowed maximum"),
+                        );
+                    }
+                    for k in 0..len {
+                        let pk = k.to_string();
+                        let exists = match obj_has_throw(interp, item, &pk) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                interp.gc_unroot_frame(gc_frame);
+                                return Completion::Throw(e);
+                            }
+                        };
+                        if exists {
+                            let val = if let JsValue::Object(obj_ref) = item {
+                                match interp.get_object_property(obj_ref.id, &pk, item) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => {
+                                        interp.gc_unroot_frame(gc_frame);
+                                        return Completion::Throw(e);
+                                    }
+                                    other => {
+                                        interp.gc_unroot_frame(gc_frame);
+                                        return other;
+                                    }
+                                }
+                            } else {
+                                match obj_get(interp, item, &pk) {
+                                    Ok(v) => v,
+                                    Err(c) => {
+                                        interp.gc_unroot_frame(gc_frame);
+                                        return c;
+                                    }
                                 }
                             };
                             if let Err(e) =
@@ -1688,1684 +1518,1577 @@ impl Interpreter {
                                 return Completion::Throw(e);
                             }
                         }
-                        Err(e) => {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(e);
-                        }
-                        _ => {}
+                        n += 1;
+                    }
+                } else {
+                    if n as u64 >= 9007199254740991 {
+                        interp.gc_unroot_frame(gc_frame);
+                        return Completion::Throw(
+                            interp.create_type_error("Array length exceeds the allowed maximum"),
+                        );
+                    }
+                    if let Err(e) =
+                        create_data_property_or_throw(interp, &a, &n.to_string(), item.clone())
+                    {
+                        interp.gc_unroot_frame(gc_frame);
+                        return Completion::Throw(e);
                     }
                     n += 1;
                 }
-                if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::Number(n as f64)) {
-                    interp.gc_unroot_frame(gc_frame);
-                    return Completion::Throw(e);
-                }
+            }
+            if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::Number(n as f64)) {
                 interp.gc_unroot_frame(gc_frame);
-                Completion::Normal(a)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("slice".to_string(), slice_fn);
+                return Completion::Throw(e);
+            }
+            interp.gc_unroot_frame(gc_frame);
+            Completion::Normal(a)
+        });
+
+        // Array.prototype.slice
+        self.define_method(proto_id, "slice", 2, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            } as i64;
+            let relative_start = if let Some(v) = args.first() {
+                match interp.to_number_value(v) {
+                    Ok(n) => to_integer_or_infinity(n),
+                    Err(e) => return Completion::Throw(e),
+                }
+            } else {
+                0.0
+            };
+            let k = resolve_relative_index(relative_start, len as usize);
+            let relative_end = if let Some(v) = args.get(1) {
+                if matches!(v, JsValue::Undefined) {
+                    len as f64
+                } else {
+                    match interp.to_number_value(v) {
+                        Ok(n) => to_integer_or_infinity(n),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                }
+            } else {
+                len as f64
+            };
+            let fin = resolve_relative_index(relative_end, len as usize);
+            let count = fin.saturating_sub(k);
+            let a = match array_species_create(interp, &o, count) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let gc_frame = interp.gc_root_frame();
+            interp.gc_root_value(&a);
+            let mut n: usize = 0;
+            for i in k..fin {
+                let pk = i.to_string();
+                match obj_has_throw(interp, &o, &pk) {
+                    Ok(true) => {
+                        let val = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => {
+                                interp.gc_unroot_frame(gc_frame);
+                                return c;
+                            }
+                        };
+                        if let Err(e) =
+                            create_data_property_or_throw(interp, &a, &n.to_string(), val)
+                        {
+                            interp.gc_unroot_frame(gc_frame);
+                            return Completion::Throw(e);
+                        }
+                    }
+                    Err(e) => {
+                        interp.gc_unroot_frame(gc_frame);
+                        return Completion::Throw(e);
+                    }
+                    _ => {}
+                }
+                n += 1;
+            }
+            if let Err(e) = obj_set_throw(interp, &a, "length", JsValue::Number(n as f64)) {
+                interp.gc_unroot_frame(gc_frame);
+                return Completion::Throw(e);
+            }
+            interp.gc_unroot_frame(gc_frame);
+            Completion::Normal(a)
+        });
 
         // Array.prototype.reverse
-        let reverse_fn = self.create_function(JsFunction::native(
-            "reverse".to_string(),
-            0,
-            |interp, this_val, _args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
+        self.define_method(proto_id, "reverse", 0, |interp, this_val, _args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let middle = len / 2;
+            for lower in 0..middle {
+                let upper = len - lower - 1;
+                let lower_s = lower.to_string();
+                let upper_s = upper.to_string();
+                // Spec §22.1.3.28 step 7: Has then Get for lower, then Has then Get for upper
+                let lower_exists = match obj_has_throw(interp, &o, &lower_s) {
+                    Ok(b) => b,
+                    Err(e) => return Completion::Throw(e),
                 };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let middle = len / 2;
-                for lower in 0..middle {
-                    let upper = len - lower - 1;
-                    let lower_s = lower.to_string();
-                    let upper_s = upper.to_string();
-                    // Spec §22.1.3.28 step 7: Has then Get for lower, then Has then Get for upper
-                    let lower_exists = match obj_has_throw(interp, &o, &lower_s) {
-                        Ok(b) => b,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let lower_val = if lower_exists {
-                        match obj_get(interp, &o, &lower_s) {
-                            Ok(v) => v,
-                            Err(c) => return c,
-                        }
-                    } else {
-                        JsValue::Undefined
-                    };
-                    let upper_exists = match obj_has_throw(interp, &o, &upper_s) {
-                        Ok(b) => b,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let upper_val = if upper_exists {
-                        match obj_get(interp, &o, &upper_s) {
-                            Ok(v) => v,
-                            Err(c) => return c,
-                        }
-                    } else {
-                        JsValue::Undefined
-                    };
-                    if lower_exists && upper_exists {
-                        if let Err(e) = obj_set_throw(interp, &o, &lower_s, upper_val) {
-                            return Completion::Throw(e);
-                        }
-                        if let Err(e) = obj_set_throw(interp, &o, &upper_s, lower_val) {
-                            return Completion::Throw(e);
-                        }
-                    } else if !lower_exists && upper_exists {
-                        if let Err(e) = obj_set_throw(interp, &o, &lower_s, upper_val) {
-                            return Completion::Throw(e);
-                        }
-                        if let Err(e) = obj_delete_throw(interp, &o, &upper_s) {
-                            return Completion::Throw(e);
-                        }
-                    } else if lower_exists && !upper_exists {
-                        if let Err(e) = obj_delete_throw(interp, &o, &lower_s) {
-                            return Completion::Throw(e);
-                        }
-                        if let Err(e) = obj_set_throw(interp, &o, &upper_s, lower_val) {
-                            return Completion::Throw(e);
-                        }
-                    }
-                }
-                Completion::Normal(o)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("reverse".to_string(), reverse_fn);
-
-        // Array.prototype.toReversed
-        let to_reversed_fn = self.create_function(JsFunction::native(
-            "toReversed".to_string(),
-            0,
-            |interp, this_val, _args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if len as u64 > 0xFFFF_FFFF {
-                    return Completion::Throw(interp.create_range_error("Invalid array length"));
-                }
-                let mut result = Vec::with_capacity(len);
-                for i in (0..len).rev() {
-                    result.push(match obj_get(interp, &o, &i.to_string()) {
+                let lower_val = if lower_exists {
+                    match obj_get(interp, &o, &lower_s) {
                         Ok(v) => v,
                         Err(c) => return c,
-                    });
-                }
-                let arr = interp.create_array(result);
-                Completion::Normal(arr)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("toReversed".to_string(), to_reversed_fn);
-
-        // Array.prototype.forEach
-        let foreach_fn = self.create_function(JsFunction::native(
-            "forEach".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
+                    }
+                } else {
+                    JsValue::Undefined
                 };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
+                let upper_exists = match obj_has_throw(interp, &o, &upper_s) {
+                    Ok(b) => b,
+                    Err(e) => return Completion::Throw(e),
                 };
-                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let Err(c) =
-                    require_callable(interp, &callback, "forEach callback is not a function")
-                {
-                    return c;
-                }
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                for k in 0..len {
-                    let pk = k.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let kvalue = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                            let call_args = vec![kvalue, JsValue::Number(k as f64), o.clone()];
-                            if let result @ Completion::Throw(_) =
-                                interp.call_function(&callback, &this_arg, &call_args)
-                            {
-                                return result;
-                            }
-                        }
-                        Err(e) => return Completion::Throw(e),
-                        _ => {}
+                let upper_val = if upper_exists {
+                    match obj_get(interp, &o, &upper_s) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    }
+                } else {
+                    JsValue::Undefined
+                };
+                if lower_exists && upper_exists {
+                    if let Err(e) = obj_set_throw(interp, &o, &lower_s, upper_val) {
+                        return Completion::Throw(e);
+                    }
+                    if let Err(e) = obj_set_throw(interp, &o, &upper_s, lower_val) {
+                        return Completion::Throw(e);
+                    }
+                } else if !lower_exists && upper_exists {
+                    if let Err(e) = obj_set_throw(interp, &o, &lower_s, upper_val) {
+                        return Completion::Throw(e);
+                    }
+                    if let Err(e) = obj_delete_throw(interp, &o, &upper_s) {
+                        return Completion::Throw(e);
+                    }
+                } else if lower_exists && !upper_exists {
+                    if let Err(e) = obj_delete_throw(interp, &o, &lower_s) {
+                        return Completion::Throw(e);
+                    }
+                    if let Err(e) = obj_set_throw(interp, &o, &upper_s, lower_val) {
+                        return Completion::Throw(e);
                     }
                 }
-                Completion::Normal(JsValue::Undefined)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("forEach".to_string(), foreach_fn);
+            }
+            Completion::Normal(o)
+        });
+
+        // Array.prototype.toReversed
+        self.define_method(proto_id, "toReversed", 0, |interp, this_val, _args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            if len as u64 > 0xFFFF_FFFF {
+                return Completion::Throw(interp.create_range_error("Invalid array length"));
+            }
+            let mut result = Vec::with_capacity(len);
+            for i in (0..len).rev() {
+                result.push(match obj_get(interp, &o, &i.to_string()) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                });
+            }
+            let arr = interp.create_array(result);
+            Completion::Normal(arr)
+        });
+
+        // Array.prototype.forEach
+        self.define_method(proto_id, "forEach", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if let Err(c) =
+                require_callable(interp, &callback, "forEach callback is not a function")
+            {
+                return c;
+            }
+            let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            for k in 0..len {
+                let pk = k.to_string();
+                match obj_has_throw(interp, &o, &pk) {
+                    Ok(true) => {
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                        let call_args = vec![kvalue, JsValue::Number(k as f64), o.clone()];
+                        if let result @ Completion::Throw(_) =
+                            interp.call_function(&callback, &this_arg, &call_args)
+                        {
+                            return result;
+                        }
+                    }
+                    Err(e) => return Completion::Throw(e),
+                    _ => {}
+                }
+            }
+            Completion::Normal(JsValue::Undefined)
+        });
 
         // Array.prototype.map
-        let map_fn = self.create_function(JsFunction::native(
-            "map".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let Err(c) =
-                    require_callable(interp, &callback, "map callback is not a function")
-                {
-                    return c;
-                }
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let a = match array_species_create(interp, &o, len) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let gc_frame = interp.gc_root_frame();
-                interp.gc_root_value(&a);
-                for k in 0..len {
-                    let pk = k.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let kvalue = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => {
+        self.define_method(proto_id, "map", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if let Err(c) = require_callable(interp, &callback, "map callback is not a function") {
+                return c;
+            }
+            let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            let a = match array_species_create(interp, &o, len) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let gc_frame = interp.gc_root_frame();
+            interp.gc_root_value(&a);
+            for k in 0..len {
+                let pk = k.to_string();
+                match obj_has_throw(interp, &o, &pk) {
+                    Ok(true) => {
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => {
+                                interp.gc_unroot_frame(gc_frame);
+                                return c;
+                            }
+                        };
+                        match interp.call_function(
+                            &callback,
+                            &this_arg,
+                            &[kvalue, JsValue::Number(k as f64), o.clone()],
+                        ) {
+                            Completion::Normal(v) => {
+                                if let Err(e) = create_data_property_or_throw(interp, &a, &pk, v) {
                                     interp.gc_unroot_frame(gc_frame);
-                                    return c;
+                                    return Completion::Throw(e);
                                 }
-                            };
-                            match interp.call_function(
-                                &callback,
-                                &this_arg,
-                                &[kvalue, JsValue::Number(k as f64), o.clone()],
-                            ) {
-                                Completion::Normal(v) => {
-                                    if let Err(e) =
-                                        create_data_property_or_throw(interp, &a, &pk, v)
-                                    {
+                            }
+                            other => {
+                                interp.gc_unroot_frame(gc_frame);
+                                return other;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        interp.gc_unroot_frame(gc_frame);
+                        return Completion::Throw(e);
+                    }
+                    _ => {}
+                }
+            }
+            interp.gc_unroot_frame(gc_frame);
+            Completion::Normal(a)
+        });
+
+        // Array.prototype.filter
+        self.define_method(proto_id, "filter", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if let Err(c) = require_callable(interp, &callback, "filter callback is not a function")
+            {
+                return c;
+            }
+            let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            let a = match array_species_create(interp, &o, 0) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let gc_frame = interp.gc_root_frame();
+            interp.gc_root_value(&a);
+            let mut to: usize = 0;
+            for k in 0..len {
+                let pk = k.to_string();
+                match obj_has_throw(interp, &o, &pk) {
+                    Ok(true) => {
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => {
+                                interp.gc_unroot_frame(gc_frame);
+                                return c;
+                            }
+                        };
+                        match interp.call_function(
+                            &callback,
+                            &this_arg,
+                            &[kvalue.clone(), JsValue::Number(k as f64), o.clone()],
+                        ) {
+                            Completion::Normal(v) => {
+                                if interp.to_boolean_val(&v) {
+                                    if let Err(e) = create_data_property_or_throw(
+                                        interp,
+                                        &a,
+                                        &to.to_string(),
+                                        kvalue,
+                                    ) {
                                         interp.gc_unroot_frame(gc_frame);
                                         return Completion::Throw(e);
                                     }
-                                }
-                                other => {
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return other;
+                                    to += 1;
                                 }
                             }
-                        }
-                        Err(e) => {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(e);
-                        }
-                        _ => {}
-                    }
-                }
-                interp.gc_unroot_frame(gc_frame);
-                Completion::Normal(a)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("map".to_string(), map_fn);
-
-        // Array.prototype.filter
-        let filter_fn = self.create_function(JsFunction::native(
-            "filter".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let Err(c) =
-                    require_callable(interp, &callback, "filter callback is not a function")
-                {
-                    return c;
-                }
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let a = match array_species_create(interp, &o, 0) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let gc_frame = interp.gc_root_frame();
-                interp.gc_root_value(&a);
-                let mut to: usize = 0;
-                for k in 0..len {
-                    let pk = k.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let kvalue = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => {
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return c;
-                                }
-                            };
-                            match interp.call_function(
-                                &callback,
-                                &this_arg,
-                                &[kvalue.clone(), JsValue::Number(k as f64), o.clone()],
-                            ) {
-                                Completion::Normal(v) => {
-                                    if interp.to_boolean_val(&v) {
-                                        if let Err(e) = create_data_property_or_throw(
-                                            interp,
-                                            &a,
-                                            &to.to_string(),
-                                            kvalue,
-                                        ) {
-                                            interp.gc_unroot_frame(gc_frame);
-                                            return Completion::Throw(e);
-                                        }
-                                        to += 1;
-                                    }
-                                }
-                                other => {
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return other;
-                                }
+                            other => {
+                                interp.gc_unroot_frame(gc_frame);
+                                return other;
                             }
                         }
-                        Err(e) => {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(e);
-                        }
-                        _ => {}
                     }
+                    Err(e) => {
+                        interp.gc_unroot_frame(gc_frame);
+                        return Completion::Throw(e);
+                    }
+                    _ => {}
                 }
-                interp.gc_unroot_frame(gc_frame);
-                Completion::Normal(a)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("filter".to_string(), filter_fn);
+            }
+            interp.gc_unroot_frame(gc_frame);
+            Completion::Normal(a)
+        });
 
         // Array.prototype.reduce
-        let reduce_fn = self.create_function(JsFunction::native(
-            "reduce".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let Err(c) =
-                    require_callable(interp, &callback, "reduce callback is not a function")
-                {
-                    return c;
-                }
-                if len == 0 && args.len() < 2 {
-                    return Completion::Throw(
-                        interp.create_type_error("Reduce of empty array with no initial value"),
-                    );
-                }
-                let mut k = 0usize;
-                let mut acc =
-                    if args.len() >= 2 {
-                        args[1].clone()
-                    } else {
-                        // Find first present element
-                        loop {
-                            if k >= len {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Reduce of empty array with no initial value",
-                                ));
-                            }
-                            let pk = k.to_string();
-                            match obj_has_throw(interp, &o, &pk) {
-                                Ok(true) => {
-                                    let val = match obj_get(interp, &o, &pk) {
-                                        Ok(v) => v,
-                                        Err(c) => return c,
-                                    };
-                                    k += 1;
-                                    break val;
-                                }
-                                Err(e) => return Completion::Throw(e),
-                                _ => {}
-                            }
-                            k += 1;
-                        }
-                    };
-                while k < len {
+        self.define_method(proto_id, "reduce", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if let Err(c) = require_callable(interp, &callback, "reduce callback is not a function")
+            {
+                return c;
+            }
+            if len == 0 && args.len() < 2 {
+                return Completion::Throw(
+                    interp.create_type_error("Reduce of empty array with no initial value"),
+                );
+            }
+            let mut k = 0usize;
+            let mut acc = if args.len() >= 2 {
+                args[1].clone()
+            } else {
+                // Find first present element
+                loop {
+                    if k >= len {
+                        return Completion::Throw(
+                            interp.create_type_error("Reduce of empty array with no initial value"),
+                        );
+                    }
                     let pk = k.to_string();
                     match obj_has_throw(interp, &o, &pk) {
                         Ok(true) => {
-                            let kvalue = match obj_get(interp, &o, &pk) {
+                            let val = match obj_get(interp, &o, &pk) {
                                 Ok(v) => v,
                                 Err(c) => return c,
                             };
-                            match interp.call_function(
-                                &callback,
-                                &JsValue::Undefined,
-                                &[acc, kvalue, JsValue::Number(k as f64), o.clone()],
-                            ) {
-                                Completion::Normal(v) => acc = v,
-                                other => return other,
-                            }
+                            k += 1;
+                            break val;
                         }
                         Err(e) => return Completion::Throw(e),
                         _ => {}
                     }
                     k += 1;
                 }
-                Completion::Normal(acc)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("reduce".to_string(), reduce_fn);
+            };
+            while k < len {
+                let pk = k.to_string();
+                match obj_has_throw(interp, &o, &pk) {
+                    Ok(true) => {
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                        match interp.call_function(
+                            &callback,
+                            &JsValue::Undefined,
+                            &[acc, kvalue, JsValue::Number(k as f64), o.clone()],
+                        ) {
+                            Completion::Normal(v) => acc = v,
+                            other => return other,
+                        }
+                    }
+                    Err(e) => return Completion::Throw(e),
+                    _ => {}
+                }
+                k += 1;
+            }
+            Completion::Normal(acc)
+        });
 
         // Array.prototype.reduceRight
-        let reduce_right_fn = self.create_function(JsFunction::native(
-            "reduceRight".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let Err(c) =
-                    require_callable(interp, &callback, "reduceRight callback is not a function")
-                {
-                    return c;
-                }
-                if len == 0 && args.len() < 2 {
-                    return Completion::Throw(
-                        interp.create_type_error("Reduce of empty array with no initial value"),
-                    );
-                }
-                let mut k = len as i64 - 1;
-                let mut acc =
-                    if args.len() >= 2 {
-                        args[1].clone()
-                    } else {
-                        loop {
-                            if k < 0 {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Reduce of empty array with no initial value",
-                                ));
-                            }
-                            let pk = (k as usize).to_string();
-                            match obj_has_throw(interp, &o, &pk) {
-                                Ok(true) => {
-                                    let val = match obj_get(interp, &o, &pk) {
-                                        Ok(v) => v,
-                                        Err(c) => return c,
-                                    };
-                                    k -= 1;
-                                    break val;
-                                }
-                                Err(e) => return Completion::Throw(e),
-                                _ => {}
-                            }
-                            k -= 1;
-                        }
-                    };
-                while k >= 0 {
+        self.define_method(proto_id, "reduceRight", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if let Err(c) =
+                require_callable(interp, &callback, "reduceRight callback is not a function")
+            {
+                return c;
+            }
+            if len == 0 && args.len() < 2 {
+                return Completion::Throw(
+                    interp.create_type_error("Reduce of empty array with no initial value"),
+                );
+            }
+            let mut k = len as i64 - 1;
+            let mut acc = if args.len() >= 2 {
+                args[1].clone()
+            } else {
+                loop {
+                    if k < 0 {
+                        return Completion::Throw(
+                            interp.create_type_error("Reduce of empty array with no initial value"),
+                        );
+                    }
                     let pk = (k as usize).to_string();
                     match obj_has_throw(interp, &o, &pk) {
                         Ok(true) => {
-                            let kvalue = match obj_get(interp, &o, &pk) {
+                            let val = match obj_get(interp, &o, &pk) {
                                 Ok(v) => v,
                                 Err(c) => return c,
                             };
-                            match interp.call_function(
-                                &callback,
-                                &JsValue::Undefined,
-                                &[acc, kvalue, JsValue::Number(k as f64), o.clone()],
-                            ) {
-                                Completion::Normal(v) => acc = v,
-                                other => return other,
-                            }
+                            k -= 1;
+                            break val;
                         }
                         Err(e) => return Completion::Throw(e),
                         _ => {}
                     }
                     k -= 1;
                 }
-                Completion::Normal(acc)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("reduceRight".to_string(), reduce_right_fn);
+            };
+            while k >= 0 {
+                let pk = (k as usize).to_string();
+                match obj_has_throw(interp, &o, &pk) {
+                    Ok(true) => {
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                        match interp.call_function(
+                            &callback,
+                            &JsValue::Undefined,
+                            &[acc, kvalue, JsValue::Number(k as f64), o.clone()],
+                        ) {
+                            Completion::Normal(v) => acc = v,
+                            other => return other,
+                        }
+                    }
+                    Err(e) => return Completion::Throw(e),
+                    _ => {}
+                }
+                k -= 1;
+            }
+            Completion::Normal(acc)
+        });
 
         // Array.prototype.some
-        let some_fn = self.create_function(JsFunction::native(
-            "some".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let Err(c) =
-                    require_callable(interp, &callback, "some callback is not a function")
-                {
-                    return c;
-                }
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                for k in 0..len {
-                    let pk = k.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let kvalue = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                            match interp.call_function(
-                                &callback,
-                                &this_arg,
-                                &[kvalue, JsValue::Number(k as f64), o.clone()],
-                            ) {
-                                Completion::Normal(v) => {
-                                    if interp.to_boolean_val(&v) {
-                                        return Completion::Normal(JsValue::Boolean(true));
-                                    }
+        self.define_method(proto_id, "some", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if let Err(c) = require_callable(interp, &callback, "some callback is not a function") {
+                return c;
+            }
+            let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            for k in 0..len {
+                let pk = k.to_string();
+                match obj_has_throw(interp, &o, &pk) {
+                    Ok(true) => {
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                        match interp.call_function(
+                            &callback,
+                            &this_arg,
+                            &[kvalue, JsValue::Number(k as f64), o.clone()],
+                        ) {
+                            Completion::Normal(v) => {
+                                if interp.to_boolean_val(&v) {
+                                    return Completion::Normal(JsValue::Boolean(true));
                                 }
-                                other => return other,
                             }
+                            other => return other,
                         }
-                        Err(e) => return Completion::Throw(e),
-                        _ => {}
                     }
+                    Err(e) => return Completion::Throw(e),
+                    _ => {}
                 }
-                Completion::Normal(JsValue::Boolean(false))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("some".to_string(), some_fn);
+            }
+            Completion::Normal(JsValue::Boolean(false))
+        });
 
         // Array.prototype.every
-        let every_fn = self.create_function(JsFunction::native(
-            "every".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let Err(c) =
-                    require_callable(interp, &callback, "every callback is not a function")
-                {
-                    return c;
-                }
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                for k in 0..len {
-                    let pk = k.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let kvalue = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            };
-                            match interp.call_function(
-                                &callback,
-                                &this_arg,
-                                &[kvalue, JsValue::Number(k as f64), o.clone()],
-                            ) {
-                                Completion::Normal(v) => {
-                                    if !interp.to_boolean_val(&v) {
-                                        return Completion::Normal(JsValue::Boolean(false));
-                                    }
+        self.define_method(proto_id, "every", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if let Err(c) = require_callable(interp, &callback, "every callback is not a function")
+            {
+                return c;
+            }
+            let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            for k in 0..len {
+                let pk = k.to_string();
+                match obj_has_throw(interp, &o, &pk) {
+                    Ok(true) => {
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return c,
+                        };
+                        match interp.call_function(
+                            &callback,
+                            &this_arg,
+                            &[kvalue, JsValue::Number(k as f64), o.clone()],
+                        ) {
+                            Completion::Normal(v) => {
+                                if !interp.to_boolean_val(&v) {
+                                    return Completion::Normal(JsValue::Boolean(false));
                                 }
-                                other => return other,
                             }
+                            other => return other,
                         }
-                        Err(e) => return Completion::Throw(e),
-                        _ => {}
                     }
+                    Err(e) => return Completion::Throw(e),
+                    _ => {}
                 }
-                Completion::Normal(JsValue::Boolean(true))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("every".to_string(), every_fn);
+            }
+            Completion::Normal(JsValue::Boolean(true))
+        });
 
         // Array.prototype.find
-        let find_fn = self.create_function(JsFunction::native(
-            "find".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
+        self.define_method(proto_id, "find", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if let Err(c) = require_callable(interp, &callback, "find predicate is not a function")
+            {
+                return c;
+            }
+            let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            for k in 0..len {
+                let kvalue = match obj_get(interp, &o, &k.to_string()) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let Err(c) =
-                    require_callable(interp, &callback, "find predicate is not a function")
-                {
-                    return c;
-                }
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                for k in 0..len {
-                    let kvalue = match obj_get(interp, &o, &k.to_string()) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
-                    match interp.call_function(
-                        &callback,
-                        &this_arg,
-                        &[kvalue.clone(), JsValue::Number(k as f64), o.clone()],
-                    ) {
-                        Completion::Normal(v) => {
-                            if interp.to_boolean_val(&v) {
-                                return Completion::Normal(kvalue);
-                            }
+                match interp.call_function(
+                    &callback,
+                    &this_arg,
+                    &[kvalue.clone(), JsValue::Number(k as f64), o.clone()],
+                ) {
+                    Completion::Normal(v) => {
+                        if interp.to_boolean_val(&v) {
+                            return Completion::Normal(kvalue);
                         }
-                        other => return other,
                     }
+                    other => return other,
                 }
-                Completion::Normal(JsValue::Undefined)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("find".to_string(), find_fn);
+            }
+            Completion::Normal(JsValue::Undefined)
+        });
 
         // Array.prototype.findIndex
-        let findindex_fn = self.create_function(JsFunction::native(
-            "findIndex".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
+        self.define_method(proto_id, "findIndex", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if let Err(c) =
+                require_callable(interp, &callback, "findIndex predicate is not a function")
+            {
+                return c;
+            }
+            let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            for k in 0..len {
+                let kvalue = match obj_get(interp, &o, &k.to_string()) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let Err(c) =
-                    require_callable(interp, &callback, "findIndex predicate is not a function")
-                {
-                    return c;
-                }
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                for k in 0..len {
-                    let kvalue = match obj_get(interp, &o, &k.to_string()) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
-                    match interp.call_function(
-                        &callback,
-                        &this_arg,
-                        &[kvalue, JsValue::Number(k as f64), o.clone()],
-                    ) {
-                        Completion::Normal(v) => {
-                            if interp.to_boolean_val(&v) {
-                                return Completion::Normal(JsValue::Number(k as f64));
-                            }
+                match interp.call_function(
+                    &callback,
+                    &this_arg,
+                    &[kvalue, JsValue::Number(k as f64), o.clone()],
+                ) {
+                    Completion::Normal(v) => {
+                        if interp.to_boolean_val(&v) {
+                            return Completion::Normal(JsValue::Number(k as f64));
                         }
-                        other => return other,
                     }
+                    other => return other,
                 }
-                Completion::Normal(JsValue::Number(-1.0))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("findIndex".to_string(), findindex_fn);
+            }
+            Completion::Normal(JsValue::Number(-1.0))
+        });
 
         // Array.prototype.findLast
-        let findlast_fn = self.create_function(JsFunction::native(
-            "findLast".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
+        self.define_method(proto_id, "findLast", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if let Err(c) =
+                require_callable(interp, &callback, "findLast predicate is not a function")
+            {
+                return c;
+            }
+            let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            for k in (0..len).rev() {
+                let kvalue = match obj_get(interp, &o, &k.to_string()) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let Err(c) =
-                    require_callable(interp, &callback, "findLast predicate is not a function")
-                {
-                    return c;
-                }
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                for k in (0..len).rev() {
-                    let kvalue = match obj_get(interp, &o, &k.to_string()) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
-                    match interp.call_function(
-                        &callback,
-                        &this_arg,
-                        &[kvalue.clone(), JsValue::Number(k as f64), o.clone()],
-                    ) {
-                        Completion::Normal(v) => {
-                            if interp.to_boolean_val(&v) {
-                                return Completion::Normal(kvalue);
-                            }
+                match interp.call_function(
+                    &callback,
+                    &this_arg,
+                    &[kvalue.clone(), JsValue::Number(k as f64), o.clone()],
+                ) {
+                    Completion::Normal(v) => {
+                        if interp.to_boolean_val(&v) {
+                            return Completion::Normal(kvalue);
                         }
-                        other => return other,
                     }
+                    other => return other,
                 }
-                Completion::Normal(JsValue::Undefined)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("findLast".to_string(), findlast_fn);
+            }
+            Completion::Normal(JsValue::Undefined)
+        });
 
         // Array.prototype.findLastIndex
-        let findlastidx_fn = self.create_function(JsFunction::native(
-            "findLastIndex".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
+        self.define_method(proto_id, "findLastIndex", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if let Err(c) = require_callable(
+                interp,
+                &callback,
+                "findLastIndex predicate is not a function",
+            ) {
+                return c;
+            }
+            let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            for k in (0..len).rev() {
+                let kvalue = match obj_get(interp, &o, &k.to_string()) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let Err(c) = require_callable(
-                    interp,
+                match interp.call_function(
                     &callback,
-                    "findLastIndex predicate is not a function",
+                    &this_arg,
+                    &[kvalue, JsValue::Number(k as f64), o.clone()],
                 ) {
-                    return c;
-                }
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                for k in (0..len).rev() {
-                    let kvalue = match obj_get(interp, &o, &k.to_string()) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    };
-                    match interp.call_function(
-                        &callback,
-                        &this_arg,
-                        &[kvalue, JsValue::Number(k as f64), o.clone()],
-                    ) {
-                        Completion::Normal(v) => {
-                            if interp.to_boolean_val(&v) {
-                                return Completion::Normal(JsValue::Number(k as f64));
-                            }
+                    Completion::Normal(v) => {
+                        if interp.to_boolean_val(&v) {
+                            return Completion::Normal(JsValue::Number(k as f64));
                         }
-                        other => return other,
                     }
+                    other => return other,
                 }
-                Completion::Normal(JsValue::Number(-1.0))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("findLastIndex".to_string(), findlastidx_fn);
+            }
+            Completion::Normal(JsValue::Number(-1.0))
+        });
 
         // Array.prototype.splice
-        let splice_fn = self.create_function(JsFunction::native(
-            "splice".to_string(),
-            2,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v as i64,
-                    Err(c) => return c,
-                };
-                let relative_start = if let Some(v) = args.first() {
-                    match interp.to_number_value(v) {
-                        Ok(n) => to_integer_or_infinity(n),
-                        Err(e) => return Completion::Throw(e),
-                    }
-                } else {
-                    0.0
-                };
-                let actual_start = resolve_relative_index(relative_start, len as usize);
-                let insert_count = if args.len() > 2 { args.len() - 2 } else { 0 };
-                let actual_delete_count = if args.is_empty() {
-                    0usize
-                } else if args.len() == 1 {
-                    (len - actual_start as i64) as usize
-                } else {
-                    let dc = match interp.to_number_value(&args[1]) {
-                        Ok(n) => to_integer_or_infinity(n),
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    dc.max(0.0).min((len - actual_start as i64) as f64) as usize
-                };
-                // Step 8: If len + insertCount - actualDeleteCount > 2^53-1, throw TypeError
-                if (len as i128) + (insert_count as i128) - (actual_delete_count as i128)
-                    > 9007199254740991
-                {
-                    return Completion::Throw(
-                        interp.create_type_error("Array length exceeds the allowed maximum"),
-                    );
+        self.define_method(proto_id, "splice", 2, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v as i64,
+                Err(c) => return c,
+            };
+            let relative_start = if let Some(v) = args.first() {
+                match interp.to_number_value(v) {
+                    Ok(n) => to_integer_or_infinity(n),
+                    Err(e) => return Completion::Throw(e),
                 }
-                let a = match array_species_create(interp, &o, actual_delete_count) {
-                    Ok(v) => v,
-                    Err(c) => return c,
+            } else {
+                0.0
+            };
+            let actual_start = resolve_relative_index(relative_start, len as usize);
+            let insert_count = if args.len() > 2 { args.len() - 2 } else { 0 };
+            let actual_delete_count = if args.is_empty() {
+                0usize
+            } else if args.len() == 1 {
+                (len - actual_start as i64) as usize
+            } else {
+                let dc = match interp.to_number_value(&args[1]) {
+                    Ok(n) => to_integer_or_infinity(n),
+                    Err(e) => return Completion::Throw(e),
                 };
-                let gc_frame = interp.gc_root_frame();
-                interp.gc_root_value(&a);
-                for i in 0..actual_delete_count {
-                    let from = (actual_start + i).to_string();
-                    match obj_has_throw(interp, &o, &from) {
-                        Ok(true) => {
-                            let val = match obj_get(interp, &o, &from) {
-                                Ok(v) => v,
-                                Err(c) => {
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return c;
-                                }
-                            };
-                            if let Err(e) =
-                                create_data_property_or_throw(interp, &a, &i.to_string(), val)
-                            {
+                dc.max(0.0).min((len - actual_start as i64) as f64) as usize
+            };
+            // Step 8: If len + insertCount - actualDeleteCount > 2^53-1, throw TypeError
+            if (len as i128) + (insert_count as i128) - (actual_delete_count as i128)
+                > 9007199254740991
+            {
+                return Completion::Throw(
+                    interp.create_type_error("Array length exceeds the allowed maximum"),
+                );
+            }
+            let a = match array_species_create(interp, &o, actual_delete_count) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let gc_frame = interp.gc_root_frame();
+            interp.gc_root_value(&a);
+            for i in 0..actual_delete_count {
+                let from = (actual_start + i).to_string();
+                match obj_has_throw(interp, &o, &from) {
+                    Ok(true) => {
+                        let val = match obj_get(interp, &o, &from) {
+                            Ok(v) => v,
+                            Err(c) => {
                                 interp.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
+                                return c;
                             }
+                        };
+                        if let Err(e) =
+                            create_data_property_or_throw(interp, &a, &i.to_string(), val)
+                        {
+                            interp.gc_unroot_frame(gc_frame);
+                            return Completion::Throw(e);
                         }
+                    }
+                    Err(e) => {
+                        interp.gc_unroot_frame(gc_frame);
+                        return Completion::Throw(e);
+                    }
+                    _ => {}
+                }
+            }
+            // Step 12: Perform ? Set(A, "length", actualDeleteCount, true).
+            if let Err(e) = obj_set_throw(
+                interp,
+                &a,
+                "length",
+                JsValue::Number(actual_delete_count as f64),
+            ) {
+                interp.gc_unroot_frame(gc_frame);
+                return Completion::Throw(e);
+            }
+            let items: Vec<JsValue> = args.iter().skip(2).cloned().collect();
+            if insert_count < actual_delete_count {
+                for k in actual_start..((len as usize) - actual_delete_count) {
+                    let from = (k + actual_delete_count).to_string();
+                    let to = (k + insert_count).to_string();
+                    let from_present = match obj_has_throw(interp, &o, &from) {
+                        Ok(v) => v,
                         Err(e) => {
                             interp.gc_unroot_frame(gc_frame);
                             return Completion::Throw(e);
                         }
-                        _ => {}
-                    }
-                }
-                // Step 12: Perform ? Set(A, "length", actualDeleteCount, true).
-                if let Err(e) = obj_set_throw(
-                    interp,
-                    &a,
-                    "length",
-                    JsValue::Number(actual_delete_count as f64),
-                ) {
-                    interp.gc_unroot_frame(gc_frame);
-                    return Completion::Throw(e);
-                }
-                let items: Vec<JsValue> = args.iter().skip(2).cloned().collect();
-                if insert_count < actual_delete_count {
-                    for k in actual_start..((len as usize) - actual_delete_count) {
-                        let from = (k + actual_delete_count).to_string();
-                        let to = (k + insert_count).to_string();
-                        let from_present = match obj_has_throw(interp, &o, &from) {
+                    };
+                    if from_present {
+                        let val = match obj_get(interp, &o, &from) {
                             Ok(v) => v,
-                            Err(e) => {
+                            Err(c) => {
                                 interp.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
+                                return c;
                             }
                         };
-                        if from_present {
-                            let val = match obj_get(interp, &o, &from) {
-                                Ok(v) => v,
-                                Err(c) => {
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return c;
-                                }
-                            };
-                            if let Err(e) = obj_set_throw(interp, &o, &to, val) {
-                                interp.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
-                            }
-                        } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
+                        if let Err(e) = obj_set_throw(interp, &o, &to, val) {
                             interp.gc_unroot_frame(gc_frame);
                             return Completion::Throw(e);
                         }
-                    }
-                    for k in
-                        ((len as usize - actual_delete_count + insert_count)..(len as usize)).rev()
-                    {
-                        if let Err(e) = obj_delete_throw(interp, &o, &k.to_string()) {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(e);
-                        }
-                    }
-                } else if insert_count > actual_delete_count {
-                    for k in (actual_start..((len as usize) - actual_delete_count)).rev() {
-                        let from = (k + actual_delete_count).to_string();
-                        let to = (k + insert_count).to_string();
-                        let from_present = match obj_has_throw(interp, &o, &from) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                interp.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
-                            }
-                        };
-                        if from_present {
-                            let val = match obj_get(interp, &o, &from) {
-                                Ok(v) => v,
-                                Err(c) => {
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return c;
-                                }
-                            };
-                            if let Err(e) = obj_set_throw(interp, &o, &to, val) {
-                                interp.gc_unroot_frame(gc_frame);
-                                return Completion::Throw(e);
-                            }
-                        } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
-                            interp.gc_unroot_frame(gc_frame);
-                            return Completion::Throw(e);
-                        }
-                    }
-                }
-                for (j, item) in items.into_iter().enumerate() {
-                    if let Err(e) = obj_set_throw(interp, &o, &(actual_start + j).to_string(), item)
-                    {
+                    } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
                         interp.gc_unroot_frame(gc_frame);
                         return Completion::Throw(e);
                     }
                 }
-                let new_len = (len as usize) - actual_delete_count + insert_count;
-                if let Err(e) = set_length_throw(interp, &o, new_len) {
-                    interp.gc_unroot_frame(gc_frame);
-                    return Completion::Throw(e);
-                }
-                interp.gc_unroot_frame(gc_frame);
-                Completion::Normal(a)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("splice".to_string(), splice_fn);
-
-        // Array.prototype.toSpliced
-        let to_spliced_fn = self.create_function(JsFunction::native(
-            "toSpliced".to_string(),
-            2,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v as i64,
-                    Err(c) => return c,
-                };
-                let relative_start = if let Some(v) = args.first() {
-                    match interp.to_number_value(v) {
-                        Ok(n) => to_integer_or_infinity(n),
-                        Err(e) => return Completion::Throw(e),
-                    }
-                } else {
-                    0.0
-                };
-                let actual_start = resolve_relative_index(relative_start, len as usize);
-                let actual_delete_count = if args.is_empty() {
-                    0usize
-                } else if args.len() == 1 {
-                    (len - actual_start as i64) as usize
-                } else {
-                    let dc = match interp.to_number_value(&args[1]) {
-                        Ok(n) => to_integer_or_infinity(n),
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    dc.max(0.0).min((len - actual_start as i64) as f64) as usize
-                };
-                let items: Vec<JsValue> = args.iter().skip(2).cloned().collect();
-                let new_len = (len as i128) - (actual_delete_count as i128) + (items.len() as i128);
-                // Step 12: If newLen > 2^53 - 1, throw TypeError
-                if new_len > 9007199254740991 {
-                    return Completion::Throw(
-                        interp.create_type_error("Array length exceeds the allowed maximum"),
-                    );
-                }
-                let new_len = new_len as usize;
-                // Step 13: ArrayCreate(newLen) — If newLen > 2^32-1, throw RangeError
-                if new_len as u64 > 0xFFFF_FFFF {
-                    return Completion::Throw(interp.create_range_error("Invalid array length"));
-                }
-                let mut result = Vec::with_capacity(new_len);
-                for i in 0..actual_start {
-                    result.push(match obj_get(interp, &o, &i.to_string()) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    });
-                }
-                result.extend(items);
-                for i in (actual_start + actual_delete_count)..(len as usize) {
-                    result.push(match obj_get(interp, &o, &i.to_string()) {
-                        Ok(v) => v,
-                        Err(c) => return c,
-                    });
-                }
-                Completion::Normal(interp.create_array(result))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("toSpliced".to_string(), to_spliced_fn);
-
-        // Array.prototype.fill
-        let fill_fn = self.create_function(JsFunction::native(
-            "fill".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v as i64,
-                    Err(c) => return c,
-                };
-                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let relative_start = if let Some(v) = args.get(1) {
-                    match interp.to_number_value(v) {
-                        Ok(n) => to_integer_or_infinity(n),
-                        Err(e) => return Completion::Throw(e),
-                    }
-                } else {
-                    0.0
-                };
-                let k = resolve_relative_index(relative_start, len as usize);
-                let relative_end = if let Some(v) = args.get(2) {
-                    if matches!(v, JsValue::Undefined) {
-                        len as f64
-                    } else {
-                        match interp.to_number_value(v) {
-                            Ok(n) => to_integer_or_infinity(n),
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    }
-                } else {
-                    len as f64
-                };
-                let fin = resolve_relative_index(relative_end, len as usize);
-                for i in k..fin {
-                    if let Err(e) = obj_set_throw(interp, &o, &i.to_string(), value.clone()) {
+                for k in ((len as usize - actual_delete_count + insert_count)..(len as usize)).rev()
+                {
+                    if let Err(e) = obj_delete_throw(interp, &o, &k.to_string()) {
+                        interp.gc_unroot_frame(gc_frame);
                         return Completion::Throw(e);
                     }
                 }
-                Completion::Normal(o)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("fill".to_string(), fill_fn);
-
-        // Array.prototype.sort
-        let sort_fn = self.create_function(JsFunction::native(
-            "sort".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let compare_fn = args.first().cloned();
-                if let Some(ref cf) = compare_fn
-                    && !matches!(cf, JsValue::Undefined)
-                    && !interp.is_callable(cf)
-                {
-                    return Completion::Throw(
-                        interp.create_type_error("compareFn is not a function"),
-                    );
-                }
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let mut items: Vec<JsValue> = Vec::with_capacity(len);
-                for i in 0..len {
-                    let pk = i.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            items.push(match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => return c,
-                            });
-                        }
-                        Err(e) => return Completion::Throw(e),
-                        _ => {}
-                    }
-                }
-                let cmp_fn = compare_fn.clone();
-                let mut sort_error: Option<JsValue> = None;
-                items.sort_by(|x, y| {
-                    if sort_error.is_some() {
-                        return std::cmp::Ordering::Equal;
-                    }
-                    if matches!(x, JsValue::Undefined) && matches!(y, JsValue::Undefined) {
-                        return std::cmp::Ordering::Equal;
-                    }
-                    if matches!(x, JsValue::Undefined) {
-                        return std::cmp::Ordering::Greater;
-                    }
-                    if matches!(y, JsValue::Undefined) {
-                        return std::cmp::Ordering::Less;
-                    }
-                    if let Some(ref cf) = cmp_fn
-                        && !matches!(cf, JsValue::Undefined)
-                        && interp.is_callable(cf)
-                    {
-                        let result =
-                            interp.call_function(cf, &JsValue::Undefined, &[x.clone(), y.clone()]);
-                        match result {
-                            Completion::Normal(v) => {
-                                let n = match interp.to_number_value(&v) {
-                                    Ok(n) => n,
-                                    Err(e) => {
-                                        sort_error = Some(e);
-                                        return std::cmp::Ordering::Equal;
-                                    }
-                                };
-                                if n.is_nan() {
-                                    return std::cmp::Ordering::Equal;
-                                }
-                                if n < 0.0 {
-                                    return std::cmp::Ordering::Less;
-                                }
-                                if n > 0.0 {
-                                    return std::cmp::Ordering::Greater;
-                                }
-                                return std::cmp::Ordering::Equal;
-                            }
-                            Completion::Throw(e) => {
-                                sort_error = Some(e);
-                                return std::cmp::Ordering::Equal;
-                            }
-                            _ => return std::cmp::Ordering::Equal,
-                        }
-                    }
-                    let xs = match interp.to_string_value(x) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            sort_error = Some(e);
-                            return std::cmp::Ordering::Equal;
-                        }
-                    };
-                    let ys = match interp.to_string_value(y) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            sort_error = Some(e);
-                            return std::cmp::Ordering::Equal;
-                        }
-                    };
-                    xs.cmp(&ys)
-                });
-                if let Some(e) = sort_error {
-                    return Completion::Throw(e);
-                }
-                // Write back
-                for (i, v) in items.iter().enumerate() {
-                    if let Err(e) = obj_set_throw(interp, &o, &i.to_string(), v.clone()) {
-                        return Completion::Throw(e);
-                    }
-                }
-                for i in items.len()..len {
-                    if let Err(e) = obj_delete_throw(interp, &o, &i.to_string()) {
-                        return Completion::Throw(e);
-                    }
-                }
-                Completion::Normal(o)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("sort".to_string(), sort_fn);
-
-        // Array.prototype.toSorted
-        let to_sorted_fn = self.create_function(JsFunction::native(
-            "toSorted".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let compare_fn = args.first().cloned();
-                if let Some(ref cf) = compare_fn
-                    && !matches!(cf, JsValue::Undefined)
-                    && !interp.is_callable(cf)
-                {
-                    return Completion::Throw(
-                        interp.create_type_error("compareFn is not a function"),
-                    );
-                }
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                // ArrayCreate(len) — If len > 2^32-1, throw RangeError
-                if len as u64 > 0xFFFF_FFFF {
-                    return Completion::Throw(interp.create_range_error("Invalid array length"));
-                }
-                let mut items: Vec<JsValue> = Vec::with_capacity(len);
-                for i in 0..len {
-                    items.push(match obj_get(interp, &o, &i.to_string()) {
+            } else if insert_count > actual_delete_count {
+                for k in (actual_start..((len as usize) - actual_delete_count)).rev() {
+                    let from = (k + actual_delete_count).to_string();
+                    let to = (k + insert_count).to_string();
+                    let from_present = match obj_has_throw(interp, &o, &from) {
                         Ok(v) => v,
-                        Err(c) => return c,
-                    });
-                }
-                let cmp_fn = compare_fn.clone();
-                let mut sort_error: Option<JsValue> = None;
-                items.sort_by(|x, y| {
-                    if sort_error.is_some() {
-                        return std::cmp::Ordering::Equal;
-                    }
-                    if matches!(x, JsValue::Undefined) && matches!(y, JsValue::Undefined) {
-                        return std::cmp::Ordering::Equal;
-                    }
-                    if matches!(x, JsValue::Undefined) {
-                        return std::cmp::Ordering::Greater;
-                    }
-                    if matches!(y, JsValue::Undefined) {
-                        return std::cmp::Ordering::Less;
-                    }
-                    if let Some(ref cf) = cmp_fn
-                        && !matches!(cf, JsValue::Undefined)
-                        && interp.is_callable(cf)
-                    {
-                        let result =
-                            interp.call_function(cf, &JsValue::Undefined, &[x.clone(), y.clone()]);
-                        match result {
-                            Completion::Normal(v) => {
-                                let n = match interp.to_number_value(&v) {
-                                    Ok(n) => n,
-                                    Err(e) => {
-                                        sort_error = Some(e);
-                                        return std::cmp::Ordering::Equal;
-                                    }
-                                };
-                                if n.is_nan() {
-                                    return std::cmp::Ordering::Equal;
-                                }
-                                if n < 0.0 {
-                                    return std::cmp::Ordering::Less;
-                                }
-                                if n > 0.0 {
-                                    return std::cmp::Ordering::Greater;
-                                }
-                                return std::cmp::Ordering::Equal;
-                            }
-                            Completion::Throw(e) => {
-                                sort_error = Some(e);
-                                return std::cmp::Ordering::Equal;
-                            }
-                            _ => {}
-                        }
-                    }
-                    let xs = match interp.to_string_value(x) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            sort_error = Some(e);
-                            return std::cmp::Ordering::Equal;
-                        }
-                    };
-                    let ys = match interp.to_string_value(y) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            sort_error = Some(e);
-                            return std::cmp::Ordering::Equal;
-                        }
-                    };
-                    xs.cmp(&ys)
-                });
-                if let Some(e) = sort_error {
-                    return Completion::Throw(e);
-                }
-                Completion::Normal(interp.create_array(items))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("toSorted".to_string(), to_sorted_fn);
-
-        // Array.prototype.flat
-        let flat_fn = self.create_function(JsFunction::native(
-            "flat".to_string(),
-            0,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let depth_num = if let Some(d) = args.first() {
-                    if matches!(d, JsValue::Undefined) {
-                        1.0
-                    } else {
-                        match interp.to_number_value(d) {
-                            Ok(n) => to_integer_or_infinity(n),
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    }
-                } else {
-                    1.0
-                };
-                let depth = if depth_num < 0.0 {
-                    0i64
-                } else {
-                    depth_num as i64
-                };
-                // Step 5: ArraySpeciesCreate BEFORE flattening (spec order)
-                let a = match array_species_create(interp, &o, 0) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let gc_frame = interp.gc_root_frame();
-                interp.gc_root_value(&a);
-                fn flatten_into(
-                    interp: &mut Interpreter,
-                    target: &JsValue,
-                    target_index: &mut usize,
-                    source: &JsValue,
-                    source_len: usize,
-                    depth: i64,
-                ) -> Result<(), Completion> {
-                    for k in 0..source_len {
-                        let pk = k.to_string();
-                        let exists =
-                            obj_has_throw(interp, source, &pk).map_err(Completion::Throw)?;
-                        if exists {
-                            let elem = match obj_get(interp, source, &pk) {
-                                Ok(v) => v,
-                                Err(c) => return Err(c),
-                            };
-                            let should_flatten = if depth > 0 {
-                                if let JsValue::Object(eo) = &elem {
-                                    is_array_check(interp, eo.id).map_err(Completion::Throw)?
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            };
-                            if should_flatten {
-                                let elem_len = length_of_array_like(interp, &elem)?;
-                                flatten_into(
-                                    interp,
-                                    target,
-                                    target_index,
-                                    &elem,
-                                    elem_len,
-                                    depth - 1,
-                                )?;
-                            } else {
-                                create_data_property_or_throw(
-                                    interp,
-                                    target,
-                                    &target_index.to_string(),
-                                    elem,
-                                )
-                                .map_err(Completion::Throw)?;
-                                *target_index += 1;
-                            }
-                        }
-                    }
-                    Ok(())
-                }
-                let mut target_index = 0usize;
-                if let Err(c) = flatten_into(interp, &a, &mut target_index, &o, len, depth) {
-                    interp.gc_unroot_frame(gc_frame);
-                    return c;
-                }
-                interp.gc_unroot_frame(gc_frame);
-                Completion::Normal(a)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("flat".to_string(), flat_fn);
-
-        // Array.prototype.flatMap
-        let flatmap_fn = self.create_function(JsFunction::native(
-            "flatMap".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let Err(c) =
-                    require_callable(interp, &callback, "flatMap callback is not a function")
-                {
-                    return c;
-                }
-                let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                // Step 5: ArraySpeciesCreate BEFORE iteration (spec order)
-                let a = match array_species_create(interp, &o, 0) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let gc_frame = interp.gc_root_frame();
-                interp.gc_root_value(&a);
-                let mut target_index = 0usize;
-                for k in 0..len {
-                    let pk = k.to_string();
-                    match obj_has_throw(interp, &o, &pk) {
-                        Ok(true) => {
-                            let kvalue = match obj_get(interp, &o, &pk) {
-                                Ok(v) => v,
-                                Err(c) => {
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return c;
-                                }
-                            };
-                            let mapped = interp.call_function(
-                                &callback,
-                                &this_arg,
-                                &[kvalue, JsValue::Number(k as f64), o.clone()],
-                            );
-                            match mapped {
-                                Completion::Normal(v) => {
-                                    let elem_is_array = if let JsValue::Object(mo) = &v {
-                                        match is_array_check(interp, mo.id) {
-                                            Ok(b) => b,
-                                            Err(e) => {
-                                                interp.gc_unroot_frame(gc_frame);
-                                                return Completion::Throw(e);
-                                            }
-                                        }
-                                    } else {
-                                        false
-                                    };
-                                    if elem_is_array {
-                                        let mlen = match length_of_array_like(interp, &v) {
-                                            Ok(l) => l,
-                                            Err(c) => {
-                                                interp.gc_unroot_frame(gc_frame);
-                                                return c;
-                                            }
-                                        };
-                                        for j in 0..mlen {
-                                            let jpk = j.to_string();
-                                            match obj_has_throw(interp, &v, &jpk) {
-                                                Ok(true) => {
-                                                    let jval = match obj_get(interp, &v, &jpk) {
-                                                        Ok(v) => v,
-                                                        Err(c) => {
-                                                            interp.gc_unroot_frame(gc_frame);
-                                                            return c;
-                                                        }
-                                                    };
-                                                    if let Err(e) = create_data_property_or_throw(
-                                                        interp,
-                                                        &a,
-                                                        &target_index.to_string(),
-                                                        jval,
-                                                    ) {
-                                                        interp.gc_unroot_frame(gc_frame);
-                                                        return Completion::Throw(e);
-                                                    }
-                                                    target_index += 1;
-                                                }
-                                                Err(e) => {
-                                                    interp.gc_unroot_frame(gc_frame);
-                                                    return Completion::Throw(e);
-                                                }
-                                                _ => {}
-                                            }
-                                        }
-                                    } else {
-                                        if let Err(e) = create_data_property_or_throw(
-                                            interp,
-                                            &a,
-                                            &target_index.to_string(),
-                                            v,
-                                        ) {
-                                            interp.gc_unroot_frame(gc_frame);
-                                            return Completion::Throw(e);
-                                        }
-                                        target_index += 1;
-                                    }
-                                }
-                                other => {
-                                    interp.gc_unroot_frame(gc_frame);
-                                    return other;
-                                }
-                            }
-                        }
                         Err(e) => {
                             interp.gc_unroot_frame(gc_frame);
                             return Completion::Throw(e);
                         }
-                        _ => {}
-                    }
-                }
-                interp.gc_unroot_frame(gc_frame);
-                Completion::Normal(a)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("flatMap".to_string(), flatmap_fn);
-
-        // Array.prototype.copyWithin
-        let copywithin_fn = self.create_function(JsFunction::native(
-            "copyWithin".to_string(),
-            2,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v as i64,
-                    Err(c) => return c,
-                };
-                let relative_target = if let Some(v) = args.first() {
-                    match interp.to_number_value(v) {
-                        Ok(n) => to_integer_or_infinity(n),
-                        Err(e) => return Completion::Throw(e),
-                    }
-                } else {
-                    0.0
-                };
-                let to_val = resolve_relative_index(relative_target, len as usize) as i64;
-                let relative_start = if let Some(v) = args.get(1) {
-                    match interp.to_number_value(v) {
-                        Ok(n) => to_integer_or_infinity(n),
-                        Err(e) => return Completion::Throw(e),
-                    }
-                } else {
-                    0.0
-                };
-                let from = resolve_relative_index(relative_start, len as usize) as i64;
-                let relative_end = if let Some(v) = args.get(2) {
-                    if matches!(v, JsValue::Undefined) {
-                        len as f64
-                    } else {
-                        match interp.to_number_value(v) {
-                            Ok(n) => to_integer_or_infinity(n),
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    }
-                } else {
-                    len as f64
-                };
-                let fin = resolve_relative_index(relative_end, len as usize) as i64;
-                let count = (fin - from).min(len - to_val);
-                if count <= 0 {
-                    return Completion::Normal(o);
-                }
-                let count = count as usize;
-                let (mut from_idx, mut to_idx, direction): (i64, i64, i64) =
-                    if from < to_val && to_val < from + count as i64 {
-                        (from + count as i64 - 1, to_val + count as i64 - 1, -1)
-                    } else {
-                        (from, to_val, 1)
-                    };
-                for _ in 0..count {
-                    let from_s = (from_idx as usize).to_string();
-                    let to_s = (to_idx as usize).to_string();
-                    let from_present = match obj_has_throw(interp, &o, &from_s) {
-                        Ok(v) => v,
-                        Err(e) => return Completion::Throw(e),
                     };
                     if from_present {
-                        let val = match obj_get(interp, &o, &from_s) {
+                        let val = match obj_get(interp, &o, &from) {
                             Ok(v) => v,
-                            Err(c) => return c,
+                            Err(c) => {
+                                interp.gc_unroot_frame(gc_frame);
+                                return c;
+                            }
                         };
-                        if let Err(e) = obj_set_throw(interp, &o, &to_s, val) {
+                        if let Err(e) = obj_set_throw(interp, &o, &to, val) {
+                            interp.gc_unroot_frame(gc_frame);
                             return Completion::Throw(e);
                         }
-                    } else if let Err(e) = obj_delete_throw(interp, &o, &to_s) {
+                    } else if let Err(e) = obj_delete_throw(interp, &o, &to) {
+                        interp.gc_unroot_frame(gc_frame);
                         return Completion::Throw(e);
                     }
-                    from_idx += direction;
-                    to_idx += direction;
                 }
-                Completion::Normal(o)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("copyWithin".to_string(), copywithin_fn);
+            }
+            for (j, item) in items.into_iter().enumerate() {
+                if let Err(e) = obj_set_throw(interp, &o, &(actual_start + j).to_string(), item) {
+                    interp.gc_unroot_frame(gc_frame);
+                    return Completion::Throw(e);
+                }
+            }
+            let new_len = (len as usize) - actual_delete_count + insert_count;
+            if let Err(e) = set_length_throw(interp, &o, new_len) {
+                interp.gc_unroot_frame(gc_frame);
+                return Completion::Throw(e);
+            }
+            interp.gc_unroot_frame(gc_frame);
+            Completion::Normal(a)
+        });
 
-        // Array.prototype.at
-        let at_fn = self.create_function(JsFunction::native(
-            "at".to_string(),
-            1,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
+        // Array.prototype.toSpliced
+        self.define_method(proto_id, "toSpliced", 2, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v as i64,
+                Err(c) => return c,
+            };
+            let relative_start = if let Some(v) = args.first() {
+                match interp.to_number_value(v) {
+                    Ok(n) => to_integer_or_infinity(n),
+                    Err(e) => return Completion::Throw(e),
+                }
+            } else {
+                0.0
+            };
+            let actual_start = resolve_relative_index(relative_start, len as usize);
+            let actual_delete_count = if args.is_empty() {
+                0usize
+            } else if args.len() == 1 {
+                (len - actual_start as i64) as usize
+            } else {
+                let dc = match interp.to_number_value(&args[1]) {
+                    Ok(n) => to_integer_or_infinity(n),
+                    Err(e) => return Completion::Throw(e),
+                };
+                dc.max(0.0).min((len - actual_start as i64) as f64) as usize
+            };
+            let items: Vec<JsValue> = args.iter().skip(2).cloned().collect();
+            let new_len = (len as i128) - (actual_delete_count as i128) + (items.len() as i128);
+            // Step 12: If newLen > 2^53 - 1, throw TypeError
+            if new_len > 9007199254740991 {
+                return Completion::Throw(
+                    interp.create_type_error("Array length exceeds the allowed maximum"),
+                );
+            }
+            let new_len = new_len as usize;
+            // Step 13: ArrayCreate(newLen) — If newLen > 2^32-1, throw RangeError
+            if new_len as u64 > 0xFFFF_FFFF {
+                return Completion::Throw(interp.create_range_error("Invalid array length"));
+            }
+            let mut result = Vec::with_capacity(new_len);
+            for i in 0..actual_start {
+                result.push(match obj_get(interp, &o, &i.to_string()) {
                     Ok(v) => v,
                     Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v as i64,
-                    Err(c) => return c,
-                };
-                let relative_index = if let Some(v) = args.first() {
-                    match interp.to_number_value(v) {
-                        Ok(n) => to_integer_or_infinity(n) as i64,
-                        Err(e) => return Completion::Throw(e),
-                    }
-                } else {
-                    0
-                };
-                let k = if relative_index >= 0 {
-                    relative_index
-                } else {
-                    len + relative_index
-                };
-                if k < 0 || k >= len {
-                    return Completion::Normal(JsValue::Undefined);
-                }
-                match obj_get(interp, &o, &(k as usize).to_string()) {
-                    Ok(v) => Completion::Normal(v),
-                    Err(c) => c,
-                }
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("at".to_string(), at_fn);
-
-        // Array.prototype.with
-        let with_fn = self.create_function(JsFunction::native(
-            "with".to_string(),
-            2,
-            |interp, this_val, args| {
-                let o = match to_object_val(interp, this_val) {
+                });
+            }
+            result.extend(items);
+            for i in (actual_start + actual_delete_count)..(len as usize) {
+                result.push(match obj_get(interp, &o, &i.to_string()) {
                     Ok(v) => v,
                     Err(c) => return c,
-                };
-                let len = match length_of_array_like(interp, &o) {
-                    Ok(v) => v as i64,
-                    Err(c) => return c,
-                };
-                if len as u64 > 0xFFFF_FFFF {
-                    return Completion::Throw(interp.create_range_error("Invalid array length"));
+                });
+            }
+            Completion::Normal(interp.create_array(result))
+        });
+
+        // Array.prototype.fill
+        self.define_method(proto_id, "fill", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v as i64,
+                Err(c) => return c,
+            };
+            let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let relative_start = if let Some(v) = args.get(1) {
+                match interp.to_number_value(v) {
+                    Ok(n) => to_integer_or_infinity(n),
+                    Err(e) => return Completion::Throw(e),
                 }
-                let relative_index = if let Some(v) = args.first() {
+            } else {
+                0.0
+            };
+            let k = resolve_relative_index(relative_start, len as usize);
+            let relative_end = if let Some(v) = args.get(2) {
+                if matches!(v, JsValue::Undefined) {
+                    len as f64
+                } else {
                     match interp.to_number_value(v) {
-                        Ok(n) => to_integer_or_infinity(n) as i64,
+                        Ok(n) => to_integer_or_infinity(n),
                         Err(e) => return Completion::Throw(e),
                     }
-                } else {
-                    0
-                };
-                let actual = if relative_index >= 0 {
-                    relative_index
-                } else {
-                    len + relative_index
-                };
-                if actual < 0 || actual >= len {
-                    return Completion::Throw(interp.create_range_error("Invalid index"));
                 }
-                let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                let mut result = Vec::with_capacity(len as usize);
-                for k in 0..len as usize {
-                    if k == actual as usize {
-                        result.push(value.clone());
-                    } else {
-                        result.push(match obj_get(interp, &o, &k.to_string()) {
+            } else {
+                len as f64
+            };
+            let fin = resolve_relative_index(relative_end, len as usize);
+            for i in k..fin {
+                if let Err(e) = obj_set_throw(interp, &o, &i.to_string(), value.clone()) {
+                    return Completion::Throw(e);
+                }
+            }
+            Completion::Normal(o)
+        });
+
+        // Array.prototype.sort
+        self.define_method(proto_id, "sort", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let compare_fn = args.first().cloned();
+            if let Some(ref cf) = compare_fn
+                && !matches!(cf, JsValue::Undefined)
+                && !interp.is_callable(cf)
+            {
+                return Completion::Throw(interp.create_type_error("compareFn is not a function"));
+            }
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let mut items: Vec<JsValue> = Vec::with_capacity(len);
+            for i in 0..len {
+                let pk = i.to_string();
+                match obj_has_throw(interp, &o, &pk) {
+                    Ok(true) => {
+                        items.push(match obj_get(interp, &o, &pk) {
                             Ok(v) => v,
                             Err(c) => return c,
                         });
                     }
+                    Err(e) => return Completion::Throw(e),
+                    _ => {}
                 }
-                Completion::Normal(interp.create_array(result))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("with".to_string(), with_fn);
+            }
+            let cmp_fn = compare_fn.clone();
+            let mut sort_error: Option<JsValue> = None;
+            items.sort_by(|x, y| {
+                if sort_error.is_some() {
+                    return std::cmp::Ordering::Equal;
+                }
+                if matches!(x, JsValue::Undefined) && matches!(y, JsValue::Undefined) {
+                    return std::cmp::Ordering::Equal;
+                }
+                if matches!(x, JsValue::Undefined) {
+                    return std::cmp::Ordering::Greater;
+                }
+                if matches!(y, JsValue::Undefined) {
+                    return std::cmp::Ordering::Less;
+                }
+                if let Some(ref cf) = cmp_fn
+                    && !matches!(cf, JsValue::Undefined)
+                    && interp.is_callable(cf)
+                {
+                    let result =
+                        interp.call_function(cf, &JsValue::Undefined, &[x.clone(), y.clone()]);
+                    match result {
+                        Completion::Normal(v) => {
+                            let n = match interp.to_number_value(&v) {
+                                Ok(n) => n,
+                                Err(e) => {
+                                    sort_error = Some(e);
+                                    return std::cmp::Ordering::Equal;
+                                }
+                            };
+                            if n.is_nan() {
+                                return std::cmp::Ordering::Equal;
+                            }
+                            if n < 0.0 {
+                                return std::cmp::Ordering::Less;
+                            }
+                            if n > 0.0 {
+                                return std::cmp::Ordering::Greater;
+                            }
+                            return std::cmp::Ordering::Equal;
+                        }
+                        Completion::Throw(e) => {
+                            sort_error = Some(e);
+                            return std::cmp::Ordering::Equal;
+                        }
+                        _ => return std::cmp::Ordering::Equal,
+                    }
+                }
+                let xs = match interp.to_string_value(x) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        sort_error = Some(e);
+                        return std::cmp::Ordering::Equal;
+                    }
+                };
+                let ys = match interp.to_string_value(y) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        sort_error = Some(e);
+                        return std::cmp::Ordering::Equal;
+                    }
+                };
+                xs.cmp(&ys)
+            });
+            if let Some(e) = sort_error {
+                return Completion::Throw(e);
+            }
+            // Write back
+            for (i, v) in items.iter().enumerate() {
+                if let Err(e) = obj_set_throw(interp, &o, &i.to_string(), v.clone()) {
+                    return Completion::Throw(e);
+                }
+            }
+            for i in items.len()..len {
+                if let Err(e) = obj_delete_throw(interp, &o, &i.to_string()) {
+                    return Completion::Throw(e);
+                }
+            }
+            Completion::Normal(o)
+        });
+
+        // Array.prototype.toSorted
+        self.define_method(proto_id, "toSorted", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let compare_fn = args.first().cloned();
+            if let Some(ref cf) = compare_fn
+                && !matches!(cf, JsValue::Undefined)
+                && !interp.is_callable(cf)
+            {
+                return Completion::Throw(interp.create_type_error("compareFn is not a function"));
+            }
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            // ArrayCreate(len) — If len > 2^32-1, throw RangeError
+            if len as u64 > 0xFFFF_FFFF {
+                return Completion::Throw(interp.create_range_error("Invalid array length"));
+            }
+            let mut items: Vec<JsValue> = Vec::with_capacity(len);
+            for i in 0..len {
+                items.push(match obj_get(interp, &o, &i.to_string()) {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                });
+            }
+            let cmp_fn = compare_fn.clone();
+            let mut sort_error: Option<JsValue> = None;
+            items.sort_by(|x, y| {
+                if sort_error.is_some() {
+                    return std::cmp::Ordering::Equal;
+                }
+                if matches!(x, JsValue::Undefined) && matches!(y, JsValue::Undefined) {
+                    return std::cmp::Ordering::Equal;
+                }
+                if matches!(x, JsValue::Undefined) {
+                    return std::cmp::Ordering::Greater;
+                }
+                if matches!(y, JsValue::Undefined) {
+                    return std::cmp::Ordering::Less;
+                }
+                if let Some(ref cf) = cmp_fn
+                    && !matches!(cf, JsValue::Undefined)
+                    && interp.is_callable(cf)
+                {
+                    let result =
+                        interp.call_function(cf, &JsValue::Undefined, &[x.clone(), y.clone()]);
+                    match result {
+                        Completion::Normal(v) => {
+                            let n = match interp.to_number_value(&v) {
+                                Ok(n) => n,
+                                Err(e) => {
+                                    sort_error = Some(e);
+                                    return std::cmp::Ordering::Equal;
+                                }
+                            };
+                            if n.is_nan() {
+                                return std::cmp::Ordering::Equal;
+                            }
+                            if n < 0.0 {
+                                return std::cmp::Ordering::Less;
+                            }
+                            if n > 0.0 {
+                                return std::cmp::Ordering::Greater;
+                            }
+                            return std::cmp::Ordering::Equal;
+                        }
+                        Completion::Throw(e) => {
+                            sort_error = Some(e);
+                            return std::cmp::Ordering::Equal;
+                        }
+                        _ => {}
+                    }
+                }
+                let xs = match interp.to_string_value(x) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        sort_error = Some(e);
+                        return std::cmp::Ordering::Equal;
+                    }
+                };
+                let ys = match interp.to_string_value(y) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        sort_error = Some(e);
+                        return std::cmp::Ordering::Equal;
+                    }
+                };
+                xs.cmp(&ys)
+            });
+            if let Some(e) = sort_error {
+                return Completion::Throw(e);
+            }
+            Completion::Normal(interp.create_array(items))
+        });
+
+        // Array.prototype.flat
+        self.define_method(proto_id, "flat", 0, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let depth_num = if let Some(d) = args.first() {
+                if matches!(d, JsValue::Undefined) {
+                    1.0
+                } else {
+                    match interp.to_number_value(d) {
+                        Ok(n) => to_integer_or_infinity(n),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                }
+            } else {
+                1.0
+            };
+            let depth = if depth_num < 0.0 {
+                0i64
+            } else {
+                depth_num as i64
+            };
+            // Step 5: ArraySpeciesCreate BEFORE flattening (spec order)
+            let a = match array_species_create(interp, &o, 0) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let gc_frame = interp.gc_root_frame();
+            interp.gc_root_value(&a);
+            fn flatten_into(
+                interp: &mut Interpreter,
+                target: &JsValue,
+                target_index: &mut usize,
+                source: &JsValue,
+                source_len: usize,
+                depth: i64,
+            ) -> Result<(), Completion> {
+                for k in 0..source_len {
+                    let pk = k.to_string();
+                    let exists = obj_has_throw(interp, source, &pk).map_err(Completion::Throw)?;
+                    if exists {
+                        let elem = match obj_get(interp, source, &pk) {
+                            Ok(v) => v,
+                            Err(c) => return Err(c),
+                        };
+                        let should_flatten = if depth > 0 {
+                            if let JsValue::Object(eo) = &elem {
+                                is_array_check(interp, eo.id).map_err(Completion::Throw)?
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        if should_flatten {
+                            let elem_len = length_of_array_like(interp, &elem)?;
+                            flatten_into(interp, target, target_index, &elem, elem_len, depth - 1)?;
+                        } else {
+                            create_data_property_or_throw(
+                                interp,
+                                target,
+                                &target_index.to_string(),
+                                elem,
+                            )
+                            .map_err(Completion::Throw)?;
+                            *target_index += 1;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            let mut target_index = 0usize;
+            if let Err(c) = flatten_into(interp, &a, &mut target_index, &o, len, depth) {
+                interp.gc_unroot_frame(gc_frame);
+                return c;
+            }
+            interp.gc_unroot_frame(gc_frame);
+            Completion::Normal(a)
+        });
+
+        // Array.prototype.flatMap
+        self.define_method(proto_id, "flatMap", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            if let Err(c) =
+                require_callable(interp, &callback, "flatMap callback is not a function")
+            {
+                return c;
+            }
+            let this_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            // Step 5: ArraySpeciesCreate BEFORE iteration (spec order)
+            let a = match array_species_create(interp, &o, 0) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let gc_frame = interp.gc_root_frame();
+            interp.gc_root_value(&a);
+            let mut target_index = 0usize;
+            for k in 0..len {
+                let pk = k.to_string();
+                match obj_has_throw(interp, &o, &pk) {
+                    Ok(true) => {
+                        let kvalue = match obj_get(interp, &o, &pk) {
+                            Ok(v) => v,
+                            Err(c) => {
+                                interp.gc_unroot_frame(gc_frame);
+                                return c;
+                            }
+                        };
+                        let mapped = interp.call_function(
+                            &callback,
+                            &this_arg,
+                            &[kvalue, JsValue::Number(k as f64), o.clone()],
+                        );
+                        match mapped {
+                            Completion::Normal(v) => {
+                                let elem_is_array = if let JsValue::Object(mo) = &v {
+                                    match is_array_check(interp, mo.id) {
+                                        Ok(b) => b,
+                                        Err(e) => {
+                                            interp.gc_unroot_frame(gc_frame);
+                                            return Completion::Throw(e);
+                                        }
+                                    }
+                                } else {
+                                    false
+                                };
+                                if elem_is_array {
+                                    let mlen = match length_of_array_like(interp, &v) {
+                                        Ok(l) => l,
+                                        Err(c) => {
+                                            interp.gc_unroot_frame(gc_frame);
+                                            return c;
+                                        }
+                                    };
+                                    for j in 0..mlen {
+                                        let jpk = j.to_string();
+                                        match obj_has_throw(interp, &v, &jpk) {
+                                            Ok(true) => {
+                                                let jval = match obj_get(interp, &v, &jpk) {
+                                                    Ok(v) => v,
+                                                    Err(c) => {
+                                                        interp.gc_unroot_frame(gc_frame);
+                                                        return c;
+                                                    }
+                                                };
+                                                if let Err(e) = create_data_property_or_throw(
+                                                    interp,
+                                                    &a,
+                                                    &target_index.to_string(),
+                                                    jval,
+                                                ) {
+                                                    interp.gc_unroot_frame(gc_frame);
+                                                    return Completion::Throw(e);
+                                                }
+                                                target_index += 1;
+                                            }
+                                            Err(e) => {
+                                                interp.gc_unroot_frame(gc_frame);
+                                                return Completion::Throw(e);
+                                            }
+                                            _ => {}
+                                        }
+                                    }
+                                } else {
+                                    if let Err(e) = create_data_property_or_throw(
+                                        interp,
+                                        &a,
+                                        &target_index.to_string(),
+                                        v,
+                                    ) {
+                                        interp.gc_unroot_frame(gc_frame);
+                                        return Completion::Throw(e);
+                                    }
+                                    target_index += 1;
+                                }
+                            }
+                            other => {
+                                interp.gc_unroot_frame(gc_frame);
+                                return other;
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        interp.gc_unroot_frame(gc_frame);
+                        return Completion::Throw(e);
+                    }
+                    _ => {}
+                }
+            }
+            interp.gc_unroot_frame(gc_frame);
+            Completion::Normal(a)
+        });
+
+        // Array.prototype.copyWithin
+        self.define_method(proto_id, "copyWithin", 2, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v as i64,
+                Err(c) => return c,
+            };
+            let relative_target = if let Some(v) = args.first() {
+                match interp.to_number_value(v) {
+                    Ok(n) => to_integer_or_infinity(n),
+                    Err(e) => return Completion::Throw(e),
+                }
+            } else {
+                0.0
+            };
+            let to_val = resolve_relative_index(relative_target, len as usize) as i64;
+            let relative_start = if let Some(v) = args.get(1) {
+                match interp.to_number_value(v) {
+                    Ok(n) => to_integer_or_infinity(n),
+                    Err(e) => return Completion::Throw(e),
+                }
+            } else {
+                0.0
+            };
+            let from = resolve_relative_index(relative_start, len as usize) as i64;
+            let relative_end = if let Some(v) = args.get(2) {
+                if matches!(v, JsValue::Undefined) {
+                    len as f64
+                } else {
+                    match interp.to_number_value(v) {
+                        Ok(n) => to_integer_or_infinity(n),
+                        Err(e) => return Completion::Throw(e),
+                    }
+                }
+            } else {
+                len as f64
+            };
+            let fin = resolve_relative_index(relative_end, len as usize) as i64;
+            let count = (fin - from).min(len - to_val);
+            if count <= 0 {
+                return Completion::Normal(o);
+            }
+            let count = count as usize;
+            let (mut from_idx, mut to_idx, direction): (i64, i64, i64) =
+                if from < to_val && to_val < from + count as i64 {
+                    (from + count as i64 - 1, to_val + count as i64 - 1, -1)
+                } else {
+                    (from, to_val, 1)
+                };
+            for _ in 0..count {
+                let from_s = (from_idx as usize).to_string();
+                let to_s = (to_idx as usize).to_string();
+                let from_present = match obj_has_throw(interp, &o, &from_s) {
+                    Ok(v) => v,
+                    Err(e) => return Completion::Throw(e),
+                };
+                if from_present {
+                    let val = match obj_get(interp, &o, &from_s) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    if let Err(e) = obj_set_throw(interp, &o, &to_s, val) {
+                        return Completion::Throw(e);
+                    }
+                } else if let Err(e) = obj_delete_throw(interp, &o, &to_s) {
+                    return Completion::Throw(e);
+                }
+                from_idx += direction;
+                to_idx += direction;
+            }
+            Completion::Normal(o)
+        });
+
+        // Array.prototype.at
+        self.define_method(proto_id, "at", 1, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v as i64,
+                Err(c) => return c,
+            };
+            let relative_index = if let Some(v) = args.first() {
+                match interp.to_number_value(v) {
+                    Ok(n) => to_integer_or_infinity(n) as i64,
+                    Err(e) => return Completion::Throw(e),
+                }
+            } else {
+                0
+            };
+            let k = if relative_index >= 0 {
+                relative_index
+            } else {
+                len + relative_index
+            };
+            if k < 0 || k >= len {
+                return Completion::Normal(JsValue::Undefined);
+            }
+            match obj_get(interp, &o, &(k as usize).to_string()) {
+                Ok(v) => Completion::Normal(v),
+                Err(c) => c,
+            }
+        });
+
+        // Array.prototype.with
+        self.define_method(proto_id, "with", 2, |interp, this_val, args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            let len = match length_of_array_like(interp, &o) {
+                Ok(v) => v as i64,
+                Err(c) => return c,
+            };
+            if len as u64 > 0xFFFF_FFFF {
+                return Completion::Throw(interp.create_range_error("Invalid array length"));
+            }
+            let relative_index = if let Some(v) = args.first() {
+                match interp.to_number_value(v) {
+                    Ok(n) => to_integer_or_infinity(n) as i64,
+                    Err(e) => return Completion::Throw(e),
+                }
+            } else {
+                0
+            };
+            let actual = if relative_index >= 0 {
+                relative_index
+            } else {
+                len + relative_index
+            };
+            if actual < 0 || actual >= len {
+                return Completion::Throw(interp.create_range_error("Invalid index"));
+            }
+            let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+            let mut result = Vec::with_capacity(len as usize);
+            for k in 0..len as usize {
+                if k == actual as usize {
+                    result.push(value.clone());
+                } else {
+                    result.push(match obj_get(interp, &o, &k.to_string()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    });
+                }
+            }
+            Completion::Normal(interp.create_array(result))
+        });
 
         // Array.isArray
         let is_array_fn = self.create_function(JsFunction::native(
@@ -3624,67 +3347,46 @@ impl Interpreter {
         ));
 
         // Array.prototype.entries
-        let entries_fn = self.create_function(JsFunction::native(
-            "entries".to_string(),
-            0,
-            |interp, this_val, _args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if let JsValue::Object(obj_ref) = &o {
-                    return Completion::Normal(
-                        interp.create_array_iterator(obj_ref.id, IteratorKind::KeyValue),
-                    );
-                }
-                Completion::Throw(interp.create_type_error("entries called on non-object"))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("entries".to_string(), entries_fn);
+        self.define_method(proto_id, "entries", 0, |interp, this_val, _args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            if let JsValue::Object(obj_ref) = &o {
+                return Completion::Normal(
+                    interp.create_array_iterator(obj_ref.id, IteratorKind::KeyValue),
+                );
+            }
+            Completion::Throw(interp.create_type_error("entries called on non-object"))
+        });
 
         // Array.prototype.keys
-        let keys_fn = self.create_function(JsFunction::native(
-            "keys".to_string(),
-            0,
-            |interp, this_val, _args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if let JsValue::Object(obj_ref) = &o {
-                    return Completion::Normal(
-                        interp.create_array_iterator(obj_ref.id, IteratorKind::Key),
-                    );
-                }
-                Completion::Throw(interp.create_type_error("keys called on non-object"))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("keys".to_string(), keys_fn);
+        self.define_method(proto_id, "keys", 0, |interp, this_val, _args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            if let JsValue::Object(obj_ref) = &o {
+                return Completion::Normal(
+                    interp.create_array_iterator(obj_ref.id, IteratorKind::Key),
+                );
+            }
+            Completion::Throw(interp.create_type_error("keys called on non-object"))
+        });
 
         // Array.prototype.values
-        let values_fn = self.create_function(JsFunction::native(
-            "values".to_string(),
-            0,
-            |interp, this_val, _args| {
-                let o = match to_object_val(interp, this_val) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if let JsValue::Object(obj_ref) = &o {
-                    return Completion::Normal(
-                        interp.create_array_iterator(obj_ref.id, IteratorKind::Value),
-                    );
-                }
-                Completion::Throw(interp.create_type_error("values called on non-object"))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("values".to_string(), values_fn.clone());
+        let values_fn = self.define_method(proto_id, "values", 0, |interp, this_val, _args| {
+            let o = match to_object_val(interp, this_val) {
+                Ok(v) => v,
+                Err(c) => return c,
+            };
+            if let JsValue::Object(obj_ref) = &o {
+                return Completion::Normal(
+                    interp.create_array_iterator(obj_ref.id, IteratorKind::Value),
+                );
+            }
+            Completion::Throw(interp.create_type_error("values called on non-object"))
+        });
 
         // Array.prototype[@@iterator] is the same function as Array.prototype.values (spec §23.1.3.35)
         if let Some(key) = self.get_symbol_iterator_key() {
