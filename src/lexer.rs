@@ -792,10 +792,21 @@ impl<'a> Lexer<'a> {
         Ok(Token::NumericLiteral(val))
     }
 
-    fn read_decimal_digits(&mut self, s: &mut String) -> Result<(), LexError> {
+    // Reads a run of digits accepted by `is_digit`, allowing single ASCII `_`
+    // separators between them, appending every consumed character (separators
+    // included) to `s`. Stops without consuming the first character that is
+    // neither a digit nor a separator. Errors on a doubled separator or a
+    // separator left dangling at the end of the run. A separator immediately
+    // after a radix prefix is a distinct error the callers reject before this
+    // runs. Shared by the decimal/hex/octal/binary readers.
+    fn read_digits_with_separators(
+        &mut self,
+        s: &mut String,
+        is_digit: impl Fn(char) -> bool,
+    ) -> Result<(), LexError> {
         let mut last_was_underscore = false;
         while let Some(ch) = self.peek() {
-            if ch.is_ascii_digit() {
+            if is_digit(ch) {
                 last_was_underscore = false;
                 s.push(ch);
                 self.advance();
@@ -816,31 +827,16 @@ impl<'a> Lexer<'a> {
         Ok(())
     }
 
+    fn read_decimal_digits(&mut self, s: &mut String) -> Result<(), LexError> {
+        self.read_digits_with_separators(s, |ch| ch.is_ascii_digit())
+    }
+
     fn read_hex_literal(&mut self, mut s: String) -> Result<Token, LexError> {
         s.push(self.advance().unwrap()); // x/X
         if self.peek() == Some('_') {
             return Err(self.error("Numeric separator cannot appear after prefix"));
         }
-        let mut last_was_underscore = false;
-        while let Some(ch) = self.peek() {
-            if ch.is_ascii_hexdigit() {
-                last_was_underscore = false;
-                s.push(ch);
-                self.advance();
-            } else if ch == '_' {
-                if last_was_underscore {
-                    return Err(self.error("Numeric separator must be exactly one underscore"));
-                }
-                last_was_underscore = true;
-                s.push(ch);
-                self.advance();
-            } else {
-                break;
-            }
-        }
-        if last_was_underscore {
-            return Err(self.error("Trailing numeric separator"));
-        }
+        self.read_digits_with_separators(&mut s, |ch| ch.is_ascii_hexdigit())?;
         if self.peek() == Some('n') {
             self.advance();
             let clean: String = s.chars().filter(|&c| c != '_').collect();
@@ -857,26 +853,7 @@ impl<'a> Lexer<'a> {
         if self.peek() == Some('_') {
             return Err(self.error("Numeric separator cannot appear after prefix"));
         }
-        let mut last_was_underscore = false;
-        while let Some(ch) = self.peek() {
-            if ch.is_ascii_digit() && ch < '8' {
-                last_was_underscore = false;
-                s.push(ch);
-                self.advance();
-            } else if ch == '_' {
-                if last_was_underscore {
-                    return Err(self.error("Numeric separator must be exactly one underscore"));
-                }
-                last_was_underscore = true;
-                s.push(ch);
-                self.advance();
-            } else {
-                break;
-            }
-        }
-        if last_was_underscore {
-            return Err(self.error("Trailing numeric separator"));
-        }
+        self.read_digits_with_separators(&mut s, |ch| ('0'..='7').contains(&ch))?;
         if self.peek() == Some('n') {
             self.advance();
             let clean: String = s.chars().filter(|&c| c != '_').collect();
@@ -943,26 +920,7 @@ impl<'a> Lexer<'a> {
         if self.peek() == Some('_') {
             return Err(self.error("Numeric separator cannot appear after prefix"));
         }
-        let mut last_was_underscore = false;
-        while let Some(ch) = self.peek() {
-            if ch == '0' || ch == '1' {
-                last_was_underscore = false;
-                s.push(ch);
-                self.advance();
-            } else if ch == '_' {
-                if last_was_underscore {
-                    return Err(self.error("Numeric separator must be exactly one underscore"));
-                }
-                last_was_underscore = true;
-                s.push(ch);
-                self.advance();
-            } else {
-                break;
-            }
-        }
-        if last_was_underscore {
-            return Err(self.error("Trailing numeric separator"));
-        }
+        self.read_digits_with_separators(&mut s, |ch| ch == '0' || ch == '1')?;
         if self.peek() == Some('n') {
             self.advance();
             let clean: String = s.chars().filter(|&c| c != '_').collect();
@@ -1768,5 +1726,125 @@ mod tests {
             lex_no_lt(r#""\u{1F600}""#),
             vec![Token::StringLiteral(utf16("\u{1F600}")), Token::Eof]
         );
+    }
+}
+
+#[cfg(test)]
+mod numeric_separator_tests {
+    // These tests pin the shared numeric-separator digit-run state machine
+    // directly against `Lexer::read_digits_with_separators`, with no token
+    // stream involved, before the decimal/hex/octal/binary readers are swept
+    // over to it. The four readers previously hand-rolled this identical loop
+    // (including two error strings each), and the octal reader even spelled its
+    // digit predicate differently (`is_ascii_digit() && ch < '8'`).
+    use super::*;
+
+    // Drives the helper over `src` with `is_digit`, returning the characters it
+    // consumed (including any separators) alongside the next unconsumed char.
+    fn run(src: &str, is_digit: impl Fn(char) -> bool) -> Result<(String, Option<char>), LexError> {
+        let mut lexer = Lexer::new(src);
+        let mut s = String::new();
+        lexer.read_digits_with_separators(&mut s, is_digit)?;
+        Ok((s, lexer.peek()))
+    }
+
+    #[test]
+    fn decimal_run_collects_all_digits() {
+        assert_eq!(
+            run("12345", |c| c.is_ascii_digit()).unwrap(),
+            ("12345".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn single_separators_between_digits_are_kept() {
+        assert_eq!(
+            run("1_2_3", |c| c.is_ascii_digit()).unwrap(),
+            ("1_2_3".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn run_stops_at_first_non_digit_without_consuming_it() {
+        assert_eq!(
+            run("12x", |c| c.is_ascii_digit()).unwrap(),
+            ("12".to_string(), Some('x'))
+        );
+    }
+
+    #[test]
+    fn hex_predicate_accepts_hex_letters() {
+        assert_eq!(
+            run("a_bcdef", |c| c.is_ascii_hexdigit()).unwrap(),
+            ("a_bcdef".to_string(), None)
+        );
+    }
+
+    #[test]
+    fn octal_predicate_stops_at_eight() {
+        assert_eq!(
+            run("7_78", |c| ('0'..='7').contains(&c)).unwrap(),
+            ("7_7".to_string(), Some('8'))
+        );
+    }
+
+    #[test]
+    fn binary_predicate_stops_at_two() {
+        assert_eq!(
+            run("10_12", |c| c == '0' || c == '1').unwrap(),
+            ("10_1".to_string(), Some('2'))
+        );
+    }
+
+    #[test]
+    fn doubled_separator_is_rejected() {
+        let err = run("1__2", |c| c.is_ascii_digit()).unwrap_err();
+        assert_eq!(
+            err.message,
+            "Numeric separator must be exactly one underscore"
+        );
+    }
+
+    #[test]
+    fn trailing_separator_before_eof_is_rejected() {
+        let err = run("12_", |c| c.is_ascii_digit()).unwrap_err();
+        assert_eq!(err.message, "Trailing numeric separator");
+    }
+
+    #[test]
+    fn trailing_separator_before_non_digit_is_rejected() {
+        // The `_` is consumed, then `x` ends the run with a dangling separator.
+        let err = run("12_x", |c| c.is_ascii_digit()).unwrap_err();
+        assert_eq!(err.message, "Trailing numeric separator");
+    }
+
+    // Regression coverage at the tokenization seam: every radix keeps producing
+    // the same tokens/errors for separated literals after the sweep.
+    fn first_token(src: &str) -> Result<Token, LexError> {
+        Lexer::new(src).next_token()
+    }
+
+    #[test]
+    fn separated_literals_tokenize_across_all_radices() {
+        assert_eq!(first_token("1_2_3").unwrap(), Token::NumericLiteral(123.0));
+        assert_eq!(first_token("0xA_B").unwrap(), Token::NumericLiteral(171.0));
+        assert_eq!(first_token("0o1_7").unwrap(), Token::NumericLiteral(15.0));
+        assert_eq!(
+            first_token("0b1_0_1_0").unwrap(),
+            Token::NumericLiteral(10.0)
+        );
+        assert_eq!(
+            first_token("0xF_Fn").unwrap(),
+            Token::BigIntLiteral("0xFF".to_string())
+        );
+    }
+
+    #[test]
+    fn separator_errors_tokenize_across_all_radices() {
+        assert!(first_token("1__2").is_err());
+        assert!(first_token("12_").is_err());
+        assert!(first_token("0x1__2").is_err());
+        assert!(first_token("0b1_").is_err());
+        assert!(first_token("0o_7").is_err()); // separator right after the prefix
     }
 }
