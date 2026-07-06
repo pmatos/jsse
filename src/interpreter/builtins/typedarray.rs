@@ -1852,10 +1852,8 @@ impl Interpreter {
                     let ta = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                             ta.clone()
                         } else {
@@ -1924,10 +1922,8 @@ impl Interpreter {
                     let offset = offset_f as usize;
 
                     // Step 3: Check detach after offset coercion
-                    if ta.is_detached.get() || is_typed_array_out_of_bounds(&ta) {
-                        return Completion::Throw(
-                            interp.create_type_error("typed array is detached"),
-                        );
+                    if let Err(c) = check_detached_or_out_of_bounds(interp, &ta) {
+                        return c;
                     }
 
                     // Check if source is a TypedArray
@@ -2131,10 +2127,8 @@ impl Interpreter {
                     let ta = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                             ta.clone()
                         } else {
@@ -2268,10 +2262,8 @@ impl Interpreter {
                     let ta = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                             ta.clone()
                         } else {
@@ -2312,10 +2304,8 @@ impl Interpreter {
                         resolve_relative_index(n, len as usize)
                     };
                     // Re-check detach and OOB after coercion
-                    if ta.is_detached.get() || is_typed_array_out_of_bounds(&ta) {
-                        return Completion::Throw(
-                            interp.create_type_error("typed array is detached"),
-                        );
+                    if let Err(c) = check_detached_or_out_of_bounds(interp, &ta) {
+                        return c;
                     }
                     // Use original len for count (per spec), but bound copy by actual buffer
                     let _cur_len = typed_array_length(&ta);
@@ -2360,10 +2350,8 @@ impl Interpreter {
                     let ta = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                             ta.clone()
                         } else {
@@ -2442,10 +2430,8 @@ impl Interpreter {
                     let ta = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                             ta.clone()
                         } else {
@@ -2500,10 +2486,8 @@ impl Interpreter {
                     let ta = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                             ta.clone()
                         } else {
@@ -2559,10 +2543,8 @@ impl Interpreter {
                     let ta = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                             ta.clone()
                         } else {
@@ -2618,10 +2600,8 @@ impl Interpreter {
                     let ta = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                             ta.clone()
                         } else {
@@ -2661,10 +2641,8 @@ impl Interpreter {
                     let ta = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                             ta.clone()
                         } else {
@@ -2784,10 +2762,8 @@ impl Interpreter {
                     let ta = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                             ta.clone()
                         } else {
@@ -2850,10 +2826,8 @@ impl Interpreter {
                     let ta = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                             ta.clone()
                         } else {
@@ -2930,10 +2904,8 @@ impl Interpreter {
                     let ta = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                             ta.clone()
                         } else {
@@ -3001,10 +2973,8 @@ impl Interpreter {
                     let ta = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                             ta.clone()
                         } else {
@@ -3271,10 +3241,8 @@ impl Interpreter {
                     let ta = {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                             ta.clone()
                         } else {
@@ -3414,10 +3382,8 @@ impl Interpreter {
                     {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                         } else {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
@@ -3448,10 +3414,8 @@ impl Interpreter {
                     {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                         } else {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
@@ -3477,10 +3441,8 @@ impl Interpreter {
                     {
                         let obj_ref = obj.borrow();
                         if let Some(ta) = obj_ref.typed_array_info() {
-                            if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                                return Completion::Throw(
-                                    interp.create_type_error("typed array is detached"),
-                                );
+                            if let Err(c) = check_detached_or_out_of_bounds(interp, ta) {
+                                return c;
                             }
                         } else {
                             return Completion::Throw(interp.create_type_error("not a TypedArray"));
@@ -6182,11 +6144,7 @@ fn extract_ta_and_callback(
         let ta = {
             let obj_ref = obj.borrow();
             if let Some(ta) = obj_ref.typed_array_info() {
-                if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                    return Err(Completion::Throw(
-                        interp.create_type_error("typed array is detached"),
-                    ));
-                }
+                check_detached_or_out_of_bounds(interp, ta)?;
                 ta.clone()
             } else {
                 return Err(Completion::Throw(
@@ -6432,6 +6390,21 @@ fn validate_uint8array_no_detach_check(
 
 fn check_detached(interp: &mut Interpreter, ta: &TypedArrayInfo) -> Result<(), Completion> {
     if ta.is_detached.get() {
+        Err(Completion::Throw(
+            interp.create_type_error("typed array is detached"),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+/// Combines the detached check with the out-of-bounds check that applies to
+/// typed arrays tracking a resizable ArrayBuffer that has since shrunk.
+fn check_detached_or_out_of_bounds(
+    interp: &mut Interpreter,
+    ta: &TypedArrayInfo,
+) -> Result<(), Completion> {
+    if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
         Err(Completion::Throw(
             interp.create_type_error("typed array is detached"),
         ))
