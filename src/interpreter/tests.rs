@@ -1385,3 +1385,91 @@ fn array_prototype_methods_have_correctly_shaped_builtins() {
         "Array.prototype[@@iterator] must be identical to Array.prototype.values"
     );
 }
+
+// Characterization test for the collections.rs → define_method refactor. Pins,
+// through the public JS surface, the (name, length) contract, the
+// writable/non-enumerable/configurable §10.2.4 method shape, the well-known
+// aliasing (Map[@@iterator]===entries, Set.keys===values===[@@iterator]), and a
+// functional smoke of every Map/Set/WeakMap/WeakSet/WeakRef/FinalizationRegistry
+// prototype method — all independent of how each method is installed internally.
+// Written before switching those installs to define_method and kept as a guard.
+#[test]
+fn collection_prototype_methods_have_correctly_shaped_builtins() {
+    let interp = run_script(
+        r#"
+        var E = [];
+        function ck(cond, msg) { if (!cond) E.push(msg); }
+        function shape(proto, pn, name, len) {
+            var d = Object.getOwnPropertyDescriptor(proto, name);
+            if (!d) { E.push(pn + "." + name + " missing"); return; }
+            var f = d.value;
+            ck(typeof f === "function", pn + "." + name + " not function");
+            ck(f && f.name === name, pn + "." + name + ".name=" + (f && f.name));
+            ck(f && f.length === len, pn + "." + name + ".length=" + (f && f.length));
+            ck(d.writable === true, pn + "." + name + " not writable");
+            ck(d.enumerable === false, pn + "." + name + " enumerable");
+            ck(d.configurable === true, pn + "." + name + " not configurable");
+        }
+
+        [["entries",0],["keys",0],["values",0],["get",1],["set",2],["has",1],
+         ["delete",1],["clear",0],["forEach",1],["getOrInsert",2],["getOrInsertComputed",2]]
+            .forEach(function(m){ shape(Map.prototype, "Map.prototype", m[0], m[1]); });
+        [["values",0],["entries",0],["add",1],["has",1],["delete",1],["clear",0],
+         ["forEach",1],["union",1],["intersection",1],["difference",1],
+         ["symmetricDifference",1],["isSubsetOf",1],["isSupersetOf",1],["isDisjointFrom",1]]
+            .forEach(function(m){ shape(Set.prototype, "Set.prototype", m[0], m[1]); });
+        [["get",1],["set",2],["has",1],["delete",1],["getOrInsert",2],["getOrInsertComputed",2]]
+            .forEach(function(m){ shape(WeakMap.prototype, "WeakMap.prototype", m[0], m[1]); });
+        [["add",1],["has",1],["delete",1]]
+            .forEach(function(m){ shape(WeakSet.prototype, "WeakSet.prototype", m[0], m[1]); });
+        shape(WeakRef.prototype, "WeakRef.prototype", "deref", 0);
+        [["register",2],["unregister",1],["cleanupSome",0]]
+            .forEach(function(m){ shape(FinalizationRegistry.prototype, "FinalizationRegistry.prototype", m[0], m[1]); });
+
+        // Iterator-prototype next() methods, reached through a live iterator.
+        shape(Object.getPrototypeOf(new Map([[1,2]]).entries()), "MapIterator", "next", 0);
+        shape(Object.getPrototypeOf(new Set([1]).values()), "SetIterator", "next", 0);
+
+        // Well-known aliasing that the install order must preserve.
+        ck(Map.prototype[Symbol.iterator] === Map.prototype.entries, "Map[@@iterator]!==entries");
+        ck(Set.prototype[Symbol.iterator] === Set.prototype.values, "Set[@@iterator]!==values");
+        ck(Set.prototype.keys === Set.prototype.values, "Set.keys!==values");
+
+        // Functional smoke — behavior, not just shape.
+        var m = new Map(); m.set("a", 1); m.set("b", 2);
+        ck(m.get("a") === 1, "map.get");
+        ck(m.has("b") === true, "map.has");
+        ck(m.size === 2, "map.size");
+        ck(m.delete("a") === true, "map.delete");
+        ck(m.size === 1, "map.size2");
+        var acc = ""; m.forEach(function(v, k){ acc += k + ":" + v; });
+        ck(acc === "b:2", "map.forEach=" + acc);
+        var ent = [].concat.apply([], [...new Map([[1,10],[2,20]]).entries()])
+            .join(",");
+        ck(ent === "1,10,2,20", "map.entries=" + ent);
+
+        var s = new Set(); s.add(1); s.add(2); s.add(2);
+        ck(s.size === 2, "set.size");
+        ck(s.has(1) === true, "set.has");
+        ck(s.delete(1) === true, "set.delete");
+        ck([...new Set([1,2]).union(new Set([2,3]))].join(",") === "1,2,3", "set.union");
+        ck([...new Set([1,2,3]).intersection(new Set([2,3,4]))].join(",") === "2,3", "set.intersection");
+        ck(new Set([1,2]).isSubsetOf(new Set([1,2,3])) === true, "set.isSubsetOf");
+
+        var wmKey = {}; var wm = new WeakMap(); wm.set(wmKey, 42);
+        ck(wm.get(wmKey) === 42, "weakmap.get");
+        ck(wm.has(wmKey) === true, "weakmap.has");
+        ck(wm.delete(wmKey) === true, "weakmap.delete");
+        var wsKey = {}; var ws = new WeakSet(); ws.add(wsKey);
+        ck(ws.has(wsKey) === true, "weakset.has");
+        ck(ws.delete(wsKey) === true, "weakset.delete");
+
+        var R = E.length ? E.join(" | ") : "OK";
+        "#,
+    );
+    assert_eq!(
+        global_string(&interp, "R"),
+        "OK",
+        "collection prototype methods must keep their observable shape and behavior"
+    );
+}

@@ -28,78 +28,69 @@ impl Interpreter {
                 ),
             );
 
-        let map_iter_next = self.create_function(JsFunction::native(
-            "next".to_string(),
-            0,
-            |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+        self.define_method(map_iter_proto_id, "next", 0, |interp, this, _args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object(o.id)
+            {
+                let state = obj.borrow().iterator_state().cloned();
+                if let Some(IteratorState::MapIterator {
+                    map_id,
+                    index,
+                    kind,
+                    done,
+                }) = state
                 {
-                    let state = obj.borrow().iterator_state().cloned();
-                    if let Some(IteratorState::MapIterator {
-                        map_id,
-                        index,
-                        kind,
-                        done,
-                    }) = state
-                    {
-                        if done {
-                            return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
-                            );
-                        }
-                        if let Some(map_obj) = interp.get_object(map_id) {
-                            let map_data = map_obj.borrow().map_data().cloned();
-                            if let Some(entries) = map_data {
-                                let mut i = index;
-                                while i < entries.len() {
-                                    if let Some(ref entry) = entries[i] {
-                                        let result = match kind {
-                                            IteratorKind::Key => entry.0.clone(),
-                                            IteratorKind::Value => entry.1.clone(),
-                                            IteratorKind::KeyValue => interp.create_array(vec![
-                                                entry.0.clone(),
-                                                entry.1.clone(),
-                                            ]),
-                                        };
-                                        obj.borrow_mut().kind =
-                                            crate::interpreter::types::ObjectKind::Iterator(
-                                                IteratorState::MapIterator {
-                                                    map_id,
-                                                    index: i + 1,
-                                                    kind,
-                                                    done: false,
-                                                },
-                                            );
-                                        return Completion::Normal(
-                                            interp.create_iter_result_object(result, false),
-                                        );
-                                    }
-                                    i += 1;
-                                }
-                            }
-                        }
-                        obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::MapIterator {
-                                map_id,
-                                index,
-                                kind,
-                                done: true,
-                            },
-                        );
+                    if done {
                         return Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         );
                     }
+                    if let Some(map_obj) = interp.get_object(map_id) {
+                        let map_data = map_obj.borrow().map_data().cloned();
+                        if let Some(entries) = map_data {
+                            let mut i = index;
+                            while i < entries.len() {
+                                if let Some(ref entry) = entries[i] {
+                                    let result = match kind {
+                                        IteratorKind::Key => entry.0.clone(),
+                                        IteratorKind::Value => entry.1.clone(),
+                                        IteratorKind::KeyValue => interp
+                                            .create_array(vec![entry.0.clone(), entry.1.clone()]),
+                                    };
+                                    obj.borrow_mut().kind =
+                                        crate::interpreter::types::ObjectKind::Iterator(
+                                            IteratorState::MapIterator {
+                                                map_id,
+                                                index: i + 1,
+                                                kind,
+                                                done: false,
+                                            },
+                                        );
+                                    return Completion::Normal(
+                                        interp.create_iter_result_object(result, false),
+                                    );
+                                }
+                                i += 1;
+                            }
+                        }
+                    }
+                    obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                        IteratorState::MapIterator {
+                            map_id,
+                            index,
+                            kind,
+                            done: true,
+                        },
+                    );
+                    return Completion::Normal(
+                        interp.create_iter_result_object(JsValue::Undefined, true),
+                    );
                 }
-                let err =
-                    interp.create_type_error("Map Iterator.prototype.next requires a Map Iterator");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(map_iter_proto_id)
-            .borrow_mut()
-            .insert_builtin("next".to_string(), map_iter_next);
+            }
+            let err =
+                interp.create_type_error("Map Iterator.prototype.next requires a Map Iterator");
+            Completion::Throw(err)
+        });
 
         if let Some(key) = self.get_symbol_iterator_key() {
             let iter_self_fn = self.create_function(JsFunction::native(
@@ -142,30 +133,23 @@ impl Interpreter {
         }
 
         // Map.prototype.entries
-        let entries_fn = self.create_function(JsFunction::native(
-            "entries".to_string(),
-            0,
-            |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                    && {
-                        let b = obj.borrow();
-                        b.map_data().is_some() && b.class_name == "Map"
-                    }
-                {
-                    return Completion::Normal(create_map_iterator(
-                        interp,
-                        o.id,
-                        IteratorKind::KeyValue,
-                    ));
+        let entries_fn = self.define_method(proto_id, "entries", 0, |interp, this, _args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+                && {
+                    let b = obj.borrow();
+                    b.map_data().is_some() && b.class_name == "Map"
                 }
-                let err = interp.create_type_error("Map.prototype.entries requires a Map");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("entries".to_string(), entries_fn.clone());
+            {
+                return Completion::Normal(create_map_iterator(
+                    interp,
+                    o.id,
+                    IteratorKind::KeyValue,
+                ));
+            }
+            let err = interp.create_type_error("Map.prototype.entries requires a Map");
+            Completion::Throw(err)
+        });
 
         // Map.prototype[@@iterator] = entries
         if let Some(key) = self.get_symbol_iterator_key() {
@@ -175,232 +159,171 @@ impl Interpreter {
         }
 
         // Map.prototype.keys
-        let keys_fn = self.create_function(JsFunction::native(
-            "keys".to_string(),
-            0,
-            |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                    && {
-                        let b = obj.borrow();
-                        b.map_data().is_some() && b.class_name == "Map"
-                    }
-                {
-                    return Completion::Normal(create_map_iterator(
-                        interp,
-                        o.id,
-                        IteratorKind::Key,
-                    ));
+        self.define_method(proto_id, "keys", 0, |interp, this, _args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+                && {
+                    let b = obj.borrow();
+                    b.map_data().is_some() && b.class_name == "Map"
                 }
-                let err = interp.create_type_error("Map.prototype.keys requires a Map");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("keys".to_string(), keys_fn);
+            {
+                return Completion::Normal(create_map_iterator(interp, o.id, IteratorKind::Key));
+            }
+            let err = interp.create_type_error("Map.prototype.keys requires a Map");
+            Completion::Throw(err)
+        });
 
         // Map.prototype.values
-        let values_fn = self.create_function(JsFunction::native(
-            "values".to_string(),
-            0,
-            |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                    && {
-                        let b = obj.borrow();
-                        b.map_data().is_some() && b.class_name == "Map"
-                    }
-                {
-                    return Completion::Normal(create_map_iterator(
-                        interp,
-                        o.id,
-                        IteratorKind::Value,
-                    ));
+        self.define_method(proto_id, "values", 0, |interp, this, _args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+                && {
+                    let b = obj.borrow();
+                    b.map_data().is_some() && b.class_name == "Map"
                 }
-                let err = interp.create_type_error("Map.prototype.values requires a Map");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("values".to_string(), values_fn);
+            {
+                return Completion::Normal(create_map_iterator(interp, o.id, IteratorKind::Value));
+            }
+            let err = interp.create_type_error("Map.prototype.values requires a Map");
+            Completion::Throw(err)
+        });
 
         // Map.prototype.get
-        let get_fn = self.create_function(JsFunction::native(
-            "get".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let borrowed = obj.borrow();
-                    let is_map = borrowed.map_data().is_some() && borrowed.class_name == "Map";
-                    let map_data = if is_map {
-                        borrowed.map_data().cloned()
-                    } else {
-                        None
-                    };
-                    drop(borrowed);
-                    if let Some(entries) = map_data {
-                        let key = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        for entry in entries.iter().flatten() {
-                            if same_value_zero(&entry.0, &key) {
-                                return Completion::Normal(entry.1.clone());
-                            }
+        self.define_method(proto_id, "get", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let borrowed = obj.borrow();
+                let is_map = borrowed.map_data().is_some() && borrowed.class_name == "Map";
+                let map_data = if is_map {
+                    borrowed.map_data().cloned()
+                } else {
+                    None
+                };
+                drop(borrowed);
+                if let Some(entries) = map_data {
+                    let key = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    for entry in entries.iter().flatten() {
+                        if same_value_zero(&entry.0, &key) {
+                            return Completion::Normal(entry.1.clone());
                         }
-                        return Completion::Normal(JsValue::Undefined);
                     }
+                    return Completion::Normal(JsValue::Undefined);
                 }
-                let err = interp.create_type_error("Map.prototype.get requires a Map");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("get".to_string(), get_fn);
+            }
+            let err = interp.create_type_error("Map.prototype.get requires a Map");
+            Completion::Throw(err)
+        });
 
         // Map.prototype.set
-        let set_fn = self.create_function(JsFunction::native(
-            "set".to_string(),
-            2,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let has_map = {
-                        let b = obj.borrow();
-                        b.map_data().is_some() && b.class_name == "Map"
-                    };
-                    if has_map {
-                        let mut key = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                        // Normalize -0 to +0
-                        if let JsValue::Number(n) = &key
-                            && *n == 0.0
-                            && n.is_sign_negative()
-                        {
-                            key = JsValue::Number(0.0);
-                        }
-                        let mut borrowed = obj.borrow_mut();
-                        let entries = borrowed.map_data_mut().unwrap();
-                        for entry in entries.iter_mut().flatten() {
-                            if same_value_zero(&entry.0, &key) {
-                                entry.1 = value;
-                                return Completion::Normal(this.clone());
-                            }
-                        }
-                        entries.push(Some((key, value)));
-                        return Completion::Normal(this.clone());
+        self.define_method(proto_id, "set", 2, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let has_map = {
+                    let b = obj.borrow();
+                    b.map_data().is_some() && b.class_name == "Map"
+                };
+                if has_map {
+                    let mut key = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    // Normalize -0 to +0
+                    if let JsValue::Number(n) = &key
+                        && *n == 0.0
+                        && n.is_sign_negative()
+                    {
+                        key = JsValue::Number(0.0);
                     }
+                    let mut borrowed = obj.borrow_mut();
+                    let entries = borrowed.map_data_mut().unwrap();
+                    for entry in entries.iter_mut().flatten() {
+                        if same_value_zero(&entry.0, &key) {
+                            entry.1 = value;
+                            return Completion::Normal(this.clone());
+                        }
+                    }
+                    entries.push(Some((key, value)));
+                    return Completion::Normal(this.clone());
                 }
-                let err = interp.create_type_error("Map.prototype.set requires a Map");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("set".to_string(), set_fn);
+            }
+            let err = interp.create_type_error("Map.prototype.set requires a Map");
+            Completion::Throw(err)
+        });
 
         // Map.prototype.has
-        let has_fn = self.create_function(JsFunction::native(
-            "has".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let borrowed = obj.borrow();
-                    let is_map = borrowed.map_data().is_some() && borrowed.class_name == "Map";
-                    let map_data = if is_map {
-                        borrowed.map_data().cloned()
-                    } else {
-                        None
-                    };
-                    drop(borrowed);
-                    if let Some(entries) = map_data {
-                        let key = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        for entry in entries.iter().flatten() {
-                            if same_value_zero(&entry.0, &key) {
-                                return Completion::Normal(JsValue::Boolean(true));
-                            }
+        self.define_method(proto_id, "has", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let borrowed = obj.borrow();
+                let is_map = borrowed.map_data().is_some() && borrowed.class_name == "Map";
+                let map_data = if is_map {
+                    borrowed.map_data().cloned()
+                } else {
+                    None
+                };
+                drop(borrowed);
+                if let Some(entries) = map_data {
+                    let key = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    for entry in entries.iter().flatten() {
+                        if same_value_zero(&entry.0, &key) {
+                            return Completion::Normal(JsValue::Boolean(true));
                         }
-                        return Completion::Normal(JsValue::Boolean(false));
                     }
+                    return Completion::Normal(JsValue::Boolean(false));
                 }
-                let err = interp.create_type_error("Map.prototype.has requires a Map");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("has".to_string(), has_fn);
+            }
+            let err = interp.create_type_error("Map.prototype.has requires a Map");
+            Completion::Throw(err)
+        });
 
         // Map.prototype.delete
-        let delete_fn = self.create_function(JsFunction::native(
-            "delete".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let has_map = {
-                        let b = obj.borrow();
-                        b.map_data().is_some() && b.class_name == "Map"
-                    };
-                    if has_map {
-                        let key = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let mut borrowed = obj.borrow_mut();
-                        let entries = borrowed.map_data_mut().unwrap();
-                        for entry in entries.iter_mut() {
-                            let matches =
-                                entry.as_ref().is_some_and(|e| same_value_zero(&e.0, &key));
-                            if matches {
-                                *entry = None;
-                                return Completion::Normal(JsValue::Boolean(true));
-                            }
+        self.define_method(proto_id, "delete", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let has_map = {
+                    let b = obj.borrow();
+                    b.map_data().is_some() && b.class_name == "Map"
+                };
+                if has_map {
+                    let key = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let mut borrowed = obj.borrow_mut();
+                    let entries = borrowed.map_data_mut().unwrap();
+                    for entry in entries.iter_mut() {
+                        let matches = entry.as_ref().is_some_and(|e| same_value_zero(&e.0, &key));
+                        if matches {
+                            *entry = None;
+                            return Completion::Normal(JsValue::Boolean(true));
                         }
-                        return Completion::Normal(JsValue::Boolean(false));
                     }
+                    return Completion::Normal(JsValue::Boolean(false));
                 }
-                let err = interp.create_type_error("Map.prototype.delete requires a Map");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("delete".to_string(), delete_fn);
+            }
+            let err = interp.create_type_error("Map.prototype.delete requires a Map");
+            Completion::Throw(err)
+        });
 
         // Map.prototype.clear
-        let clear_fn = self.create_function(JsFunction::native(
-            "clear".to_string(),
-            0,
-            |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let has_map = {
-                        let b = obj.borrow();
-                        b.map_data().is_some() && b.class_name == "Map"
-                    };
-                    if has_map {
-                        obj.borrow_mut().kind =
-                            crate::interpreter::types::ObjectKind::Map(Vec::new());
-                        return Completion::Normal(JsValue::Undefined);
-                    }
+        self.define_method(proto_id, "clear", 0, |interp, this, _args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let has_map = {
+                    let b = obj.borrow();
+                    b.map_data().is_some() && b.class_name == "Map"
+                };
+                if has_map {
+                    obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Map(Vec::new());
+                    return Completion::Normal(JsValue::Undefined);
                 }
-                let err = interp.create_type_error("Map.prototype.clear requires a Map");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("clear".to_string(), clear_fn);
+            }
+            let err = interp.create_type_error("Map.prototype.clear requires a Map");
+            Completion::Throw(err)
+        });
 
         // Map.prototype.forEach
-        let foreach_fn = self.create_function(JsFunction::native(
-            "forEach".to_string(),
-            1,
+        self.define_method(proto_id, "forEach", 1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id) {
@@ -432,10 +355,7 @@ impl Interpreter {
                 let err = interp.create_type_error("Map.prototype.forEach requires a Map");
                 Completion::Throw(err)
             },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("forEach".to_string(), foreach_fn);
+        );
 
         // Map.prototype.size (getter)
         let size_getter = self.create_function(JsFunction::native(
@@ -477,56 +397,47 @@ impl Interpreter {
             );
 
         // Map.prototype.getOrInsert
-        let get_or_insert_fn = self.create_function(JsFunction::native(
-            "getOrInsert".to_string(),
-            2,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let is_map = {
+        self.define_method(proto_id, "getOrInsert", 2, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let is_map = {
+                    let borrowed = obj.borrow();
+                    borrowed.map_data().is_some() && borrowed.class_name == "Map"
+                };
+                if is_map {
+                    let mut key = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    // CanonicalizeKeyedCollectionKey: normalize -0 to +0
+                    if let JsValue::Number(n) = &key
+                        && *n == 0.0
+                        && n.is_sign_negative()
+                    {
+                        key = JsValue::Number(0.0);
+                    }
+                    // Search existing entries
+                    {
                         let borrowed = obj.borrow();
-                        borrowed.map_data().is_some() && borrowed.class_name == "Map"
-                    };
-                    if is_map {
-                        let mut key = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                        // CanonicalizeKeyedCollectionKey: normalize -0 to +0
-                        if let JsValue::Number(n) = &key
-                            && *n == 0.0
-                            && n.is_sign_negative()
-                        {
-                            key = JsValue::Number(0.0);
-                        }
-                        // Search existing entries
-                        {
-                            let borrowed = obj.borrow();
-                            let entries = borrowed.map_data().unwrap();
-                            for entry in entries.iter().flatten() {
-                                if same_value_zero(&entry.0, &key) {
-                                    return Completion::Normal(entry.1.clone());
-                                }
+                        let entries = borrowed.map_data().unwrap();
+                        for entry in entries.iter().flatten() {
+                            if same_value_zero(&entry.0, &key) {
+                                return Completion::Normal(entry.1.clone());
                             }
                         }
-                        // Key not found - append new entry
-                        let mut borrowed = obj.borrow_mut();
-                        let entries = borrowed.map_data_mut().unwrap();
-                        entries.push(Some((key, value.clone())));
-                        return Completion::Normal(value);
                     }
+                    // Key not found - append new entry
+                    let mut borrowed = obj.borrow_mut();
+                    let entries = borrowed.map_data_mut().unwrap();
+                    entries.push(Some((key, value.clone())));
+                    return Completion::Normal(value);
                 }
-                let err = interp.create_type_error("Map.prototype.getOrInsert requires a Map");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("getOrInsert".to_string(), get_or_insert_fn);
+            }
+            let err = interp.create_type_error("Map.prototype.getOrInsert requires a Map");
+            Completion::Throw(err)
+        });
 
         // Map.prototype.getOrInsertComputed
-        let get_or_insert_computed_fn = self.create_function(JsFunction::native(
-            "getOrInsertComputed".to_string(),
-            2,
+        self.define_method(proto_id, "getOrInsertComputed", 2,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object_cell(o.id)
@@ -583,10 +494,7 @@ impl Interpreter {
                 let err = interp.create_type_error("Map.prototype.getOrInsertComputed requires a Map");
                 Completion::Throw(err)
             },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("getOrInsertComputed".to_string(), get_or_insert_computed_fn);
+        );
 
         // @@toStringTag
         self.get_object_cell_expect(proto_id)
@@ -912,76 +820,69 @@ impl Interpreter {
                 ),
             );
 
-        let set_iter_next = self.create_function(JsFunction::native(
-            "next".to_string(),
-            0,
-            |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+        self.define_method(set_iter_proto_id, "next", 0, |interp, this, _args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object(o.id)
+            {
+                let state = obj.borrow().iterator_state().cloned();
+                if let Some(IteratorState::SetIterator {
+                    set_id,
+                    index,
+                    kind,
+                    done,
+                }) = state
                 {
-                    let state = obj.borrow().iterator_state().cloned();
-                    if let Some(IteratorState::SetIterator {
-                        set_id,
-                        index,
-                        kind,
-                        done,
-                    }) = state
-                    {
-                        if done {
-                            return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
-                            );
-                        }
-                        if let Some(set_obj) = interp.get_object(set_id) {
-                            let set_data = set_obj.borrow().set_data().cloned();
-                            if let Some(entries) = set_data {
-                                let mut i = index;
-                                while i < entries.len() {
-                                    if let Some(ref val) = entries[i] {
-                                        let result = match kind {
-                                            IteratorKind::Value | IteratorKind::Key => val.clone(),
-                                            IteratorKind::KeyValue => {
-                                                interp.create_array(vec![val.clone(), val.clone()])
-                                            }
-                                        };
-                                        obj.borrow_mut().kind =
-                                            crate::interpreter::types::ObjectKind::Iterator(
-                                                IteratorState::SetIterator {
-                                                    set_id,
-                                                    index: i + 1,
-                                                    kind,
-                                                    done: false,
-                                                },
-                                            );
-                                        return Completion::Normal(
-                                            interp.create_iter_result_object(result, false),
-                                        );
-                                    }
-                                    i += 1;
-                                }
-                            }
-                        }
-                        obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                            IteratorState::SetIterator {
-                                set_id,
-                                index,
-                                kind,
-                                done: true,
-                            },
-                        );
+                    if done {
                         return Completion::Normal(
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         );
                     }
+                    if let Some(set_obj) = interp.get_object(set_id) {
+                        let set_data = set_obj.borrow().set_data().cloned();
+                        if let Some(entries) = set_data {
+                            let mut i = index;
+                            while i < entries.len() {
+                                if let Some(ref val) = entries[i] {
+                                    let result = match kind {
+                                        IteratorKind::Value | IteratorKind::Key => val.clone(),
+                                        IteratorKind::KeyValue => {
+                                            interp.create_array(vec![val.clone(), val.clone()])
+                                        }
+                                    };
+                                    obj.borrow_mut().kind =
+                                        crate::interpreter::types::ObjectKind::Iterator(
+                                            IteratorState::SetIterator {
+                                                set_id,
+                                                index: i + 1,
+                                                kind,
+                                                done: false,
+                                            },
+                                        );
+                                    return Completion::Normal(
+                                        interp.create_iter_result_object(result, false),
+                                    );
+                                }
+                                i += 1;
+                            }
+                        }
+                    }
+                    obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                        IteratorState::SetIterator {
+                            set_id,
+                            index,
+                            kind,
+                            done: true,
+                        },
+                    );
+                    return Completion::Normal(
+                        interp.create_iter_result_object(JsValue::Undefined, true),
+                    );
                 }
-                let err =
-                    interp.create_type_error("Set Iterator.prototype.next requires a Set Iterator");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(set_iter_proto_id)
-            .borrow_mut()
-            .insert_builtin("next".to_string(), set_iter_next);
+            }
+            let err =
+                interp.create_type_error("Set Iterator.prototype.next requires a Set Iterator");
+            Completion::Throw(err)
+        });
 
         if let Some(key) = self.get_symbol_iterator_key() {
             let iter_self_fn = self.create_function(JsFunction::native(
@@ -1023,30 +924,19 @@ impl Interpreter {
         }
 
         // Set.prototype.values
-        let values_fn = self.create_function(JsFunction::native(
-            "values".to_string(),
-            0,
-            |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                    && {
-                        let b = obj.borrow();
-                        b.set_data().is_some() && b.class_name != "WeakSet"
-                    }
-                {
-                    return Completion::Normal(create_set_iterator(
-                        interp,
-                        o.id,
-                        IteratorKind::Value,
-                    ));
+        let values_fn = self.define_method(proto_id, "values", 0, |interp, this, _args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+                && {
+                    let b = obj.borrow();
+                    b.set_data().is_some() && b.class_name != "WeakSet"
                 }
-                let err = interp.create_type_error("Set.prototype.values requires a Set");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("values".to_string(), values_fn.clone());
+            {
+                return Completion::Normal(create_set_iterator(interp, o.id, IteratorKind::Value));
+            }
+            let err = interp.create_type_error("Set.prototype.values requires a Set");
+            Completion::Throw(err)
+        });
 
         // Set.prototype.keys = Set.prototype.values
         self.get_object_cell_expect(proto_id)
@@ -1061,168 +951,129 @@ impl Interpreter {
         }
 
         // Set.prototype.entries
-        let entries_fn = self.create_function(JsFunction::native(
-            "entries".to_string(),
-            0,
-            |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                    && {
-                        let b = obj.borrow();
-                        b.set_data().is_some() && b.class_name != "WeakSet"
-                    }
-                {
-                    return Completion::Normal(create_set_iterator(
-                        interp,
-                        o.id,
-                        IteratorKind::KeyValue,
-                    ));
+        self.define_method(proto_id, "entries", 0, |interp, this, _args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+                && {
+                    let b = obj.borrow();
+                    b.set_data().is_some() && b.class_name != "WeakSet"
                 }
-                let err = interp.create_type_error("Set.prototype.entries requires a Set");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("entries".to_string(), entries_fn);
+            {
+                return Completion::Normal(create_set_iterator(
+                    interp,
+                    o.id,
+                    IteratorKind::KeyValue,
+                ));
+            }
+            let err = interp.create_type_error("Set.prototype.entries requires a Set");
+            Completion::Throw(err)
+        });
 
         // Set.prototype.add
-        let add_fn = self.create_function(JsFunction::native(
-            "add".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let has_set = {
-                        let b = obj.borrow();
-                        b.set_data().is_some() && b.class_name != "WeakSet"
-                    };
-                    if has_set {
-                        let mut value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if let JsValue::Number(n) = &value
-                            && *n == 0.0
-                            && n.is_sign_negative()
-                        {
-                            value = JsValue::Number(0.0);
-                        }
-                        let mut borrowed = obj.borrow_mut();
-                        let entries = borrowed.set_data_mut().unwrap();
-                        for entry in entries.iter().flatten() {
-                            if same_value_zero(entry, &value) {
-                                return Completion::Normal(this.clone());
-                            }
-                        }
-                        entries.push(Some(value));
-                        return Completion::Normal(this.clone());
+        self.define_method(proto_id, "add", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let has_set = {
+                    let b = obj.borrow();
+                    b.set_data().is_some() && b.class_name != "WeakSet"
+                };
+                if has_set {
+                    let mut value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if let JsValue::Number(n) = &value
+                        && *n == 0.0
+                        && n.is_sign_negative()
+                    {
+                        value = JsValue::Number(0.0);
                     }
+                    let mut borrowed = obj.borrow_mut();
+                    let entries = borrowed.set_data_mut().unwrap();
+                    for entry in entries.iter().flatten() {
+                        if same_value_zero(entry, &value) {
+                            return Completion::Normal(this.clone());
+                        }
+                    }
+                    entries.push(Some(value));
+                    return Completion::Normal(this.clone());
                 }
-                let err = interp.create_type_error("Set.prototype.add requires a Set");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("add".to_string(), add_fn);
+            }
+            let err = interp.create_type_error("Set.prototype.add requires a Set");
+            Completion::Throw(err)
+        });
 
         // Set.prototype.has
-        let has_fn = self.create_function(JsFunction::native(
-            "has".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let (is_set, set_data) = {
-                        let b = obj.borrow();
-                        (
-                            b.set_data().is_some() && b.class_name != "WeakSet",
-                            b.set_data().cloned(),
-                        )
-                    };
-                    if is_set && let Some(entries) = set_data {
-                        let value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        for entry in entries.iter().flatten() {
-                            if same_value_zero(entry, &value) {
-                                return Completion::Normal(JsValue::Boolean(true));
-                            }
+        self.define_method(proto_id, "has", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let (is_set, set_data) = {
+                    let b = obj.borrow();
+                    (
+                        b.set_data().is_some() && b.class_name != "WeakSet",
+                        b.set_data().cloned(),
+                    )
+                };
+                if is_set && let Some(entries) = set_data {
+                    let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    for entry in entries.iter().flatten() {
+                        if same_value_zero(entry, &value) {
+                            return Completion::Normal(JsValue::Boolean(true));
                         }
-                        return Completion::Normal(JsValue::Boolean(false));
                     }
+                    return Completion::Normal(JsValue::Boolean(false));
                 }
-                let err = interp.create_type_error("Set.prototype.has requires a Set");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("has".to_string(), has_fn);
+            }
+            let err = interp.create_type_error("Set.prototype.has requires a Set");
+            Completion::Throw(err)
+        });
 
         // Set.prototype.delete
-        let delete_fn = self.create_function(JsFunction::native(
-            "delete".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let has_set = {
-                        let b = obj.borrow();
-                        b.set_data().is_some() && b.class_name != "WeakSet"
-                    };
-                    if has_set {
-                        let value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let mut borrowed = obj.borrow_mut();
-                        let entries = borrowed.set_data_mut().unwrap();
-                        for entry in entries.iter_mut() {
-                            let matches =
-                                entry.as_ref().is_some_and(|e| same_value_zero(e, &value));
-                            if matches {
-                                *entry = None;
-                                return Completion::Normal(JsValue::Boolean(true));
-                            }
+        self.define_method(proto_id, "delete", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let has_set = {
+                    let b = obj.borrow();
+                    b.set_data().is_some() && b.class_name != "WeakSet"
+                };
+                if has_set {
+                    let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let mut borrowed = obj.borrow_mut();
+                    let entries = borrowed.set_data_mut().unwrap();
+                    for entry in entries.iter_mut() {
+                        let matches = entry.as_ref().is_some_and(|e| same_value_zero(e, &value));
+                        if matches {
+                            *entry = None;
+                            return Completion::Normal(JsValue::Boolean(true));
                         }
-                        return Completion::Normal(JsValue::Boolean(false));
                     }
+                    return Completion::Normal(JsValue::Boolean(false));
                 }
-                let err = interp.create_type_error("Set.prototype.delete requires a Set");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("delete".to_string(), delete_fn);
+            }
+            let err = interp.create_type_error("Set.prototype.delete requires a Set");
+            Completion::Throw(err)
+        });
 
         // Set.prototype.clear
-        let clear_fn = self.create_function(JsFunction::native(
-            "clear".to_string(),
-            0,
-            |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let has_set = {
-                        let b = obj.borrow();
-                        b.set_data().is_some() && b.class_name != "WeakSet"
-                    };
-                    if has_set {
-                        obj.borrow_mut().kind =
-                            crate::interpreter::types::ObjectKind::Set(Vec::new());
-                        return Completion::Normal(JsValue::Undefined);
-                    }
+        self.define_method(proto_id, "clear", 0, |interp, this, _args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let has_set = {
+                    let b = obj.borrow();
+                    b.set_data().is_some() && b.class_name != "WeakSet"
+                };
+                if has_set {
+                    obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Set(Vec::new());
+                    return Completion::Normal(JsValue::Undefined);
                 }
-                let err = interp.create_type_error("Set.prototype.clear requires a Set");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("clear".to_string(), clear_fn);
+            }
+            let err = interp.create_type_error("Set.prototype.clear requires a Set");
+            Completion::Throw(err)
+        });
 
         // Set.prototype.forEach
-        let foreach_fn = self.create_function(JsFunction::native(
-            "forEach".to_string(),
-            1,
+        self.define_method(proto_id, "forEach", 1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id) {
@@ -1254,10 +1105,7 @@ impl Interpreter {
                 let err = interp.create_type_error("Set.prototype.forEach requires a Set");
                 Completion::Throw(err)
             },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("forEach".to_string(), foreach_fn);
+        );
 
         // Set.prototype.size (getter)
         let size_getter = self.create_function(JsFunction::native(
@@ -1441,289 +1289,344 @@ impl Interpreter {
         }
 
         // Set.prototype.union
-        let union_fn = self.create_function(JsFunction::native(
-            "union".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                    && {
-                        let b = obj.borrow();
-                        b.set_data().is_some() && b.class_name != "WeakSet"
-                    }
-                {
-                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let other_rec = match spec_get_set_record(interp, &other) {
-                        Ok(r) => r,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    // Step 5: GetIteratorFromMethod (may trigger .next getter side effects)
-                    let (keys_iter, next_fn) =
-                        match get_keys_iterator(interp, &other_rec.keys, &other) {
-                            Ok(r) => r,
-                            Err(c) => return c,
-                        };
-                    // Step 7: Copy O.[[SetData]] AFTER GetIteratorFromMethod
-                    let entries = obj.borrow().set_data().cloned().unwrap();
-                    let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-                    for entry in entries.iter().flatten() {
-                        new_entries.push(Some(entry.clone()));
-                    }
-                    loop {
-                        let value = match iter_step_value(interp, &keys_iter, &next_fn) {
-                            Ok(Some(v)) => v,
-                            Ok(None) => break,
-                            Err(c) => return c,
-                        };
-                        let val = canonicalize_key(value);
-                        if !set_data_has(&new_entries, &val) {
-                            new_entries.push(Some(val));
-                        }
-                    }
-                    return make_result_set(interp, new_entries);
+        self.define_method(proto_id, "union", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object(o.id)
+                && {
+                    let b = obj.borrow();
+                    b.set_data().is_some() && b.class_name != "WeakSet"
                 }
-                let err = interp.create_type_error("Set.prototype.union requires a Set");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("union".to_string(), union_fn);
+            {
+                let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let other_rec = match spec_get_set_record(interp, &other) {
+                    Ok(r) => r,
+                    Err(e) => return Completion::Throw(e),
+                };
+                // Step 5: GetIteratorFromMethod (may trigger .next getter side effects)
+                let (keys_iter, next_fn) = match get_keys_iterator(interp, &other_rec.keys, &other)
+                {
+                    Ok(r) => r,
+                    Err(c) => return c,
+                };
+                // Step 7: Copy O.[[SetData]] AFTER GetIteratorFromMethod
+                let entries = obj.borrow().set_data().cloned().unwrap();
+                let mut new_entries: Vec<Option<JsValue>> = Vec::new();
+                for entry in entries.iter().flatten() {
+                    new_entries.push(Some(entry.clone()));
+                }
+                loop {
+                    let value = match iter_step_value(interp, &keys_iter, &next_fn) {
+                        Ok(Some(v)) => v,
+                        Ok(None) => break,
+                        Err(c) => return c,
+                    };
+                    let val = canonicalize_key(value);
+                    if !set_data_has(&new_entries, &val) {
+                        new_entries.push(Some(val));
+                    }
+                }
+                return make_result_set(interp, new_entries);
+            }
+            let err = interp.create_type_error("Set.prototype.union requires a Set");
+            Completion::Throw(err)
+        });
 
         // Set.prototype.intersection
-        let intersection_fn = self.create_function(JsFunction::native(
-            "intersection".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                    && {
-                        let b = obj.borrow();
-                        b.set_data().is_some() && b.class_name != "WeakSet"
-                    }
-                {
-                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let other_rec = match spec_get_set_record(interp, &other) {
-                        Ok(r) => r,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-                    // Re-read entries after GetSetRecord (side-effects may mutate this)
-                    let entries = obj.borrow().set_data().cloned().unwrap();
-                    let this_size = entries.iter().filter(|e| e.is_some()).count();
+        self.define_method(proto_id, "intersection", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object(o.id)
+                && {
+                    let b = obj.borrow();
+                    b.set_data().is_some() && b.class_name != "WeakSet"
+                }
+            {
+                let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let other_rec = match spec_get_set_record(interp, &other) {
+                    Ok(r) => r,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let mut new_entries: Vec<Option<JsValue>> = Vec::new();
+                // Re-read entries after GetSetRecord (side-effects may mutate this)
+                let entries = obj.borrow().set_data().cloned().unwrap();
+                let this_size = entries.iter().filter(|e| e.is_some()).count();
 
-                    if this_size as f64 <= other_rec.size {
-                        let mut index = 0;
-                        loop {
-                            let entry = {
-                                let borrowed = obj.borrow();
-                                let data = borrowed.set_data().unwrap();
-                                if index >= data.len() {
-                                    break;
-                                }
-                                data[index].clone()
-                            };
-                            index += 1;
-                            if let Some(entry) = entry {
-                                let has_result = match interp.call_function(
-                                    &other_rec.has,
-                                    &other,
-                                    std::slice::from_ref(&entry),
-                                ) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                };
-                                if interp.to_boolean_val(&has_result) {
-                                    let val = canonicalize_key(entry);
-                                    if !set_data_has(&new_entries, &val) {
-                                        new_entries.push(Some(val));
-                                    }
-                                }
+                if this_size as f64 <= other_rec.size {
+                    let mut index = 0;
+                    loop {
+                        let entry = {
+                            let borrowed = obj.borrow();
+                            let data = borrowed.set_data().unwrap();
+                            if index >= data.len() {
+                                break;
                             }
-                        }
-                    } else {
-                        let (keys_iter, next_fn) =
-                            match get_keys_iterator(interp, &other_rec.keys, &other) {
-                                Ok(r) => r,
-                                Err(c) => return c,
+                            data[index].clone()
+                        };
+                        index += 1;
+                        if let Some(entry) = entry {
+                            let has_result = match interp.call_function(
+                                &other_rec.has,
+                                &other,
+                                std::slice::from_ref(&entry),
+                            ) {
+                                Completion::Normal(v) => v,
+                                other => return other,
                             };
-                        loop {
-                            let value = match iter_step_value(interp, &keys_iter, &next_fn) {
-                                Ok(Some(v)) => v,
-                                Ok(None) => break,
-                                Err(c) => return c,
-                            };
-                            let current = obj.borrow().set_data().cloned().unwrap_or_default();
-                            if set_data_has(&current, &value) {
-                                let val = canonicalize_key(value);
+                            if interp.to_boolean_val(&has_result) {
+                                let val = canonicalize_key(entry);
                                 if !set_data_has(&new_entries, &val) {
                                     new_entries.push(Some(val));
                                 }
                             }
                         }
                     }
-                    return make_result_set(interp, new_entries);
-                }
-                let err = interp.create_type_error("Set.prototype.intersection requires a Set");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("intersection".to_string(), intersection_fn);
-
-        // Set.prototype.difference
-        let difference_fn = self.create_function(JsFunction::native(
-            "difference".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                    && {
-                        let b = obj.borrow();
-                        b.set_data().is_some() && b.class_name != "WeakSet"
-                    }
-                {
-                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let other_rec = match spec_get_set_record(interp, &other) {
-                        Ok(r) => r,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    // Re-read entries after GetSetRecord
-                    let entries = obj.borrow().set_data().cloned().unwrap();
-                    let this_size = entries.iter().filter(|e| e.is_some()).count();
-                    let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-
-                    if this_size as f64 <= other_rec.size {
-                        for entry in entries.iter().flatten() {
-                            let has_result = match interp.call_function(
-                                &other_rec.has,
-                                &other,
-                                std::slice::from_ref(entry),
-                            ) {
-                                Completion::Normal(v) => v,
-                                other => return other,
-                            };
-                            if !interp.to_boolean_val(&has_result) {
-                                new_entries.push(Some(entry.clone()));
-                            }
-                        }
-                    } else {
-                        for entry in entries.iter().flatten() {
-                            new_entries.push(Some(entry.clone()));
-                        }
-                        let (keys_iter, next_fn) =
-                            match get_keys_iterator(interp, &other_rec.keys, &other) {
-                                Ok(r) => r,
-                                Err(c) => return c,
-                            };
-                        loop {
-                            let value = match iter_step_value(interp, &keys_iter, &next_fn) {
-                                Ok(Some(v)) => v,
-                                Ok(None) => break,
-                                Err(c) => return c,
-                            };
-                            for entry in new_entries.iter_mut() {
-                                if entry.as_ref().is_some_and(|e| same_value_zero(e, &value)) {
-                                    *entry = None;
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    return make_result_set(interp, new_entries);
-                }
-                let err = interp.create_type_error("Set.prototype.difference requires a Set");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("difference".to_string(), difference_fn);
-
-        // Set.prototype.symmetricDifference
-        let sym_diff_fn = self.create_function(JsFunction::native(
-            "symmetricDifference".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                    && {
-                        let b = obj.borrow();
-                        b.set_data().is_some() && b.class_name != "WeakSet"
-                    }
-                {
-                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let other_rec = match spec_get_set_record(interp, &other) {
-                        Ok(r) => r,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    // Step 5: GetIteratorFromMethod (may trigger .next getter side effects)
+                } else {
                     let (keys_iter, next_fn) =
                         match get_keys_iterator(interp, &other_rec.keys, &other) {
                             Ok(r) => r,
                             Err(c) => return c,
                         };
-                    // Step 6: Copy O.[[SetData]] AFTER GetIteratorFromMethod
-                    let entries = obj.borrow().set_data().cloned().unwrap();
-                    let mut new_entries: Vec<Option<JsValue>> = Vec::new();
-                    for entry in entries.iter().flatten() {
-                        new_entries.push(Some(entry.clone()));
-                    }
                     loop {
                         let value = match iter_step_value(interp, &keys_iter, &next_fn) {
                             Ok(Some(v)) => v,
                             Ok(None) => break,
                             Err(c) => return c,
                         };
-                        let val = canonicalize_key(value);
-                        // Check against live O.[[SetData]]
                         let current = obj.borrow().set_data().cloned().unwrap_or_default();
-                        let in_this = set_data_has(&current, &val);
-                        if in_this {
-                            for entry in new_entries.iter_mut() {
-                                if entry.as_ref().is_some_and(|e| same_value_zero(e, &val)) {
-                                    *entry = None;
-                                    break;
-                                }
+                        if set_data_has(&current, &value) {
+                            let val = canonicalize_key(value);
+                            if !set_data_has(&new_entries, &val) {
+                                new_entries.push(Some(val));
                             }
-                        } else if !set_data_has(&new_entries, &val) {
-                            new_entries.push(Some(val));
                         }
                     }
-                    return make_result_set(interp, new_entries);
                 }
-                let err =
-                    interp.create_type_error("Set.prototype.symmetricDifference requires a Set");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("symmetricDifference".to_string(), sym_diff_fn);
+                return make_result_set(interp, new_entries);
+            }
+            let err = interp.create_type_error("Set.prototype.intersection requires a Set");
+            Completion::Throw(err)
+        });
+
+        // Set.prototype.difference
+        self.define_method(proto_id, "difference", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object(o.id)
+                && {
+                    let b = obj.borrow();
+                    b.set_data().is_some() && b.class_name != "WeakSet"
+                }
+            {
+                let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let other_rec = match spec_get_set_record(interp, &other) {
+                    Ok(r) => r,
+                    Err(e) => return Completion::Throw(e),
+                };
+                // Re-read entries after GetSetRecord
+                let entries = obj.borrow().set_data().cloned().unwrap();
+                let this_size = entries.iter().filter(|e| e.is_some()).count();
+                let mut new_entries: Vec<Option<JsValue>> = Vec::new();
+
+                if this_size as f64 <= other_rec.size {
+                    for entry in entries.iter().flatten() {
+                        let has_result = match interp.call_function(
+                            &other_rec.has,
+                            &other,
+                            std::slice::from_ref(entry),
+                        ) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if !interp.to_boolean_val(&has_result) {
+                            new_entries.push(Some(entry.clone()));
+                        }
+                    }
+                } else {
+                    for entry in entries.iter().flatten() {
+                        new_entries.push(Some(entry.clone()));
+                    }
+                    let (keys_iter, next_fn) =
+                        match get_keys_iterator(interp, &other_rec.keys, &other) {
+                            Ok(r) => r,
+                            Err(c) => return c,
+                        };
+                    loop {
+                        let value = match iter_step_value(interp, &keys_iter, &next_fn) {
+                            Ok(Some(v)) => v,
+                            Ok(None) => break,
+                            Err(c) => return c,
+                        };
+                        for entry in new_entries.iter_mut() {
+                            if entry.as_ref().is_some_and(|e| same_value_zero(e, &value)) {
+                                *entry = None;
+                                break;
+                            }
+                        }
+                    }
+                }
+                return make_result_set(interp, new_entries);
+            }
+            let err = interp.create_type_error("Set.prototype.difference requires a Set");
+            Completion::Throw(err)
+        });
+
+        // Set.prototype.symmetricDifference
+        self.define_method(proto_id, "symmetricDifference", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object(o.id)
+                && {
+                    let b = obj.borrow();
+                    b.set_data().is_some() && b.class_name != "WeakSet"
+                }
+            {
+                let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let other_rec = match spec_get_set_record(interp, &other) {
+                    Ok(r) => r,
+                    Err(e) => return Completion::Throw(e),
+                };
+                // Step 5: GetIteratorFromMethod (may trigger .next getter side effects)
+                let (keys_iter, next_fn) = match get_keys_iterator(interp, &other_rec.keys, &other)
+                {
+                    Ok(r) => r,
+                    Err(c) => return c,
+                };
+                // Step 6: Copy O.[[SetData]] AFTER GetIteratorFromMethod
+                let entries = obj.borrow().set_data().cloned().unwrap();
+                let mut new_entries: Vec<Option<JsValue>> = Vec::new();
+                for entry in entries.iter().flatten() {
+                    new_entries.push(Some(entry.clone()));
+                }
+                loop {
+                    let value = match iter_step_value(interp, &keys_iter, &next_fn) {
+                        Ok(Some(v)) => v,
+                        Ok(None) => break,
+                        Err(c) => return c,
+                    };
+                    let val = canonicalize_key(value);
+                    // Check against live O.[[SetData]]
+                    let current = obj.borrow().set_data().cloned().unwrap_or_default();
+                    let in_this = set_data_has(&current, &val);
+                    if in_this {
+                        for entry in new_entries.iter_mut() {
+                            if entry.as_ref().is_some_and(|e| same_value_zero(e, &val)) {
+                                *entry = None;
+                                break;
+                            }
+                        }
+                    } else if !set_data_has(&new_entries, &val) {
+                        new_entries.push(Some(val));
+                    }
+                }
+                return make_result_set(interp, new_entries);
+            }
+            let err = interp.create_type_error("Set.prototype.symmetricDifference requires a Set");
+            Completion::Throw(err)
+        });
 
         // Set.prototype.isSubsetOf
-        let is_subset_fn = self.create_function(JsFunction::native(
-            "isSubsetOf".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                    && {
-                        let b = obj.borrow();
-                        b.set_data().is_some() && b.class_name != "WeakSet"
-                    }
-                {
-                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let other_rec = match spec_get_set_record(interp, &other) {
-                        Ok(r) => r,
-                        Err(e) => return Completion::Throw(e),
+        self.define_method(proto_id, "isSubsetOf", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object(o.id)
+                && {
+                    let b = obj.borrow();
+                    b.set_data().is_some() && b.class_name != "WeakSet"
+                }
+            {
+                let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let other_rec = match spec_get_set_record(interp, &other) {
+                    Ok(r) => r,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let entries = obj.borrow().set_data().cloned().unwrap();
+                let this_size = entries.iter().filter(|e| e.is_some()).count();
+                if this_size as f64 > other_rec.size {
+                    return Completion::Normal(JsValue::Boolean(false));
+                }
+                // Iterate live set data (re-read each iteration for mutation support)
+                let mut i = 0;
+                loop {
+                    let entry = {
+                        let borrowed = obj.borrow();
+                        let data = borrowed.set_data().unwrap();
+                        if i >= data.len() {
+                            break;
+                        }
+                        data[i].clone()
                     };
-                    let entries = obj.borrow().set_data().cloned().unwrap();
-                    let this_size = entries.iter().filter(|e| e.is_some()).count();
-                    if this_size as f64 > other_rec.size {
+                    i += 1;
+                    if let Some(e) = entry {
+                        let has_result = match interp.call_function(&other_rec.has, &other, &[e]) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if !interp.to_boolean_val(&has_result) {
+                            return Completion::Normal(JsValue::Boolean(false));
+                        }
+                    }
+                }
+                return Completion::Normal(JsValue::Boolean(true));
+            }
+            let err = interp.create_type_error("Set.prototype.isSubsetOf requires a Set");
+            Completion::Throw(err)
+        });
+
+        // Set.prototype.isSupersetOf
+        self.define_method(proto_id, "isSupersetOf", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object(o.id)
+                && {
+                    let b = obj.borrow();
+                    b.set_data().is_some() && b.class_name != "WeakSet"
+                }
+            {
+                let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let other_rec = match spec_get_set_record(interp, &other) {
+                    Ok(r) => r,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let entries = obj.borrow().set_data().cloned().unwrap();
+                let this_size = entries.iter().filter(|e| e.is_some()).count();
+                if (this_size as f64) < other_rec.size {
+                    return Completion::Normal(JsValue::Boolean(false));
+                }
+                let (keys_iter, next_fn) = match get_keys_iterator(interp, &other_rec.keys, &other)
+                {
+                    Ok(r) => r,
+                    Err(c) => return c,
+                };
+                loop {
+                    let value = match iter_step_value(interp, &keys_iter, &next_fn) {
+                        Ok(Some(v)) => v,
+                        Ok(None) => break,
+                        Err(c) => return c,
+                    };
+                    let current = obj.borrow().set_data().cloned().unwrap_or_default();
+                    if !set_data_has(&current, &value) {
+                        interp.iterator_close(&keys_iter, JsValue::Undefined);
                         return Completion::Normal(JsValue::Boolean(false));
                     }
+                }
+                return Completion::Normal(JsValue::Boolean(true));
+            }
+            let err = interp.create_type_error("Set.prototype.isSupersetOf requires a Set");
+            Completion::Throw(err)
+        });
+
+        // Set.prototype.isDisjointFrom
+        self.define_method(proto_id, "isDisjointFrom", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object(o.id)
+                && {
+                    let b = obj.borrow();
+                    b.set_data().is_some() && b.class_name != "WeakSet"
+                }
+            {
+                let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let other_rec = match spec_get_set_record(interp, &other) {
+                    Ok(r) => r,
+                    Err(e) => return Completion::Throw(e),
+                };
+                let entries = obj.borrow().set_data().cloned().unwrap();
+                let this_size = entries.iter().filter(|e| e.is_some()).count();
+                if this_size as f64 <= other_rec.size {
                     // Iterate live set data (re-read each iteration for mutation support)
                     let mut i = 0;
                     loop {
@@ -1742,43 +1645,12 @@ impl Interpreter {
                                     Completion::Normal(v) => v,
                                     other => return other,
                                 };
-                            if !interp.to_boolean_val(&has_result) {
+                            if interp.to_boolean_val(&has_result) {
                                 return Completion::Normal(JsValue::Boolean(false));
                             }
                         }
                     }
-                    return Completion::Normal(JsValue::Boolean(true));
-                }
-                let err = interp.create_type_error("Set.prototype.isSubsetOf requires a Set");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("isSubsetOf".to_string(), is_subset_fn);
-
-        // Set.prototype.isSupersetOf
-        let is_superset_fn = self.create_function(JsFunction::native(
-            "isSupersetOf".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                    && {
-                        let b = obj.borrow();
-                        b.set_data().is_some() && b.class_name != "WeakSet"
-                    }
-                {
-                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let other_rec = match spec_get_set_record(interp, &other) {
-                        Ok(r) => r,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let entries = obj.borrow().set_data().cloned().unwrap();
-                    let this_size = entries.iter().filter(|e| e.is_some()).count();
-                    if (this_size as f64) < other_rec.size {
-                        return Completion::Normal(JsValue::Boolean(false));
-                    }
+                } else {
                     let (keys_iter, next_fn) =
                         match get_keys_iterator(interp, &other_rec.keys, &other) {
                             Ok(r) => r,
@@ -1791,92 +1663,17 @@ impl Interpreter {
                             Err(c) => return c,
                         };
                         let current = obj.borrow().set_data().cloned().unwrap_or_default();
-                        if !set_data_has(&current, &value) {
+                        if set_data_has(&current, &value) {
                             interp.iterator_close(&keys_iter, JsValue::Undefined);
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                     }
-                    return Completion::Normal(JsValue::Boolean(true));
                 }
-                let err = interp.create_type_error("Set.prototype.isSupersetOf requires a Set");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("isSupersetOf".to_string(), is_superset_fn);
-
-        // Set.prototype.isDisjointFrom
-        let is_disjoint_fn = self.create_function(JsFunction::native(
-            "isDisjointFrom".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                    && {
-                        let b = obj.borrow();
-                        b.set_data().is_some() && b.class_name != "WeakSet"
-                    }
-                {
-                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let other_rec = match spec_get_set_record(interp, &other) {
-                        Ok(r) => r,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let entries = obj.borrow().set_data().cloned().unwrap();
-                    let this_size = entries.iter().filter(|e| e.is_some()).count();
-                    if this_size as f64 <= other_rec.size {
-                        // Iterate live set data (re-read each iteration for mutation support)
-                        let mut i = 0;
-                        loop {
-                            let entry = {
-                                let borrowed = obj.borrow();
-                                let data = borrowed.set_data().unwrap();
-                                if i >= data.len() {
-                                    break;
-                                }
-                                data[i].clone()
-                            };
-                            i += 1;
-                            if let Some(e) = entry {
-                                let has_result =
-                                    match interp.call_function(&other_rec.has, &other, &[e]) {
-                                        Completion::Normal(v) => v,
-                                        other => return other,
-                                    };
-                                if interp.to_boolean_val(&has_result) {
-                                    return Completion::Normal(JsValue::Boolean(false));
-                                }
-                            }
-                        }
-                    } else {
-                        let (keys_iter, next_fn) =
-                            match get_keys_iterator(interp, &other_rec.keys, &other) {
-                                Ok(r) => r,
-                                Err(c) => return c,
-                            };
-                        loop {
-                            let value = match iter_step_value(interp, &keys_iter, &next_fn) {
-                                Ok(Some(v)) => v,
-                                Ok(None) => break,
-                                Err(c) => return c,
-                            };
-                            let current = obj.borrow().set_data().cloned().unwrap_or_default();
-                            if set_data_has(&current, &value) {
-                                interp.iterator_close(&keys_iter, JsValue::Undefined);
-                                return Completion::Normal(JsValue::Boolean(false));
-                            }
-                        }
-                    }
-                    return Completion::Normal(JsValue::Boolean(true));
-                }
-                let err = interp.create_type_error("Set.prototype.isDisjointFrom requires a Set");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("isDisjointFrom".to_string(), is_disjoint_fn);
+                return Completion::Normal(JsValue::Boolean(true));
+            }
+            let err = interp.create_type_error("Set.prototype.isDisjointFrom requires a Set");
+            Completion::Throw(err)
+        });
 
         // @@toStringTag
         self.get_object_cell_expect(proto_id)
@@ -2049,186 +1846,145 @@ impl Interpreter {
             .class_name = "WeakMap".to_string();
 
         // WeakMap.prototype.get
-        let get_fn = self.create_function(JsFunction::native(
-            "get".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let is_weakmap = obj.borrow().class_name == "WeakMap";
-                    let map_data = obj.borrow().map_data().cloned();
-                    if is_weakmap && let Some(entries) = map_data {
-                        let key = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if !interp.can_be_held_weakly(&key) {
-                            return Completion::Normal(JsValue::Undefined);
+        self.define_method(proto_id, "get", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let is_weakmap = obj.borrow().class_name == "WeakMap";
+                let map_data = obj.borrow().map_data().cloned();
+                if is_weakmap && let Some(entries) = map_data {
+                    let key = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if !interp.can_be_held_weakly(&key) {
+                        return Completion::Normal(JsValue::Undefined);
+                    }
+                    for entry in entries.iter().flatten() {
+                        if strict_equality(&entry.0, &key) {
+                            return Completion::Normal(entry.1.clone());
                         }
+                    }
+                    return Completion::Normal(JsValue::Undefined);
+                }
+            }
+            let err = interp.create_type_error("WeakMap.prototype.get requires a WeakMap");
+            Completion::Throw(err)
+        });
+
+        // WeakMap.prototype.set
+        self.define_method(proto_id, "set", 2, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let has_map = obj.borrow().map_data().is_some();
+                if has_map && obj.borrow().class_name == "WeakMap" {
+                    let key = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if !interp.can_be_held_weakly(&key) {
+                        let err = interp.create_type_error("Invalid value used as weak map key");
+                        return Completion::Throw(err);
+                    }
+                    let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let mut borrowed = obj.borrow_mut();
+                    let entries = borrowed.map_data_mut().unwrap();
+                    for entry in entries.iter_mut().flatten() {
+                        if strict_equality(&entry.0, &key) {
+                            entry.1 = value;
+                            return Completion::Normal(this.clone());
+                        }
+                    }
+                    entries.push(Some((key, value)));
+                    return Completion::Normal(this.clone());
+                }
+            }
+            let err = interp.create_type_error("WeakMap.prototype.set requires a WeakMap");
+            Completion::Throw(err)
+        });
+
+        // WeakMap.prototype.has
+        self.define_method(proto_id, "has", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let is_weakmap = obj.borrow().class_name == "WeakMap";
+                let map_data = obj.borrow().map_data().cloned();
+                if is_weakmap && let Some(entries) = map_data {
+                    let key = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if !interp.can_be_held_weakly(&key) {
+                        return Completion::Normal(JsValue::Boolean(false));
+                    }
+                    for entry in entries.iter().flatten() {
+                        if strict_equality(&entry.0, &key) {
+                            return Completion::Normal(JsValue::Boolean(true));
+                        }
+                    }
+                    return Completion::Normal(JsValue::Boolean(false));
+                }
+            }
+            let err = interp.create_type_error("WeakMap.prototype.has requires a WeakMap");
+            Completion::Throw(err)
+        });
+
+        // WeakMap.prototype.delete
+        self.define_method(proto_id, "delete", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let is_weakmap = obj.borrow().class_name == "WeakMap";
+                let has_map = obj.borrow().map_data().is_some();
+                if is_weakmap && has_map {
+                    let key = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if !interp.can_be_held_weakly(&key) {
+                        return Completion::Normal(JsValue::Boolean(false));
+                    }
+                    let mut borrowed = obj.borrow_mut();
+                    let entries = borrowed.map_data_mut().unwrap();
+                    for entry in entries.iter_mut() {
+                        let matches = entry.as_ref().is_some_and(|e| strict_equality(&e.0, &key));
+                        if matches {
+                            *entry = None;
+                            return Completion::Normal(JsValue::Boolean(true));
+                        }
+                    }
+                    return Completion::Normal(JsValue::Boolean(false));
+                }
+            }
+            let err = interp.create_type_error("WeakMap.prototype.delete requires a WeakMap");
+            Completion::Throw(err)
+        });
+
+        // WeakMap.prototype.getOrInsert
+        self.define_method(proto_id, "getOrInsert", 2, |interp, this, args| {
+            if let JsValue::Object(o) = &this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let is_weakmap =
+                    obj.borrow().map_data().is_some() && obj.borrow().class_name == "WeakMap";
+                if is_weakmap {
+                    let key = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    if !interp.can_be_held_weakly(&key) {
+                        let err = interp.create_type_error("Invalid value used as weak map key");
+                        return Completion::Throw(err);
+                    }
+                    {
+                        let borrowed = obj.borrow();
+                        let entries = borrowed.map_data().unwrap();
                         for entry in entries.iter().flatten() {
                             if strict_equality(&entry.0, &key) {
                                 return Completion::Normal(entry.1.clone());
                             }
                         }
-                        return Completion::Normal(JsValue::Undefined);
                     }
+                    let mut borrowed = obj.borrow_mut();
+                    let entries = borrowed.map_data_mut().unwrap();
+                    entries.push(Some((key, value.clone())));
+                    return Completion::Normal(value);
                 }
-                let err = interp.create_type_error("WeakMap.prototype.get requires a WeakMap");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("get".to_string(), get_fn);
-
-        // WeakMap.prototype.set
-        let set_fn = self.create_function(JsFunction::native(
-            "set".to_string(),
-            2,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let has_map = obj.borrow().map_data().is_some();
-                    if has_map && obj.borrow().class_name == "WeakMap" {
-                        let key = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if !interp.can_be_held_weakly(&key) {
-                            let err =
-                                interp.create_type_error("Invalid value used as weak map key");
-                            return Completion::Throw(err);
-                        }
-                        let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                        let mut borrowed = obj.borrow_mut();
-                        let entries = borrowed.map_data_mut().unwrap();
-                        for entry in entries.iter_mut().flatten() {
-                            if strict_equality(&entry.0, &key) {
-                                entry.1 = value;
-                                return Completion::Normal(this.clone());
-                            }
-                        }
-                        entries.push(Some((key, value)));
-                        return Completion::Normal(this.clone());
-                    }
-                }
-                let err = interp.create_type_error("WeakMap.prototype.set requires a WeakMap");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("set".to_string(), set_fn);
-
-        // WeakMap.prototype.has
-        let has_fn = self.create_function(JsFunction::native(
-            "has".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let is_weakmap = obj.borrow().class_name == "WeakMap";
-                    let map_data = obj.borrow().map_data().cloned();
-                    if is_weakmap && let Some(entries) = map_data {
-                        let key = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if !interp.can_be_held_weakly(&key) {
-                            return Completion::Normal(JsValue::Boolean(false));
-                        }
-                        for entry in entries.iter().flatten() {
-                            if strict_equality(&entry.0, &key) {
-                                return Completion::Normal(JsValue::Boolean(true));
-                            }
-                        }
-                        return Completion::Normal(JsValue::Boolean(false));
-                    }
-                }
-                let err = interp.create_type_error("WeakMap.prototype.has requires a WeakMap");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("has".to_string(), has_fn);
-
-        // WeakMap.prototype.delete
-        let delete_fn = self.create_function(JsFunction::native(
-            "delete".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let is_weakmap = obj.borrow().class_name == "WeakMap";
-                    let has_map = obj.borrow().map_data().is_some();
-                    if is_weakmap && has_map {
-                        let key = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if !interp.can_be_held_weakly(&key) {
-                            return Completion::Normal(JsValue::Boolean(false));
-                        }
-                        let mut borrowed = obj.borrow_mut();
-                        let entries = borrowed.map_data_mut().unwrap();
-                        for entry in entries.iter_mut() {
-                            let matches =
-                                entry.as_ref().is_some_and(|e| strict_equality(&e.0, &key));
-                            if matches {
-                                *entry = None;
-                                return Completion::Normal(JsValue::Boolean(true));
-                            }
-                        }
-                        return Completion::Normal(JsValue::Boolean(false));
-                    }
-                }
-                let err = interp.create_type_error("WeakMap.prototype.delete requires a WeakMap");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("delete".to_string(), delete_fn);
-
-        // WeakMap.prototype.getOrInsert
-        let get_or_insert_fn = self.create_function(JsFunction::native(
-            "getOrInsert".to_string(),
-            2,
-            |interp, this, args| {
-                if let JsValue::Object(o) = &this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let is_weakmap =
-                        obj.borrow().map_data().is_some() && obj.borrow().class_name == "WeakMap";
-                    if is_weakmap {
-                        let key = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                        if !interp.can_be_held_weakly(&key) {
-                            let err =
-                                interp.create_type_error("Invalid value used as weak map key");
-                            return Completion::Throw(err);
-                        }
-                        {
-                            let borrowed = obj.borrow();
-                            let entries = borrowed.map_data().unwrap();
-                            for entry in entries.iter().flatten() {
-                                if strict_equality(&entry.0, &key) {
-                                    return Completion::Normal(entry.1.clone());
-                                }
-                            }
-                        }
-                        let mut borrowed = obj.borrow_mut();
-                        let entries = borrowed.map_data_mut().unwrap();
-                        entries.push(Some((key, value.clone())));
-                        return Completion::Normal(value);
-                    }
-                }
-                let err =
-                    interp.create_type_error("WeakMap.prototype.getOrInsert requires a WeakMap");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("getOrInsert".to_string(), get_or_insert_fn);
+            }
+            let err = interp.create_type_error("WeakMap.prototype.getOrInsert requires a WeakMap");
+            Completion::Throw(err)
+        });
 
         // WeakMap.prototype.getOrInsertComputed
-        let get_or_insert_computed_fn = self.create_function(JsFunction::native(
-            "getOrInsertComputed".to_string(),
-            2,
+        self.define_method(proto_id, "getOrInsertComputed", 2,
             |interp, this, args| {
                 if let JsValue::Object(o) = &this
                     && let Some(obj) = interp.get_object_cell(o.id)
@@ -2285,10 +2041,7 @@ impl Interpreter {
                 );
                 Completion::Throw(err)
             },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("getOrInsertComputed".to_string(), get_or_insert_computed_fn);
+        );
 
         // @@toStringTag
         self.get_object_cell_expect(proto_id)
@@ -2473,106 +2226,84 @@ impl Interpreter {
             .class_name = "WeakSet".to_string();
 
         // WeakSet.prototype.add
-        let add_fn = self.create_function(JsFunction::native(
-            "add".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let has_set =
-                        obj.borrow().set_data().is_some() && obj.borrow().class_name == "WeakSet";
-                    if has_set {
-                        let value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if !interp.can_be_held_weakly(&value) {
-                            let err = interp.create_type_error("Invalid value used in weak set");
-                            return Completion::Throw(err);
-                        }
-                        let mut borrowed = obj.borrow_mut();
-                        let entries = borrowed.set_data_mut().unwrap();
-                        for entry in entries.iter().flatten() {
-                            if strict_equality(entry, &value) {
-                                return Completion::Normal(this.clone());
-                            }
-                        }
-                        entries.push(Some(value));
-                        return Completion::Normal(this.clone());
+        self.define_method(proto_id, "add", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let has_set =
+                    obj.borrow().set_data().is_some() && obj.borrow().class_name == "WeakSet";
+                if has_set {
+                    let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if !interp.can_be_held_weakly(&value) {
+                        let err = interp.create_type_error("Invalid value used in weak set");
+                        return Completion::Throw(err);
                     }
+                    let mut borrowed = obj.borrow_mut();
+                    let entries = borrowed.set_data_mut().unwrap();
+                    for entry in entries.iter().flatten() {
+                        if strict_equality(entry, &value) {
+                            return Completion::Normal(this.clone());
+                        }
+                    }
+                    entries.push(Some(value));
+                    return Completion::Normal(this.clone());
                 }
-                let err = interp.create_type_error("WeakSet.prototype.add requires a WeakSet");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("add".to_string(), add_fn);
+            }
+            let err = interp.create_type_error("WeakSet.prototype.add requires a WeakSet");
+            Completion::Throw(err)
+        });
 
         // WeakSet.prototype.has
-        let has_fn = self.create_function(JsFunction::native(
-            "has".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let is_weakset = obj.borrow().class_name == "WeakSet";
-                    let set_data = obj.borrow().set_data().cloned();
-                    if is_weakset && let Some(entries) = set_data {
-                        let value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if !interp.can_be_held_weakly(&value) {
-                            return Completion::Normal(JsValue::Boolean(false));
-                        }
-                        for entry in entries.iter().flatten() {
-                            if strict_equality(entry, &value) {
-                                return Completion::Normal(JsValue::Boolean(true));
-                            }
-                        }
+        self.define_method(proto_id, "has", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let is_weakset = obj.borrow().class_name == "WeakSet";
+                let set_data = obj.borrow().set_data().cloned();
+                if is_weakset && let Some(entries) = set_data {
+                    let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if !interp.can_be_held_weakly(&value) {
                         return Completion::Normal(JsValue::Boolean(false));
                     }
+                    for entry in entries.iter().flatten() {
+                        if strict_equality(entry, &value) {
+                            return Completion::Normal(JsValue::Boolean(true));
+                        }
+                    }
+                    return Completion::Normal(JsValue::Boolean(false));
                 }
-                let err = interp.create_type_error("WeakSet.prototype.has requires a WeakSet");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("has".to_string(), has_fn);
+            }
+            let err = interp.create_type_error("WeakSet.prototype.has requires a WeakSet");
+            Completion::Throw(err)
+        });
 
         // WeakSet.prototype.delete
-        let delete_fn = self.create_function(JsFunction::native(
-            "delete".to_string(),
-            1,
-            |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let is_weakset = obj.borrow().class_name == "WeakSet";
-                    let has_set = obj.borrow().set_data().is_some();
-                    if is_weakset && has_set {
-                        let value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if !interp.can_be_held_weakly(&value) {
-                            return Completion::Normal(JsValue::Boolean(false));
-                        }
-                        let mut borrowed = obj.borrow_mut();
-                        let entries = borrowed.set_data_mut().unwrap();
-                        for entry in entries.iter_mut() {
-                            let matches =
-                                entry.as_ref().is_some_and(|e| strict_equality(e, &value));
-                            if matches {
-                                *entry = None;
-                                return Completion::Normal(JsValue::Boolean(true));
-                            }
-                        }
+        self.define_method(proto_id, "delete", 1, |interp, this, args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let is_weakset = obj.borrow().class_name == "WeakSet";
+                let has_set = obj.borrow().set_data().is_some();
+                if is_weakset && has_set {
+                    let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    if !interp.can_be_held_weakly(&value) {
                         return Completion::Normal(JsValue::Boolean(false));
                     }
+                    let mut borrowed = obj.borrow_mut();
+                    let entries = borrowed.set_data_mut().unwrap();
+                    for entry in entries.iter_mut() {
+                        let matches = entry.as_ref().is_some_and(|e| strict_equality(e, &value));
+                        if matches {
+                            *entry = None;
+                            return Completion::Normal(JsValue::Boolean(true));
+                        }
+                    }
+                    return Completion::Normal(JsValue::Boolean(false));
                 }
-                let err = interp.create_type_error("WeakSet.prototype.delete requires a WeakSet");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("delete".to_string(), delete_fn);
+            }
+            let err = interp.create_type_error("WeakSet.prototype.delete requires a WeakSet");
+            Completion::Throw(err)
+        });
 
         // @@toStringTag
         self.get_object_cell_expect(proto_id)
@@ -2730,30 +2461,23 @@ impl Interpreter {
             .class_name = "WeakRef".to_string();
 
         // WeakRef.prototype.deref
-        let deref_fn = self.create_function(JsFunction::native(
-            "deref".to_string(),
-            0,
-            |interp, this, _args| {
-                // Require this to be an object with [[WeakRefTarget]] internal slot
-                // (indicated by class_name == "WeakRef" AND primitive_value.is_some())
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let b = obj.borrow();
-                    if b.class_name == "WeakRef" && b.primitive_value.is_some() {
-                        return Completion::Normal(
-                            b.primitive_value.clone().unwrap_or(JsValue::Undefined),
-                        );
-                    }
+        self.define_method(proto_id, "deref", 0, |interp, this, _args| {
+            // Require this to be an object with [[WeakRefTarget]] internal slot
+            // (indicated by class_name == "WeakRef" AND primitive_value.is_some())
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let b = obj.borrow();
+                if b.class_name == "WeakRef" && b.primitive_value.is_some() {
+                    return Completion::Normal(
+                        b.primitive_value.clone().unwrap_or(JsValue::Undefined),
+                    );
                 }
-                Completion::Throw(
-                    interp.create_type_error("WeakRef.prototype.deref requires a WeakRef"),
-                )
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("deref".to_string(), deref_fn);
+            }
+            Completion::Throw(
+                interp.create_type_error("WeakRef.prototype.deref requires a WeakRef"),
+            )
+        });
 
         // @@toStringTag
         {
@@ -2859,9 +2583,7 @@ impl Interpreter {
             .class_name = "FinalizationRegistry".to_string();
 
         // FinalizationRegistry.prototype.register
-        let register_fn = self.create_function(JsFunction::native(
-            "register".to_string(),
-            2,
+        self.define_method(proto_id, "register", 2,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object_cell(o.id)
@@ -2915,15 +2637,10 @@ impl Interpreter {
                     "FinalizationRegistry.prototype.register requires a FinalizationRegistry",
                 ))
             },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("register".to_string(), register_fn);
+        );
 
         // FinalizationRegistry.prototype.unregister
-        let unregister_fn = self.create_function(JsFunction::native(
-            "unregister".to_string(),
-            1,
+        self.define_method(proto_id, "unregister", 1,
             |interp, this, args| {
                 if let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object_cell(o.id)
@@ -2966,36 +2683,25 @@ impl Interpreter {
                     "FinalizationRegistry.prototype.unregister requires a FinalizationRegistry",
                 ))
             },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("unregister".to_string(), unregister_fn);
+        );
 
         // FinalizationRegistry.prototype.cleanupSome
-        let cleanup_fn = self.create_function(JsFunction::native(
-            "cleanupSome".to_string(),
-            0,
-            |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let has_cells = {
-                        let b = obj.borrow();
-                        b.class_name == "FinalizationRegistry"
-                            && b.finalization_registry().is_some()
-                    };
-                    if has_cells {
-                        return Completion::Normal(JsValue::Undefined);
-                    }
+        self.define_method(proto_id, "cleanupSome", 0, |interp, this, _args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let has_cells = {
+                    let b = obj.borrow();
+                    b.class_name == "FinalizationRegistry" && b.finalization_registry().is_some()
+                };
+                if has_cells {
+                    return Completion::Normal(JsValue::Undefined);
                 }
-                Completion::Throw(interp.create_type_error(
-                    "FinalizationRegistry.prototype.cleanupSome requires a FinalizationRegistry",
-                ))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_builtin("cleanupSome".to_string(), cleanup_fn);
+            }
+            Completion::Throw(interp.create_type_error(
+                "FinalizationRegistry.prototype.cleanupSome requires a FinalizationRegistry",
+            ))
+        });
 
         // @@toStringTag
         {
