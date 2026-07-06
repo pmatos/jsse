@@ -465,7 +465,7 @@ dependencies = [
  "icu_properties",
  "icu_provider",
  "litemap",
- "num-bigint",
+ "num-bigint 0.4.7",
  "num-rational",
  "num-traits",
  "potential_utf",
@@ -713,7 +713,7 @@ dependencies = [
  "icu",
  "icu_calendar",
  "icu_normalizer",
- "num-bigint",
+ "num-bigint 0.5.0",
  "regex",
  "rustc-hash",
  "ryu-js",
@@ -754,9 +754,19 @@ checksum = "f52b00d39961fc5b2736ea853c9cc86238e165017a493d1d5c8eac6bdc4cc273"
 
 [[package]]
 name = "num-bigint"
-version = "0.4.6"
+version = "0.4.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5e44f723f1133c9deac646763579fdb3ac745e418f2a7af9cd0c431da1f20b9"
+checksum = "c863e9ab5e7bf9c99ba75e1050f1e4d624ae87ed3532d6238ffbdc7b585dbbe6"
+dependencies = [
+ "num-integer",
+ "num-traits",
+]
+
+[[package]]
+name = "num-bigint"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7032fbb7ef662c18e806aa75b311f68ddf5c94e8fc62832c0039d79095ab6abf"
 dependencies = [
  "num-integer",
  "num-traits",
@@ -777,7 +787,7 @@ version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f83d14da390562dca69fc84082e73e548e1ad308d24accdedd2720017cb37824"
 dependencies = [
- "num-bigint",
+ "num-bigint 0.4.7",
  "num-integer",
  "num-traits",
 ]
