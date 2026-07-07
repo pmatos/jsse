@@ -1611,6 +1611,17 @@ impl Interpreter {
         }
     }
 
+    // §7.1.5 ToIntegerOrInfinity — `? ToNumber(argument)` then truncate toward
+    // zero (NaN → +0, ±∞ pass through). The combined coercion that callers used
+    // to open-code as a `to_number_value` match feeding `to_integer_or_infinity`;
+    // this is the spec abstract operation as a single named step, alongside
+    // to_number_value / to_string_value / to_index.
+    #[allow(clippy::wrong_self_convention)]
+    pub(crate) fn to_integer_or_infinity_value(&mut self, val: &JsValue) -> Result<f64, JsValue> {
+        let n = self.to_number_value(val)?;
+        Ok(to_integer_or_infinity(n))
+    }
+
     // §7.1.13 ToBigInt
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_bigint_value(&mut self, val: &JsValue) -> Result<JsValue, JsValue> {

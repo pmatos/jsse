@@ -1473,3 +1473,83 @@ fn collection_prototype_methods_have_correctly_shaped_builtins() {
         "collection prototype methods must keep their observable shape and behavior"
     );
 }
+
+// §7.1.5 ToIntegerOrInfinity — the combined `? ToIntegerOrInfinity(argument)`
+// coercion method that sits alongside to_number_value / to_string_value / to_index.
+// Expected values are the spec's, not recomputed the way the code does it.
+mod to_integer_or_infinity_value_tests {
+    use super::*;
+
+    fn conv(v: JsValue) -> f64 {
+        let mut interp = Interpreter::new();
+        interp
+            .to_integer_or_infinity_value(&v)
+            .expect("expected a normal (non-throwing) coercion")
+    }
+
+    #[test]
+    fn truncates_toward_zero() {
+        assert_eq!(conv(JsValue::Number(3.7)), 3.0);
+        assert_eq!(conv(JsValue::Number(-3.7)), -3.0);
+        assert_eq!(conv(JsValue::Number(5.0)), 5.0);
+        assert_eq!(conv(JsValue::Number(-0.9)), 0.0);
+    }
+
+    #[test]
+    fn nan_becomes_positive_zero() {
+        let r = conv(JsValue::Number(f64::NAN));
+        assert_eq!(r, 0.0);
+        assert!(r.is_sign_positive(), "ToIntegerOrInfinity(NaN) is +0");
+    }
+
+    #[test]
+    fn infinities_pass_through() {
+        assert_eq!(conv(JsValue::Number(f64::INFINITY)), f64::INFINITY);
+        assert_eq!(conv(JsValue::Number(f64::NEG_INFINITY)), f64::NEG_INFINITY);
+    }
+
+    #[test]
+    fn coerces_booleans_null_and_undefined() {
+        assert_eq!(conv(JsValue::Boolean(true)), 1.0); // ToNumber(true) = 1
+        assert_eq!(conv(JsValue::Boolean(false)), 0.0);
+        assert_eq!(conv(JsValue::Null), 0.0); // ToNumber(null) = 0
+        assert_eq!(conv(JsValue::Undefined), 0.0); // ToNumber(undefined) = NaN -> 0
+    }
+
+    #[test]
+    fn coerces_strings() {
+        assert_eq!(conv(JsValue::String(JsString::from_str("42"))), 42.0);
+        assert_eq!(conv(JsValue::String(JsString::from_str("42.9"))), 42.0);
+        assert_eq!(conv(JsValue::String(JsString::from_str("  -7.5 "))), -7.0);
+        assert_eq!(conv(JsValue::String(JsString::from_str("abc"))), 0.0); // NaN -> 0
+        assert_eq!(
+            conv(JsValue::String(JsString::from_str("Infinity"))),
+            f64::INFINITY
+        );
+    }
+
+    #[test]
+    fn observable_truncation_through_array_prototype_at() {
+        // The builtin routes its index argument through the coercion method,
+        // so truncation is observable at the public JS seam.
+        let interp = run_script(r#"var R = [10, 20, 30].at(1.9);"#);
+        assert_eq!(global_number(&interp, "R"), 20.0);
+    }
+
+    #[test]
+    fn throwing_valueof_propagates_through_the_seam() {
+        // ? ToIntegerOrInfinity must forward a ToNumber abrupt completion.
+        let interp = run_script(
+            r#"
+            var threw = false;
+            try {
+                [1, 2, 3].at({ valueOf() { throw new Error("boom"); } });
+            } catch (e) {
+                threw = (e instanceof Error) && e.message === "boom";
+            }
+            var R = threw ? "threw" : "did-not-throw";
+            "#,
+        );
+        assert_eq!(global_string(&interp, "R"), "threw");
+    }
+}
