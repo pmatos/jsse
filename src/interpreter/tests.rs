@@ -1473,3 +1473,83 @@ fn collection_prototype_methods_have_correctly_shaped_builtins() {
         "collection prototype methods must keep their observable shape and behavior"
     );
 }
+
+#[test]
+fn date_set_hours_coerces_all_provided_args_left_to_right_regardless_of_nan() {
+    let interp = run_script(
+        r#"
+        var order = [];
+        function tap(name, val) {
+            return { valueOf: function () { order.push(name); return val; } };
+        }
+        var d = new Date(NaN);
+        var r = d.setHours(tap("h", 1), tap("m", 2), tap("s", 3), tap("ms", 4));
+        globalThis.__order = order.join(",");
+        globalThis.__result = r;
+        "#,
+    );
+    assert_eq!(
+        global_string(&interp, "__order"),
+        "h,m,s,ms",
+        "setHours must coerce every provided argument, in order, even when the result is NaN"
+    );
+    assert!(global_number(&interp, "__result").is_nan());
+}
+
+#[test]
+fn date_set_minutes_defaults_missing_trailing_args_from_current_local_time() {
+    let interp = run_script(
+        r#"
+        var d = new Date(2024, 0, 1, 10, 20, 30, 400);
+        d.setMinutes(5);
+        globalThis.__h = d.getHours();
+        globalThis.__m = d.getMinutes();
+        globalThis.__s = d.getSeconds();
+        globalThis.__ms = d.getMilliseconds();
+        "#,
+    );
+    assert_eq!(global_number(&interp, "__h"), 10.0);
+    assert_eq!(global_number(&interp, "__m"), 5.0);
+    assert_eq!(global_number(&interp, "__s"), 30.0);
+    assert_eq!(global_number(&interp, "__ms"), 400.0);
+}
+
+#[test]
+fn date_set_utc_hours_overrides_only_time_of_day_components() {
+    let interp = run_script(
+        r#"
+        var d = new Date(Date.UTC(2024, 5, 15, 1, 2, 3, 4));
+        d.setUTCHours(23, 59, 58, 999);
+        globalThis.__y = d.getUTCFullYear();
+        globalThis.__mo = d.getUTCMonth();
+        globalThis.__d = d.getUTCDate();
+        globalThis.__h = d.getUTCHours();
+        globalThis.__mi = d.getUTCMinutes();
+        globalThis.__s = d.getUTCSeconds();
+        globalThis.__ms = d.getUTCMilliseconds();
+        "#,
+    );
+    assert_eq!(global_number(&interp, "__y"), 2024.0);
+    assert_eq!(global_number(&interp, "__mo"), 5.0);
+    assert_eq!(global_number(&interp, "__d"), 15.0);
+    assert_eq!(global_number(&interp, "__h"), 23.0);
+    assert_eq!(global_number(&interp, "__mi"), 59.0);
+    assert_eq!(global_number(&interp, "__s"), 58.0);
+    assert_eq!(global_number(&interp, "__ms"), 999.0);
+}
+
+#[test]
+fn date_set_utc_full_year_on_invalid_date_seeds_missing_args_from_epoch_not_nan() {
+    let interp = run_script(
+        r#"
+        var d = new Date(NaN);
+        d.setUTCFullYear(2024);
+        globalThis.__y = d.getUTCFullYear();
+        globalThis.__mo = d.getUTCMonth();
+        globalThis.__d = d.getUTCDate();
+        "#,
+    );
+    assert_eq!(global_number(&interp, "__y"), 2024.0);
+    assert_eq!(global_number(&interp, "__mo"), 0.0);
+    assert_eq!(global_number(&interp, "__d"), 1.0);
+}

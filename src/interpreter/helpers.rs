@@ -1531,6 +1531,18 @@ pub(crate) fn utc_time(t: f64) -> f64 {
     t - local_tza()
 }
 
+/// Shared final step of every `Date.prototype.set*` method: combine a day
+/// number and a time-within-day into an absolute time, convert back from
+/// local time to UTC when `is_local`, and clip to the valid Date range.
+pub(crate) fn make_date_clipped(day: f64, time: f64, is_local: bool) -> f64 {
+    let combined = make_date(day, time);
+    time_clip(if is_local {
+        utc_time(combined)
+    } else {
+        combined
+    })
+}
+
 pub(crate) fn now_ms() -> f64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -2347,5 +2359,51 @@ mod resolve_relative_index_tests {
     fn zero_length_clamps_everything_to_zero() {
         assert_eq!(resolve_relative_index(-1.0, 0), 0);
         assert_eq!(resolve_relative_index(5.0, 0), 0);
+    }
+}
+
+#[cfg(test)]
+mod make_date_clipped_tests {
+    use super::{make_date, make_date_clipped, time_clip, utc_time};
+
+    #[test]
+    fn utc_variant_matches_plain_make_date_then_clip() {
+        for (day, time) in [(0.0, 0.0), (19858.0, 3_723_000.0), (-100_000.0, 12_345.0)] {
+            assert_eq!(
+                make_date_clipped(day, time, false),
+                time_clip(make_date(day, time))
+            );
+        }
+    }
+
+    #[test]
+    fn local_variant_additionally_converts_from_local_to_utc() {
+        for (day, time) in [(0.0, 0.0), (19858.0, 3_723_000.0), (-100_000.0, 12_345.0)] {
+            assert_eq!(
+                make_date_clipped(day, time, true),
+                time_clip(utc_time(make_date(day, time)))
+            );
+        }
+    }
+
+    #[test]
+    fn nan_day_or_time_propagates_as_nan() {
+        assert!(make_date_clipped(f64::NAN, 0.0, false).is_nan());
+        assert!(make_date_clipped(0.0, f64::NAN, false).is_nan());
+        assert!(make_date_clipped(f64::NAN, 0.0, true).is_nan());
+    }
+
+    #[test]
+    fn out_of_range_day_clips_to_nan() {
+        // 1e9 days is far beyond the +/-100,000,000-day valid Date range.
+        assert!(make_date_clipped(1e9, 0.0, false).is_nan());
+        assert!(make_date_clipped(1e9, 0.0, true).is_nan());
+    }
+
+    #[test]
+    fn negative_zero_result_normalizes_to_positive_zero() {
+        let v = make_date_clipped(0.0, 0.0, false);
+        assert_eq!(v, 0.0);
+        assert!(v.is_sign_positive());
     }
 }

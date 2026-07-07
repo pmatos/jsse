@@ -237,6 +237,36 @@ impl Interpreter {
             interp.to_number_value(val)
         }
 
+        // Every `set*` method reads its Nth argument (falling back to a
+        // caller-supplied default, e.g. the current time's own component,
+        // when the argument is absent) via ToNumber -- shared here so the
+        // cascading-default logic isn't hand-rolled per component per method.
+        fn arg_num_or(
+            interp: &mut Interpreter,
+            args: &[JsValue],
+            idx: usize,
+            default: f64,
+        ) -> Result<f64, JsValue> {
+            match args.get(idx) {
+                Some(a) => to_num(interp, a),
+                None => Ok(default),
+            }
+        }
+
+        // Shared final step of every `set*` method: combine day + time,
+        // clip, store on `this`, and return the new time value.
+        fn finish_set(
+            interp: &Interpreter,
+            this: &JsValue,
+            day: f64,
+            time: f64,
+            is_local: bool,
+        ) -> Completion {
+            let v = make_date_clipped(day, time, is_local);
+            set_date_value(interp, this, v);
+            Completion::Normal(JsValue::Number(v))
+        }
+
         // Getter methods
         #[allow(clippy::type_complexity)]
         let methods: Vec<(
@@ -479,12 +509,9 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let v = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let v = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     let v = time_clip(v);
                     set_date_value(interp, this, v);
@@ -499,12 +526,9 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let ms = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let ms = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
@@ -512,9 +536,7 @@ impl Interpreter {
                     let lt = local_time(t);
                     let time =
                         make_time(hour_from_time(lt), min_from_time(lt), sec_from_time(lt), ms);
-                    let v = time_clip(utc_time(make_date(day(lt), time)));
-                    set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    finish_set(interp, this, day(lt), time, true)
                 }),
             ),
             (
@@ -525,20 +547,15 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let ms = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let ms = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
                     }
                     let time = make_time(hour_from_time(t), min_from_time(t), sec_from_time(t), ms);
-                    let v = time_clip(make_date(day(t), time));
-                    set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    finish_set(interp, this, day(t), time, false)
                 }),
             ),
             (
@@ -549,34 +566,25 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let s = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let s = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
-                    let ms = match args.get(1) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => {
-                            if t.is_nan() {
-                                f64::NAN
-                            } else {
-                                ms_from_time(local_time(t))
-                            }
-                        }
+                    let ms_default = if t.is_nan() {
+                        f64::NAN
+                    } else {
+                        ms_from_time(local_time(t))
+                    };
+                    let ms = match arg_num_or(interp, args, 1, ms_default) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
                     }
                     let lt = local_time(t);
                     let time = make_time(hour_from_time(lt), min_from_time(lt), s, ms);
-                    let v = time_clip(utc_time(make_date(day(lt), time)));
-                    set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    finish_set(interp, this, day(lt), time, true)
                 }),
             ),
             (
@@ -587,33 +595,24 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let s = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let s = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
-                    let ms = match args.get(1) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => {
-                            if t.is_nan() {
-                                f64::NAN
-                            } else {
-                                ms_from_time(t)
-                            }
-                        }
+                    let ms_default = if t.is_nan() {
+                        f64::NAN
+                    } else {
+                        ms_from_time(t)
+                    };
+                    let ms = match arg_num_or(interp, args, 1, ms_default) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
                     }
                     let time = make_time(hour_from_time(t), min_from_time(t), s, ms);
-                    let v = time_clip(make_date(day(t), time));
-                    set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    finish_set(interp, this, day(t), time, false)
                 }),
             ),
             (
@@ -624,47 +623,34 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let m = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let m = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
-                    let s = match args.get(1) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => {
-                            if t.is_nan() {
-                                f64::NAN
-                            } else {
-                                sec_from_time(local_time(t))
-                            }
-                        }
+                    let s_default = if t.is_nan() {
+                        f64::NAN
+                    } else {
+                        sec_from_time(local_time(t))
                     };
-                    let ms = match args.get(2) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => {
-                            if t.is_nan() {
-                                f64::NAN
-                            } else {
-                                ms_from_time(local_time(t))
-                            }
-                        }
+                    let s = match arg_num_or(interp, args, 1, s_default) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let ms_default = if t.is_nan() {
+                        f64::NAN
+                    } else {
+                        ms_from_time(local_time(t))
+                    };
+                    let ms = match arg_num_or(interp, args, 2, ms_default) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
                     }
                     let lt = local_time(t);
                     let time = make_time(hour_from_time(lt), m, s, ms);
-                    let v = time_clip(utc_time(make_date(day(lt), time)));
-                    set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    finish_set(interp, this, day(lt), time, true)
                 }),
             ),
             (
@@ -675,46 +661,33 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let m = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let m = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
-                    let s = match args.get(1) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => {
-                            if t.is_nan() {
-                                f64::NAN
-                            } else {
-                                sec_from_time(t)
-                            }
-                        }
+                    let s_default = if t.is_nan() {
+                        f64::NAN
+                    } else {
+                        sec_from_time(t)
                     };
-                    let ms = match args.get(2) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => {
-                            if t.is_nan() {
-                                f64::NAN
-                            } else {
-                                ms_from_time(t)
-                            }
-                        }
+                    let s = match arg_num_or(interp, args, 1, s_default) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let ms_default = if t.is_nan() {
+                        f64::NAN
+                    } else {
+                        ms_from_time(t)
+                    };
+                    let ms = match arg_num_or(interp, args, 2, ms_default) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
                     }
                     let time = make_time(hour_from_time(t), m, s, ms);
-                    let v = time_clip(make_date(day(t), time));
-                    set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    finish_set(interp, this, day(t), time, false)
                 }),
             ),
             (
@@ -725,60 +698,43 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let h = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let h = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
-                    let m = match args.get(1) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => {
-                            if t.is_nan() {
-                                f64::NAN
-                            } else {
-                                min_from_time(local_time(t))
-                            }
-                        }
+                    let m_default = if t.is_nan() {
+                        f64::NAN
+                    } else {
+                        min_from_time(local_time(t))
                     };
-                    let s = match args.get(2) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => {
-                            if t.is_nan() {
-                                f64::NAN
-                            } else {
-                                sec_from_time(local_time(t))
-                            }
-                        }
+                    let m = match arg_num_or(interp, args, 1, m_default) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
-                    let ms = match args.get(3) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => {
-                            if t.is_nan() {
-                                f64::NAN
-                            } else {
-                                ms_from_time(local_time(t))
-                            }
-                        }
+                    let s_default = if t.is_nan() {
+                        f64::NAN
+                    } else {
+                        sec_from_time(local_time(t))
+                    };
+                    let s = match arg_num_or(interp, args, 2, s_default) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let ms_default = if t.is_nan() {
+                        f64::NAN
+                    } else {
+                        ms_from_time(local_time(t))
+                    };
+                    let ms = match arg_num_or(interp, args, 3, ms_default) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
                     }
                     let lt = local_time(t);
                     let time = make_time(h, m, s, ms);
-                    let v = time_clip(utc_time(make_date(day(lt), time)));
-                    set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    finish_set(interp, this, day(lt), time, true)
                 }),
             ),
             (
@@ -789,59 +745,42 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let h = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let h = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
-                    let m = match args.get(1) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => {
-                            if t.is_nan() {
-                                f64::NAN
-                            } else {
-                                min_from_time(t)
-                            }
-                        }
+                    let m_default = if t.is_nan() {
+                        f64::NAN
+                    } else {
+                        min_from_time(t)
                     };
-                    let s = match args.get(2) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => {
-                            if t.is_nan() {
-                                f64::NAN
-                            } else {
-                                sec_from_time(t)
-                            }
-                        }
+                    let m = match arg_num_or(interp, args, 1, m_default) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
-                    let ms = match args.get(3) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => {
-                            if t.is_nan() {
-                                f64::NAN
-                            } else {
-                                ms_from_time(t)
-                            }
-                        }
+                    let s_default = if t.is_nan() {
+                        f64::NAN
+                    } else {
+                        sec_from_time(t)
+                    };
+                    let s = match arg_num_or(interp, args, 2, s_default) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    let ms_default = if t.is_nan() {
+                        f64::NAN
+                    } else {
+                        ms_from_time(t)
+                    };
+                    let ms = match arg_num_or(interp, args, 3, ms_default) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
                     }
                     let time = make_time(h, m, s, ms);
-                    let v = time_clip(make_date(day(t), time));
-                    set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    finish_set(interp, this, day(t), time, false)
                 }),
             ),
             (
@@ -852,21 +791,16 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let dt = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let dt = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
                     }
                     let lt = local_time(t);
                     let new_date = make_day(year_from_time(lt), month_from_time(lt), dt);
-                    let v = time_clip(utc_time(make_date(new_date, time_within_day(lt))));
-                    set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    finish_set(interp, this, new_date, time_within_day(lt), true)
                 }),
             ),
             (
@@ -877,20 +811,15 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let dt = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let dt = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
                     }
                     let new_date = make_day(year_from_time(t), month_from_time(t), dt);
-                    let v = time_clip(make_date(new_date, time_within_day(t)));
-                    set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    finish_set(interp, this, new_date, time_within_day(t), false)
                 }),
             ),
             (
@@ -901,34 +830,25 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let m = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let m = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
-                    let dt = match args.get(1) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => {
-                            if t.is_nan() {
-                                f64::NAN
-                            } else {
-                                date_from_time(local_time(t))
-                            }
-                        }
+                    let dt_default = if t.is_nan() {
+                        f64::NAN
+                    } else {
+                        date_from_time(local_time(t))
+                    };
+                    let dt = match arg_num_or(interp, args, 1, dt_default) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
                     }
                     let lt = local_time(t);
                     let new_date = make_day(year_from_time(lt), m, dt);
-                    let v = time_clip(utc_time(make_date(new_date, time_within_day(lt))));
-                    set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    finish_set(interp, this, new_date, time_within_day(lt), true)
                 }),
             ),
             (
@@ -939,33 +859,24 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let m = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let m = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
-                    let dt = match args.get(1) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => {
-                            if t.is_nan() {
-                                f64::NAN
-                            } else {
-                                date_from_time(t)
-                            }
-                        }
+                    let dt_default = if t.is_nan() {
+                        f64::NAN
+                    } else {
+                        date_from_time(t)
+                    };
+                    let dt = match arg_num_or(interp, args, 1, dt_default) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
                         return Completion::Normal(JsValue::Number(f64::NAN));
                     }
                     let new_date = make_day(year_from_time(t), m, dt);
-                    let v = time_clip(make_date(new_date, time_within_day(t)));
-                    set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    finish_set(interp, this, new_date, time_within_day(t), false)
                 }),
             ),
             (
@@ -976,33 +887,22 @@ impl Interpreter {
                         let e = interp.create_type_error("this is not a Date object");
                         return Completion::Throw(e);
                     };
-                    let y = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let y = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     // Per spec: if t is NaN, set t to +0; otherwise set t to LocalTime(t)
                     let lt = if t.is_nan() { 0.0 } else { local_time(t) };
-                    let m = match args.get(1) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => month_from_time(lt),
+                    let m = match arg_num_or(interp, args, 1, month_from_time(lt)) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
-                    let dt = match args.get(2) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => date_from_time(lt),
+                    let dt = match arg_num_or(interp, args, 2, date_from_time(lt)) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     let new_date = make_day(y, m, dt);
-                    let v = time_clip(utc_time(make_date(new_date, time_within_day(lt))));
-                    set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    finish_set(interp, this, new_date, time_within_day(lt), true)
                 }),
             ),
             (
@@ -1015,31 +915,20 @@ impl Interpreter {
                     };
                     // Per spec: NaN check before ToNumber for setUTCFullYear
                     let t_adj = if t.is_nan() { 0.0 } else { t };
-                    let y = match args.first() {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => f64::NAN,
+                    let y = match arg_num_or(interp, args, 0, f64::NAN) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
-                    let m = match args.get(1) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => month_from_time(t_adj),
+                    let m = match arg_num_or(interp, args, 1, month_from_time(t_adj)) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
-                    let dt = match args.get(2) {
-                        Some(a) => match to_num(interp, a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        },
-                        None => date_from_time(t_adj),
+                    let dt = match arg_num_or(interp, args, 2, date_from_time(t_adj)) {
+                        Ok(n) => n,
+                        Err(e) => return Completion::Throw(e),
                     };
                     let new_date = make_day(y, m, dt);
-                    let v = time_clip(make_date(new_date, time_within_day(t_adj)));
-                    set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    finish_set(interp, this, new_date, time_within_day(t_adj), false)
                 }),
             ),
             // String formatting methods
@@ -1597,12 +1486,9 @@ impl Interpreter {
                     let e = interp.create_type_error("this is not a Date object");
                     return Completion::Throw(e);
                 };
-                let y = match args.first() {
-                    Some(a) => match to_num(interp, a) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    },
-                    None => f64::NAN,
+                let y = match arg_num_or(interp, args, 0, f64::NAN) {
+                    Ok(n) => n,
+                    Err(e) => return Completion::Throw(e),
                 };
                 if y.is_nan() {
                     set_date_value(interp, this, f64::NAN);
@@ -1616,9 +1502,7 @@ impl Interpreter {
                 };
                 let t = if t.is_nan() { 0.0 } else { local_time(t) };
                 let new_date = make_day(yr, month_from_time(t), date_from_time(t));
-                let v = time_clip(utc_time(make_date(new_date, time_within_day(t))));
-                set_date_value(interp, this, v);
-                Completion::Normal(JsValue::Number(v))
+                finish_set(interp, this, new_date, time_within_day(t), true)
             }),
             false,
         ));
