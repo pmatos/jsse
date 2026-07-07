@@ -84,6 +84,15 @@ fn to_num(interp: &mut Interpreter, val: &JsValue) -> Result<f64, Completion> {
     }
 }
 
+// §7.1.5 `? ToIntegerOrInfinity(argument)` in the local `to_num`-style shape
+// (Completion errors) used throughout the String prototype builtins.
+fn to_int_or_inf(interp: &mut Interpreter, val: &JsValue) -> Result<f64, Completion> {
+    match interp.to_integer_or_infinity_value(val) {
+        Ok(n) => Ok(n),
+        Err(e) => Err(Completion::Throw(e)),
+    }
+}
+
 fn utf16_units(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
@@ -156,8 +165,8 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let pos = match args.first() {
-                        Some(v) => match to_num(interp, v) {
-                            Ok(n) => to_integer_or_infinity(n),
+                        Some(v) => match to_int_or_inf(interp, v) {
+                            Ok(n) => n,
                             Err(c) => return c,
                         },
                         None => 0.0,
@@ -181,8 +190,8 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let pos = match args.first() {
-                        Some(v) => match to_num(interp, v) {
-                            Ok(n) => to_integer_or_infinity(n),
+                        Some(v) => match to_int_or_inf(interp, v) {
+                            Ok(n) => n,
                             Err(c) => return c,
                         },
                         None => 0.0,
@@ -204,8 +213,8 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let pos = match args.first() {
-                        Some(v) => match to_num(interp, v) {
-                            Ok(n) => to_integer_or_infinity(n),
+                        Some(v) => match to_int_or_inf(interp, v) {
+                            Ok(n) => n,
                             Err(c) => return c,
                         },
                         None => 0.0,
@@ -244,8 +253,8 @@ impl Interpreter {
                         None => "undefined".to_string(),
                     };
                     let pos = match args.get(1) {
-                        Some(v) => match to_num(interp, v) {
-                            Ok(n) => to_integer_or_infinity(n),
+                        Some(v) => match to_int_or_inf(interp, v) {
+                            Ok(n) => n,
                             Err(c) => return c,
                         },
                         None => 0.0,
@@ -337,8 +346,8 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let pos = match args.get(1) {
-                        Some(v) => match to_num(interp, v) {
-                            Ok(n) => to_integer_or_infinity(n).max(0.0) as usize,
+                        Some(v) => match to_int_or_inf(interp, v) {
+                            Ok(n) => n.max(0.0) as usize,
                             Err(c) => return c,
                         },
                         None => 0,
@@ -385,10 +394,12 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let pos = match args.get(1) {
-                        Some(v) if !matches!(v, JsValue::Undefined) => match to_num(interp, v) {
-                            Ok(n) => to_integer_or_infinity(n).max(0.0) as usize,
-                            Err(c) => return c,
-                        },
+                        Some(v) if !matches!(v, JsValue::Undefined) => {
+                            match to_int_or_inf(interp, v) {
+                                Ok(n) => n.max(0.0) as usize,
+                                Err(c) => return c,
+                            }
+                        }
                         _ => 0,
                     };
                     let s_units = utf16_units(&s);
@@ -430,10 +441,12 @@ impl Interpreter {
                     let search_units = utf16_units(&search);
                     let s_len = s_units.len();
                     let end_pos = match args.get(1) {
-                        Some(v) if !matches!(v, JsValue::Undefined) => match to_num(interp, v) {
-                            Ok(n) => to_integer_or_infinity(n).max(0.0).min(s_len as f64) as usize,
-                            Err(c) => return c,
-                        },
+                        Some(v) if !matches!(v, JsValue::Undefined) => {
+                            match to_int_or_inf(interp, v) {
+                                Ok(n) => n.max(0.0).min(s_len as f64) as usize,
+                                Err(c) => return c,
+                            }
+                        }
                         _ => s_len,
                     };
                     let search_len = search_units.len();
@@ -456,17 +469,19 @@ impl Interpreter {
                     let units = &js_str.code_units;
                     let len = units.len() as f64;
                     let int_start = match args.first() {
-                        Some(v) => match to_num(interp, v) {
-                            Ok(n) => to_integer_or_infinity(n),
+                        Some(v) => match to_int_or_inf(interp, v) {
+                            Ok(n) => n,
                             Err(c) => return c,
                         },
                         None => 0.0,
                     };
                     let int_end = match args.get(1) {
-                        Some(v) if !matches!(v, JsValue::Undefined) => match to_num(interp, v) {
-                            Ok(n) => to_integer_or_infinity(n),
-                            Err(c) => return c,
-                        },
+                        Some(v) if !matches!(v, JsValue::Undefined) => {
+                            match to_int_or_inf(interp, v) {
+                                Ok(n) => n,
+                                Err(c) => return c,
+                            }
+                        }
                         _ => len,
                     };
                     let from = resolve_relative_index(int_start, len as usize);
@@ -634,8 +649,8 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let n = match args.first() {
-                        Some(v) => match to_num(interp, v) {
-                            Ok(n) => to_integer_or_infinity(n),
+                        Some(v) => match to_int_or_inf(interp, v) {
+                            Ok(n) => n,
                             Err(c) => return c,
                         },
                         None => 0.0,
@@ -656,8 +671,8 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let max_length = match args.first() {
-                        Some(v) => match to_num(interp, v) {
-                            Ok(n) => to_integer_or_infinity(n),
+                        Some(v) => match to_int_or_inf(interp, v) {
+                            Ok(n) => n,
                             Err(c) => return c,
                         },
                         None => 0.0,
@@ -692,8 +707,8 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let max_length = match args.first() {
-                        Some(v) => match to_num(interp, v) {
-                            Ok(n) => to_integer_or_infinity(n),
+                        Some(v) => match to_int_or_inf(interp, v) {
+                            Ok(n) => n,
                             Err(c) => return c,
                         },
                         None => 0.0,
@@ -1124,8 +1139,8 @@ impl Interpreter {
                     let units = &js_str.code_units;
                     let len = units.len() as i64;
                     let idx = match args.first() {
-                        Some(v) => match to_num(interp, v) {
-                            Ok(n) => to_integer_or_infinity(n) as i64,
+                        Some(v) => match to_int_or_inf(interp, v) {
+                            Ok(n) => n as i64,
                             Err(c) => return c,
                         },
                         None => 0,

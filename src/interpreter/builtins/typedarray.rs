@@ -1863,8 +1863,8 @@ impl Interpreter {
                     // Capture len BEFORE argument coercion (may resize buffer)
                     let len = typed_array_length(&ta) as i64;
                     let idx_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let idx = match interp.to_number_value(&idx_val) {
-                        Ok(n) => to_integer(n) as i64,
+                    let idx = match interp.to_integer_or_infinity_value(&idx_val) {
+                        Ok(n) => n as i64,
                         Err(e) => return Completion::Throw(e),
                     };
                     let actual = if idx < 0 { len + idx } else { idx };
@@ -1907,8 +1907,8 @@ impl Interpreter {
 
                     // Step 2: ToIntegerOrInfinity(offset) BEFORE detach check
                     let offset_f = if args.len() > 1 {
-                        match interp.to_number_value(&args[1]) {
-                            Ok(n) => to_integer(n),
+                        match interp.to_integer_or_infinity_value(&args[1]) {
+                            Ok(n) => n,
                             Err(e) => return Completion::Throw(e),
                         }
                     } else {
@@ -2006,8 +2006,8 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        let src_len = match interp.to_number_value(&len_val) {
-                            Ok(n) => to_integer(n) as usize,
+                        let src_len = match interp.to_integer_or_infinity_value(&len_val) {
+                            Ok(n) => n as usize,
                             Err(e) => return Completion::Throw(e),
                         };
                         if offset + src_len > target_len {
@@ -2071,7 +2071,7 @@ impl Interpreter {
                         typed_array_length(&ta) as i64
                     };
                     let begin = {
-                        let n = to_integer(if let Some(a) = args.first() {
+                        let n = to_integer_or_infinity(if let Some(a) = args.first() {
                             match interp.to_number_value(a) {
                                 Ok(n) => n,
                                 Err(e) => return Completion::Throw(e),
@@ -2085,10 +2085,10 @@ impl Interpreter {
                         args.len() <= 1 || matches!(args.get(1), Some(JsValue::Undefined));
                     let end = {
                         let n = if !end_is_undefined {
-                            to_integer(match interp.to_number_value(&args[1]) {
+                            match interp.to_integer_or_infinity_value(&args[1]) {
                                 Ok(n) => n,
                                 Err(e) => return Completion::Throw(e),
-                            })
+                            }
                         } else {
                             src_len as f64
                         };
@@ -2137,7 +2137,7 @@ impl Interpreter {
                     };
                     let len = typed_array_length(&ta) as i64;
                     let begin = {
-                        let n = to_integer(if let Some(a) = args.first() {
+                        let n = to_integer_or_infinity(if let Some(a) = args.first() {
                             match interp.to_number_value(a) {
                                 Ok(n) => n,
                                 Err(e) => return Completion::Throw(e),
@@ -2149,10 +2149,10 @@ impl Interpreter {
                     };
                     let end = {
                         let n = if args.len() > 1 && !matches!(args[1], JsValue::Undefined) {
-                            to_integer(match interp.to_number_value(&args[1]) {
+                            match interp.to_integer_or_infinity_value(&args[1]) {
                                 Ok(n) => n,
                                 Err(e) => return Completion::Throw(e),
-                            })
+                            }
                         } else {
                             len as f64
                         };
@@ -2275,27 +2275,27 @@ impl Interpreter {
                     }
                     let len = typed_array_length(&ta) as i64;
                     let target = {
-                        let n = match interp
-                            .to_number_value(args.first().unwrap_or(&JsValue::Undefined))
-                        {
+                        let n = match interp.to_integer_or_infinity_value(
+                            args.first().unwrap_or(&JsValue::Undefined),
+                        ) {
                             Ok(n) => n,
                             Err(e) => return Completion::Throw(e),
                         };
-                        resolve_relative_index(to_integer(n), len as usize)
+                        resolve_relative_index(n, len as usize)
                     };
                     let start = {
-                        let n = match interp
-                            .to_number_value(args.get(1).unwrap_or(&JsValue::Undefined))
-                        {
+                        let n = match interp.to_integer_or_infinity_value(
+                            args.get(1).unwrap_or(&JsValue::Undefined),
+                        ) {
                             Ok(n) => n,
                             Err(e) => return Completion::Throw(e),
                         };
-                        resolve_relative_index(to_integer(n), len as usize)
+                        resolve_relative_index(n, len as usize)
                     };
                     let end = {
                         let n = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
-                            match interp.to_number_value(&args[2]) {
-                                Ok(n) => to_integer(n),
+                            match interp.to_integer_or_infinity_value(&args[2]) {
+                                Ok(n) => n,
                                 Err(e) => return Completion::Throw(e),
                             }
                         } else {
@@ -2373,7 +2373,7 @@ impl Interpreter {
                     };
                     let len_f = len as f64;
                     let start = {
-                        let v = to_integer(if args.len() > 1 {
+                        let v = to_integer_or_infinity(if args.len() > 1 {
                             match interp.to_number_value(&args[1]) {
                                 Ok(n) => n,
                                 Err(e) => return Completion::Throw(e),
@@ -2385,10 +2385,10 @@ impl Interpreter {
                     };
                     let end = {
                         let v = if args.len() > 2 && !matches!(args[2], JsValue::Undefined) {
-                            to_integer(match interp.to_number_value(&args[2]) {
+                            match interp.to_integer_or_infinity_value(&args[2]) {
                                 Ok(n) => n,
                                 Err(e) => return Completion::Throw(e),
-                            })
+                            }
                         } else {
                             len_f
                         };
@@ -2444,7 +2444,7 @@ impl Interpreter {
                     }
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let from = if args.len() > 1 {
-                        to_integer(match interp.to_number_value(&args[1]) {
+                        (match interp.to_integer_or_infinity_value(&args[1]) {
                             Ok(n) => n,
                             Err(e) => return Completion::Throw(e),
                         }) as i64
@@ -2500,7 +2500,7 @@ impl Interpreter {
                     }
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let from = if args.len() > 1 {
-                        to_integer(match interp.to_number_value(&args[1]) {
+                        (match interp.to_integer_or_infinity_value(&args[1]) {
                             Ok(n) => n,
                             Err(e) => return Completion::Throw(e),
                         }) as i64
@@ -2557,7 +2557,7 @@ impl Interpreter {
                     }
                     let search = args.first().cloned().unwrap_or(JsValue::Undefined);
                     let from = if args.len() > 1 {
-                        to_integer(match interp.to_number_value(&args[1]) {
+                        (match interp.to_integer_or_infinity_value(&args[1]) {
                             Ok(n) => n,
                             Err(e) => return Completion::Throw(e),
                         }) as i64
@@ -5326,8 +5326,8 @@ impl Interpreter {
                 Completion::Throw(e) => return Err(Completion::Throw(e)),
                 _ => return Ok(Vec::new()),
             };
-            let len_f = match self.to_number_value(&len_val) {
-                Ok(n) => to_integer(n),
+            let len_f = match self.to_integer_or_infinity_value(&len_val) {
+                Ok(n) => n,
                 Err(e) => return Err(Completion::Throw(e)),
             };
             // §22.2.4.4 step 4+6: AllocateTypedArrayBuffer requires len <= 2^53-1
@@ -6296,16 +6296,6 @@ pub(crate) fn dv_f64_to_f16_bits(val: f64) -> u16 {
         return sign | (1 << 10);
     }
     sign | rounded
-}
-
-fn to_integer(n: f64) -> f64 {
-    if n.is_nan() {
-        return 0.0;
-    }
-    if n == 0.0 || n.is_infinite() {
-        return n;
-    }
-    n.signum() * n.abs().floor()
 }
 
 fn is_bigint_kind(kind: TypedArrayKind) -> bool {
