@@ -165,9 +165,9 @@ fn obj_set_throw(
                 let num_val = if is_bigint {
                     interp.to_bigint_value(&value)?
                 } else {
-                    match interp.to_number_value(&value) {
-                        Ok(n) => JsValue::Number(n),
-                        Err(e) => return Err(e),
+                    {
+                        let n = interp.to_number_value(&value)?;
+                        JsValue::Number(n)
                     }
                 };
                 if let Some(cell) = interp.get_object_cell(obj_ref.id)

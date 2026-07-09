@@ -452,9 +452,9 @@ pub(crate) fn json_stringify_full(
                 Completion::Throw(e) => return Err(e),
                 _ => JsValue::Undefined,
             };
-            let len = match interp.to_number_value(&len_val) {
-                Ok(n) => n as usize,
-                Err(e) => return Err(e),
+            let len = {
+                let n = interp.to_number_value(&len_val)?;
+                n as usize
             };
             for i in 0..len {
                 let item = match interp.get_object_property(o.id, &i.to_string(), &obj_val) {
@@ -469,9 +469,9 @@ pub(crate) fn json_stringify_full(
                         if let Some(inner) = interp.get_object_cell(oo.id) {
                             let cn = inner.borrow().class_name.clone();
                             if cn == "String" || cn == "Number" {
-                                match interp.to_string_value(&item) {
-                                    Ok(s) => Some(s),
-                                    Err(e) => return Err(e),
+                                {
+                                    let s = interp.to_string_value(&item)?;
+                                    Some(s)
                                 }
                             } else {
                                 None
@@ -585,14 +585,14 @@ fn json_stringify_internal(
             String::new()
         };
         match class.as_str() {
-            "Number" => match interp.to_number_value(&value) {
-                Ok(n) => value = JsValue::Number(n),
-                Err(e) => return Err(e),
-            },
-            "String" => match interp.to_string_value(&value) {
-                Ok(s) => value = JsValue::String(JsString::from_str(&s)),
-                Err(e) => return Err(e),
-            },
+            "Number" => {
+                let n = interp.to_number_value(&value)?;
+                value = JsValue::Number(n)
+            }
+            "String" => {
+                let s = interp.to_string_value(&value)?;
+                value = JsValue::String(JsString::from_str(&s))
+            }
             "Boolean" => {
                 if let Some(cell) = interp.get_object_cell(o.id)
                     && let Some(pv) = cell.borrow().primitive_value.clone()

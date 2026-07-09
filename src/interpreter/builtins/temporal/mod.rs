@@ -3005,10 +3005,9 @@ pub(crate) fn parse_temporal_date_time_string(s: &str) -> Option<ParsedIsoDateTi
             }
             // If it looks like a UTC offset, validate no sub-minute precision
             if annotation.starts_with('+') || annotation.starts_with('-') {
-                if let Some(parsed_off) = parse_utc_offset_timezone(annotation) {
+                {
+                    let parsed_off = parse_utc_offset_timezone(annotation)?;
                     time_zone = Some(parsed_off);
-                } else {
-                    return None;
                 }
             } else {
                 // IANA name or custom timezone — store as-is

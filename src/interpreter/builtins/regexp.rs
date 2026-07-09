@@ -6285,16 +6285,12 @@ fn spec_set(
         // Proxy set trap
         if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
             let receiver = obj_val.clone();
-            match interp.proxy_set(obj_id, key, value, &receiver) {
-                Ok(success) => {
-                    if !success && throw {
-                        return Err(
-                            interp.create_type_error(&format!("Cannot set property '{key}'"))
-                        );
-                    }
-                    return Ok(());
+            {
+                let success = interp.proxy_set(obj_id, key, value, &receiver)?;
+                if !success && throw {
+                    return Err(interp.create_type_error(&format!("Cannot set property '{key}'")));
                 }
-                Err(e) => return Err(e),
+                return Ok(());
             }
         }
         // Check for setter accessor
