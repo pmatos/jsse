@@ -1185,8 +1185,8 @@ impl Interpreter {
             }
             let search = args.first().cloned().unwrap_or(JsValue::Undefined);
             let n = if args.len() >= 2 {
-                match interp.to_number_value(&args[1]) {
-                    Ok(v) => to_integer_or_infinity(v),
+                match interp.to_integer_or_infinity_value(&args[1]) {
+                    Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 }
             } else {
@@ -1235,8 +1235,8 @@ impl Interpreter {
             }
             let search = args.first().cloned().unwrap_or(JsValue::Undefined);
             let n = if args.len() >= 2 {
-                match interp.to_number_value(&args[1]) {
-                    Ok(v) => to_integer_or_infinity(v),
+                match interp.to_integer_or_infinity_value(&args[1]) {
+                    Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 }
             } else {
@@ -1285,8 +1285,8 @@ impl Interpreter {
             }
             let search = args.first().cloned().unwrap_or(JsValue::Undefined);
             let n = if args.len() >= 2 {
-                match interp.to_number_value(&args[1]) {
-                    Ok(v) => to_integer_or_infinity(v),
+                match interp.to_integer_or_infinity_value(&args[1]) {
+                    Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 }
             } else {
@@ -1555,8 +1555,8 @@ impl Interpreter {
                 Err(c) => return c,
             } as i64;
             let relative_start = if let Some(v) = args.first() {
-                match interp.to_number_value(v) {
-                    Ok(n) => to_integer_or_infinity(n),
+                match interp.to_integer_or_infinity_value(v) {
+                    Ok(n) => n,
                     Err(e) => return Completion::Throw(e),
                 }
             } else {
@@ -1567,8 +1567,8 @@ impl Interpreter {
                 if matches!(v, JsValue::Undefined) {
                     len as f64
                 } else {
-                    match interp.to_number_value(v) {
-                        Ok(n) => to_integer_or_infinity(n),
+                    match interp.to_integer_or_infinity_value(v) {
+                        Ok(n) => n,
                         Err(e) => return Completion::Throw(e),
                     }
                 }
@@ -2272,8 +2272,8 @@ impl Interpreter {
                 Err(c) => return c,
             };
             let relative_start = if let Some(v) = args.first() {
-                match interp.to_number_value(v) {
-                    Ok(n) => to_integer_or_infinity(n),
+                match interp.to_integer_or_infinity_value(v) {
+                    Ok(n) => n,
                     Err(e) => return Completion::Throw(e),
                 }
             } else {
@@ -2286,8 +2286,8 @@ impl Interpreter {
             } else if args.len() == 1 {
                 (len - actual_start as i64) as usize
             } else {
-                let dc = match interp.to_number_value(&args[1]) {
-                    Ok(n) => to_integer_or_infinity(n),
+                let dc = match interp.to_integer_or_infinity_value(&args[1]) {
+                    Ok(n) => n,
                     Err(e) => return Completion::Throw(e),
                 };
                 dc.max(0.0).min((len - actual_start as i64) as f64) as usize
@@ -2432,8 +2432,8 @@ impl Interpreter {
                 Err(c) => return c,
             };
             let relative_start = if let Some(v) = args.first() {
-                match interp.to_number_value(v) {
-                    Ok(n) => to_integer_or_infinity(n),
+                match interp.to_integer_or_infinity_value(v) {
+                    Ok(n) => n,
                     Err(e) => return Completion::Throw(e),
                 }
             } else {
@@ -2445,8 +2445,8 @@ impl Interpreter {
             } else if args.len() == 1 {
                 (len - actual_start as i64) as usize
             } else {
-                let dc = match interp.to_number_value(&args[1]) {
-                    Ok(n) => to_integer_or_infinity(n),
+                let dc = match interp.to_integer_or_infinity_value(&args[1]) {
+                    Ok(n) => n,
                     Err(e) => return Completion::Throw(e),
                 };
                 dc.max(0.0).min((len - actual_start as i64) as f64) as usize
@@ -2493,8 +2493,8 @@ impl Interpreter {
             };
             let value = args.first().cloned().unwrap_or(JsValue::Undefined);
             let relative_start = if let Some(v) = args.get(1) {
-                match interp.to_number_value(v) {
-                    Ok(n) => to_integer_or_infinity(n),
+                match interp.to_integer_or_infinity_value(v) {
+                    Ok(n) => n,
                     Err(e) => return Completion::Throw(e),
                 }
             } else {
@@ -2505,8 +2505,8 @@ impl Interpreter {
                 if matches!(v, JsValue::Undefined) {
                     len as f64
                 } else {
-                    match interp.to_number_value(v) {
-                        Ok(n) => to_integer_or_infinity(n),
+                    match interp.to_integer_or_infinity_value(v) {
+                        Ok(n) => n,
                         Err(e) => return Completion::Throw(e),
                     }
                 }
@@ -2746,8 +2746,8 @@ impl Interpreter {
                 if matches!(d, JsValue::Undefined) {
                     1.0
                 } else {
-                    match interp.to_number_value(d) {
-                        Ok(n) => to_integer_or_infinity(n),
+                    match interp.to_integer_or_infinity_value(d) {
+                        Ok(n) => n,
                         Err(e) => return Completion::Throw(e),
                     }
                 }
@@ -2949,8 +2949,8 @@ impl Interpreter {
                 Err(c) => return c,
             };
             let relative_target = if let Some(v) = args.first() {
-                match interp.to_number_value(v) {
-                    Ok(n) => to_integer_or_infinity(n),
+                match interp.to_integer_or_infinity_value(v) {
+                    Ok(n) => n,
                     Err(e) => return Completion::Throw(e),
                 }
             } else {
@@ -2958,8 +2958,8 @@ impl Interpreter {
             };
             let to_val = resolve_relative_index(relative_target, len as usize) as i64;
             let relative_start = if let Some(v) = args.get(1) {
-                match interp.to_number_value(v) {
-                    Ok(n) => to_integer_or_infinity(n),
+                match interp.to_integer_or_infinity_value(v) {
+                    Ok(n) => n,
                     Err(e) => return Completion::Throw(e),
                 }
             } else {
@@ -2970,8 +2970,8 @@ impl Interpreter {
                 if matches!(v, JsValue::Undefined) {
                     len as f64
                 } else {
-                    match interp.to_number_value(v) {
-                        Ok(n) => to_integer_or_infinity(n),
+                    match interp.to_integer_or_infinity_value(v) {
+                        Ok(n) => n,
                         Err(e) => return Completion::Throw(e),
                     }
                 }
@@ -3025,8 +3025,8 @@ impl Interpreter {
                 Err(c) => return c,
             };
             let relative_index = if let Some(v) = args.first() {
-                match interp.to_number_value(v) {
-                    Ok(n) => to_integer_or_infinity(n) as i64,
+                match interp.to_integer_or_infinity_value(v) {
+                    Ok(n) => n as i64,
                     Err(e) => return Completion::Throw(e),
                 }
             } else {
@@ -3060,8 +3060,8 @@ impl Interpreter {
                 return Completion::Throw(interp.create_range_error("Invalid array length"));
             }
             let relative_index = if let Some(v) = args.first() {
-                match interp.to_number_value(v) {
-                    Ok(n) => to_integer_or_infinity(n) as i64,
+                match interp.to_integer_or_infinity_value(v) {
+                    Ok(n) => n as i64,
                     Err(e) => return Completion::Throw(e),
                 }
             } else {
