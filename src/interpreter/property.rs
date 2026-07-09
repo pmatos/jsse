@@ -1565,17 +1565,13 @@ impl Interpreter {
                         continue;
                     }
                     // Check enumerability via proxy-aware [[GetOwnProperty]]
-                    match self.proxy_get_own_property_descriptor(cid, &key_str) {
-                        Ok(desc_val) => {
-                            seen.insert(key_str.clone());
-                            if !matches!(desc_val, JsValue::Undefined)
-                                && let Ok(desc) = self.to_property_descriptor(&desc_val)
-                                && desc.enumerable != Some(false)
-                            {
-                                keys.push(key_str);
-                            }
-                        }
-                        Err(e) => return Err(e),
+                    let desc_val = self.proxy_get_own_property_descriptor(cid, &key_str)?;
+                    seen.insert(key_str.clone());
+                    if !matches!(desc_val, JsValue::Undefined)
+                        && let Ok(desc) = self.to_property_descriptor(&desc_val)
+                        && desc.enumerable != Some(false)
+                    {
+                        keys.push(key_str);
                     }
                 }
             }

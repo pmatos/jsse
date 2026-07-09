@@ -15247,7 +15247,6 @@ impl Interpreter {
         None
     }
 
-
     /// Get the super base object ID from __home_object__.__proto__ in the given env.
     /// Returns Ok(Some(id)) for a valid super base, Ok(None) for null prototype, or
     /// falls back to __super__.prototype.
