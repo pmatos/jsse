@@ -33,12 +33,13 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
   - `declarations.rs` — Function, class, variable, destructuring parsing
   - `modules.rs` — Module-specific parsing
 - `src/interpreter/` — Tree-walking interpreter
-  - `mod.rs` — Interpreter struct, new(), run(), object/property helpers
+  - `mod.rs` — Interpreter struct, new(), run(), object arena, realm management
   - `types.rs` — Completion, Environment, JsFunction, PropertyDescriptor, JsObjectData, etc.
   - `helpers.rs` — Type conversion, equality, JSON, date math helpers
   - `gc.rs` — Mark-and-sweep GC with ephemeron support
   - `exec.rs` — Statement execution (exec_statements, loops, try/switch)
   - `eval.rs` — Expression evaluation (eval_expr, eval_call, eval_new, etc.)
+  - `property.rs` — Property-access MOP operations ([[Get]], [[Set]], [[DefineOwnProperty]], [[Delete]], [[HasProperty]], proxy traps, array/typed-array exotic, chain walkers)
   - `builtins/` — Built-in object setup
     - `mod.rs` — setup_globals, setup_object_statics, setup_reflect, setup_proxy, setup_function_prototype
     - `array.rs` — setup_array_prototype
@@ -92,7 +93,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - All 13,507 acorn tests should pass on both jsse and Node.
 
 ## Architecture Notes
-- The interpreter is a single-pass tree-walker over the AST — no bytecode compilation.
+- The interpreter is a single-pass tree-walker over the AST. A bytecode compiler/VM exists in `bytecode/` as an experimental fast path (feature-flagged off by default via `bytecode_enabled`). Property-access MOP operations ([[Get]], [[Set]], [[DefineOwnProperty]], [[Delete]], [[HasProperty]], proxy traps, array/typed-array exotic) are consolidated in `property.rs`.
 - Built-in prototypes (e.g. `string_prototype`, `symbol_prototype`) are stored as fields on `Interpreter` and wired up in `setup_builtins()` / `setup_*_prototype()` methods.
 - GC is mark-and-sweep with ephemeron support for WeakMap/WeakSet. Realm prototype fields are still rooted in `gc_safepoint()`. Kind-specific roots are derived from `ObjectKind` via an exhaustive `match` in `gc::trace_object_fields` — adding a new variant fails to compile until the GC walker handles it.
 - `ObjectKind` (in `interpreter/types.rs`) is the canonical "what shape is this object?" discriminator. Each variant owns the kind-specific slot data (`ProxyData`, `ArrayBufferData`, `TypedArrayInfo`, `IteratorState`, `PromiseData`, `BoundFunctionData`, `IterHelperData`, `FinalizationRegistry`, `Map`, `Set`, `Arguments`, `Array`, `ModuleNamespace`, `DisposableStack`, `TemporalData`, `IntlData`, `WrappedFunctionData`, `ShadowRealm`, `RegExpData`, `DataView`, `Ordinary`, `PrimitiveWrapper`). The disjunction is type-enforced — an object cannot be e.g. both a Proxy and a TypedArray simultaneously. Cross-cutting aspects (`callable`, `constructor_kind`, `prototype_id`, `properties`) remain orthogonal fields on `JsObjectData`. Predicate methods (`is_proxy`, `is_class_constructor`, `arraybuffer_is_shared`, etc.) and accessor methods (`obj.bound()`, `obj.proxy()`, `obj.typed_array_info()`, etc.) pull from `kind` and are the supported read API; direct `obj.kind` matching is fine when destructuring is wanted.
