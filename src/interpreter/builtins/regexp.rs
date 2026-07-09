@@ -4654,6 +4654,41 @@ enum CompiledRegex {
         remaining_source: Option<String>,
     },
 }
+/// Annex B.1.2 legacy RegExp static state — the `RegExp.input`, `RegExp.$1`-`$9`,
+/// `RegExp.lastMatch`, `RegExp.lastParen`, `RegExp.leftContext`,
+/// `RegExp.rightContext` statics and the compiled-pattern cache.
+///
+/// All eight legacy fields were previously flat fields on the `Interpreter`
+/// god object (mod.rs L113–119 + L137), touched only by this file. Colocating
+/// them into a single struct deepens the Interpreter: 8 fields collapse to 1,
+/// and the regexp concern gains a clean seam. See `JobScheduler` for the same
+/// pattern (embedded struct accessed via `self.scheduler`).
+pub(crate) struct RegexpLegacyState {
+    pub(crate) input: String,
+    pub(crate) last_match: String,
+    pub(crate) last_paren: String,
+    pub(crate) left_context: String,
+    pub(crate) right_context: String,
+    pub(crate) parens: [String; 9],
+    pub(crate) constructor_id: Option<u64>,
+    pub(crate) regex_cache: HashMap<(String, String), Rc<CachedRegex>>,
+}
+
+impl Default for RegexpLegacyState {
+    fn default() -> Self {
+        Self {
+            input: String::new(),
+            last_match: String::new(),
+            last_paren: String::new(),
+            left_context: String::new(),
+            right_context: String::new(),
+            parens: Default::default(),
+            constructor_id: None,
+            regex_cache: HashMap::new(),
+        }
+    }
+}
+
 
 pub(crate) struct CachedRegex {
     compiled: CompiledRegex,
@@ -4669,7 +4704,7 @@ fn build_regex_cached(
     flags: &str,
 ) -> Result<std::rc::Rc<CachedRegex>, String> {
     let key = (source.to_string(), flags.to_string());
-    if let Some(cached) = interp.regex_cache.get(&key) {
+    if let Some(cached) = interp.regexp_legacy.regex_cache.get(&key) {
         return Ok(std::rc::Rc::clone(cached));
     }
     let (compiled, dup_map, name_order) = build_regex_ex(source, flags)?;
@@ -4678,10 +4713,10 @@ fn build_regex_cached(
         dup_map,
         name_order,
     });
-    if interp.regex_cache.len() >= REGEX_CACHE_MAX {
-        interp.regex_cache.clear();
+    if interp.regexp_legacy.regex_cache.len() >= REGEX_CACHE_MAX {
+        interp.regexp_legacy.regex_cache.clear();
     }
-    interp.regex_cache.insert(key, std::rc::Rc::clone(&entry));
+    interp.regexp_legacy.regex_cache.insert(key, std::rc::Rc::clone(&entry));
     Ok(entry)
 }
 
@@ -6746,14 +6781,14 @@ fn regexp_exec_raw(
 
     // Update Annex B legacy static properties (B.2.4)
     {
-        interp.regexp_legacy_input = input.to_string();
-        interp.regexp_legacy_last_match = full_match.text.clone();
-        interp.regexp_legacy_left_context = if is_bytes_mode {
+        interp.regexp_legacy.input = input.to_string();
+        interp.regexp_legacy.last_match = full_match.text.clone();
+        interp.regexp_legacy.left_context = if is_bytes_mode {
             wtf8_slice_to_pua_string(&wtf8_bytes[..full_match.start])
         } else {
             input[..full_match.start].to_string()
         };
-        interp.regexp_legacy_right_context = if is_bytes_mode {
+        interp.regexp_legacy.right_context = if is_bytes_mode {
             wtf8_slice_to_pua_string(&wtf8_bytes[full_match.end..])
         } else {
             input[full_match.end..].to_string()
@@ -6765,9 +6800,9 @@ fn regexp_exec_raw(
                 break;
             }
         }
-        interp.regexp_legacy_last_paren = last_paren;
+        interp.regexp_legacy.last_paren = last_paren;
         for p in 0..9 {
-            interp.regexp_legacy_parens[p] =
+            interp.regexp_legacy.parens[p] =
                 caps.get(p + 1).map(|m| m.text.clone()).unwrap_or_default();
         }
     }
@@ -9259,7 +9294,7 @@ impl Interpreter {
 
             // Annex B legacy static accessor properties (B.2.4)
             let ctor_id = o.id;
-            self.regexp_constructor_id = Some(ctor_id);
+            self.regexp_legacy.constructor_id = Some(ctor_id);
 
             // Helper macro for legacy accessor property getters/setters
             // $1..$9 — get-only
@@ -9276,7 +9311,7 @@ impl Interpreter {
                                     "RegExp legacy accessor requires RegExp constructor as this",
                                 )),
                             }
-                            let val = interp.regexp_legacy_parens[(idx - 1) as usize].clone();
+                            let val = interp.regexp_legacy.parens[(idx - 1) as usize].clone();
                             Completion::Normal(JsValue::String(JsString::from_str(&val)))
                         },
                     ));
@@ -9308,7 +9343,7 @@ impl Interpreter {
                                 )),
                             }
                             Completion::Normal(JsValue::String(JsString::from_str(
-                                &interp.regexp_legacy_input,
+                                &interp.regexp_legacy.input,
                             )))
                         },
                     ));
@@ -9328,7 +9363,7 @@ impl Interpreter {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
-                            interp.regexp_legacy_input = s;
+                            interp.regexp_legacy.input = s;
                             Completion::Normal(JsValue::Undefined)
                         },
                     ));
@@ -9360,7 +9395,7 @@ impl Interpreter {
                                 )),
                             }
                             Completion::Normal(JsValue::String(JsString::from_str(
-                                &interp.regexp_legacy_last_match,
+                                &interp.regexp_legacy.last_match,
                             )))
                         },
                     ));
@@ -9392,7 +9427,7 @@ impl Interpreter {
                                 )),
                             }
                             Completion::Normal(JsValue::String(JsString::from_str(
-                                &interp.regexp_legacy_last_paren,
+                                &interp.regexp_legacy.last_paren,
                             )))
                         },
                     ));
@@ -9424,7 +9459,7 @@ impl Interpreter {
                                 )),
                             }
                             Completion::Normal(JsValue::String(JsString::from_str(
-                                &interp.regexp_legacy_left_context,
+                                &interp.regexp_legacy.left_context,
                             )))
                         },
                     ));
@@ -9456,7 +9491,7 @@ impl Interpreter {
                                 )),
                             }
                             Completion::Normal(JsValue::String(JsString::from_str(
-                                &interp.regexp_legacy_right_context,
+                                &interp.regexp_legacy.right_context,
                             )))
                         },
                     ));
