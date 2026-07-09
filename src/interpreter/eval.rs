@@ -4206,16 +4206,14 @@ impl Interpreter {
             // Proxy set trap
             if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
                 let receiver = obj_val.clone();
-                match self.proxy_set(o.id, key, val, &receiver) {
-                    Ok(success) => {
-                        if !success && strict {
-                            return Err(self.create_type_error(&format!(
-                                "Cannot assign to read only property '{key}'"
-                            )));
-                        }
-                        return Ok(());
+                {
+                    let success = self.proxy_set(o.id, key, val, &receiver)?;
+                    if !success && strict {
+                        return Err(self.create_type_error(&format!(
+                            "Cannot assign to read only property '{key}'"
+                        )));
                     }
-                    Err(e) => return Err(e),
+                    return Ok(());
                 }
             }
             // Module namespace exotic: [[Set]] always returns false
@@ -4294,16 +4292,14 @@ impl Interpreter {
                     }
                     if self.get_proxy_info(proto_id).is_some() {
                         let receiver = obj_val.clone();
-                        match self.proxy_set(proto_id, key, val, &receiver) {
-                            Ok(success) => {
-                                if !success && strict {
-                                    return Err(self.create_type_error(&format!(
-                                        "Cannot assign to read only property '{key}'"
-                                    )));
-                                }
-                                return Ok(());
+                        {
+                            let success = self.proxy_set(proto_id, key, val, &receiver)?;
+                            if !success && strict {
+                                return Err(self.create_type_error(&format!(
+                                    "Cannot assign to read only property '{key}'"
+                                )));
                             }
-                            Err(e) => return Err(e),
+                            return Ok(());
                         }
                     }
                     let proto_id = proto_rc;
@@ -16233,17 +16229,15 @@ impl Interpreter {
                         continue;
                     }
                     // Check enumerability via proxy-aware [[GetOwnProperty]]
-                    match self.proxy_get_own_property_descriptor(cid, &key_str) {
-                        Ok(desc_val) => {
-                            seen.insert(key_str.clone());
-                            if !matches!(desc_val, JsValue::Undefined)
-                                && let Ok(desc) = self.to_property_descriptor(&desc_val)
-                                && desc.enumerable != Some(false)
-                            {
-                                keys.push(key_str);
-                            }
+                    {
+                        let desc_val = self.proxy_get_own_property_descriptor(cid, &key_str)?;
+                        seen.insert(key_str.clone());
+                        if !matches!(desc_val, JsValue::Undefined)
+                            && let Ok(desc) = self.to_property_descriptor(&desc_val)
+                            && desc.enumerable != Some(false)
+                        {
+                            keys.push(key_str);
                         }
-                        Err(e) => return Err(e),
                     }
                 }
             }

@@ -452,9 +452,9 @@ pub(crate) fn json_stringify_full(
                 Completion::Throw(e) => return Err(e),
                 _ => JsValue::Undefined,
             };
-            let len = match interp.to_number_value(&len_val) {
-                Ok(n) => n as usize,
-                Err(e) => return Err(e),
+            let len = {
+                let n = interp.to_number_value(&len_val)?;
+                n as usize
             };
             for i in 0..len {
                 let item = match interp.get_object_property(o.id, &i.to_string(), &obj_val) {
@@ -469,9 +469,9 @@ pub(crate) fn json_stringify_full(
                         if let Some(inner) = interp.get_object_cell(oo.id) {
                             let cn = inner.borrow().class_name.clone();
                             if cn == "String" || cn == "Number" {
-                                match interp.to_string_value(&item) {
-                                    Ok(s) => Some(s),
-                                    Err(e) => return Err(e),
+                                {
+                                    let s = interp.to_string_value(&item)?;
+                                    Some(s)
                                 }
                             } else {
                                 None
@@ -585,14 +585,14 @@ fn json_stringify_internal(
             String::new()
         };
         match class.as_str() {
-            "Number" => match interp.to_number_value(&value) {
-                Ok(n) => value = JsValue::Number(n),
-                Err(e) => return Err(e),
-            },
-            "String" => match interp.to_string_value(&value) {
-                Ok(s) => value = JsValue::String(JsString::from_str(&s)),
-                Err(e) => return Err(e),
-            },
+            "Number" => {
+                let n = interp.to_number_value(&value)?;
+                value = JsValue::Number(n)
+            }
+            "String" => {
+                let s = interp.to_string_value(&value)?;
+                value = JsValue::String(JsString::from_str(&s))
+            }
             "Boolean" => {
                 if let Some(cell) = interp.get_object_cell(o.id)
                     && let Some(pv) = cell.borrow().primitive_value.clone()
@@ -1531,6 +1531,18 @@ pub(crate) fn utc_time(t: f64) -> f64 {
     t - local_tza()
 }
 
+/// Shared final step of every `Date.prototype.set*` method: combine a day
+/// number and a time-within-day into an absolute time, convert back from
+/// local time to UTC when `is_local`, and clip to the valid Date range.
+pub(crate) fn make_date_clipped(day: f64, time: f64, is_local: bool) -> f64 {
+    let combined = make_date(day, time);
+    time_clip(if is_local {
+        utc_time(combined)
+    } else {
+        combined
+    })
+}
+
 pub(crate) fn now_ms() -> f64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
@@ -2347,5 +2359,51 @@ mod resolve_relative_index_tests {
     fn zero_length_clamps_everything_to_zero() {
         assert_eq!(resolve_relative_index(-1.0, 0), 0);
         assert_eq!(resolve_relative_index(5.0, 0), 0);
+    }
+}
+
+#[cfg(test)]
+mod make_date_clipped_tests {
+    use super::{make_date, make_date_clipped, time_clip, utc_time};
+
+    #[test]
+    fn utc_variant_matches_plain_make_date_then_clip() {
+        for (day, time) in [(0.0, 0.0), (19858.0, 3_723_000.0), (-100_000.0, 12_345.0)] {
+            assert_eq!(
+                make_date_clipped(day, time, false),
+                time_clip(make_date(day, time))
+            );
+        }
+    }
+
+    #[test]
+    fn local_variant_additionally_converts_from_local_to_utc() {
+        for (day, time) in [(0.0, 0.0), (19858.0, 3_723_000.0), (-100_000.0, 12_345.0)] {
+            assert_eq!(
+                make_date_clipped(day, time, true),
+                time_clip(utc_time(make_date(day, time)))
+            );
+        }
+    }
+
+    #[test]
+    fn nan_day_or_time_propagates_as_nan() {
+        assert!(make_date_clipped(f64::NAN, 0.0, false).is_nan());
+        assert!(make_date_clipped(0.0, f64::NAN, false).is_nan());
+        assert!(make_date_clipped(f64::NAN, 0.0, true).is_nan());
+    }
+
+    #[test]
+    fn out_of_range_day_clips_to_nan() {
+        // 1e9 days is far beyond the +/-100,000,000-day valid Date range.
+        assert!(make_date_clipped(1e9, 0.0, false).is_nan());
+        assert!(make_date_clipped(1e9, 0.0, true).is_nan());
+    }
+
+    #[test]
+    fn negative_zero_result_normalizes_to_positive_zero() {
+        let v = make_date_clipped(0.0, 0.0, false);
+        assert_eq!(v, 0.0);
+        assert!(v.is_sign_positive());
     }
 }
