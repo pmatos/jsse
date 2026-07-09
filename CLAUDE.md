@@ -103,7 +103,7 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 
 ### Issue tracker
 
-Issues live on GitHub at `pmatos/jsse` and are managed via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+Issues live on GitHub at `pmatos/jsse` and are managed via the `gh` CLI; external PRs are not a triage surface (issues only). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
