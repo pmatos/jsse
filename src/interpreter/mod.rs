@@ -29,6 +29,7 @@ pub(crate) mod generator_transform;
 pub(crate) mod ic;
 pub(crate) mod key_intern;
 mod object_arena;
+mod property;
 mod property_map;
 pub(crate) use property_map::PropertyMap;
 mod scheduler;
@@ -873,7 +874,7 @@ impl Interpreter {
     }
 
     #[allow(clippy::wrong_self_convention)]
-    fn to_property_descriptor(
+    pub(crate) fn to_property_descriptor(
         &mut self,
         val: &JsValue,
     ) -> Result<PropertyDescriptor, Option<JsValue>> {
@@ -962,7 +963,7 @@ impl Interpreter {
         }
     }
 
-    fn same_value_option(a: Option<&JsValue>, b: Option<&JsValue>) -> bool {
+    pub(crate) fn same_value_option(a: Option<&JsValue>, b: Option<&JsValue>) -> bool {
         match (a, b) {
             (Some(a), Some(b)) => crate::interpreter::helpers::same_value(a, b),
             (None, None) => true,
@@ -1306,91 +1307,6 @@ impl Interpreter {
         self.objects.get_cell_expect(id)
     }
 
-    /// Iterative prototype-chain walk of `get_property`. Returns
-    /// `JsValue::Undefined` when the key is not found anywhere in the chain.
-    /// Each frame borrows the slot's `RefCell` directly via `get_object_cell_expect`,
-    /// avoiding an `Rc::clone` per prototype hop. The walk holds no state across
-    /// `&mut self` calls, so the `&self`-tied lifetime is safe.
-    pub(crate) fn get_property_on_id(&self, start_id: u64, key: &str) -> JsValue {
-        let mut current = Some(start_id);
-        while let Some(id) = current {
-            let b = self.get_object_cell_expect(id).borrow();
-            if let Some(v) = b.own_property_lookup(key) {
-                return v;
-            }
-            let next = b.prototype_id;
-            drop(b);
-            current = next;
-        }
-        JsValue::Undefined
-    }
-
-    /// Iterative prototype-chain walk of `get_property_descriptor`.
-    pub(crate) fn get_property_descriptor_on_id(
-        &self,
-        start_id: u64,
-        key: &str,
-    ) -> Option<PropertyDescriptor> {
-        let mut current = Some(start_id);
-        while let Some(id) = current {
-            let b = self.get_object_cell_expect(id).borrow();
-            if let Some(d) = b.own_property_descriptor_lookup(key) {
-                return Some(d);
-            }
-            let next = b.prototype_id;
-            drop(b);
-            current = next;
-        }
-        None
-    }
-
-    /// Iterative prototype-chain walk of `has_property`. TypedArray canonical
-    /// numeric indices short-circuit the walk (per §10.4.5.2).
-    // Documented chain-walking HasProperty primitive (sibling of
-    // `own_has_property`); retained as the canonical API even when currently
-    // uncalled — CreateDataProperty's extensibility guard now correctly uses
-    // the own-only variant.
-    #[allow(dead_code)]
-    pub(crate) fn has_property_on_id(&self, start_id: u64, key: &str) -> bool {
-        let mut current = Some(start_id);
-        while let Some(id) = current {
-            let b = self.get_object_cell_expect(id).borrow();
-            if let Some(result) = b.own_has_property(key) {
-                return result;
-            }
-            let next = b.prototype_id;
-            drop(b);
-            current = next;
-        }
-        false
-    }
-
-    /// Iterative prototype-chain walk of `enumerable_keys_with_proto`. Merges
-    /// each frame's emit with a global shadow set so non-enumerable own keys on
-    /// one frame correctly suppress enumerable inherited keys with matching
-    /// names on subsequent frames.
-    pub(crate) fn enumerable_keys_with_proto_on_id(&self, start_id: u64) -> Vec<String> {
-        let mut global_seen: HashSet<String> = HashSet::default();
-        let mut result: Vec<String> = Vec::new();
-        let mut current = Some(start_id);
-        while let Some(id) = current {
-            let b = self.get_object_cell_expect(id).borrow();
-            let (keys, shadow) = b.own_enumerable_keys_with_shadow();
-            for k in keys {
-                if global_seen.insert(k.clone()) {
-                    result.push(k);
-                }
-            }
-            for k in shadow {
-                global_seen.insert(k);
-            }
-            let next = b.prototype_id;
-            drop(b);
-            current = next;
-        }
-        result
-    }
-
     pub(crate) fn set_function_name(&self, val: &JsValue, name: &str) {
         if let JsValue::Object(o) = val
             && let Some(obj) = self.get_object_cell(o.id)
@@ -1635,7 +1551,7 @@ impl Interpreter {
         }
     }
 
-    fn module_registry_get(&self, path: &Path) -> Option<Rc<RefCell<LoadedModule>>> {
+    pub(crate) fn module_registry_get(&self, path: &Path) -> Option<Rc<RefCell<LoadedModule>>> {
         self.module_registry
             .get(&(self.current_realm_id, path.to_path_buf()))
             .cloned()
@@ -4707,268 +4623,6 @@ impl Interpreter {
                 .unwrap();
             drop(_guard);
         }
-    }
-
-    /// §10.4.2.4 ArraySetLength(A, Desc)
-    pub(crate) fn array_set_length(
-        &mut self,
-        obj_id: usize,
-        desc: PropertyDescriptor,
-    ) -> Result<bool, JsValue> {
-        // 1. If Desc does not have [[Value]], just do OrdinaryDefineOwnProperty(A, "length", Desc)
-        if desc.value.is_none() {
-            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
-            return Ok(obj_rc
-                .borrow_mut()
-                .define_own_property("length".to_string(), desc));
-        }
-
-        // 2. Let newLenDesc be a copy of Desc.
-        let desc_value = desc.value.clone().unwrap();
-        let mut new_len_desc = desc;
-
-        // 3. Let newLen be ? ToUint32(Desc.[[Value]]).
-        //    ToUint32 internally calls ToNumber — this is valueOf call #1
-        let num_for_uint32 = self.to_number_value(&desc_value)?;
-        let new_len = to_uint32_f64(num_for_uint32);
-
-        // 4. Let numberLen be ? ToNumber(Desc.[[Value]]).
-        //    This is a separate ToNumber call — valueOf call #2
-        let number_len = self.to_number_value(&desc_value)?;
-
-        // 5. If SameValueZero(newLen, numberLen) is false, throw RangeError.
-        if (new_len as f64) != number_len {
-            return Err(self.create_error("RangeError", "Invalid array length"));
-        }
-
-        // 5. Set newLenDesc.[[Value]] to newLen (as a Number).
-        new_len_desc.value = Some(JsValue::Number(new_len as f64));
-
-        // 6. Let oldLenDesc be OrdinaryGetOwnProperty(A, "length").
-        let (old_len, old_len_writable) = {
-            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
-            let obj = obj_rc.borrow();
-            let old_len_desc = obj.properties.get("length").cloned();
-            match old_len_desc {
-                Some(ref d) => {
-                    let ol = d
-                        .value
-                        .as_ref()
-                        .and_then(|v| {
-                            if let JsValue::Number(n) = v {
-                                Some(*n as u32)
-                            } else {
-                                None
-                            }
-                        })
-                        .unwrap_or(0);
-                    let w = d.writable.unwrap_or(true);
-                    (ol, w)
-                }
-                None => (0, true),
-            }
-        };
-
-        // 7. If newLen >= oldLen, return OrdinaryDefineOwnProperty(A, "length", newLenDesc).
-        if new_len >= old_len {
-            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
-            let result = obj_rc
-                .borrow_mut()
-                .define_own_property("length".to_string(), new_len_desc);
-            return Ok(result);
-        }
-
-        // 8. If oldLenDesc.[[Writable]] is false, return false.
-        if !old_len_writable {
-            return Ok(false);
-        }
-
-        // 9. If newLenDesc.[[Writable]] is absent or true, let newWritable be true.
-        //    Else, need to defer setting writable to false until after deletions.
-        let new_writable = !matches!(new_len_desc.writable, Some(false));
-
-        // 10. If newWritable is false, set newLenDesc.[[Writable]] to true (we'll set it false later).
-        if !new_writable {
-            new_len_desc.writable = Some(true);
-        }
-
-        // 11. Let succeeded be OrdinaryDefineOwnProperty(A, "length", newLenDesc).
-        {
-            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
-            let succeeded = obj_rc
-                .borrow_mut()
-                .define_own_property("length".to_string(), new_len_desc);
-            // 12. If succeeded is false, return false.
-            if !succeeded {
-                return Ok(false);
-            }
-        }
-
-        // 13. For each property key P that is an array index, delete from oldLen-1 down to newLen.
-        //     Stop if a deletion fails (non-configurable).
-        let mut actual_new_len = new_len;
-        {
-            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
-            let mut obj = obj_rc.borrow_mut();
-
-            // Collect array index keys >= newLen and < oldLen, sorted descending.
-            let mut idx_keys: Vec<(u32, String)> = obj
-                .properties
-                .keys()
-                .filter_map(|k| {
-                    k.parse::<u64>()
-                        .ok()
-                        .filter(|&idx| idx <= 0xFFFF_FFFE && idx.to_string() == **k)
-                        .map(|idx| idx as u32)
-                        .filter(|&idx| idx >= new_len && idx < old_len)
-                        .map(|idx| (idx, k.to_string()))
-                })
-                .collect();
-            idx_keys.sort_by_key(|a| std::cmp::Reverse(a.0));
-
-            for (idx, k) in &idx_keys {
-                let is_non_configurable = obj
-                    .properties
-                    .get(k.as_str())
-                    .is_some_and(|d| d.configurable == Some(false));
-                if is_non_configurable {
-                    // 13.d.iii. Set newLenDesc.[[Value]] to index + 1.
-                    actual_new_len = idx + 1;
-                    break;
-                } else {
-                    obj.remove_property(k.as_str());
-                }
-            }
-
-            // Also truncate array_elements.
-            if let Some(elements) = obj.array_elements_mut() {
-                elements.truncate(actual_new_len as usize);
-            }
-        }
-
-        // If we were blocked by a non-configurable element, update length and handle writable.
-        if actual_new_len != new_len {
-            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
-            let mut obj = obj_rc.borrow_mut();
-            if let Some(len_desc) = obj.properties.get_mut("length") {
-                len_desc.value = Some(JsValue::Number(actual_new_len as f64));
-            }
-            // 13.d.iii.2. If newWritable is false, set length writable to false.
-            if !new_writable && let Some(len_desc) = obj.properties.get_mut("length") {
-                len_desc.writable = Some(false);
-            }
-            return Ok(false);
-        }
-
-        // 14. If newWritable is false, set [[Writable]] on length to false.
-        if !new_writable {
-            let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
-            let mut obj = obj_rc.borrow_mut();
-            if let Some(len_desc) = obj.properties.get_mut("length") {
-                len_desc.writable = Some(false);
-            }
-        }
-
-        Ok(true)
-    }
-
-    /// §10.4.2.1 [[DefineOwnProperty]](P, Desc) for Array exotic objects
-    pub(crate) fn array_define_own_property(
-        &mut self,
-        obj_id: usize,
-        key: &str,
-        desc: PropertyDescriptor,
-    ) -> Result<bool, JsValue> {
-        // 1. If P is "length", return ArraySetLength(A, Desc).
-        if key == "length" {
-            return self.array_set_length(obj_id, desc);
-        }
-
-        // 2. If P is an array index (canonical numeric string with value <= 0xFFFFFFFE)...
-        if let Ok(index) = key.parse::<u64>()
-            && index <= 0xFFFF_FFFE
-            && index.to_string() == key
-        {
-            let index_u32 = index as u32;
-
-            // 2.a. Let oldLen be the current length value.
-            let (old_len, length_writable) = {
-                let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
-                let obj = obj_rc.borrow();
-                let len_desc = obj.properties.get("length");
-                let ol = len_desc
-                    .and_then(|d| d.value.as_ref())
-                    .and_then(|v| {
-                        if let JsValue::Number(n) = v {
-                            Some(*n as u32)
-                        } else {
-                            None
-                        }
-                    })
-                    .unwrap_or(0);
-                let w = len_desc.and_then(|d| d.writable).unwrap_or(true);
-                (ol, w)
-            };
-
-            // 2.b. If index >= oldLen and length is non-writable, return false.
-            if index_u32 >= old_len && !length_writable {
-                return Ok(false);
-            }
-
-            // 2.c. Let succeeded be OrdinaryDefineOwnProperty(A, P, Desc).
-            let succeeded = {
-                let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
-                obj_rc
-                    .borrow_mut()
-                    .define_own_property(key.to_string(), desc.clone())
-            };
-
-            // 2.d. If succeeded is false, return false.
-            if !succeeded {
-                return Ok(false);
-            }
-
-            // 2.e. If index >= oldLen, set length to index + 1.
-            if index_u32 >= old_len {
-                let new_len = index_u32 + 1;
-                let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
-                let mut obj = obj_rc.borrow_mut();
-                if let Some(len_desc) = obj.properties.get_mut("length") {
-                    len_desc.value = Some(JsValue::Number(new_len as f64));
-                }
-                if let Some(elems) = obj.array_elements_mut() {
-                    let val = desc.value.unwrap_or(JsValue::Undefined);
-                    let idx = index_u32 as usize;
-                    if idx < elems.len() {
-                        elems[idx] = val;
-                    } else if idx <= elems.len() + 1024 {
-                        while elems.len() < idx {
-                            elems.push(JsValue::Undefined);
-                        }
-                        elems.push(val);
-                    }
-                }
-            } else {
-                let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
-                let mut obj = obj_rc.borrow_mut();
-                if let Some(elems) = obj.array_elements_mut() {
-                    let idx = index_u32 as usize;
-                    if idx < elems.len()
-                        && let Some(ref val) = desc.value
-                    {
-                        elems[idx] = val.clone();
-                    }
-                }
-            }
-
-            return Ok(true);
-        }
-
-        // 3. Return OrdinaryDefineOwnProperty(A, P, Desc).
-        let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
-        Ok(obj_rc
-            .borrow_mut()
-            .define_own_property(key.to_string(), desc))
     }
 
     pub fn format_value(&self, val: &JsValue) -> String {
