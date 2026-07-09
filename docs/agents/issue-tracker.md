@@ -13,6 +13,10 @@ Issues and PRDs for this repo live as GitHub issues. Use the `gh` CLI for all op
 
 Infer the repo from `git remote -v` — `gh` does this automatically when run inside a clone.
 
+## Pull requests as a request surface
+
+External pull requests are **not** a triage surface for this repo. `/triage` processes GitHub issues only; it does not pull outside contributors' PRs into the queue. (Collaborators' in-flight PRs are left alone in either case.)
+
 ## When a skill says "publish to the issue tracker"
 
 Create a GitHub issue.
