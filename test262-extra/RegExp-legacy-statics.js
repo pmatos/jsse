@@ -90,7 +90,7 @@ if (!threw) {
 // --- Non-RegExp-constructor receiver throws TypeError ---
 threw = false;
 try {
-  RegExp.lastMatch.call({});
+  Object.getOwnPropertyDescriptor(RegExp, "lastMatch").get.call({});
 } catch (e) {
   if (!(e instanceof TypeError)) {
     throw new Test262Error("Expected TypeError for non-RegExp this, got: " + e);
@@ -98,7 +98,7 @@ try {
   threw = true;
 }
 if (!threw) {
-  throw new Test262Error("RegExp.lastMatch.call({}) should throw TypeError");
+  throw new Test262Error("Object.getOwnPropertyDescriptor(RegExp, 'lastMatch').get.call({}) should throw TypeError");
 }
 
 // --- After a new match, values update ---

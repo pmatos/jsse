@@ -4663,6 +4663,7 @@ enum CompiledRegex {
 /// them into a single struct deepens the Interpreter: 8 fields collapse to 1,
 /// and the regexp concern gains a clean seam. See `JobScheduler` for the same
 /// pattern (embedded struct accessed via `self.scheduler`).
+#[derive(Default)]
 pub(crate) struct RegexpLegacyState {
     pub(crate) input: String,
     pub(crate) last_match: String,
@@ -4673,22 +4674,6 @@ pub(crate) struct RegexpLegacyState {
     pub(crate) constructor_id: Option<u64>,
     pub(crate) regex_cache: HashMap<(String, String), Rc<CachedRegex>>,
 }
-
-impl Default for RegexpLegacyState {
-    fn default() -> Self {
-        Self {
-            input: String::new(),
-            last_match: String::new(),
-            last_paren: String::new(),
-            left_context: String::new(),
-            right_context: String::new(),
-            parens: Default::default(),
-            constructor_id: None,
-            regex_cache: HashMap::new(),
-        }
-    }
-}
-
 
 pub(crate) struct CachedRegex {
     compiled: CompiledRegex,
@@ -4716,7 +4701,10 @@ fn build_regex_cached(
     if interp.regexp_legacy.regex_cache.len() >= REGEX_CACHE_MAX {
         interp.regexp_legacy.regex_cache.clear();
     }
-    interp.regexp_legacy.regex_cache.insert(key, std::rc::Rc::clone(&entry));
+    interp
+        .regexp_legacy
+        .regex_cache
+        .insert(key, std::rc::Rc::clone(&entry));
     Ok(entry)
 }
 
