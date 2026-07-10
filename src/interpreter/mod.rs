@@ -4650,21 +4650,6 @@ impl Interpreter {
     }
 }
 
-/// §7.1.6 ToUint32 — convert an f64 to u32 per spec.
-fn to_uint32_f64(n: f64) -> u32 {
-    if n.is_nan() || n.is_infinite() || n == 0.0 {
-        return 0;
-    }
-    let int_val = n.signum() * n.abs().floor();
-    let modulo = int_val % 4294967296.0;
-    let modulo = if modulo < 0.0 {
-        modulo + 4294967296.0
-    } else {
-        modulo
-    };
-    modulo as u32
-}
-
 fn setup_agent_side_262(interp: &mut Interpreter) {
     use crate::types::JsObject;
 

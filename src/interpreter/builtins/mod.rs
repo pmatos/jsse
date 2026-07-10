@@ -1792,7 +1792,7 @@ impl Interpreter {
                     Ok(n) => n,
                     Err(e) => return Completion::Throw(e),
                 };
-                let mut radix = crate::interpreter::types::to_int32_modular(radix_num);
+                let mut radix = number_ops::to_int32(radix_num);
                 let s = s.trim_matches(crate::interpreter::builtins::string::is_ecma_whitespace);
                 let (negative, s) = if let Some(rest) = s.strip_prefix('-') {
                     (true, rest)

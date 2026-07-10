@@ -416,22 +416,26 @@ pub mod number_ops {
         buf.format(x).to_string()
     }
 
-    // §7.1.6 ToInt32
-    pub fn to_int32(x: f64) -> i32 {
-        if x.is_nan() || x.is_infinite() || x == 0.0 {
+    // §7.1.7 ToUint32 — reduce the truncated real value modulo 2^32. The modular
+    // step is done in f64 (exact for integer-valued doubles) so it stays correct
+    // for magnitudes beyond the i64 range, where an `as i64` cast would saturate.
+    pub fn to_uint32(x: f64) -> u32 {
+        if !x.is_finite() || x == 0.0 {
             return 0;
         }
         let int_val = x.trunc();
-        (int_val as i64 as u32) as i32
+        let modulo = int_val % 4294967296.0; // 2^32
+        let int32bit = if modulo < 0.0 {
+            modulo + 4294967296.0
+        } else {
+            modulo
+        };
+        int32bit as u32
     }
 
-    // §7.1.7 ToUint32
-    pub fn to_uint32(x: f64) -> u32 {
-        if x.is_nan() || x.is_infinite() || x == 0.0 {
-            return 0;
-        }
-        let int_val = x.trunc();
-        int_val as i64 as u32
+    // §7.1.6 ToInt32 — the same int32bit as ToUint32, reinterpreted as signed.
+    pub fn to_int32(x: f64) -> i32 {
+        to_uint32(x) as i32
     }
 }
 
@@ -571,6 +575,64 @@ mod tests {
         assert_eq!(number_ops::to_int32(0.0), 0);
         assert_eq!(number_ops::to_int32(42.9), 42);
         assert_eq!(number_ops::to_int32(-42.9), -42);
+    }
+
+    // §7.1.6 ToInt32 / §7.1.7 ToUint32 — spec-correct modular reduction over the
+    // full f64 range. Expected values cross-checked against Node (`x | 0` and
+    // `x >>> 0`). The large-magnitude cases (>= 2^63) are the ones a saturating
+    // `as i64` cast gets wrong.
+    #[test]
+    fn to_uint32_spec_values() {
+        // NaN / +/-Inf / +/-0 -> +0
+        assert_eq!(number_ops::to_uint32(f64::NAN), 0);
+        assert_eq!(number_ops::to_uint32(f64::INFINITY), 0);
+        assert_eq!(number_ops::to_uint32(f64::NEG_INFINITY), 0);
+        assert_eq!(number_ops::to_uint32(-0.0), 0);
+        // truncation toward zero
+        assert_eq!(number_ops::to_uint32(3.9), 3);
+        assert_eq!(number_ops::to_uint32(-2.5), 4294967294);
+        // around the 2^31 / 2^32 boundaries
+        assert_eq!(number_ops::to_uint32(-1.0), 4294967295);
+        assert_eq!(number_ops::to_uint32(2147483648.0), 2147483648); // 2^31
+        assert_eq!(number_ops::to_uint32(4294967295.0), 4294967295); // 2^32-1
+        assert_eq!(number_ops::to_uint32(4294967296.0), 0); // 2^32
+        assert_eq!(number_ops::to_uint32(4294967301.0), 5); // 2^32+5
+        assert_eq!(number_ops::to_uint32(9007199254740992.0), 0); // 2^53
+        // large magnitudes beyond i64 range (saturating cast gets these wrong)
+        assert_eq!(number_ops::to_uint32(9223372036854775808.0), 0); // 2^63
+        assert_eq!(number_ops::to_uint32(18446744073709551616.0), 0); // 2^64
+        assert_eq!(number_ops::to_uint32(-9223372036854775808.0), 0); // -(2^63)
+        assert_eq!(number_ops::to_uint32(1e21), 3735027712);
+    }
+
+    #[test]
+    fn to_int32_spec_values() {
+        assert_eq!(number_ops::to_int32(-1.0), -1);
+        assert_eq!(number_ops::to_int32(2147483647.0), 2147483647); // 2^31-1
+        assert_eq!(number_ops::to_int32(2147483648.0), -2147483648); // 2^31 wraps
+        assert_eq!(number_ops::to_int32(4294967295.0), -1); // 2^32-1
+        assert_eq!(number_ops::to_int32(4294967296.0), 0); // 2^32
+        assert_eq!(number_ops::to_int32(4294967301.0), 5); // 2^32+5
+        assert_eq!(number_ops::to_int32(9007199254740992.0), 0); // 2^53
+        // large magnitudes beyond i64 range (saturating cast gets these wrong)
+        assert_eq!(number_ops::to_int32(9223372036854775808.0), 0); // 2^63
+        assert_eq!(number_ops::to_int32(18446744073709551616.0), 0); // 2^64
+        assert_eq!(number_ops::to_int32(-9223372036854775808.0), 0); // -(2^63)
+        assert_eq!(number_ops::to_int32(1e21), -559939584);
+    }
+
+    #[test]
+    fn bitwise_and_shift_large_values() {
+        // The bitwise/shift operators feed operands through ToInt32/ToUint32, so
+        // large magnitudes must reduce modulo 2^32 (cross-checked against Node).
+        assert_eq!(number_ops::bitwise_or(18446744073709551616.0, 0.0), 0.0); // (2^64)|0
+        assert_eq!(number_ops::bitwise_or(1e21, 0.0), -559939584.0); // (1e21)|0
+        assert_eq!(number_ops::bitwise_and(4294967301.0, 4294967295.0), 5.0);
+        assert_eq!(
+            number_ops::unsigned_right_shift(18446744073709551616.0, 0.0),
+            0.0
+        );
+        assert_eq!(number_ops::unsigned_right_shift(1e21, 0.0), 3735027712.0);
     }
 
     #[test]

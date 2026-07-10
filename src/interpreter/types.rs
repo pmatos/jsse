@@ -3,7 +3,7 @@ use crate::interpreter::PropertyMap;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
 use crate::interpreter::helpers::same_value;
 use crate::interpreter::key_intern::intern_key;
-use crate::types::{JsString, JsValue};
+use crate::types::{JsString, JsValue, number_ops};
 use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -3555,33 +3555,11 @@ fn to_number(v: &JsValue) -> f64 {
     }
 }
 
-fn to_uint32_modular(n: f64) -> u32 {
-    if n.is_nan() || n.is_infinite() || n == 0.0 {
-        return 0;
-    }
-    let n = n.trunc();
-    let n = n % 4294967296.0; // 2^32
-    let n = if n < 0.0 { n + 4294967296.0 } else { n };
-    n as u32
-}
-pub(crate) fn to_int32_modular(n: f64) -> i32 {
-    if n.is_nan() || n.is_infinite() || n == 0.0 {
-        return 0;
-    }
-    let n = n.trunc();
-    let n = n % 4294967296.0; // 2^32
-    let n = if n < 0.0 { n + 4294967296.0 } else { n };
-    if n >= 2147483648.0 {
-        (n - 4294967296.0) as i32
-    } else {
-        n as i32
-    }
-}
 fn to_int8(v: &JsValue) -> i8 {
-    to_int32_modular(to_number(v)) as i8
+    number_ops::to_int32(to_number(v)) as i8
 }
 fn to_uint8(v: &JsValue) -> u8 {
-    to_uint32_modular(to_number(v)) as u8
+    number_ops::to_uint32(to_number(v)) as u8
 }
 fn to_uint8_clamped(v: &JsValue) -> u8 {
     let n = to_number(v);
@@ -3604,16 +3582,16 @@ fn to_uint8_clamped(v: &JsValue) -> u8 {
     }
 }
 fn to_int16(v: &JsValue) -> i16 {
-    to_int32_modular(to_number(v)) as i16
+    number_ops::to_int32(to_number(v)) as i16
 }
 fn to_uint16(v: &JsValue) -> u16 {
-    to_uint32_modular(to_number(v)) as u16
+    number_ops::to_uint32(to_number(v)) as u16
 }
 fn to_int32(v: &JsValue) -> i32 {
-    to_int32_modular(to_number(v))
+    number_ops::to_int32(to_number(v))
 }
 fn to_uint32(v: &JsValue) -> u32 {
-    to_uint32_modular(to_number(v))
+    number_ops::to_uint32(to_number(v))
 }
 fn to_bigint64(v: &JsValue) -> i64 {
     match v {

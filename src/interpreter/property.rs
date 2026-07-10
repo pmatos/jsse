@@ -412,7 +412,7 @@ impl Interpreter {
         // 3. Let newLen be ? ToUint32(Desc.[[Value]]).
         //    ToUint32 internally calls ToNumber — this is valueOf call #1
         let num_for_uint32 = self.to_number_value(&desc_value)?;
-        let new_len = to_uint32_f64(num_for_uint32);
+        let new_len = crate::types::number_ops::to_uint32(num_for_uint32);
 
         // 4. Let numberLen be ? ToNumber(Desc.[[Value]]).
         //    This is a separate ToNumber call — valueOf call #2
