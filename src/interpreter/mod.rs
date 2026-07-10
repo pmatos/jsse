@@ -27,6 +27,7 @@ mod gc;
 pub(crate) mod generator_analysis;
 pub(crate) mod generator_transform;
 pub(crate) mod ic;
+pub(crate) mod ic_store;
 pub(crate) mod key_intern;
 mod object_arena;
 mod property;
@@ -157,6 +158,15 @@ pub struct Interpreter {
     /// never dereferenced. Cannot go stale: ASTs are immutable post-parse and
     /// the keyed body is pinned in the value.
     pub(crate) hoist_cache: FxHashMap<*const Vec<Statement>, Rc<HoistAnalysis>>,
+    /// Per-body inline-cache store. Bodies are keyed by the `Rc` pointer to
+    /// their statement vector so closures of the same function body share the
+    /// same cache. See `docs/adr/0001-inline-cache-ast-seam.md`.
+    pub(crate) ic_store: ic_store::IcStore,
+    /// Handle for the body currently being executed. Updated whenever we enter
+    /// or leave a function body (or the top-level program). The evaluator uses
+    /// this handle to read and write per-body IC slots without threading it
+    /// through every recursive call.
+    pub(crate) current_ic_handle: ic_store::BodyStoreHandle,
 }
 
 pub(crate) struct CallFrame {
@@ -299,6 +309,8 @@ impl Interpreter {
             bytecode_enabled: false,
             bytecode_chunks_executed: 0,
             hoist_cache: FxHashMap::default(),
+            ic_store: ic_store::IcStore::new(),
+            current_ic_handle: ic_store::BodyStoreHandle(0),
         };
         interp.setup_globals();
         interp
@@ -1501,7 +1513,7 @@ impl Interpreter {
                 if program.body_is_strict {
                     global.borrow_mut().strict = true;
                 }
-                self.exec_statements(&program.body, &global)
+                self.exec_body(&program.body, &global)
             }
             SourceType::Module => self.run_module(program, None),
         };
@@ -1519,7 +1531,7 @@ impl Interpreter {
                 if program.body_is_strict {
                     global.borrow_mut().strict = true;
                 }
-                let r = self.exec_statements(&program.body, &global);
+                let r = self.exec_body(&program.body, &global);
                 // Drain microtasks before restoring path so async callbacks can use relative imports
                 self.drain_microtasks_until_idle();
                 self.current_module_path = prev;
@@ -2770,6 +2782,9 @@ impl Interpreter {
         self.current_module_path = Some(module_path.to_path_buf());
         self.static_module_load_depth += 1;
 
+        let prev_ic_handle = self.current_ic_handle;
+        self.current_ic_handle = self.ic_store.for_body(&program.body);
+
         let mut err = None;
         for item in &program.module_items {
             match item {
@@ -2794,6 +2809,7 @@ impl Interpreter {
             }
         }
         module.borrow_mut().program_ast = None;
+        self.current_ic_handle = prev_ic_handle;
         self.static_module_load_depth -= 1;
         self.current_module_path = prev_path;
         match err {
@@ -4165,7 +4181,7 @@ impl Interpreter {
                 let func = JsFunction::User {
                     name: Some(f.name.clone()),
                     params: Rc::new(f.params.clone()),
-                    body: Rc::new(f.body.clone()),
+                    body: f.body.clone(),
                     closure: env.clone(),
                     is_arrow: false,
                     is_strict: true, // Module code is always strict
@@ -4214,7 +4230,7 @@ impl Interpreter {
                         f.name.clone()
                     }),
                     params: Rc::new(f.params.clone()),
-                    body: Rc::new(f.body.clone()),
+                    body: f.body.clone(),
                     closure: env.clone(),
                     is_arrow: false,
                     is_strict: true,
@@ -4394,7 +4410,7 @@ impl Interpreter {
                 let js_func = JsFunction::User {
                     name: Some(name),
                     params: Rc::new(func.params.clone()),
-                    body: Rc::new(func.body.clone()),
+                    body: func.body.clone(),
                     closure: env.clone(),
                     is_arrow: false,
                     is_strict: func.body_is_strict || enclosing_strict,

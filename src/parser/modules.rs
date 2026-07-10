@@ -409,7 +409,7 @@ impl<'a> Parser<'a> {
         Ok(FunctionDecl {
             name,
             params,
-            body,
+            body: Body::new(body),
             is_async: false,
             is_generator,
             source_text,
@@ -437,7 +437,7 @@ impl<'a> Parser<'a> {
         Ok(FunctionDecl {
             name,
             params,
-            body,
+            body: Body::new(body),
             is_async: true,
             is_generator,
             source_text,

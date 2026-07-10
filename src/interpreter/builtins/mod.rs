@@ -2689,7 +2689,7 @@ impl Interpreter {
                     };
 
                     if let Some(Statement::Expression(Expression::Function(fe))) =
-                        program.body.first()
+                        program.body.as_slice().first()
                     {
                         let is_strict = fe.body_is_strict;
                         // Use the realm of the Function constructor, not the caller's realm
@@ -2702,7 +2702,7 @@ impl Interpreter {
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
                             params: Rc::new(fe.params.clone()),
-                            body: Rc::new(fe.body.clone()),
+                            body: fe.body.clone(),
                             closure: dynamic_fn_env,
                             is_arrow: false,
                             is_strict,
@@ -3281,7 +3281,7 @@ impl Interpreter {
                     };
 
                     if let Some(Statement::Expression(Expression::Function(fe))) =
-                        program.body.first()
+                        program.body.as_slice().first()
                     {
                         let is_strict = fe.body_is_strict;
                         let dynamic_fn_env =
@@ -3290,7 +3290,7 @@ impl Interpreter {
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
                             params: Rc::new(fe.params.clone()),
-                            body: Rc::new(fe.body.clone()),
+                            body: fe.body.clone(),
                             closure: dynamic_fn_env,
                             is_arrow: false,
                             is_strict,
@@ -3439,7 +3439,7 @@ impl Interpreter {
                     };
 
                     if let Some(Statement::Expression(Expression::Function(fe))) =
-                        program.body.first()
+                        program.body.as_slice().first()
                     {
                         let is_strict = fe.body_is_strict;
                         let dynamic_fn_env =
@@ -3448,7 +3448,7 @@ impl Interpreter {
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
                             params: Rc::new(fe.params.clone()),
-                            body: Rc::new(fe.body.clone()),
+                            body: fe.body.clone(),
                             closure: dynamic_fn_env,
                             is_arrow: false,
                             is_strict,
@@ -3599,7 +3599,7 @@ impl Interpreter {
                     };
 
                     if let Some(Statement::Expression(Expression::Function(fe))) =
-                        program.body.first()
+                        program.body.as_slice().first()
                     {
                         let is_strict = fe.body_is_strict;
                         let dynamic_fn_env =
@@ -3608,7 +3608,7 @@ impl Interpreter {
                         let js_func = JsFunction::User {
                             name: Some("anonymous".to_string()),
                             params: Rc::new(fe.params.clone()),
-                            body: Rc::new(fe.body.clone()),
+                            body: fe.body.clone(),
                             closure: dynamic_fn_env,
                             is_arrow: false,
                             is_strict,

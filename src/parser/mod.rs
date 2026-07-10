@@ -581,9 +581,15 @@ impl<'a> Parser<'a> {
             // Arrow functions don't create their own arguments binding,
             // so references inside them still refer to the enclosing scope's arguments
             Expression::ArrowFunction(af) => match &af.body {
-                ArrowBody::Expression(e) => Self::contains_arguments(e),
-                ArrowBody::Block(stmts) => Self::stmts_contain_arguments(stmts),
-            },
+                            ArrowBody::Expression(body) => {
+                                if let Statement::Expression(e) = &body.as_slice()[0] {
+                                    Self::contains_arguments(e)
+                                } else {
+                                    false
+                                }
+                            }
+                            ArrowBody::Block(body) => Self::stmts_contain_arguments(body.as_slice()),
+                        },
             Expression::Template(tl) => {
                 tl.expressions.iter().any(Self::contains_arguments)
             }
@@ -776,9 +782,15 @@ impl<'a> Parser<'a> {
             Expression::ArrowFunction(af) if !af.is_async => {
                 af.params.iter().any(Self::pattern_contains_await_identifier)
                     || match &af.body {
-                        ArrowBody::Expression(e) => Self::expr_contains_await_identifier(e),
-                        ArrowBody::Block(_) => false,
-                    }
+                                            ArrowBody::Expression(body) => {
+                                                if let Statement::Expression(e) = &body.as_slice()[0] {
+                                                    Self::expr_contains_await_identifier(e)
+                                                } else {
+                                                    false
+                                                }
+                                            }
+                                            ArrowBody::Block(_) => false,
+                                        }
             }
             Expression::Template(tl) => {
                 tl.expressions.iter().any(Self::expr_contains_await_identifier)
@@ -872,9 +884,15 @@ impl<'a> Parser<'a> {
             Expression::ArrowFunction(af) if !af.is_async => {
                 af.params.iter().any(Self::pattern_contains_await_expression)
                     || match &af.body {
-                        ArrowBody::Expression(e) => Self::expr_contains_await_expression(e),
-                        ArrowBody::Block(_) => false,
-                    }
+                                            ArrowBody::Expression(body) => {
+                                                if let Statement::Expression(e) = &body.as_slice()[0] {
+                                                    Self::expr_contains_await_expression(e)
+                                                } else {
+                                                    false
+                                                }
+                                            }
+                                            ArrowBody::Block(_) => false,
+                                        }
             }
             Expression::Template(tl) => {
                 tl.expressions.iter().any(Self::expr_contains_await_expression)
@@ -958,9 +976,15 @@ impl<'a> Parser<'a> {
             Expression::ArrowFunction(af) => {
                 af.params.iter().any(Self::pattern_contains_yield_expression)
                     || match &af.body {
-                        ArrowBody::Expression(e) => Self::expr_contains_yield_expression(e),
-                        ArrowBody::Block(_) => false,
-                    }
+                                            ArrowBody::Expression(body) => {
+                                                if let Statement::Expression(e) = &body.as_slice()[0] {
+                                                    Self::expr_contains_yield_expression(e)
+                                                } else {
+                                                    false
+                                                }
+                                            }
+                                            ArrowBody::Block(_) => false,
+                                        }
             }
             Expression::Template(tl) => {
                 tl.expressions.iter().any(Self::expr_contains_yield_expression)
@@ -1098,12 +1122,14 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Ok(Program {
+        let mut program = Program {
             source_type: SourceType::Script,
-            body,
+            body: Body::new(body),
             module_items: Vec::new(),
             body_is_strict,
-        })
+        };
+        assign_ic_sites(&mut program.body);
+        Ok(program)
     }
 
     pub fn parse_program_as_module(&mut self) -> Result<Program, ParseError> {
@@ -1132,12 +1158,14 @@ impl<'a> Parser<'a> {
         // §16.2.1.1 Module early errors
         self.validate_module_early_errors(&module_items)?;
 
-        Ok(Program {
+        let mut program = Program {
             source_type: SourceType::Module,
-            body: Vec::new(),
+            body: Body::new(Vec::new()),
             module_items,
             body_is_strict: true,
-        })
+        };
+        assign_ic_sites_for_module(&mut program);
+        Ok(program)
     }
 
     fn get_exported_names(&self, export: &ExportDeclaration) -> Vec<String> {
@@ -1600,55 +1628,61 @@ mod tests {
     #[test]
     fn parse_empty() {
         let prog = parse("");
-        assert!(prog.body.is_empty());
+        assert!(prog.body.as_slice().is_empty());
     }
 
     #[test]
     fn parse_var_declaration() {
         let prog = parse("var x = 42;");
-        assert_eq!(prog.body.len(), 1);
-        assert!(matches!(&prog.body[0], Statement::Variable(_)));
+        assert_eq!(prog.body.as_slice().len(), 1);
+        assert!(matches!(&prog.body.as_slice()[0], Statement::Variable(_)));
     }
 
     #[test]
     fn parse_if_statement() {
         let prog = parse("if (true) { x; } else { y; }");
-        assert!(matches!(&prog.body[0], Statement::If(_)));
+        assert!(matches!(&prog.body.as_slice()[0], Statement::If(_)));
     }
 
     #[test]
     fn parse_function_declaration() {
         let prog = parse("function foo(a, b) { return a + b; }");
-        assert!(matches!(&prog.body[0], Statement::FunctionDeclaration(_)));
+        assert!(matches!(
+            &prog.body.as_slice()[0],
+            Statement::FunctionDeclaration(_)
+        ));
     }
 
     #[test]
     fn parse_expression_statement() {
         let prog = parse("1 + 2 * 3;");
-        assert!(matches!(&prog.body[0], Statement::Expression(_)));
+        assert!(matches!(&prog.body.as_slice()[0], Statement::Expression(_)));
     }
 
     #[test]
     fn parse_for_loop() {
         let prog = parse("for (var i = 0; i < 10; i++) { x; }");
-        assert!(matches!(&prog.body[0], Statement::For(_)));
+        assert!(matches!(&prog.body.as_slice()[0], Statement::For(_)));
     }
 
     #[test]
     fn parse_arrow_function() {
         let prog = parse("var f = (a, b) => a + b;");
-        assert!(matches!(&prog.body[0], Statement::Variable(_)));
+        assert!(matches!(&prog.body.as_slice()[0], Statement::Variable(_)));
     }
 
     #[test]
     fn parse_try_catch() {
         let prog = parse("try { x; } catch (e) { y; } finally { z; }");
-        assert!(matches!(&prog.body[0], Statement::Try(_)));
+        assert!(matches!(&prog.body.as_slice()[0], Statement::Try(_)));
     }
 
     #[test]
     fn parse_class() {
         let prog = parse("class Foo extends Bar { constructor() {} }");
-        assert!(matches!(&prog.body[0], Statement::ClassDeclaration(_)));
+        assert!(matches!(
+            &prog.body.as_slice()[0],
+            Statement::ClassDeclaration(_)
+        ));
     }
 }

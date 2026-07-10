@@ -2,11 +2,12 @@
 //!
 //! Issue #71 — see `.ultraplan/property-lookup-caching.md` for the full design.
 //!
-//! `PropIcSlot` lives on every `Expression::Member` AST node behind a `Cell`
-//! (slot is `Copy` so `Cell::get` is sufficient — no `RefCell` ceremony).
-//! The probe at `eval_member` reads the slot; on hit it dispatches directly.
-//! On miss it falls through to the slow path which records a fresh `Mono`
-//! entry (or transitions to `Megamorphic`).
+//! The slot values are stored in a per-`Body` `BodyIcStore` in the interpreter,
+//! keyed by the identity of the executing `Body`. The AST carries only dense
+//! `CallSiteId` / `PropSiteId` identifiers (see `src/interpreter/ic_store.rs`).
+//! The probe at `eval_member` reads the slot via `Interpreter::prop_slot`; on
+//! hit it dispatches directly. On miss it falls through to the slow path which
+//! records a fresh `Mono` entry (or transitions to `Megamorphic`).
 //!
 //! Shape-id matching is the core invariant: a slot is valid if and only if
 //! `obj.id == slot.obj_id && obj.shape_id == slot.obj_shape_id`. The global
@@ -14,8 +15,9 @@
 //! freed and re-used by GC cannot collide with a stale slot — the new
 //! object's shape_id is freshly drawn from the counter.
 
-/// Property-access IC slot. Held in `Cell<PropIcSlot>` on every
-/// `Expression::Member` node. `Copy` so the cell can use `get`/`set`.
+/// Property-access IC slot. Stored in a `BodyIcStore` slot and looked up
+/// by `PropSiteId`. `Copy` so reads and writes can be done with short-lived
+/// mutable borrows.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PropIcSlot {
     /// First execution at this site, or just transitioned out of `Mono` due
@@ -79,27 +81,19 @@ pub(crate) enum PropIcKind {
 }
 
 impl PropIcSlot {
-    /// Construct an empty slot. Used by `fresh_prop_ic_cell()` and reserved
-    /// for any future code path that wants the canonical empty value.
+    /// Construct an empty slot. Reserved for any future code path that wants
+    /// the canonical empty value.
     #[allow(dead_code)]
     pub(crate) const fn empty() -> Self {
         PropIcSlot::Empty
     }
 }
 
-/// Helper for parser/transform sites that construct `Expression::Member` —
-/// produces a fresh, empty IC cell. Avoids spelling out
-/// `Cell::new(PropIcSlot::empty())` at every callsite.
-#[inline]
-pub fn fresh_prop_ic_cell() -> std::cell::Cell<PropIcSlot> {
-    std::cell::Cell::new(PropIcSlot::Empty)
-}
-
 // ---- Call-site IC (Phase 3, plan Step 13) -----------------------------------
 
-/// Call-site IC slot. Held in `Cell<CallIcSlot>` on every `Expression::Call`
-/// and `Expression::New` node. `Copy` so the cell can use `get`/`set`. The
-/// state machine mirrors `PropIcSlot` exactly.
+/// Call-site IC slot. Stored in a `BodyIcStore` slot and looked up by
+/// `CallSiteId`. `Copy` so reads and writes can be done with short-lived
+/// mutable borrows. The state machine mirrors `PropIcSlot` exactly.
 ///
 /// Phase-3 v1 reads `callee_obj_id` and `callee_shape_id` for the hit check
 /// but does not yet branch on `kind` — the fast-dispatch entry that uses it
@@ -147,13 +141,6 @@ impl CallIcSlot {
     pub(crate) const fn empty() -> Self {
         CallIcSlot::Empty
     }
-}
-
-/// Helper for parser/transform sites that construct `Expression::Call` /
-/// `Expression::New` — fresh, empty call IC cell.
-#[inline]
-pub fn fresh_call_ic_cell() -> std::cell::Cell<CallIcSlot> {
-    std::cell::Cell::new(CallIcSlot::Empty)
 }
 
 const _ASSERT_CALL_IC_SLOT_SIZE: () = {

@@ -1012,7 +1012,7 @@ pub enum JsFunction {
     User {
         name: Option<String>,
         params: Rc<Vec<Pattern>>,
-        body: Rc<Vec<Statement>>,
+        body: Body,
         closure: EnvRef,
         is_arrow: bool,
         is_strict: bool,
@@ -1223,7 +1223,7 @@ pub enum IteratorState {
         done: bool,
     },
     Generator {
-        body: Rc<Vec<Statement>>,
+        body: Body,
         func_env: EnvRef,
         is_strict: bool,
         execution_state: GeneratorExecutionState,
@@ -1241,7 +1241,7 @@ pub enum IteratorState {
         pending_return: Option<JsValue>,
     },
     AsyncGenerator {
-        body: Rc<Vec<Statement>>,
+        body: Body,
         func_env: EnvRef,
         is_strict: bool,
         execution_state: GeneratorExecutionState,

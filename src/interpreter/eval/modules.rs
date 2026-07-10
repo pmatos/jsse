@@ -837,7 +837,7 @@ impl Interpreter {
         };
         // Hoist var/function declarations to var_env
         if let Err(e) = self.eval_declaration_instantiation(
-            &program.body,
+            program.body.as_slice(),
             &var_env,
             &lex_env,
             is_strict,
@@ -850,7 +850,7 @@ impl Interpreter {
         // Execute body in lex_env
         self.call_stack_envs.push(lex_env.clone());
         let mut result = Completion::Empty;
-        for stmt in &program.body {
+        for stmt in program.body.as_slice() {
             self.gc_root_completion(&result);
             self.gc_safepoint();
             let comp = self.exec_statement(stmt, &lex_env);

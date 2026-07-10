@@ -312,7 +312,7 @@ impl Interpreter {
             JsFunction::User {
                 name: Some(name.to_string()),
                 params: Rc::new(cm.value.params.clone()),
-                body: Rc::new(cm.value.body.clone()),
+                body: cm.value.body.clone(),
                 closure: class_env.clone(),
                 is_arrow: false,
                 is_strict: true,
@@ -330,7 +330,7 @@ impl Interpreter {
                 vec![Expression::Spread(Box::new(Expression::Identifier(
                     "args".into(),
                 )))],
-                crate::interpreter::ic::fresh_call_ic_cell(),
+                CallSiteId::UNASSIGNED,
             ))];
             let uses_args = stmts_use_arguments(&default_body);
             JsFunction::User {
@@ -338,7 +338,7 @@ impl Interpreter {
                 params: Rc::new(vec![Pattern::Rest(Box::new(Pattern::Identifier(
                     "args".into(),
                 )))]),
-                body: Rc::new(default_body),
+                body: Body::new(default_body),
                 closure: class_env.clone(),
                 is_arrow: false,
                 is_strict: true,
@@ -355,7 +355,7 @@ impl Interpreter {
             JsFunction::User {
                 name: Some(name.to_string()),
                 params: Rc::new(vec![]),
-                body: Rc::new(vec![]),
+                body: Body::new(vec![]),
                 closure: class_env.clone(),
                 is_arrow: false,
                 is_strict: true,
@@ -572,7 +572,7 @@ impl Interpreter {
                             let method_func = JsFunction::User {
                                 name: Some(format!("#{name}")),
                                 params: Rc::new(m.value.params.clone()),
-                                body: Rc::new(m.value.body.clone()),
+                                body: m.value.body.clone(),
                                 closure: method_closure,
                                 is_arrow: false,
                                 is_strict: true,
@@ -747,7 +747,7 @@ impl Interpreter {
                     let method_func = JsFunction::User {
                         name: Some(method_display_name),
                         params: Rc::new(m.value.params.clone()),
-                        body: Rc::new(m.value.body.clone()),
+                        body: m.value.body.clone(),
                         closure: method_closure,
                         is_arrow: false,
                         is_strict: true,

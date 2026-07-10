@@ -1,4 +1,5 @@
 use super::*;
+use crate::ast::{CallSiteId, PropSiteId};
 
 mod access;
 mod literals;
@@ -409,13 +410,9 @@ impl Interpreter {
                     self.eval_expr(alt, env)
                 }
             }
-            Expression::Call(callee, args, ic_cell) => {
-                self.eval_call(callee, args, env, Some(ic_cell))
-            }
-            Expression::New(callee, args, _) => self.eval_new(callee, args, env),
-            Expression::Member(obj, prop, ic_cell) => {
-                self.eval_member(obj, prop, env, Some(ic_cell))
-            }
+            Expression::Call(callee, args, site_id) => self.eval_call(callee, args, env, *site_id),
+            Expression::New(callee, args, site_id) => self.eval_new(callee, args, env, *site_id),
+            Expression::Member(obj, prop, site_id) => self.eval_member(obj, prop, env, *site_id),
             Expression::Array(elements, _) => self.eval_array_literal(elements, env),
             Expression::Object(props) => self.eval_object_literal(props, env),
             Expression::Function(f) => {
@@ -452,7 +449,7 @@ impl Interpreter {
                 let func = JsFunction::User {
                     name: f.name.clone(),
                     params: Rc::new(f.params.clone()),
-                    body: Rc::new(f.body.clone()),
+                    body: f.body.clone(),
                     closure: closure_env.clone(),
                     is_arrow: false,
                     is_strict: f.body_is_strict || enclosing_strict,
@@ -472,16 +469,10 @@ impl Interpreter {
             }
             Expression::ArrowFunction(af) => {
                 let enclosing_strict = env.borrow().strict;
-                let body_stmts = match &af.body {
-                    ArrowBody::Block(stmts) => stmts.clone(),
-                    ArrowBody::Expression(expr) => {
-                        vec![Statement::Return(Some(*expr.clone()))]
-                    }
-                };
                 let func = JsFunction::User {
                     name: None,
                     params: Rc::new(af.params.clone()),
-                    body: Rc::new(body_stmts),
+                    body: af.body.body().clone(),
                     closure: env.clone(),
                     is_arrow: true,
                     is_strict: af.body_is_strict || enclosing_strict,
@@ -1926,7 +1917,7 @@ impl Interpreter {
     pub(super) fn dispatch_body(
         &mut self,
         func_obj_id: u64,
-        body: &Rc<Vec<Statement>>,
+        body: &Body,
         exec_env: &EnvRef,
         this_val: &JsValue,
     ) -> Completion {
@@ -1939,7 +1930,7 @@ impl Interpreter {
             let chunk = match cache_state {
                 BytecodeCacheState::Compiled(c) => Some(c),
                 BytecodeCacheState::Ineligible => None,
-                BytecodeCacheState::Untried => match compiler::compile_body(body) {
+                BytecodeCacheState::Untried => match compiler::compile_body(body.as_slice()) {
                     Ok(c) => {
                         let rc = Rc::new(c);
                         if let Some(o) = self.get_object(func_obj_id) {
@@ -1964,25 +1955,30 @@ impl Interpreter {
         // keyed by the body's Rc pointer identity. The body Rc is stable across
         // function-object clones, so repeated calls reuse the analysis. ASTs are
         // immutable post-parse, so the cache cannot go stale.
-        let key = Rc::as_ptr(body);
+        let key = Rc::as_ptr(&body.statements);
         let analysis = match self.hoist_cache.get(&key) {
             Some(a) => a.clone(),
             None => {
                 let mut var_set = std::collections::HashSet::new();
-                Self::collect_var_names_from_stmts(body, &mut var_set);
+                Self::collect_var_names_from_stmts(body.as_slice(), &mut var_set);
                 let mut names = Vec::new();
                 let mut blocked = Vec::new();
-                Self::collect_annexb_function_names(body, &mut names, &mut blocked);
+                Self::collect_annexb_function_names(body.as_slice(), &mut names, &mut blocked);
                 let a = Rc::new(HoistAnalysis {
                     var_names: var_set.into_iter().collect(),
                     annexb_names: names,
-                    _body: body.clone(),
+                    _body: body.statements.clone(),
                 });
                 self.hoist_cache.insert(key, a.clone());
                 a
             }
         };
-        self.exec_statements_cached(body, exec_env, Some(&analysis))
+        let handle = self.ic_store.for_body(body);
+        let prev = self.current_ic_handle;
+        self.current_ic_handle = handle;
+        let result = self.exec_statements_cached(body.as_slice(), exec_env, Some(&analysis));
+        self.current_ic_handle = prev;
+        result
     }
 
     pub(super) fn eval_binary(
@@ -5124,7 +5120,7 @@ impl Interpreter {
         callee: &Expression,
         args: &[Expression],
         env: &EnvRef,
-        ic_cell: Option<&std::cell::Cell<crate::interpreter::ic::CallIcSlot>>,
+        site_id: CallSiteId,
     ) -> Completion {
         let saved_tail = self.in_tail_position;
         self.in_tail_position = false;
@@ -5455,12 +5451,12 @@ impl Interpreter {
         //    user function (no proxy, no wrapped, not a class ctor without
         //    `new`, not bound), records Mono. Otherwise transitions to
         //    Megamorphic. State machine identical to PropIcSlot.
-        if let Some(cell) = ic_cell
+        if site_id != CallSiteId::UNASSIGNED
             && self.with_scope_depth == 0
             && let JsValue::Object(o) = &func_val
         {
             use crate::interpreter::ic::CallIcSlot;
-            let slot = cell.get();
+            let slot = *self.call_slot(site_id);
             let mut probe_hit = false;
             if let CallIcSlot::Mono {
                 callee_obj_id,
@@ -5507,7 +5503,7 @@ impl Interpreter {
                     ) if prev == new => s,
                     (CallIcSlot::Mono { .. }, Some(_)) => CallIcSlot::Megamorphic,
                 };
-                cell.set(next);
+                *self.call_slot(site_id) = next;
             }
             self.gc_unroot_frame(gc_frame);
             return result;
@@ -5620,7 +5616,7 @@ impl Interpreter {
 
         func_env.borrow_mut().strict = is_strict;
         self.call_stack_envs.push(func_env.clone());
-        let result = self.exec_statements(&body, &func_env);
+        let result = self.exec_body(&body, &func_env);
         self.call_stack_envs.pop();
         let _ctx = self.generator_context.take();
 
@@ -5783,7 +5779,7 @@ impl Interpreter {
 
                 func_env.borrow_mut().strict = is_strict;
                 self.call_stack_envs.push(func_env.clone());
-                let result = self.exec_statements(&body, &func_env);
+                let result = self.exec_body(&body, &func_env);
                 self.call_stack_envs.pop();
                 let _ctx = self.generator_context.take();
 
@@ -5915,7 +5911,7 @@ impl Interpreter {
 
                 func_env.borrow_mut().strict = is_strict;
                 self.call_stack_envs.push(func_env.clone());
-                let result = self.exec_statements(&body, &func_env);
+                let result = self.exec_body(&body, &func_env);
                 self.call_stack_envs.pop();
                 let _ctx = self.generator_context.take();
 
@@ -6231,10 +6227,7 @@ impl Interpreter {
         let mut inline_yield_prev_sent: Option<Vec<JsValue>> = initial_inline_yield_prev_sent;
 
         loop {
-            let (statements, terminator) = {
-                let gen_state = &state_machine.states[current_id];
-                (gen_state.statements.clone(), gen_state.terminator.clone())
-            };
+            let terminator = state_machine.states[current_id].terminator.clone();
 
             let is_inline_replay = inline_yield_target.is_some();
             if let Some(target) = inline_yield_target.take() {
@@ -6250,7 +6243,7 @@ impl Interpreter {
             }
 
             self.in_state_machine = true;
-            let mut stmt_result = self.exec_statements(&statements, &func_env);
+            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &func_env);
             self.in_state_machine = saved_in_state_machine;
             while let Completion::TailCall { func, this, args } = stmt_result {
                 stmt_result = self.call_function(&func, &this, &args);
@@ -9790,10 +9783,7 @@ impl Interpreter {
                 }
             } // end if check_abrupt_on_resume
 
-            let (statements, terminator) = {
-                let gen_state = &state_machine.states[current_id];
-                (gen_state.statements.clone(), gen_state.terminator.clone())
-            };
+            let terminator = state_machine.states[current_id].terminator.clone();
 
             let is_inline_replay = inline_yield_target.is_some();
             if let Some(target) = inline_yield_target.take() {
@@ -9809,7 +9799,7 @@ impl Interpreter {
             }
 
             self.in_state_machine = true;
-            let mut stmt_result = self.exec_statements(&statements, &func_env);
+            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, &func_env);
             self.in_state_machine = saved_in_state_machine;
             while let Completion::TailCall { func, this, args } = stmt_result {
                 stmt_result = self.call_function(&func, &this, &args);
@@ -11758,7 +11748,7 @@ impl Interpreter {
 
         func_env.borrow_mut().strict = is_strict;
         self.call_stack_envs.push(func_env.clone());
-        let result = self.exec_statements(&body, &func_env);
+        let result = self.exec_body(&body, &func_env);
         self.call_stack_envs.pop();
         let _ctx = self.generator_context.take();
 
@@ -12555,7 +12545,7 @@ impl Interpreter {
                                 body_env.borrow_mut().strict = func_env.borrow().strict;
                                 body_env.borrow_mut().has_simple_params = false;
                                 let mut var_names = HashSet::new();
-                                Self::collect_var_names_from_stmts(&body, &mut var_names);
+                                Self::collect_var_names_from_stmts(body.as_slice(), &mut var_names);
                                 let mut param_names_set = HashSet::new();
                                 for p in params.iter() {
                                     Self::collect_var_names_from_pattern(p, &mut param_names_set);
@@ -12576,7 +12566,8 @@ impl Interpreter {
                             };
 
                             use crate::interpreter::generator_transform::transform_async_generator;
-                            let state_machine = Rc::new(transform_async_generator(&body, &params));
+                            let state_machine =
+                                Rc::new(transform_async_generator(body.as_slice(), &params));
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
@@ -12753,7 +12744,7 @@ impl Interpreter {
                                 body_env.borrow_mut().strict = func_env.borrow().strict;
                                 body_env.borrow_mut().has_simple_params = false;
                                 let mut var_names = HashSet::new();
-                                Self::collect_var_names_from_stmts(&body, &mut var_names);
+                                Self::collect_var_names_from_stmts(body.as_slice(), &mut var_names);
                                 let mut param_names_set = HashSet::new();
                                 for p in params.iter() {
                                     Self::collect_var_names_from_pattern(p, &mut param_names_set);
@@ -12774,7 +12765,8 @@ impl Interpreter {
                             };
 
                             use crate::interpreter::generator_transform::transform_generator;
-                            let state_machine = Rc::new(transform_generator(&body, &params));
+                            let state_machine =
+                                Rc::new(transform_generator(body.as_slice(), &params));
                             for temp_var in &state_machine.temp_vars {
                                 exec_env.borrow_mut().declare(temp_var, BindingKind::Var);
                             }
@@ -12952,7 +12944,7 @@ impl Interpreter {
                             body_env.borrow_mut().strict = func_env.borrow().strict;
                             body_env.borrow_mut().has_simple_params = false;
                             let mut var_names = HashSet::new();
-                            Self::collect_var_names_from_stmts(&body, &mut var_names);
+                            Self::collect_var_names_from_stmts(body.as_slice(), &mut var_names);
                             let mut param_names = HashSet::new();
                             for p in params.iter() {
                                 Self::collect_var_names_from_pattern(p, &mut param_names);
@@ -13197,9 +13189,9 @@ impl Interpreter {
                 Self::expr_contains_arguments(tag)
                     || tl.expressions.iter().any(Self::expr_contains_arguments)
             }
-            Expression::ArrowFunction(af) => match &af.body {
-                ArrowBody::Expression(e) => Self::expr_contains_arguments(e),
-                ArrowBody::Block(stmts) => Self::stmts_contain_arguments(stmts),
+            Expression::ArrowFunction(af) => match af.body.body().as_slice() {
+                [Statement::Expression(e)] => Self::expr_contains_arguments(e),
+                stmts => Self::stmts_contain_arguments(stmts),
             },
             Expression::Function(_) | Expression::Class(_) => false,
             _ => false,
@@ -13259,9 +13251,9 @@ impl Interpreter {
                     || Self::expr_contains_super_call(c)
                     || Self::expr_contains_super_call(a)
             }
-            Expression::ArrowFunction(af) => match &af.body {
-                ArrowBody::Expression(e) => Self::expr_contains_super_call(e),
-                ArrowBody::Block(stmts) => Self::stmts_contain_super_call(stmts),
+            Expression::ArrowFunction(af) => match af.body.body().as_slice() {
+                [Statement::Expression(e)] => Self::expr_contains_super_call(e),
+                stmts => Self::stmts_contain_super_call(stmts),
             },
             Expression::New(callee, args, _) => {
                 Self::expr_contains_super_call(callee)
@@ -13360,24 +13352,25 @@ impl Interpreter {
         if in_field_initializer {
             p.set_eval_in_field_initializer();
         }
-        let program = match p.parse_program() {
+        let mut program = match p.parse_program() {
             Ok(prog) => prog,
             Err(e) => {
                 return Completion::Throw(self.create_error("SyntaxError", &format!("{}", e)));
             }
         };
+        crate::ast::assign_ic_sites(&mut program.body);
         // Validate private name usage in eval-in-class context
         if let Err(e) = p.validate_eval_private_names() {
             return Completion::Throw(self.create_error("SyntaxError", &format!("{}", e)));
         }
         if in_field_initializer {
-            if Self::stmts_contain_arguments(&program.body) {
+            if Self::stmts_contain_arguments(program.body.as_slice()) {
                 return Completion::Throw(self.create_error(
                     "SyntaxError",
                     "'arguments' is not allowed in class field initializer or static block",
                 ));
             }
-            if Self::stmts_contain_super_call(&program.body) {
+            if Self::stmts_contain_super_call(program.body.as_slice()) {
                 return Completion::Throw(self.create_error(
                     "SyntaxError",
                     "'super()' is not allowed in class field initializer",
@@ -13410,7 +13403,7 @@ impl Interpreter {
 
         // EvalDeclarationInstantiation
         if let Err(e) = self.eval_declaration_instantiation(
-            &program.body,
+            program.body.as_slice(),
             &var_env,
             &lex_env,
             is_strict,
@@ -13427,25 +13420,10 @@ impl Interpreter {
             is_eval: true,
         });
         self.call_stack_envs.push(lex_env.clone());
-        let mut last = Completion::Empty;
-        for stmt in &program.body {
-            self.gc_root_completion(&last);
-            self.gc_safepoint();
-            let comp = self.exec_statement(stmt, &lex_env);
-            self.gc_unroot_completion(&last);
-            match comp {
-                Completion::Normal(v) => last = Completion::Normal(v),
-                Completion::Empty => {}
-                other => {
-                    self.call_stack_envs.pop();
-                    self.call_stack_frames.pop();
-                    return other;
-                }
-            }
-        }
+        let result = self.exec_body(&program.body, &lex_env);
         self.call_stack_envs.pop();
         self.call_stack_frames.pop();
-        last.update_empty(JsValue::Undefined)
+        self.dispose_resources(&lex_env, result)
     }
 
     /// Collect top-level var-declared names from eval body (recursively into blocks, etc.)
@@ -13742,7 +13720,7 @@ impl Interpreter {
             let func = JsFunction::User {
                 name: Some(f.name.clone()),
                 params: Rc::new(f.params.clone()),
-                body: Rc::new(f.body.clone()),
+                body: f.body.clone(),
                 closure: lex_env.clone(),
                 is_arrow: false,
                 is_strict: f.body_is_strict || enclosing_strict,
@@ -13912,7 +13890,13 @@ impl Interpreter {
         Ok(())
     }
 
-    fn eval_new(&mut self, callee: &Expression, args: &[Expression], env: &EnvRef) -> Completion {
+    fn eval_new(
+        &mut self,
+        callee: &Expression,
+        args: &[Expression],
+        env: &EnvRef,
+        _site_id: CallSiteId,
+    ) -> Completion {
         let gc_frame = self.gc_root_frame();
         let callee_val = match self.eval_expr(callee, env) {
             Completion::Normal(v) => v,
@@ -15401,7 +15385,7 @@ impl Interpreter {
     fn call_async_function(
         &mut self,
         params: &[Pattern],
-        body: &[Statement],
+        body: &Body,
         closure: EnvRef,
         is_arrow: bool,
         is_strict: bool,
@@ -15524,7 +15508,10 @@ impl Interpreter {
         self.in_tail_position = false;
 
         let sm = Rc::new(
-            crate::interpreter::generator_transform::transform_async_function(body, params),
+            crate::interpreter::generator_transform::transform_async_function(
+                body.as_slice(),
+                params,
+            ),
         );
 
         for tv in &sm.temp_vars {
@@ -15712,9 +15699,7 @@ impl Interpreter {
                 self.async_fn_complete(async_id, &func_env, &resolve_fn, &reject_fn);
                 return;
             }
-            let state_ref = &state_machine.states[current_id];
-            let statements = &state_ref.statements;
-            let terminator = state_ref.terminator.clone();
+            let terminator = state_machine.states[current_id].terminator.clone();
 
             // Route pending exception through try stack
             // Skip routing if we're at EnterCatch/EnterFinally (already routed to handler)
@@ -15761,7 +15746,7 @@ impl Interpreter {
 
             self.in_state_machine = true;
             let exec_env = for_of_iter_env.as_ref().unwrap_or(&func_env);
-            let mut stmt_result = self.exec_statements(statements, exec_env);
+            let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, exec_env);
             self.in_state_machine = saved_in_state_machine;
 
             // Execute tail calls inline — async functions don't use PTC, but
