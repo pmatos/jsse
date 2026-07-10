@@ -97,22 +97,6 @@ fn utf16_units(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
-// §7.1.7 ToUint32
-fn to_uint32(n: f64) -> u32 {
-    if n.is_nan() || n.is_infinite() || n == 0.0 {
-        return 0;
-    }
-    let int_val = n.signum() * n.abs().floor();
-    let two32: f64 = 4294967296.0; // 2^32
-    let int32bit = int_val % two32;
-    let int32bit = if int32bit < 0.0 {
-        int32bit + two32
-    } else {
-        int32bit
-    };
-    int32bit as u32
-}
-
 // §7.2.8 IsRegExp(argument) — uses [[Get]] for Symbol.match (invokes getters)
 fn is_regexp(interp: &mut Interpreter, obj_id: u64, obj_val: &JsValue) -> Result<bool, JsValue> {
     if let Some(match_key) = interp.get_symbol_key("match") {
@@ -787,7 +771,7 @@ impl Interpreter {
                         0xFFFF_FFFF // 2^32 - 1
                     } else {
                         match to_num(interp, &limit_arg) {
-                            Ok(n) => to_uint32(n),
+                            Ok(n) => crate::types::number_ops::to_uint32(n),
                             Err(c) => return c,
                         }
                     };

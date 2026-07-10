@@ -90,21 +90,6 @@ fn utf16_to_byte_offset(s: &str, utf16_offset: usize) -> usize {
     s.len()
 }
 
-fn to_uint32_f64(n: f64) -> u32 {
-    if n.is_nan() || n.is_infinite() || n == 0.0 {
-        return 0;
-    }
-    let int_val = n.signum() * n.abs().floor();
-    // Modulo 2^32
-    let modulo = int_val % 4294967296.0;
-    let modulo = if modulo < 0.0 {
-        modulo + 4294967296.0
-    } else {
-        modulo
-    };
-    modulo as u32
-}
-
 // Surrogate code points (U+D800-U+DFFF) can't be represented as Rust chars.
 // We remap them to Supplementary PUA-A (U+F0000+) so regex matching works
 // on strings containing lone surrogates.
@@ -8208,7 +8193,7 @@ impl Interpreter {
                     0xFFFFFFFF
                 } else {
                     match interp.to_number_value(&limit) {
-                        Ok(n) => to_uint32_f64(n),
+                        Ok(n) => crate::types::number_ops::to_uint32(n),
                         Err(e) => return Completion::Throw(e),
                     }
                 };

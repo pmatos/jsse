@@ -1,6 +1,6 @@
 use super::super::*;
 use crate::interpreter::types::BufferData;
-use crate::types::{JsBigInt, JsObject, JsString, JsValue};
+use crate::types::{JsBigInt, JsObject, JsString, JsValue, number_ops};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -19,20 +19,6 @@ fn with_buffer_read<R>(buf: &Rc<RefCell<BufferData>>, f: impl FnOnce(&[u8]) -> R
 
 fn with_buffer_write<R>(buf: &Rc<RefCell<BufferData>>, f: impl FnOnce(&mut [u8]) -> R) -> R {
     (*buf.borrow_mut()).with_write(f)
-}
-
-fn to_int32_modular(n: f64) -> i32 {
-    if n.is_nan() || n.is_infinite() || n == 0.0 {
-        return 0;
-    }
-    let n = n.trunc();
-    let n = n % 4294967296.0; // 2^32
-    let n = if n < 0.0 { n + 4294967296.0 } else { n };
-    if n >= 2147483648.0 {
-        (n - 4294967296.0) as i32
-    } else {
-        n as i32
-    }
 }
 
 impl Interpreter {
@@ -5852,18 +5838,18 @@ impl Interpreter {
         }
 
         dv_set_method!("setInt8", 1, number, |buf: &mut [u8], n: f64, _le: bool| {
-            buf[0] = to_int32_modular(n) as i8 as u8;
+            buf[0] = number_ops::to_int32(n) as i8 as u8;
         });
         dv_set_method!(
             "setUint8",
             1,
             number,
             |buf: &mut [u8], n: f64, _le: bool| {
-                buf[0] = to_int32_modular(n) as u8;
+                buf[0] = number_ops::to_int32(n) as u8;
             }
         );
         dv_set_method!("setInt16", 2, number, |buf: &mut [u8], n: f64, le: bool| {
-            let v = to_int32_modular(n) as i16;
+            let v = number_ops::to_int32(n) as i16;
             let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
             buf.copy_from_slice(&bytes);
         });
@@ -5872,13 +5858,13 @@ impl Interpreter {
             2,
             number,
             |buf: &mut [u8], n: f64, le: bool| {
-                let v = to_int32_modular(n) as u16;
+                let v = number_ops::to_int32(n) as u16;
                 let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
                 buf.copy_from_slice(&bytes);
             }
         );
         dv_set_method!("setInt32", 4, number, |buf: &mut [u8], n: f64, le: bool| {
-            let v = to_int32_modular(n);
+            let v = number_ops::to_int32(n);
             let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
             buf.copy_from_slice(&bytes);
         });
@@ -5887,7 +5873,7 @@ impl Interpreter {
             4,
             number,
             |buf: &mut [u8], n: f64, le: bool| {
-                let v = to_int32_modular(n) as u32;
+                let v = number_ops::to_int32(n) as u32;
                 let bytes = if le { v.to_le_bytes() } else { v.to_be_bytes() };
                 buf.copy_from_slice(&bytes);
             }
