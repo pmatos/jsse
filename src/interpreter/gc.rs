@@ -1,44 +1,140 @@
 use super::*;
 
+/// Allocation-pressure pacing for the garbage collector.
+///
+/// Owns the accounting that decides *when* to collect: how many objects and
+/// bytes have been charged since the last collection, how many off-heap bytes
+/// are currently live, and the adaptive byte budget that grows with the live
+/// set. The mark/sweep mechanics stay in [`Interpreter::gc_safepoint`]; this is
+/// purely the "should we collect now?" heuristic, exercised through the small
+/// interface below rather than by poking counters on the interpreter.
+pub(crate) struct GcPacer {
+    /// Object allocations since the last collection (count-based trigger).
+    alloc_count: usize,
+    /// Heap + off-heap bytes charged since the last collection (byte trigger).
+    bytes_since_gc: usize,
+    /// Live off-heap bytes currently tracked (e.g. ArrayBuffer backing stores).
+    external_bytes: usize,
+    /// Adaptive byte budget; exceeding it requests a collection.
+    threshold_bytes: usize,
+    /// A collection has been requested and not yet performed.
+    requested: bool,
+}
+
+impl GcPacer {
+    pub(crate) fn new() -> Self {
+        GcPacer {
+            alloc_count: 0,
+            bytes_since_gc: 0,
+            external_bytes: 0,
+            threshold_bytes: GC_INITIAL_THRESHOLD_BYTES,
+            requested: false,
+        }
+    }
+
+    /// Charge one object allocation. `reused` is true when the slot came from
+    /// the arena free-list, which costs half of a fresh allocation.
+    pub(crate) fn charge_object(&mut self, reused: bool) {
+        self.alloc_count += 1;
+        let cost = if reused {
+            GC_OBJECT_OVERHEAD / 2
+        } else {
+            GC_OBJECT_OVERHEAD
+        };
+        self.bytes_since_gc += cost;
+        if self.alloc_count >= GC_THRESHOLD || self.bytes_since_gc >= self.threshold_bytes {
+            self.requested = true;
+        }
+    }
+
+    /// Charge newly tracked off-heap bytes against the budget.
+    pub(crate) fn track_external(&mut self, bytes: usize) {
+        self.external_bytes += bytes;
+        self.bytes_since_gc += bytes;
+        if self.bytes_since_gc >= self.threshold_bytes {
+            self.requested = true;
+        }
+    }
+
+    /// Release previously tracked off-heap bytes (saturating at zero).
+    pub(crate) fn release_external(&mut self, bytes: usize) {
+        self.external_bytes = self.external_bytes.saturating_sub(bytes);
+    }
+
+    /// Force a collection at the next safepoint.
+    pub(crate) fn request(&mut self) {
+        self.requested = true;
+    }
+
+    /// Consume a pending request at a safepoint. Returns true when a collection
+    /// should run, resetting the per-cycle object counter as it does.
+    pub(crate) fn begin_collection(&mut self) -> bool {
+        if !self.requested {
+            return false;
+        }
+        self.requested = false;
+        self.alloc_count = 0;
+        true
+    }
+
+    /// Re-pace after a collection: grow the next byte budget from the surviving
+    /// live set and reset the per-cycle byte counter. `live_object_count` is the
+    /// number of heap objects that survived the sweep.
+    pub(crate) fn end_collection(&mut self, live_object_count: usize) {
+        let live_bytes = live_object_count * GC_OBJECT_OVERHEAD + self.external_bytes;
+        self.threshold_bytes = std::cmp::max(GC_MIN_THRESHOLD_BYTES, live_bytes * GC_GROWTH_FACTOR);
+        self.bytes_since_gc = 0;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_requested(&self) -> bool {
+        self.requested
+    }
+
+    #[cfg(test)]
+    pub(crate) fn alloc_count(&self) -> usize {
+        self.alloc_count
+    }
+
+    #[cfg(test)]
+    pub(crate) fn bytes_since_gc(&self) -> usize {
+        self.bytes_since_gc
+    }
+
+    #[cfg(test)]
+    pub(crate) fn external_bytes(&self) -> usize {
+        self.external_bytes
+    }
+
+    #[cfg(test)]
+    pub(crate) fn threshold_bytes(&self) -> usize {
+        self.threshold_bytes
+    }
+}
+
 impl Interpreter {
     /// Allocate a fresh object slot for `data` and return its id. The id is
     /// written to `data.id` inside the arena's `alloc`, so the field is set
     /// exactly once at allocation and never reassigned.
     pub(crate) fn alloc_object(&mut self, mut data: JsObjectData) -> u64 {
-        self.gc_alloc_count += 1;
         data.shape_id = crate::interpreter::types::fresh_shape_id();
         let (id, was_reuse) = self.objects.alloc(data);
-        let cost = if was_reuse {
-            GC_OBJECT_OVERHEAD / 2
-        } else {
-            GC_OBJECT_OVERHEAD
-        };
-        self.gc_bytes_since_gc += cost;
-        if self.gc_alloc_count >= GC_THRESHOLD || self.gc_bytes_since_gc >= self.gc_threshold_bytes
-        {
-            self.gc_requested = true;
-        }
+        self.gc.charge_object(was_reuse);
         id
     }
 
     pub(crate) fn gc_track_external_bytes(&mut self, bytes: usize) {
-        self.gc_external_bytes += bytes;
-        self.gc_bytes_since_gc += bytes;
-        if self.gc_bytes_since_gc >= self.gc_threshold_bytes {
-            self.gc_requested = true;
-        }
+        self.gc.track_external(bytes);
     }
 
     pub(crate) fn gc_untrack_external_bytes(&mut self, bytes: usize) {
-        self.gc_external_bytes = self.gc_external_bytes.saturating_sub(bytes);
+        self.gc.release_external(bytes);
     }
 
     pub(crate) fn gc_safepoint(&mut self) {
-        if !self.gc_requested {
+        if !self.gc.begin_collection() {
             return;
         }
-        self.gc_requested = false;
-        self.gc_alloc_count = 0;
         let obj_count = self.objects.capacity() as usize;
         // Reuse the mark bitmap buffer across collections to avoid per-GC
         // allocation churn. clear()+resize(_, false) yields an all-false buffer
@@ -199,7 +295,7 @@ impl Interpreter {
                     if let Some(buf_data) = obj.arraybuffer_data()
                         && let BufferData::Owned(ref v) = *buf_data.borrow()
                     {
-                        self.gc_external_bytes = self.gc_external_bytes.saturating_sub(v.len());
+                        self.gc.release_external(v.len());
                     }
                 }
                 self.objects.free(id);
@@ -210,10 +306,7 @@ impl Interpreter {
         }
         // Adaptive threshold: scale next GC budget from live heap size
         let live_count = self.objects.live_count();
-        let live_bytes = live_count * GC_OBJECT_OVERHEAD + self.gc_external_bytes;
-        self.gc_threshold_bytes =
-            std::cmp::max(GC_MIN_THRESHOLD_BYTES, live_bytes * GC_GROWTH_FACTOR);
-        self.gc_bytes_since_gc = 0;
+        self.gc.end_collection(live_count);
         // Post-sweep: clear dead weak entries
         for i in 0..obj_count {
             if !marks[i] {
@@ -631,5 +724,120 @@ mod tests {
         let mut worklist = Vec::new();
         Interpreter::collect_env_roots(&cyclic, &mut worklist);
         assert_eq!(worklist, vec![32]);
+    }
+
+    // GcPacer — the allocation-pressure heuristic that decides when to collect.
+    // Tested through its public interface; expected budgets are hand-computed
+    // literals (independent of the pacer's own arithmetic).
+
+    #[test]
+    fn fresh_pacer_requests_no_collection() {
+        let mut pacer = GcPacer::new();
+        assert!(!pacer.is_requested());
+        assert!(!pacer.begin_collection());
+    }
+
+    #[test]
+    fn object_count_threshold_requests_collection() {
+        // Reused slots cost GC_OBJECT_OVERHEAD/2 (256B) each, so 4096 of them
+        // total 1 MiB — below the 2 MiB initial byte budget. The request here
+        // can only come from the object-count trigger, not byte pressure.
+        let mut pacer = GcPacer::new();
+        for _ in 0..GC_THRESHOLD - 1 {
+            pacer.charge_object(true);
+        }
+        assert!(
+            !pacer.is_requested(),
+            "not yet at the object-count threshold"
+        );
+        pacer.charge_object(true);
+        assert!(
+            pacer.is_requested(),
+            "reaching GC_THRESHOLD requests a collection"
+        );
+    }
+
+    #[test]
+    fn byte_threshold_requests_collection() {
+        let mut pacer = GcPacer::new();
+        pacer.track_external(1024);
+        assert!(
+            !pacer.is_requested(),
+            "a small allocation stays under budget"
+        );
+
+        let mut pacer = GcPacer::new();
+        pacer.track_external(GC_INITIAL_THRESHOLD_BYTES);
+        assert!(
+            pacer.is_requested(),
+            "crossing the byte budget requests a collection"
+        );
+    }
+
+    #[test]
+    fn request_forces_a_collection() {
+        let mut pacer = GcPacer::new();
+        pacer.request();
+        assert!(pacer.is_requested());
+        assert!(pacer.begin_collection());
+    }
+
+    #[test]
+    fn release_external_saturates_at_zero() {
+        let mut pacer = GcPacer::new();
+        pacer.track_external(1000);
+        assert_eq!(pacer.external_bytes(), 1000);
+        pacer.release_external(4000);
+        assert_eq!(pacer.external_bytes(), 0);
+    }
+
+    #[test]
+    fn begin_collection_consumes_request_and_resets_count() {
+        let mut pacer = GcPacer::new();
+        for _ in 0..GC_THRESHOLD {
+            pacer.charge_object(true);
+        }
+        assert!(pacer.is_requested());
+        assert!(pacer.begin_collection(), "the pending request is honored");
+        assert_eq!(
+            pacer.alloc_count(),
+            0,
+            "the per-cycle object counter resets"
+        );
+        assert!(!pacer.is_requested());
+        assert!(
+            !pacer.begin_collection(),
+            "the request is consumed, not repeated"
+        );
+    }
+
+    #[test]
+    fn end_collection_grows_threshold_from_live_set() {
+        // Empty live set floors at GC_MIN_THRESHOLD_BYTES (256 KiB = 262144).
+        let mut pacer = GcPacer::new();
+        pacer.end_collection(0);
+        assert_eq!(pacer.threshold_bytes(), 262_144);
+
+        // 1000 live objects × 512B overhead × 2 growth = 1_024_000.
+        let mut pacer = GcPacer::new();
+        pacer.end_collection(1000);
+        assert_eq!(pacer.threshold_bytes(), 1_024_000);
+
+        // Tracked off-heap bytes feed the live-set estimate:
+        // (0 objects + 1_000_000 external) × 2 growth = 2_000_000.
+        let mut pacer = GcPacer::new();
+        pacer.track_external(1_000_000);
+        pacer.end_collection(0);
+        assert_eq!(pacer.threshold_bytes(), 2_000_000);
+    }
+
+    #[test]
+    fn end_collection_resets_byte_counter() {
+        let mut pacer = GcPacer::new();
+        pacer.track_external(GC_INITIAL_THRESHOLD_BYTES);
+        assert_eq!(pacer.bytes_since_gc(), GC_INITIAL_THRESHOLD_BYTES);
+        pacer.begin_collection();
+        pacer.end_collection(0);
+        assert_eq!(pacer.bytes_since_gc(), 0);
     }
 }
