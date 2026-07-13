@@ -13190,7 +13190,7 @@ impl Interpreter {
                     || tl.expressions.iter().any(Self::expr_contains_arguments)
             }
             Expression::ArrowFunction(af) => match af.body.body().as_slice() {
-                [Statement::Expression(e)] => Self::expr_contains_arguments(e),
+                [Statement::Return(Some(e))] => Self::expr_contains_arguments(e),
                 stmts => Self::stmts_contain_arguments(stmts),
             },
             Expression::Function(_) | Expression::Class(_) => false,
@@ -13252,7 +13252,7 @@ impl Interpreter {
                     || Self::expr_contains_super_call(a)
             }
             Expression::ArrowFunction(af) => match af.body.body().as_slice() {
-                [Statement::Expression(e)] => Self::expr_contains_super_call(e),
+                [Statement::Return(Some(e))] => Self::expr_contains_super_call(e),
                 stmts => Self::stmts_contain_super_call(stmts),
             },
             Expression::New(callee, args, _) => {
@@ -13420,10 +13420,10 @@ impl Interpreter {
             is_eval: true,
         });
         self.call_stack_envs.push(lex_env.clone());
-        let result = self.exec_body(&program.body, &lex_env);
+        let result = self.exec_eval_body(&program.body, &lex_env);
         self.call_stack_envs.pop();
         self.call_stack_frames.pop();
-        self.dispose_resources(&lex_env, result)
+        self.dispose_resources(&lex_env, result.update_empty(JsValue::Undefined))
     }
 
     /// Collect top-level var-declared names from eval body (recursively into blocks, etc.)

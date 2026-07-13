@@ -914,9 +914,9 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Expression(
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
                                 self.parse_arrow_expression_body()?,
-                            )])),
+                            ))])),
                             false,
                         )
                     };
@@ -943,9 +943,9 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Expression(
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
                                 self.parse_arrow_expression_body()?,
-                            )])),
+                            ))])),
                             false,
                         )
                     };
@@ -970,9 +970,9 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Expression(
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
                                 self.parse_arrow_expression_body()?,
-                            )])),
+                            ))])),
                             false,
                         )
                     };
@@ -997,9 +997,9 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Expression(
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
                                 self.parse_arrow_expression_body()?,
-                            )])),
+                            ))])),
                             false,
                         )
                     };
@@ -1113,8 +1113,8 @@ impl<'a> Parser<'a> {
                                 (ArrowBody::Block(Body::new(stmts)), strict)
                             } else {
                                 (
-                                    ArrowBody::Expression(Body::new(vec![Statement::Expression(
-                                        self.parse_arrow_expression_body()?,
+                                    ArrowBody::Expression(Body::new(vec![Statement::Return(
+                                        Some(self.parse_arrow_expression_body()?),
                                     )])),
                                     false,
                                 )
@@ -1158,9 +1158,9 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Expression(
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
                                 self.parse_arrow_expression_body()?,
-                            )])),
+                            ))])),
                             false,
                         )
                     };
@@ -1200,9 +1200,9 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Expression(
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
                                 self.parse_arrow_expression_body()?,
-                            )])),
+                            ))])),
                             false,
                         )
                     };
@@ -1303,9 +1303,9 @@ impl<'a> Parser<'a> {
                             (ArrowBody::Block(Body::new(stmts)), strict)
                         } else {
                             (
-                                ArrowBody::Expression(Body::new(vec![Statement::Expression(
+                                ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
                                     self.parse_arrow_expression_body()?,
-                                )])),
+                                ))])),
                                 false,
                             )
                         };
@@ -1333,9 +1333,9 @@ impl<'a> Parser<'a> {
                         (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Body::new(vec![Statement::Expression(
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
                                 self.parse_arrow_expression_body()?,
-                            )])),
+                            ))])),
                             false,
                         )
                     };
@@ -1395,9 +1395,9 @@ impl<'a> Parser<'a> {
                             (ArrowBody::Block(Body::new(stmts)), strict)
                         } else {
                             (
-                                ArrowBody::Expression(Body::new(vec![Statement::Expression(
+                                ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
                                     self.parse_arrow_expression_body()?,
-                                )])),
+                                ))])),
                                 false,
                             )
                         };
@@ -2145,9 +2145,9 @@ impl<'a> Parser<'a> {
                     (ArrowBody::Block(Body::new(stmts)), strict)
                 } else {
                     (
-                        ArrowBody::Expression(Body::new(vec![Statement::Expression(
+                        ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
                             self.parse_arrow_expression_body()?,
-                        )])),
+                        ))])),
                         false,
                     )
                 };
@@ -2185,9 +2185,9 @@ impl<'a> Parser<'a> {
                 (ArrowBody::Block(Body::new(stmts)), strict)
             } else {
                 (
-                    ArrowBody::Expression(Body::new(vec![Statement::Expression(
+                    ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
                         self.parse_arrow_expression_body()?,
-                    )])),
+                    ))])),
                     false,
                 )
             };
@@ -2244,9 +2244,9 @@ impl<'a> Parser<'a> {
                     (ArrowBody::Block(Body::new(stmts)), strict)
                 } else {
                     (
-                        ArrowBody::Expression(Body::new(vec![Statement::Expression(
+                        ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
                             self.parse_arrow_expression_body()?,
-                        )])),
+                        ))])),
                         false,
                     )
                 };

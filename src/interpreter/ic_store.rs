@@ -24,8 +24,9 @@ pub struct BodyStoreHandle(pub usize);
 pub struct IcStore {
     /// Map from the body statement-vector pointer to the store index. The key
     /// is the `Rc` pointer so that cloned ASTs sharing the same body share the
-    /// same cache. The `Body` `Rc` is also pinned here to prevent reuse of the
-    /// pointer address (ABA).
+    /// same cache. Each `BodyIcStore` pins a clone of the body's statement `Rc`
+    /// so the pointer key cannot be reused by a freed-then-reallocated body
+    /// (ABA), matching the `HoistAnalysis` cache pattern.
     index: HashMap<*const Vec<crate::ast::Statement>, usize>,
     stores: Vec<BodyIcStore>,
 }
@@ -47,7 +48,8 @@ impl IcStore {
             return BodyStoreHandle(idx);
         }
         let idx = self.stores.len();
-        self.stores.push(BodyIcStore::new(body.ic));
+        self.stores
+            .push(BodyIcStore::new(body.ic, body.statements.clone()));
         self.index.insert(key, idx);
         BodyStoreHandle(idx)
     }
@@ -63,13 +65,18 @@ impl IcStore {
 pub struct BodyIcStore {
     call_slots: Vec<CallIcSlot>,
     prop_slots: Vec<PropIcSlot>,
+    /// Pins the body's statement `Rc` alive so its `Rc::as_ptr` address (used as
+    /// the `IcStore` key) cannot be reused by an unrelated body after this one
+    /// is dropped, which would otherwise alias a stale, wrongly-sized store.
+    _body: Rc<Vec<crate::ast::Statement>>,
 }
 
 impl BodyIcStore {
-    fn new(info: BodyIcInfo) -> Self {
+    fn new(info: BodyIcInfo, body: Rc<Vec<crate::ast::Statement>>) -> Self {
         Self {
             call_slots: vec![CallIcSlot::Empty; info.call_site_count as usize],
             prop_slots: vec![PropIcSlot::Empty; info.prop_site_count as usize],
+            _body: body,
         }
     }
 

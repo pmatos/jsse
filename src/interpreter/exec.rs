@@ -19,6 +19,37 @@ impl Interpreter {
         result
     }
 
+    /// Execute an `eval` / ShadowRealm-eval body. Like `exec_body`, this switches
+    /// `current_ic_handle` to the body's own IC store (dynamic code gets its own
+    /// dense site namespace via `assign_ic_sites`). Unlike `exec_body`, it does
+    /// NOT run the function-body hoisting pass: eval callers run
+    /// `eval_declaration_instantiation` first (which applies the eval-specific
+    /// var/function hoisting rules), and re-hoisting here with function-body
+    /// semantics would corrupt those bindings. Returns the last statement's
+    /// completion value (eval's result), matching PerformEval / PerformShadowRealmEval.
+    pub(crate) fn exec_eval_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
+        let handle = self.ic_store.for_body(body);
+        let prev = self.current_ic_handle;
+        self.current_ic_handle = handle;
+        let mut last = Completion::Empty;
+        for stmt in body.as_slice() {
+            self.gc_root_completion(&last);
+            self.gc_safepoint();
+            let comp = self.exec_statement(stmt, env);
+            self.gc_unroot_completion(&last);
+            match comp {
+                Completion::Normal(v) => last = Completion::Normal(v),
+                Completion::Empty => {}
+                other => {
+                    last = other;
+                    break;
+                }
+            }
+        }
+        self.current_ic_handle = prev;
+        last
+    }
+
     /// Core statement-sequence executor. `analysis`, when `Some`, supplies the
     /// pre-computed hoisting *name collection* for this function body (#72),
     /// letting us skip the per-statement var-hoisting walk and the Annex-B name

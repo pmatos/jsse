@@ -771,7 +771,7 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
         Expression::ArrowFunction(a) => {
             let body = a.body.body();
             match body.statements.as_slice() {
-                [Statement::Expression(e)] => expr_uses_arguments(e),
+                [Statement::Return(Some(e))] => expr_uses_arguments(e),
                 stmts => stmts_use_arguments(stmts),
             }
         }

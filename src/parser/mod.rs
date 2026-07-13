@@ -582,7 +582,7 @@ impl<'a> Parser<'a> {
             // so references inside them still refer to the enclosing scope's arguments
             Expression::ArrowFunction(af) => match &af.body {
                             ArrowBody::Expression(body) => {
-                                if let Statement::Expression(e) = &body.as_slice()[0] {
+                                if let Statement::Return(Some(e)) = &body.as_slice()[0] {
                                     Self::contains_arguments(e)
                                 } else {
                                     false
@@ -783,7 +783,7 @@ impl<'a> Parser<'a> {
                 af.params.iter().any(Self::pattern_contains_await_identifier)
                     || match &af.body {
                                             ArrowBody::Expression(body) => {
-                                                if let Statement::Expression(e) = &body.as_slice()[0] {
+                                                if let Statement::Return(Some(e)) = &body.as_slice()[0] {
                                                     Self::expr_contains_await_identifier(e)
                                                 } else {
                                                     false
@@ -885,7 +885,7 @@ impl<'a> Parser<'a> {
                 af.params.iter().any(Self::pattern_contains_await_expression)
                     || match &af.body {
                                             ArrowBody::Expression(body) => {
-                                                if let Statement::Expression(e) = &body.as_slice()[0] {
+                                                if let Statement::Return(Some(e)) = &body.as_slice()[0] {
                                                     Self::expr_contains_await_expression(e)
                                                 } else {
                                                     false
@@ -977,7 +977,7 @@ impl<'a> Parser<'a> {
                 af.params.iter().any(Self::pattern_contains_yield_expression)
                     || match &af.body {
                                             ArrowBody::Expression(body) => {
-                                                if let Statement::Expression(e) = &body.as_slice()[0] {
+                                                if let Statement::Return(Some(e)) = &body.as_slice()[0] {
                                                     Self::expr_contains_yield_expression(e)
                                                 } else {
                                                     false

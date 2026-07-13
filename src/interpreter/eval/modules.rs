@@ -797,7 +797,7 @@ impl Interpreter {
     ) -> Completion {
         use crate::parser::Parser;
 
-        let program = {
+        let mut program = {
             let mut parser = match Parser::new(source_text) {
                 Ok(p) => p,
                 Err(_) => {
@@ -819,6 +819,11 @@ impl Interpreter {
                 }
             }
         };
+
+        // Assign the evaluated program its own dense IC-site namespace so that
+        // `exec_body` below can switch `current_ic_handle` to this body's store.
+        // Without this the program's site ids would index the caller's IC store.
+        crate::ast::assign_ic_sites(&mut program.body);
 
         let old_realm = self.current_realm_id;
         self.current_realm_id = eval_realm_id;
@@ -847,23 +852,12 @@ impl Interpreter {
             self.current_realm_id = old_realm;
             return Completion::Throw(e);
         }
-        // Execute body in lex_env
+        // Execute body in lex_env via exec_eval_body: it switches current_ic_handle
+        // to this program's own IC store (keeping the seam invariant that every
+        // executed body switches the handle) without re-running the hoisting pass,
+        // since eval_declaration_instantiation above already performed it.
         self.call_stack_envs.push(lex_env.clone());
-        let mut result = Completion::Empty;
-        for stmt in program.body.as_slice() {
-            self.gc_root_completion(&result);
-            self.gc_safepoint();
-            let comp = self.exec_statement(stmt, &lex_env);
-            self.gc_unroot_completion(&result);
-            match comp {
-                Completion::Normal(v) => result = Completion::Normal(v),
-                Completion::Empty => {}
-                other => {
-                    result = other;
-                    break;
-                }
-            }
-        }
+        let result = self.exec_eval_body(&program.body, &lex_env);
         self.call_stack_envs.pop();
         self.drain_microtasks();
         self.current_realm_id = old_realm;
