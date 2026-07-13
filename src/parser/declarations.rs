@@ -299,7 +299,7 @@ impl<'a> Parser<'a> {
         Ok(Statement::FunctionDeclaration(FunctionDecl {
             name,
             params,
-            body,
+            body: Body::new(body),
             is_async,
             is_generator,
             source_text,
@@ -551,7 +551,7 @@ impl<'a> Parser<'a> {
         for elem in body {
             if let ClassElement::Method(m) = elem
                 && m.kind == ClassMethodKind::Constructor
-                && Self::stmts_has_direct_super(&m.value.body)
+                && Self::stmts_has_direct_super(m.value.body.as_slice())
             {
                 return Err(ParseError {
                     message: "'super' keyword unexpected here".to_string(),
@@ -1205,7 +1205,7 @@ impl<'a> Parser<'a> {
         Ok(FunctionExpr {
             name: None,
             params,
-            body,
+            body: Body::new(body),
             is_async,
             is_generator,
             source_text,

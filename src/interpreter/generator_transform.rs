@@ -1,6 +1,5 @@
 use crate::ast::*;
 use crate::interpreter::generator_analysis::*;
-use crate::interpreter::ic::{fresh_call_ic_cell, fresh_prop_ic_cell};
 use crate::types::JsValue;
 use std::collections::HashMap;
 
@@ -18,7 +17,7 @@ pub struct GeneratorStateMachine {
 #[allow(dead_code)]
 pub struct GeneratorState {
     pub id: usize,
-    pub statements: Vec<Statement>,
+    pub body: Body,
     pub terminator: StateTerminator,
 }
 
@@ -87,6 +86,83 @@ pub enum StateTerminator {
         sent_value_binding: Option<SentValueBinding>,
     },
     Completed,
+}
+
+/// Clear IC sites in a sent-value binding pattern (the destructuring target of
+/// `x = yield` / `x = await`). The pattern is applied to the resumed value before
+/// the next `exec_body` switches to a state-body store, so any computed-key or
+/// default-value sites in it run under the caller's handle and must be cleared.
+fn clear_sent_value_binding(binding: &mut Option<SentValueBinding>) {
+    if let Some(SentValueBinding {
+        kind: SentValueBindingKind::Pattern(p),
+    }) = binding
+    {
+        crate::ast::clear_pattern_ic_sites(p);
+    }
+}
+
+/// Reset IC site ids in a terminator's expressions to UNASSIGNED. See
+/// `ast::clear_expr_ic_sites`: terminator expressions run under the caller's IC
+/// handle rather than any state body's store, so they must take the slow path.
+fn clear_terminator_ic_sites(t: &mut StateTerminator) {
+    use crate::ast::{clear_expr_ic_sites, clear_for_in_of_left, clear_pattern_ic_sites};
+    match t {
+        StateTerminator::Yield {
+            value,
+            sent_value_binding,
+            ..
+        } => {
+            if let Some(v) = value {
+                clear_expr_ic_sites(v);
+            }
+            clear_sent_value_binding(sent_value_binding);
+        }
+        StateTerminator::Return(v) => {
+            if let Some(v) = v {
+                clear_expr_ic_sites(v);
+            }
+        }
+        StateTerminator::Throw(v) => clear_expr_ic_sites(v),
+        StateTerminator::ConditionalGoto { condition, .. } => clear_expr_ic_sites(condition),
+        StateTerminator::SwitchDispatch {
+            discriminant,
+            cases,
+            ..
+        } => {
+            clear_expr_ic_sites(discriminant);
+            for case in cases.iter_mut() {
+                clear_expr_ic_sites(&mut case.test);
+            }
+        }
+        // ForOfInit only evaluates `iterable` here; the `left` binding is applied
+        // later in ForOfHead, which is where its sites are cleared.
+        StateTerminator::ForOfInit { iterable, .. } => clear_expr_ic_sites(iterable),
+        StateTerminator::ForOfHead { left, .. } => clear_for_in_of_left(left),
+        StateTerminator::Await {
+            value,
+            sent_value_binding,
+            ..
+        } => {
+            clear_expr_ic_sites(value);
+            clear_sent_value_binding(sent_value_binding);
+        }
+        StateTerminator::TryEnter { catch_state, .. } => {
+            if let Some(ci) = catch_state
+                && let Some(p) = ci.param.as_mut()
+            {
+                clear_pattern_ic_sites(p);
+            }
+        }
+        StateTerminator::EnterCatch { param, .. } => {
+            if let Some(p) = param {
+                clear_pattern_ic_sites(p);
+            }
+        }
+        StateTerminator::Goto(_)
+        | StateTerminator::TryExit { .. }
+        | StateTerminator::EnterFinally { .. }
+        | StateTerminator::Completed => {}
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -174,7 +250,7 @@ impl TransformContext {
         let id = self.states.len();
         self.states.push(GeneratorState {
             id,
-            statements: Vec::new(),
+            body: Body::new(Vec::new()),
             terminator: StateTerminator::Completed,
         });
         id
@@ -194,7 +270,15 @@ impl TransformContext {
                 }
                 stmts = vec![wrapped];
             }
-            self.states[self.current_state_id].statements = stmts;
+            let mut body = Body::new(stmts);
+            crate::ast::assign_ic_sites_for_body(&mut body);
+            // Terminator expressions (yield/await/return/throw values, branch and
+            // switch conditions, for-of iterables) are evaluated by the state
+            // driver under the caller's IC handle, not this state body's store,
+            // so their site ids must stay UNASSIGNED (IC slow path).
+            let mut terminator = terminator;
+            clear_terminator_ic_sites(&mut terminator);
+            self.states[self.current_state_id].body = body;
             self.states[self.current_state_id].terminator = terminator;
         }
     }
@@ -277,10 +361,12 @@ fn create_simple_machine(
     params: &[Pattern],
     analysis: &GeneratorAnalysis,
 ) -> GeneratorStateMachine {
+    let mut body = Body::new(body.to_vec());
+    crate::ast::assign_ic_sites_for_body(&mut body);
     GeneratorStateMachine {
         states: vec![GeneratorState {
             id: 0,
-            statements: body.to_vec(),
+            body,
             terminator: StateTerminator::Completed,
         }],
         local_vars: analysis.local_vars.clone(),
@@ -851,7 +937,8 @@ fn transform_yielding_expression(
                 }
             }
 
-            let combined = Expression::New(Box::new(temp_callee), temp_args, fresh_call_ic_cell());
+            let combined =
+                Expression::New(Box::new(temp_callee), temp_args, CallSiteId::UNASSIGNED);
             emit_expression_with_binding(&combined, &binding, ctx);
         }
 
@@ -985,13 +1072,16 @@ fn transform_yielding_expression(
                     let combined = Expression::Member(
                         Box::new(temp_obj),
                         MemberProperty::Computed(Box::new(Expression::Identifier(tv))),
-                        fresh_prop_ic_cell(),
+                        PropSiteId::UNASSIGNED,
                     );
                     emit_expression_with_binding(&combined, &binding, ctx);
                 }
                 _ => {
-                    let combined =
-                        Expression::Member(Box::new(temp_obj), prop.clone(), fresh_prop_ic_cell());
+                    let combined = Expression::Member(
+                        Box::new(temp_obj),
+                        prop.clone(),
+                        PropSiteId::UNASSIGNED,
+                    );
                     emit_expression_with_binding(&combined, &binding, ctx);
                 }
             }
@@ -1201,15 +1291,15 @@ fn oc_chain_to_regular_expr(chain: &Expression, base_var: &str) -> Expression {
         Expression::Identifier(name) => Expression::Member(
             Box::new(Expression::Identifier(base_var.to_string())),
             MemberProperty::Dot(name.clone()),
-            fresh_prop_ic_cell(),
+            PropSiteId::UNASSIGNED,
         ),
         Expression::Member(inner, prop, _) => {
             let inner_expr = oc_chain_to_regular_expr(inner, base_var);
-            Expression::Member(Box::new(inner_expr), prop.clone(), fresh_prop_ic_cell())
+            Expression::Member(Box::new(inner_expr), prop.clone(), PropSiteId::UNASSIGNED)
         }
         Expression::Call(callee, args, _) => {
             let callee_expr = oc_chain_to_regular_expr(callee, base_var);
-            Expression::Call(Box::new(callee_expr), args.clone(), fresh_call_ic_cell())
+            Expression::Call(Box::new(callee_expr), args.clone(), CallSiteId::UNASSIGNED)
         }
         other => other.clone(),
     }
@@ -1239,12 +1329,15 @@ fn transform_call_expression(
                     temp_callee = Expression::Member(
                         Box::new(temp_obj),
                         MemberProperty::Computed(Box::new(Expression::Identifier(tv))),
-                        fresh_prop_ic_cell(),
+                        PropSiteId::UNASSIGNED,
                     );
                 }
                 _ => {
-                    temp_callee =
-                        Expression::Member(Box::new(temp_obj), prop.clone(), fresh_prop_ic_cell());
+                    temp_callee = Expression::Member(
+                        Box::new(temp_obj),
+                        prop.clone(),
+                        PropSiteId::UNASSIGNED,
+                    );
                 }
             }
         } else {
@@ -1278,7 +1371,7 @@ fn transform_call_expression(
         }
     }
 
-    let combined = Expression::Call(Box::new(temp_callee), temp_args, fresh_call_ic_cell());
+    let combined = Expression::Call(Box::new(temp_callee), temp_args, CallSiteId::UNASSIGNED);
     emit_expression_with_binding(&combined, &binding, ctx);
 }
 
@@ -1345,7 +1438,7 @@ fn extract_lhs_suspensions(expr: &Expression, ctx: &mut TransformContext) -> Exp
                 }
                 other => other.clone(),
             };
-            Expression::Member(Box::new(new_obj), new_prop, fresh_prop_ic_cell())
+            Expression::Member(Box::new(new_obj), new_prop, PropSiteId::UNASSIGNED)
         }
         _ => expr.clone(),
     }
@@ -2197,12 +2290,12 @@ fn rewrite_expr(expr: &Expression) -> Expression {
         Expression::Call(callee, args, _) => Expression::Call(
             Box::new(rewrite_expr(callee)),
             args.iter().map(rewrite_expr).collect(),
-            fresh_call_ic_cell(),
+            CallSiteId::UNASSIGNED,
         ),
         Expression::New(callee, args, _) => Expression::New(
             Box::new(rewrite_expr(callee)),
             args.iter().map(rewrite_expr).collect(),
-            fresh_call_ic_cell(),
+            CallSiteId::UNASSIGNED,
         ),
         Expression::Member(obj, prop, _) => Expression::Member(
             Box::new(rewrite_expr(obj)),
@@ -2210,7 +2303,7 @@ fn rewrite_expr(expr: &Expression) -> Expression {
                 MemberProperty::Computed(e) => MemberProperty::Computed(Box::new(rewrite_expr(e))),
                 other => other.clone(),
             },
-            fresh_prop_ic_cell(),
+            PropSiteId::UNASSIGNED,
         ),
         Expression::OptionalChain(base, chain) => {
             Expression::OptionalChain(Box::new(rewrite_expr(base)), Box::new(rewrite_expr(chain)))

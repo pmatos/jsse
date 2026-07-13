@@ -1,5 +1,4 @@
 use super::*;
-use crate::interpreter::ic::{fresh_call_ic_cell, fresh_prop_ic_cell};
 
 fn validate_regexp_literal(pattern: &str, flags: &str) -> Result<(), ParseError> {
     let valid_flags = "dgimsuyv";
@@ -690,7 +689,7 @@ impl<'a> Parser<'a> {
                     {
                         return Err(self.error("Private fields are not accessible on 'super'"));
                     }
-                    expr = Expression::Member(Box::new(expr), prop, fresh_prop_ic_cell());
+                    expr = Expression::Member(Box::new(expr), prop, PropSiteId::UNASSIGNED);
                 }
                 Token::LeftBracket => {
                     self.advance()?;
@@ -699,12 +698,12 @@ impl<'a> Parser<'a> {
                     expr = Expression::Member(
                         Box::new(expr),
                         MemberProperty::Computed(Box::new(prop)),
-                        fresh_prop_ic_cell(),
+                        PropSiteId::UNASSIGNED,
                     );
                 }
                 Token::LeftParen => {
                     let args = self.parse_arguments()?;
-                    expr = Expression::Call(Box::new(expr), args, fresh_call_ic_cell());
+                    expr = Expression::Call(Box::new(expr), args, CallSiteId::UNASSIGNED);
                 }
                 Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                     let tmpl = self.parse_template_literal_expr(true)?;
@@ -717,7 +716,7 @@ impl<'a> Parser<'a> {
                         Expression::Call(
                             Box::new(Expression::Identifier("".into())),
                             args,
-                            fresh_call_ic_cell(),
+                            CallSiteId::UNASSIGNED,
                         )
                     } else if self.current == Token::LeftBracket {
                         self.advance()?;
@@ -726,7 +725,7 @@ impl<'a> Parser<'a> {
                         Expression::Member(
                             Box::new(Expression::Identifier("".into())),
                             MemberProperty::Computed(Box::new(p)),
-                            fresh_prop_ic_cell(),
+                            PropSiteId::UNASSIGNED,
                         )
                     } else if let Token::PrivateName(name) = &self.current {
                         let name = name.clone();
@@ -735,7 +734,7 @@ impl<'a> Parser<'a> {
                         Expression::Member(
                             Box::new(Expression::Identifier("".into())),
                             MemberProperty::Private(name),
-                            fresh_prop_ic_cell(),
+                            PropSiteId::UNASSIGNED,
                         )
                     } else {
                         let name = match &self.current {
@@ -751,7 +750,8 @@ impl<'a> Parser<'a> {
                             Token::Dot => {
                                 self.advance()?;
                                 let mp = self.parse_dot_member_property()?;
-                                prop = Expression::Member(Box::new(prop), mp, fresh_prop_ic_cell());
+                                prop =
+                                    Expression::Member(Box::new(prop), mp, PropSiteId::UNASSIGNED);
                             }
                             Token::LeftBracket => {
                                 self.advance()?;
@@ -760,12 +760,13 @@ impl<'a> Parser<'a> {
                                 prop = Expression::Member(
                                     Box::new(prop),
                                     MemberProperty::Computed(Box::new(p)),
-                                    fresh_prop_ic_cell(),
+                                    PropSiteId::UNASSIGNED,
                                 );
                             }
                             Token::LeftParen => {
                                 let args = self.parse_arguments()?;
-                                prop = Expression::Call(Box::new(prop), args, fresh_call_ic_cell());
+                                prop =
+                                    Expression::Call(Box::new(prop), args, CallSiteId::UNASSIGNED);
                             }
                             Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
                                 return Err(self
@@ -810,7 +811,7 @@ impl<'a> Parser<'a> {
             return Ok(Expression::New(
                 Box::new(inner),
                 Vec::new(),
-                fresh_call_ic_cell(),
+                CallSiteId::UNASSIGNED,
             ));
         }
         // `new import(...)` is a syntax error (ImportCall is CallExpression, not MemberExpression)
@@ -835,7 +836,7 @@ impl<'a> Parser<'a> {
                 Token::Dot => {
                     self.advance()?;
                     let prop = self.parse_dot_member_property()?;
-                    callee = Expression::Member(Box::new(callee), prop, fresh_prop_ic_cell());
+                    callee = Expression::Member(Box::new(callee), prop, PropSiteId::UNASSIGNED);
                 }
                 Token::LeftBracket => {
                     self.advance()?;
@@ -844,7 +845,7 @@ impl<'a> Parser<'a> {
                     callee = Expression::Member(
                         Box::new(callee),
                         MemberProperty::Computed(Box::new(prop)),
-                        fresh_prop_ic_cell(),
+                        PropSiteId::UNASSIGNED,
                     );
                 }
                 Token::NoSubstitutionTemplate(_, _) | Token::TemplateHead(_, _) => {
@@ -862,7 +863,7 @@ impl<'a> Parser<'a> {
         Ok(Expression::New(
             Box::new(callee),
             args,
-            fresh_call_ic_cell(),
+            CallSiteId::UNASSIGNED,
         ))
     }
 
@@ -910,10 +911,12 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let (body, body_is_strict) = if self.current == Token::LeftBrace {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
-                        (ArrowBody::Block(stmts), strict)
+                        (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
+                                self.parse_arrow_expression_body()?,
+                            ))])),
                             false,
                         )
                     };
@@ -937,10 +940,12 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let (body, body_is_strict) = if self.current == Token::LeftBrace {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
-                        (ArrowBody::Block(stmts), strict)
+                        (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
+                                self.parse_arrow_expression_body()?,
+                            ))])),
                             false,
                         )
                     };
@@ -962,10 +967,12 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let (body, body_is_strict) = if self.current == Token::LeftBrace {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
-                        (ArrowBody::Block(stmts), strict)
+                        (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
+                                self.parse_arrow_expression_body()?,
+                            ))])),
                             false,
                         )
                     };
@@ -987,10 +994,12 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let (body, body_is_strict) = if self.current == Token::LeftBrace {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
-                        (ArrowBody::Block(stmts), strict)
+                        (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
+                                self.parse_arrow_expression_body()?,
+                            ))])),
                             false,
                         )
                     };
@@ -1101,12 +1110,12 @@ impl<'a> Parser<'a> {
                             self.in_async = true;
                             let (body, body_is_strict) = if self.current == Token::LeftBrace {
                                 let (stmts, strict) = self.parse_arrow_function_body(true)?;
-                                (ArrowBody::Block(stmts), strict)
+                                (ArrowBody::Block(Body::new(stmts)), strict)
                             } else {
                                 (
-                                    ArrowBody::Expression(Box::new(
-                                        self.parse_arrow_expression_body()?,
-                                    )),
+                                    ArrowBody::Expression(Body::new(vec![Statement::Return(
+                                        Some(self.parse_arrow_expression_body()?),
+                                    )])),
                                     false,
                                 )
                             };
@@ -1146,10 +1155,12 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let (body, body_is_strict) = if self.current == Token::LeftBrace {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
-                        (ArrowBody::Block(stmts), strict)
+                        (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
+                                self.parse_arrow_expression_body()?,
+                            ))])),
                             false,
                         )
                     };
@@ -1186,10 +1197,12 @@ impl<'a> Parser<'a> {
                     self.advance()?;
                     let (body, body_is_strict) = if self.current == Token::LeftBrace {
                         let (stmts, strict) = self.parse_arrow_function_body(false)?;
-                        (ArrowBody::Block(stmts), strict)
+                        (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
+                                self.parse_arrow_expression_body()?,
+                            ))])),
                             false,
                         )
                     };
@@ -1287,12 +1300,12 @@ impl<'a> Parser<'a> {
                         self.advance()?;
                         let (body, body_is_strict) = if self.current == Token::LeftBrace {
                             let (stmts, strict) = self.parse_arrow_function_body(false)?;
-                            (ArrowBody::Block(stmts), strict)
+                            (ArrowBody::Block(Body::new(stmts)), strict)
                         } else {
                             (
-                                ArrowBody::Expression(Box::new(
+                                ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
                                     self.parse_arrow_expression_body()?,
-                                )),
+                                ))])),
                                 false,
                             )
                         };
@@ -1317,10 +1330,12 @@ impl<'a> Parser<'a> {
                     self.eat(&Token::Arrow)?;
                     let (body, body_is_strict) = if self.current == Token::LeftBrace {
                         let (stmts, strict) = self.parse_arrow_body_checked(false, &params)?;
-                        (ArrowBody::Block(stmts), strict)
+                        (ArrowBody::Block(Body::new(stmts)), strict)
                     } else {
                         (
-                            ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
+                            ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
+                                self.parse_arrow_expression_body()?,
+                            ))])),
                             false,
                         )
                     };
@@ -1377,12 +1392,12 @@ impl<'a> Parser<'a> {
                         self.check_duplicate_params_strict(&params)?;
                         let (body, body_is_strict) = if self.current == Token::LeftBrace {
                             let (stmts, strict) = self.parse_arrow_body_checked(false, &params)?;
-                            (ArrowBody::Block(stmts), strict)
+                            (ArrowBody::Block(Body::new(stmts)), strict)
                         } else {
                             (
-                                ArrowBody::Expression(Box::new(
+                                ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
                                     self.parse_arrow_expression_body()?,
-                                )),
+                                ))])),
                                 false,
                             )
                         };
@@ -1623,7 +1638,7 @@ impl<'a> Parser<'a> {
                         value: Expression::Function(FunctionExpr {
                             name: None,
                             params,
-                            body,
+                            body: Body::new(body),
                             is_async: true,
                             is_generator,
                             source_text,
@@ -1703,7 +1718,7 @@ impl<'a> Parser<'a> {
                 value: Expression::Function(FunctionExpr {
                     name: None,
                     params,
-                    body,
+                    body: Body::new(body),
                     is_async: false,
                     is_generator: true,
                     source_text,
@@ -1790,7 +1805,7 @@ impl<'a> Parser<'a> {
                     value: Expression::Function(FunctionExpr {
                         name: None,
                         params,
-                        body,
+                        body: Body::new(body),
                         is_async: false,
                         is_generator: false,
                         source_text: self.source_since(method_source_start),
@@ -1971,7 +1986,7 @@ impl<'a> Parser<'a> {
                 value: Expression::Function(FunctionExpr {
                     name: None,
                     params,
-                    body,
+                    body: Body::new(body),
                     is_async: false,
                     is_generator: false,
                     source_text: self.source_since(method_source_start),
@@ -2053,7 +2068,7 @@ impl<'a> Parser<'a> {
         Ok(Expression::Function(FunctionExpr {
             name,
             params,
-            body,
+            body: Body::new(body),
             is_async: false,
             is_generator,
             source_text,
@@ -2108,7 +2123,7 @@ impl<'a> Parser<'a> {
         Ok(Expression::Function(FunctionExpr {
             name,
             params,
-            body,
+            body: Body::new(body),
             is_async: true,
             is_generator,
             source_text,
@@ -2127,10 +2142,12 @@ impl<'a> Parser<'a> {
                 self.in_async = true;
                 let (body, body_is_strict) = if self.current == Token::LeftBrace {
                     let (stmts, strict) = self.parse_arrow_function_body(true)?;
-                    (ArrowBody::Block(stmts), strict)
+                    (ArrowBody::Block(Body::new(stmts)), strict)
                 } else {
                     (
-                        ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
+                        ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
+                            self.parse_arrow_expression_body()?,
+                        ))])),
                         false,
                     )
                 };
@@ -2148,7 +2165,7 @@ impl<'a> Parser<'a> {
             return Ok(Expression::Call(
                 Box::new(Expression::Identifier("async".to_string())),
                 Vec::new(),
-                fresh_call_ic_cell(),
+                CallSiteId::UNASSIGNED,
             ));
         }
         if self.current == Token::Ellipsis {
@@ -2165,10 +2182,12 @@ impl<'a> Parser<'a> {
             self.in_async = true;
             let (body, body_is_strict) = if self.current == Token::LeftBrace {
                 let (stmts, strict) = self.parse_arrow_body_checked(true, &params)?;
-                (ArrowBody::Block(stmts), strict)
+                (ArrowBody::Block(Body::new(stmts)), strict)
             } else {
                 (
-                    ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
+                    ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
+                        self.parse_arrow_expression_body()?,
+                    ))])),
                     false,
                 )
             };
@@ -2222,10 +2241,12 @@ impl<'a> Parser<'a> {
                 self.in_async = true;
                 let (body, body_is_strict) = if self.current == Token::LeftBrace {
                     let (stmts, strict) = self.parse_arrow_body_checked(true, &params)?;
-                    (ArrowBody::Block(stmts), strict)
+                    (ArrowBody::Block(Body::new(stmts)), strict)
                 } else {
                     (
-                        ArrowBody::Expression(Box::new(self.parse_arrow_expression_body()?)),
+                        ArrowBody::Expression(Body::new(vec![Statement::Return(Some(
+                            self.parse_arrow_expression_body()?,
+                        ))])),
                         false,
                     )
                 };
@@ -2243,7 +2264,7 @@ impl<'a> Parser<'a> {
             return Ok(Expression::Call(
                 Box::new(Expression::Identifier("async".to_string())),
                 exprs,
-                fresh_call_ic_cell(),
+                CallSiteId::UNASSIGNED,
             ));
         }
         self.eat(&Token::RightParen)?;
@@ -2251,7 +2272,7 @@ impl<'a> Parser<'a> {
         Ok(Expression::Call(
             Box::new(Expression::Identifier("async".to_string())),
             vec![expr],
-            fresh_call_ic_cell(),
+            CallSiteId::UNASSIGNED,
         ))
     }
 

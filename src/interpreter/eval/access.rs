@@ -593,7 +593,7 @@ impl Interpreter {
         obj: &Expression,
         prop: &MemberProperty,
         env: &EnvRef,
-        ic_cell: Option<&std::cell::Cell<crate::interpreter::ic::PropIcSlot>>,
+        site_id: PropSiteId,
     ) -> Completion {
         // §13.3.7.1: super[expr] — special evaluation order:
         // 1. GetThisBinding (throws if uninitialized) — before key expression
@@ -788,11 +788,11 @@ impl Interpreter {
                 // Computed access goes straight to the slow path; caching it
                 // requires extra logic for non-string keys and is deferred.
                 if matches!(prop, MemberProperty::Dot(_))
-                    && let Some(cell) = ic_cell
+                    && site_id != PropSiteId::UNASSIGNED
                     && self.with_scope_depth == 0
                 {
                     use crate::interpreter::ic::{PropIcKind, PropIcSlot};
-                    let slot = cell.get();
+                    let slot = *self.prop_slot(site_id);
                     if let PropIcSlot::Mono {
                         obj_id,
                         obj_shape_id,
@@ -883,7 +883,7 @@ impl Interpreter {
                             ) if prev_id == new_id => s,
                             (PropIcSlot::Mono { .. }, Some(_)) => PropIcSlot::Megamorphic,
                         };
-                        cell.set(next);
+                        *self.prop_slot(site_id) = next;
                     }
                     return result;
                 }

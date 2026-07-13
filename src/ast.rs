@@ -1,11 +1,8 @@
 /// AST node types for ECMAScript.
 /// Each node represents a syntactic element from the spec.
-use std::cell::Cell;
 use std::fmt;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
-
-use crate::interpreter::ic::{CallIcSlot, PropIcSlot};
 
 static NEXT_TEMPLATE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -53,10 +50,133 @@ pub enum SourceType {
     Module,
 }
 
+/// Dense identifier for a call IC site within a single `Body`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+#[repr(transparent)]
+pub struct CallSiteId(pub u32);
+
+/// Dense identifier for a property-access IC site within a single `Body`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
+#[repr(transparent)]
+pub struct PropSiteId(pub u32);
+
+impl CallSiteId {
+    pub const UNASSIGNED: Self = Self(u32::MAX);
+}
+
+impl PropSiteId {
+    pub const UNASSIGNED: Self = Self(u32::MAX);
+}
+
+/// Metadata describing the number of IC sites in a `Body`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct BodyIcInfo {
+    pub call_site_count: u32,
+    pub prop_site_count: u32,
+    pub assigned: bool,
+}
+
+/// A unit of executable ECMAScript syntax: a script, module, or function body.
+/// Carries the statement vector and IC metadata; the runtime cache lives in the
+/// interpreter, keyed by the body's identity.
+#[derive(Clone, Debug)]
+pub struct Body {
+    pub statements: Rc<Vec<Statement>>,
+    pub ic: BodyIcInfo,
+}
+
+impl Body {
+    pub fn new(statements: Vec<Statement>) -> Self {
+        Self {
+            statements: Rc::new(statements),
+            ic: BodyIcInfo::default(),
+        }
+    }
+
+    pub fn as_slice(&self) -> &[Statement] {
+        &self.statements
+    }
+}
+
+/// Assign dense `CallSiteId` and `PropSiteId` values to every call, new, and
+/// member site in `body`, and record the final counts in `body.ic`.
+/// This is a single shared pass used by the parser, generator transform,
+/// `eval`, and `new Function`.
+pub fn assign_ic_sites(body: &mut Body) {
+    let mut call_id = 0u32;
+    let mut prop_id = 0u32;
+    for stmt in Rc::make_mut(&mut body.statements).iter_mut() {
+        assign_stmt_sites(stmt, &mut call_id, &mut prop_id);
+    }
+    body.ic.call_site_count = call_id;
+    body.ic.prop_site_count = prop_id;
+    body.ic.assigned = true;
+}
+
+/// Assign IC sites to a nested body that was created synthetically (e.g. an
+/// arrow expression body or a dynamic `Function` body). Returns the number of
+/// call and property sites found.
+pub fn assign_ic_sites_for_body(body: &mut Body) -> (u32, u32) {
+    let before_call = body.ic.call_site_count;
+    let before_prop = body.ic.prop_site_count;
+    if !body.ic.assigned {
+        assign_ic_sites(body);
+    }
+    (
+        body.ic.call_site_count - before_call,
+        body.ic.prop_site_count - before_prop,
+    )
+}
+
+/// Assign dense IC site ids to all call/new/member sites in a module-level
+/// program. The module's top-level items are not stored in a `Body`, but they
+/// share a single dense namespace keyed by the program's `body` field. This
+/// keeps IC sites on module top-level executable expressions valid while the
+/// interpreter is executing module items.
+pub fn assign_ic_sites_for_module(program: &mut Program) {
+    if program.source_type == SourceType::Script {
+        assign_ic_sites(&mut program.body);
+        return;
+    }
+
+    let mut call_id = 0u32;
+    let mut prop_id = 0u32;
+    for item in program.module_items.iter_mut() {
+        assign_module_item_sites(item, &mut call_id, &mut prop_id);
+    }
+    program.body.ic.call_site_count = call_id;
+    program.body.ic.prop_site_count = prop_id;
+    program.body.ic.assigned = true;
+}
+
+fn assign_module_item_sites(item: &mut ModuleItem, call_id: &mut u32, prop_id: &mut u32) {
+    match item {
+        ModuleItem::Statement(stmt) => assign_stmt_sites(stmt, call_id, prop_id),
+        ModuleItem::ImportDeclaration(_) => {}
+        ModuleItem::ExportDeclaration(export) => assign_export_sites(export, call_id, prop_id),
+    }
+}
+
+fn assign_export_sites(export: &mut ExportDeclaration, call_id: &mut u32, prop_id: &mut u32) {
+    match export {
+        ExportDeclaration::Named { declaration, .. } => {
+            if let Some(decl) = declaration.as_mut() {
+                assign_stmt_sites(decl, call_id, prop_id);
+            }
+        }
+        ExportDeclaration::Default(expr) => assign_expr_sites(expr, call_id, prop_id),
+        ExportDeclaration::DefaultFunction(f) => {
+            assign_ic_sites(&mut f.body);
+        }
+        ExportDeclaration::DefaultClass(c) => assign_class_sites(c, call_id, prop_id),
+        ExportDeclaration::All { .. } => {}
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Program {
     pub source_type: SourceType,
-    pub body: Vec<Statement>,
+    pub body: Body,
     pub module_items: Vec<ModuleItem>,
     pub body_is_strict: bool,
 }
@@ -194,25 +314,16 @@ pub enum Expression {
     Assign(AssignOp, Box<Expression>, Box<Expression>),
     Conditional(Box<Expression>, Box<Expression>, Box<Expression>),
     /// Function call `f(args)` / `obj.method(args)`. Third field is a
-    /// per-site call IC slot (issue #71, Phase 3).
-    Call(Box<Expression>, Vec<Expression>, Cell<CallIcSlot>),
-    /// Constructor invocation `new F(args)`. Carries its own call IC slot —
-    /// the slot is allocated for forward compatibility but is not yet read
-    /// in Phase-3 v1 (constructor invocation is statistically rarer than
-    /// regular calls; probe wiring lands in a follow-up cycle).
-    New(
-        Box<Expression>,
-        Vec<Expression>,
-        #[allow(dead_code)] Cell<CallIcSlot>,
-    ),
-    /// Property access `obj.x` / `obj[key]`. The third field is a per-site
-    /// inline-cache slot (issue #71). `Cell<PropIcSlot>` works because
-    /// `PropIcSlot` is `Copy`. At parse time the slot is `Empty`; the
-    /// `eval_member` probe and `get_object_property` slow path mutate it
-    /// through `Cell::get`/`Cell::set`. Slot state is per-AST-node, not
-    /// per-execution; generator/async replay is safe because the slot is
-    /// shape-keyed and re-fetches on every hit.
-    Member(Box<Expression>, MemberProperty, Cell<PropIcSlot>),
+    /// per-body call IC site identifier (issue #71, Phase 3).
+    Call(Box<Expression>, Vec<Expression>, CallSiteId),
+    /// Constructor invocation `new F(args)`. Carries its own call IC site id —
+    /// not yet read in Phase-3 v1; the slot is allocated for forward
+    /// compatibility (issue #71).
+    New(Box<Expression>, Vec<Expression>, CallSiteId),
+    /// Property access `obj.x` / `obj[key]`. Third field is a per-body
+    /// property-access IC site identifier (issue #71). The runtime cache slot
+    /// lives in the interpreter, keyed by the body identity.
+    Member(Box<Expression>, MemberProperty, PropSiteId),
     OptionalChain(Box<Expression>, Box<Expression>),
     #[allow(dead_code)]
     Comma(Vec<Expression>),
@@ -427,7 +538,7 @@ pub struct SwitchCase {
 pub struct FunctionDecl {
     pub name: String,
     pub params: Vec<Pattern>,
-    pub body: Vec<Statement>,
+    pub body: Body,
     pub is_async: bool,
     pub is_generator: bool,
     pub source_text: Option<SourceText>,
@@ -438,7 +549,7 @@ pub struct FunctionDecl {
 pub struct FunctionExpr {
     pub name: Option<String>,
     pub params: Vec<Pattern>,
-    pub body: Vec<Statement>,
+    pub body: Body,
     pub is_async: bool,
     pub is_generator: bool,
     pub source_text: Option<SourceText>,
@@ -456,8 +567,26 @@ pub struct ArrowFunction {
 
 #[derive(Clone, Debug)]
 pub enum ArrowBody {
-    Expression(Box<Expression>),
-    Block(Vec<Statement>),
+    /// Concise arrow-function body: `() => expr`. The `Body` contains a single
+    /// `Statement::Expression` so it participates in the same per-body IC
+    /// numbering and store as a block arrow body.
+    Expression(Body),
+    /// Block arrow-function body: `() => { ... }`.
+    Block(Body),
+}
+
+impl ArrowBody {
+    pub fn body(&self) -> &Body {
+        match self {
+            ArrowBody::Expression(b) | ArrowBody::Block(b) => b,
+        }
+    }
+
+    pub fn body_mut(&mut self) -> &mut Body {
+        match self {
+            ArrowBody::Expression(b) | ArrowBody::Block(b) => b,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -532,8 +661,8 @@ pub struct TemplateLiteral {
 
 /// Check if a function (body + params) references the `arguments` identifier.
 /// Also checks parameter default expressions (which can reference arguments).
-pub fn func_uses_arguments(params: &[Pattern], body: &[Statement]) -> bool {
-    params_use_arguments(params) || stmts_use_arguments(body)
+pub fn func_uses_arguments(params: &[Pattern], body: &Body) -> bool {
+    params_use_arguments(params) || stmts_use_arguments(body.as_slice())
 }
 
 /// A "simple" parameter list (§15.1.3 IsSimpleParameterList) is one consisting
@@ -639,10 +768,13 @@ fn expr_uses_arguments(expr: &Expression) -> bool {
             class_extends_or_computed_keys_use_arguments(c.super_class.as_deref(), &c.body)
         }
         // DO recurse into arrow functions (they inherit arguments)
-        Expression::ArrowFunction(a) => match &a.body {
-            ArrowBody::Expression(e) => expr_uses_arguments(e),
-            ArrowBody::Block(stmts) => stmts_use_arguments(stmts),
-        },
+        Expression::ArrowFunction(a) => {
+            let body = a.body.body();
+            match body.statements.as_slice() {
+                [Statement::Return(Some(e))] => expr_uses_arguments(e),
+                stmts => stmts_use_arguments(stmts),
+            }
+        }
         Expression::Array(elems, _) => elems
             .iter()
             .any(|e| e.as_ref().is_some_and(expr_uses_arguments)),
@@ -729,6 +861,692 @@ fn for_in_of_left_uses_arguments(left: &ForInOfLeft) -> bool {
     }
 }
 
+fn assign_stmt_sites(stmt: &mut Statement, call_id: &mut u32, prop_id: &mut u32) {
+    match stmt {
+        Statement::Expression(e) => assign_expr_sites(e, call_id, prop_id),
+        Statement::Block(stmts) => {
+            for s in stmts.iter_mut() {
+                assign_stmt_sites(s, call_id, prop_id);
+            }
+        }
+        Statement::Variable(decl) => {
+            for d in decl.declarations.iter_mut() {
+                assign_pattern_sites(&mut d.pattern, call_id, prop_id);
+                if let Some(init) = d.init.as_mut() {
+                    assign_expr_sites(init, call_id, prop_id);
+                }
+            }
+        }
+        Statement::If(i) => {
+            assign_expr_sites(&mut i.test, call_id, prop_id);
+            assign_stmt_sites(&mut i.consequent, call_id, prop_id);
+            if let Some(alt) = i.alternate.as_mut() {
+                assign_stmt_sites(alt, call_id, prop_id);
+            }
+        }
+        Statement::While(w) => {
+            assign_expr_sites(&mut w.test, call_id, prop_id);
+            assign_stmt_sites(&mut w.body, call_id, prop_id);
+        }
+        Statement::DoWhile(d) => {
+            assign_stmt_sites(&mut d.body, call_id, prop_id);
+            assign_expr_sites(&mut d.test, call_id, prop_id);
+        }
+        Statement::For(f) => {
+            if let Some(init) = f.init.as_mut() {
+                match init {
+                    ForInit::Expression(e) => assign_expr_sites(e, call_id, prop_id),
+                    ForInit::Variable(decl) => {
+                        for d in decl.declarations.iter_mut() {
+                            assign_pattern_sites(&mut d.pattern, call_id, prop_id);
+                            if let Some(init) = d.init.as_mut() {
+                                assign_expr_sites(init, call_id, prop_id);
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(test) = f.test.as_mut() {
+                assign_expr_sites(test, call_id, prop_id);
+            }
+            if let Some(update) = f.update.as_mut() {
+                assign_expr_sites(update, call_id, prop_id);
+            }
+            assign_stmt_sites(&mut f.body, call_id, prop_id);
+        }
+        Statement::ForIn(f) => {
+            match &mut f.left {
+                ForInOfLeft::Variable(decl) => {
+                    for d in decl.declarations.iter_mut() {
+                        assign_pattern_sites(&mut d.pattern, call_id, prop_id);
+                        if let Some(init) = d.init.as_mut() {
+                            assign_expr_sites(init, call_id, prop_id);
+                        }
+                    }
+                }
+                ForInOfLeft::Pattern(p) => assign_pattern_sites(p, call_id, prop_id),
+                ForInOfLeft::Expression(e) => assign_expr_sites(e, call_id, prop_id),
+            }
+            assign_expr_sites(&mut f.right, call_id, prop_id);
+            assign_stmt_sites(&mut f.body, call_id, prop_id);
+        }
+        Statement::ForOf(f) => {
+            match &mut f.left {
+                ForInOfLeft::Variable(decl) => {
+                    for d in decl.declarations.iter_mut() {
+                        assign_pattern_sites(&mut d.pattern, call_id, prop_id);
+                        if let Some(init) = d.init.as_mut() {
+                            assign_expr_sites(init, call_id, prop_id);
+                        }
+                    }
+                }
+                ForInOfLeft::Pattern(p) => assign_pattern_sites(p, call_id, prop_id),
+                ForInOfLeft::Expression(e) => assign_expr_sites(e, call_id, prop_id),
+            }
+            assign_expr_sites(&mut f.right, call_id, prop_id);
+            assign_stmt_sites(&mut f.body, call_id, prop_id);
+        }
+        Statement::Return(e) => {
+            if let Some(e) = e.as_mut() {
+                assign_expr_sites(e, call_id, prop_id);
+            }
+        }
+        Statement::Throw(e) => assign_expr_sites(e, call_id, prop_id),
+        Statement::Try(t) => {
+            for s in t.block.iter_mut() {
+                assign_stmt_sites(s, call_id, prop_id);
+            }
+            if let Some(h) = t.handler.as_mut() {
+                if let Some(param) = h.param.as_mut() {
+                    assign_pattern_sites(param, call_id, prop_id);
+                }
+                for s in h.body.iter_mut() {
+                    assign_stmt_sites(s, call_id, prop_id);
+                }
+            }
+            if let Some(f) = t.finalizer.as_mut() {
+                for s in f.iter_mut() {
+                    assign_stmt_sites(s, call_id, prop_id);
+                }
+            }
+        }
+        Statement::Switch(s) => {
+            assign_expr_sites(&mut s.discriminant, call_id, prop_id);
+            for c in s.cases.iter_mut() {
+                if let Some(test) = c.test.as_mut() {
+                    assign_expr_sites(test, call_id, prop_id);
+                }
+                for stmt in c.consequent.iter_mut() {
+                    assign_stmt_sites(stmt, call_id, prop_id);
+                }
+            }
+        }
+        Statement::Labeled(_, s) => assign_stmt_sites(s, call_id, prop_id),
+        Statement::With(e, s) => {
+            assign_expr_sites(e, call_id, prop_id);
+            assign_stmt_sites(s, call_id, prop_id);
+        }
+        Statement::FunctionDeclaration(f) => {
+            assign_ic_sites(&mut f.body);
+        }
+        Statement::ClassDeclaration(c) => assign_class_sites(c, call_id, prop_id),
+        Statement::Empty | Statement::Break(_) | Statement::Continue(_) | Statement::Debugger => {}
+    }
+}
+
+fn assign_class_sites(c: &mut ClassDecl, call_id: &mut u32, prop_id: &mut u32) {
+    if let Some(super_class) = c.super_class.as_mut() {
+        assign_expr_sites(super_class, call_id, prop_id);
+    }
+    for el in c.body.iter_mut() {
+        match el {
+            ClassElement::Method(m) => assign_class_method_sites(m, call_id, prop_id),
+            ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
+                // Computed keys are evaluated once, at class-definition time,
+                // under the surrounding body's IC handle — number them here.
+                if let PropertyKey::Computed(e) = &mut p.key {
+                    assign_expr_sites(e, call_id, prop_id);
+                }
+                // Static field initializers also run at class-definition time,
+                // so their sites belong to this body. Instance field and
+                // instance auto-accessor initializers run later, during
+                // construction, under whatever body invokes the constructor —
+                // numbering their sites here would make them index that body's
+                // (possibly smaller) IC store and panic. Leave them UNASSIGNED
+                // so they take the IC slow path wherever they execute.
+                if p.is_static
+                    && let Some(v) = p.value.as_mut()
+                {
+                    assign_expr_sites(v, call_id, prop_id);
+                }
+            }
+            ClassElement::StaticBlock(stmts) => {
+                for s in stmts.iter_mut() {
+                    assign_stmt_sites(s, call_id, prop_id);
+                }
+            }
+        }
+    }
+}
+
+fn assign_class_method_sites(m: &mut ClassMethod, call_id: &mut u32, prop_id: &mut u32) {
+    if let PropertyKey::Computed(e) = &mut m.key {
+        assign_expr_sites(e, call_id, prop_id);
+    }
+    assign_ic_sites(&mut m.value.body);
+}
+
+fn assign_pattern_sites(pat: &mut Pattern, call_id: &mut u32, prop_id: &mut u32) {
+    match pat {
+        Pattern::Identifier(_) => {}
+        Pattern::Array(elems) => {
+            for e in elems.iter_mut().flatten() {
+                match e {
+                    ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                        assign_pattern_sites(p, call_id, prop_id)
+                    }
+                }
+            }
+        }
+        Pattern::Object(props) => {
+            for p in props.iter_mut() {
+                match p {
+                    ObjectPatternProperty::KeyValue(key, pat) => {
+                        if let PropertyKey::Computed(e) = key {
+                            assign_expr_sites(e, call_id, prop_id);
+                        }
+                        assign_pattern_sites(pat, call_id, prop_id);
+                    }
+                    ObjectPatternProperty::Shorthand(_) => {}
+                    ObjectPatternProperty::Rest(pat) => assign_pattern_sites(pat, call_id, prop_id),
+                }
+            }
+        }
+        Pattern::Assign(pat, expr) => {
+            assign_pattern_sites(pat, call_id, prop_id);
+            assign_expr_sites(expr, call_id, prop_id);
+        }
+        Pattern::Rest(pat) => assign_pattern_sites(pat, call_id, prop_id),
+        Pattern::MemberExpression(e) => {
+            // A member pattern is an assignment target, not a property access,
+            // so the top-level Member does not get an IC site. Sub-expressions
+            // (computed key, base object) are still traversed.
+            match &mut **e {
+                Expression::Member(obj, prop, _) => {
+                    assign_expr_sites(obj, call_id, prop_id);
+                    if let MemberProperty::Computed(e) = prop {
+                        assign_expr_sites(e, call_id, prop_id);
+                    }
+                }
+                other => assign_expr_sites(other, call_id, prop_id),
+            }
+        }
+    }
+}
+
+fn assign_expr_sites(expr: &mut Expression, call_id: &mut u32, prop_id: &mut u32) {
+    match expr {
+        Expression::Call(callee, args, site) => {
+            assign_expr_sites(callee, call_id, prop_id);
+            for a in args.iter_mut() {
+                assign_expr_sites(a, call_id, prop_id);
+            }
+            *site = CallSiteId(*call_id);
+            *call_id += 1;
+        }
+        Expression::New(callee, args, site) => {
+            assign_expr_sites(callee, call_id, prop_id);
+            for a in args.iter_mut() {
+                assign_expr_sites(a, call_id, prop_id);
+            }
+            *site = CallSiteId(*call_id);
+            *call_id += 1;
+        }
+        Expression::Member(obj, prop, site) => {
+            assign_expr_sites(obj, call_id, prop_id);
+            if let MemberProperty::Computed(e) = prop {
+                assign_expr_sites(e, call_id, prop_id);
+            }
+            *site = PropSiteId(*prop_id);
+            *prop_id += 1;
+        }
+        Expression::OptionalChain(base, chain) => {
+            assign_expr_sites(base, call_id, prop_id);
+            assign_expr_sites(chain, call_id, prop_id);
+        }
+        Expression::Unary(_, e)
+        | Expression::Update(_, _, e)
+        | Expression::Spread(e)
+        | Expression::Yield(Some(e), _)
+        | Expression::Await(e)
+        | Expression::Typeof(e)
+        | Expression::Void(e)
+        | Expression::Delete(e) => assign_expr_sites(e, call_id, prop_id),
+        Expression::Yield(None, _) => {}
+        Expression::Binary(_, l, r)
+        | Expression::Logical(_, l, r)
+        | Expression::Assign(_, l, r) => {
+            assign_expr_sites(l, call_id, prop_id);
+            assign_expr_sites(r, call_id, prop_id);
+        }
+        Expression::Conditional(t, c, a) => {
+            assign_expr_sites(t, call_id, prop_id);
+            assign_expr_sites(c, call_id, prop_id);
+            assign_expr_sites(a, call_id, prop_id);
+        }
+        Expression::Array(elems, _) => {
+            for e in elems.iter_mut().flatten() {
+                assign_expr_sites(e, call_id, prop_id);
+            }
+        }
+        Expression::Object(props) => {
+            for p in props.iter_mut() {
+                if let PropertyKey::Computed(e) = &mut p.key {
+                    assign_expr_sites(e, call_id, prop_id);
+                }
+                assign_expr_sites(&mut p.value, call_id, prop_id);
+            }
+        }
+        Expression::Function(f) => {
+            assign_ic_sites(&mut f.body);
+        }
+        Expression::ArrowFunction(a) => {
+            assign_ic_sites(a.body.body_mut());
+        }
+        Expression::Class(c) => {
+            if let Some(super_class) = c.super_class.as_mut() {
+                assign_expr_sites(super_class, call_id, prop_id);
+            }
+            for el in c.body.iter_mut() {
+                match el {
+                    ClassElement::Method(m) => assign_class_method_sites(m, call_id, prop_id),
+                    ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
+                        // See assign_class_sites: number computed keys and static
+                        // initializers (evaluated at class-definition time), but
+                        // leave instance field / auto-accessor initializers
+                        // UNASSIGNED so they take the IC slow path when they run
+                        // during construction under the constructor's handle.
+                        if let PropertyKey::Computed(e) = &mut p.key {
+                            assign_expr_sites(e, call_id, prop_id);
+                        }
+                        if p.is_static
+                            && let Some(v) = p.value.as_mut()
+                        {
+                            assign_expr_sites(v, call_id, prop_id);
+                        }
+                    }
+                    ClassElement::StaticBlock(stmts) => {
+                        for s in stmts.iter_mut() {
+                            assign_stmt_sites(s, call_id, prop_id);
+                        }
+                    }
+                }
+            }
+        }
+        Expression::TaggedTemplate(tag, tpl) => {
+            assign_expr_sites(tag, call_id, prop_id);
+            for e in tpl.expressions.iter_mut() {
+                assign_expr_sites(e, call_id, prop_id);
+            }
+        }
+        Expression::Template(tpl) => {
+            for e in tpl.expressions.iter_mut() {
+                assign_expr_sites(e, call_id, prop_id);
+            }
+        }
+        Expression::Comma(exprs) | Expression::Sequence(exprs) => {
+            for e in exprs.iter_mut() {
+                assign_expr_sites(e, call_id, prop_id);
+            }
+        }
+        Expression::Import(spec, opts)
+        | Expression::ImportDefer(spec, opts)
+        | Expression::ImportSource(spec, opts) => {
+            assign_expr_sites(spec, call_id, prop_id);
+            if let Some(opts) = opts.as_mut() {
+                assign_expr_sites(opts, call_id, prop_id);
+            }
+        }
+        Expression::Literal(_)
+        | Expression::Identifier(_)
+        | Expression::This
+        | Expression::Super
+        | Expression::ImportMeta
+        | Expression::NewTarget
+        | Expression::PrivateIdentifier(_) => {}
+    }
+}
+
+/// Reset the inline-cache site ids reachable from `expr` (without descending
+/// into nested function/arrow bodies) to `UNASSIGNED`, forcing the IC slow path.
+///
+/// Used for generator/async state-machine *terminator* expressions — yield /
+/// await / return / throw values, `ConditionalGoto` and `SwitchDispatch`
+/// conditions, and `ForOfInit` iterables. The state driver evaluates these after
+/// `exec_body` has restored the previous `current_ic_handle`, i.e. under whatever
+/// body is driving the generator (often the caller), not under any state body's
+/// store. A numbered site would then index the wrong store and panic, so these
+/// expressions must stay unnumbered. Nested function/arrow bodies are left intact
+/// because they execute under their own stores; a class literal's `extends`,
+/// computed keys, and static-field initializers are cleared because they evaluate
+/// at class-definition time (i.e. when the terminator expression runs).
+pub fn clear_expr_ic_sites(expr: &mut Expression) {
+    match expr {
+        Expression::Call(callee, args, site) => {
+            clear_expr_ic_sites(callee);
+            for a in args.iter_mut() {
+                clear_expr_ic_sites(a);
+            }
+            *site = CallSiteId::UNASSIGNED;
+        }
+        Expression::New(callee, args, site) => {
+            clear_expr_ic_sites(callee);
+            for a in args.iter_mut() {
+                clear_expr_ic_sites(a);
+            }
+            *site = CallSiteId::UNASSIGNED;
+        }
+        Expression::Member(obj, prop, site) => {
+            clear_expr_ic_sites(obj);
+            if let MemberProperty::Computed(e) = prop {
+                clear_expr_ic_sites(e);
+            }
+            *site = PropSiteId::UNASSIGNED;
+        }
+        Expression::OptionalChain(base, chain) => {
+            clear_expr_ic_sites(base);
+            clear_expr_ic_sites(chain);
+        }
+        Expression::Unary(_, e)
+        | Expression::Update(_, _, e)
+        | Expression::Spread(e)
+        | Expression::Yield(Some(e), _)
+        | Expression::Await(e)
+        | Expression::Typeof(e)
+        | Expression::Void(e)
+        | Expression::Delete(e) => clear_expr_ic_sites(e),
+        Expression::Yield(None, _) => {}
+        Expression::Binary(_, l, r)
+        | Expression::Logical(_, l, r)
+        | Expression::Assign(_, l, r) => {
+            clear_expr_ic_sites(l);
+            clear_expr_ic_sites(r);
+        }
+        Expression::Conditional(t, c, a) => {
+            clear_expr_ic_sites(t);
+            clear_expr_ic_sites(c);
+            clear_expr_ic_sites(a);
+        }
+        Expression::Array(elems, _) => {
+            for e in elems.iter_mut().flatten() {
+                clear_expr_ic_sites(e);
+            }
+        }
+        Expression::Object(props) => {
+            for p in props.iter_mut() {
+                if let PropertyKey::Computed(e) = &mut p.key {
+                    clear_expr_ic_sites(e);
+                }
+                clear_expr_ic_sites(&mut p.value);
+            }
+        }
+        // Nested function/arrow bodies run under their own IC store — leave them.
+        Expression::Function(_) | Expression::ArrowFunction(_) => {}
+        Expression::Class(c) => {
+            clear_class_def_ic_sites(c.super_class.as_deref_mut(), &mut c.body);
+        }
+        Expression::TaggedTemplate(tag, tpl) => {
+            clear_expr_ic_sites(tag);
+            for e in tpl.expressions.iter_mut() {
+                clear_expr_ic_sites(e);
+            }
+        }
+        Expression::Template(tpl) => {
+            for e in tpl.expressions.iter_mut() {
+                clear_expr_ic_sites(e);
+            }
+        }
+        Expression::Comma(exprs) | Expression::Sequence(exprs) => {
+            for e in exprs.iter_mut() {
+                clear_expr_ic_sites(e);
+            }
+        }
+        Expression::Import(spec, opts)
+        | Expression::ImportDefer(spec, opts)
+        | Expression::ImportSource(spec, opts) => {
+            clear_expr_ic_sites(spec);
+            if let Some(opts) = opts.as_mut() {
+                clear_expr_ic_sites(opts);
+            }
+        }
+        Expression::Literal(_)
+        | Expression::Identifier(_)
+        | Expression::This
+        | Expression::Super
+        | Expression::ImportMeta
+        | Expression::NewTarget
+        | Expression::PrivateIdentifier(_) => {}
+    }
+}
+
+/// Clear IC sites in the parts of a class literal that are evaluated at
+/// class-definition time (`extends`, computed keys, static-field initializers,
+/// static blocks). Used from `clear_expr_ic_sites` when a class appears inside a
+/// generator/async terminator expression: those parts run while the terminator
+/// is evaluated (under the caller's IC handle), so their sites must be cleared.
+/// Method bodies and instance-field initializers run under their own stores /
+/// the construction handle and are left untouched.
+fn clear_class_def_ic_sites(super_class: Option<&mut Expression>, body: &mut [ClassElement]) {
+    if let Some(sc) = super_class {
+        clear_expr_ic_sites(sc);
+    }
+    for el in body.iter_mut() {
+        match el {
+            ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
+                if let PropertyKey::Computed(e) = &mut p.key {
+                    clear_expr_ic_sites(e);
+                }
+                if p.is_static
+                    && let Some(v) = p.value.as_mut()
+                {
+                    clear_expr_ic_sites(v);
+                }
+            }
+            ClassElement::Method(m) => {
+                if let PropertyKey::Computed(e) = &mut m.key {
+                    clear_expr_ic_sites(e);
+                }
+            }
+            ClassElement::StaticBlock(stmts) => {
+                for s in stmts.iter_mut() {
+                    clear_stmt_ic_sites(s);
+                }
+            }
+        }
+    }
+}
+
+/// Statement companion to [`clear_expr_ic_sites`]. Resets IC sites in statements
+/// reachable from a generator/async terminator (e.g. inside a class static block
+/// that runs at class-definition time). Nested function-declaration bodies are
+/// left intact — they execute under their own stores.
+fn clear_stmt_ic_sites(stmt: &mut Statement) {
+    match stmt {
+        Statement::Expression(e) => clear_expr_ic_sites(e),
+        Statement::Block(stmts) => {
+            for s in stmts.iter_mut() {
+                clear_stmt_ic_sites(s);
+            }
+        }
+        Statement::Variable(decl) => {
+            for d in decl.declarations.iter_mut() {
+                clear_pattern_ic_sites(&mut d.pattern);
+                if let Some(init) = d.init.as_mut() {
+                    clear_expr_ic_sites(init);
+                }
+            }
+        }
+        Statement::If(i) => {
+            clear_expr_ic_sites(&mut i.test);
+            clear_stmt_ic_sites(&mut i.consequent);
+            if let Some(alt) = i.alternate.as_mut() {
+                clear_stmt_ic_sites(alt);
+            }
+        }
+        Statement::While(w) => {
+            clear_expr_ic_sites(&mut w.test);
+            clear_stmt_ic_sites(&mut w.body);
+        }
+        Statement::DoWhile(d) => {
+            clear_stmt_ic_sites(&mut d.body);
+            clear_expr_ic_sites(&mut d.test);
+        }
+        Statement::For(f) => {
+            if let Some(init) = f.init.as_mut() {
+                match init {
+                    ForInit::Expression(e) => clear_expr_ic_sites(e),
+                    ForInit::Variable(decl) => {
+                        for d in decl.declarations.iter_mut() {
+                            clear_pattern_ic_sites(&mut d.pattern);
+                            if let Some(init) = d.init.as_mut() {
+                                clear_expr_ic_sites(init);
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(test) = f.test.as_mut() {
+                clear_expr_ic_sites(test);
+            }
+            if let Some(update) = f.update.as_mut() {
+                clear_expr_ic_sites(update);
+            }
+            clear_stmt_ic_sites(&mut f.body);
+        }
+        Statement::ForIn(f) => {
+            clear_for_in_of_left(&mut f.left);
+            clear_expr_ic_sites(&mut f.right);
+            clear_stmt_ic_sites(&mut f.body);
+        }
+        Statement::ForOf(f) => {
+            clear_for_in_of_left(&mut f.left);
+            clear_expr_ic_sites(&mut f.right);
+            clear_stmt_ic_sites(&mut f.body);
+        }
+        Statement::Return(e) => {
+            if let Some(e) = e.as_mut() {
+                clear_expr_ic_sites(e);
+            }
+        }
+        Statement::Throw(e) => clear_expr_ic_sites(e),
+        Statement::Try(t) => {
+            for s in t.block.iter_mut() {
+                clear_stmt_ic_sites(s);
+            }
+            if let Some(h) = t.handler.as_mut() {
+                if let Some(param) = h.param.as_mut() {
+                    clear_pattern_ic_sites(param);
+                }
+                for s in h.body.iter_mut() {
+                    clear_stmt_ic_sites(s);
+                }
+            }
+            if let Some(f) = t.finalizer.as_mut() {
+                for s in f.iter_mut() {
+                    clear_stmt_ic_sites(s);
+                }
+            }
+        }
+        Statement::Switch(s) => {
+            clear_expr_ic_sites(&mut s.discriminant);
+            for c in s.cases.iter_mut() {
+                if let Some(test) = c.test.as_mut() {
+                    clear_expr_ic_sites(test);
+                }
+                for stmt in c.consequent.iter_mut() {
+                    clear_stmt_ic_sites(stmt);
+                }
+            }
+        }
+        Statement::Labeled(_, s) => clear_stmt_ic_sites(s),
+        Statement::With(e, s) => {
+            clear_expr_ic_sites(e);
+            clear_stmt_ic_sites(s);
+        }
+        // Nested function bodies execute under their own IC store — leave them.
+        Statement::FunctionDeclaration(_) => {}
+        Statement::ClassDeclaration(c) => {
+            clear_class_def_ic_sites(c.super_class.as_deref_mut(), &mut c.body);
+        }
+        Statement::Empty | Statement::Break(_) | Statement::Continue(_) | Statement::Debugger => {}
+    }
+}
+
+pub fn clear_for_in_of_left(left: &mut ForInOfLeft) {
+    match left {
+        ForInOfLeft::Variable(decl) => {
+            for d in decl.declarations.iter_mut() {
+                clear_pattern_ic_sites(&mut d.pattern);
+                if let Some(init) = d.init.as_mut() {
+                    clear_expr_ic_sites(init);
+                }
+            }
+        }
+        ForInOfLeft::Pattern(p) => clear_pattern_ic_sites(p),
+        ForInOfLeft::Expression(e) => clear_expr_ic_sites(e),
+    }
+}
+
+/// Pattern companion to [`clear_expr_ic_sites`], for patterns reachable from a
+/// terminator (e.g. destructuring declarations inside a class static block, or
+/// a for-of binding / catch parameter evaluated at a state transition).
+pub fn clear_pattern_ic_sites(pat: &mut Pattern) {
+    match pat {
+        Pattern::Identifier(_) => {}
+        Pattern::Array(elems) => {
+            for e in elems.iter_mut().flatten() {
+                match e {
+                    ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                        clear_pattern_ic_sites(p)
+                    }
+                }
+            }
+        }
+        Pattern::Object(props) => {
+            for p in props.iter_mut() {
+                match p {
+                    ObjectPatternProperty::KeyValue(key, pat) => {
+                        if let PropertyKey::Computed(e) = key {
+                            clear_expr_ic_sites(e);
+                        }
+                        clear_pattern_ic_sites(pat);
+                    }
+                    ObjectPatternProperty::Shorthand(_) => {}
+                    ObjectPatternProperty::Rest(pat) => clear_pattern_ic_sites(pat),
+                }
+            }
+        }
+        Pattern::Assign(pat, expr) => {
+            clear_pattern_ic_sites(pat);
+            clear_expr_ic_sites(expr);
+        }
+        Pattern::Rest(pat) => clear_pattern_ic_sites(pat),
+        Pattern::MemberExpression(e) => {
+            // The top-level member is an assignment target (no IC site of its
+            // own); only its sub-expressions carry sites.
+            match &mut **e {
+                Expression::Member(obj, prop, _) => {
+                    clear_expr_ic_sites(obj);
+                    if let MemberProperty::Computed(e) = prop {
+                        clear_expr_ic_sites(e);
+                    }
+                }
+                other => clear_expr_ic_sites(other),
+            }
+        }
+    }
+}
+
 fn class_extends_or_computed_keys_use_arguments(
     super_class: Option<&Expression>,
     body: &[ClassElement],
@@ -746,4 +1564,136 @@ fn class_extends_or_computed_keys_use_arguments(
         // Static blocks have their own scope per spec §15.7.13 — do not recurse.
         ClassElement::StaticBlock(_) => false,
     })
+}
+
+#[cfg(test)]
+mod ic_site_tests {
+    use super::*;
+
+    fn ident(name: &str) -> Expression {
+        Expression::Identifier(name.to_string())
+    }
+
+    fn call(callee: Expression, args: Vec<Expression>) -> Expression {
+        Expression::Call(Box::new(callee), args, CallSiteId::UNASSIGNED)
+    }
+
+    fn prop(obj: Expression, name: &str) -> Expression {
+        Expression::Member(
+            Box::new(obj),
+            MemberProperty::Dot(name.to_string()),
+            PropSiteId::UNASSIGNED,
+        )
+    }
+
+    fn expr_stmt(e: Expression) -> Statement {
+        Statement::Expression(e)
+    }
+
+    fn body_with(stmts: Vec<Statement>) -> Body {
+        Body::new(stmts)
+    }
+
+    #[test]
+    fn single_call_site_gets_id_zero() {
+        let mut body = body_with(vec![expr_stmt(call(ident("f"), vec![]))]);
+        assign_ic_sites(&mut body);
+        assert!(body.ic.assigned);
+        assert_eq!(body.ic.call_site_count, 1);
+        assert_eq!(body.ic.prop_site_count, 0);
+        match &body.statements[0] {
+            Statement::Expression(Expression::Call(_, _, id)) => assert_eq!(id.0, 0),
+            _ => panic!("expected Call"),
+        }
+    }
+
+    #[test]
+    fn mixed_call_and_prop_sites_numbered_separately() {
+        let mut body = body_with(vec![expr_stmt(call(
+            prop(ident("o"), "m"),
+            vec![prop(ident("o"), "x")],
+        ))]);
+        assign_ic_sites(&mut body);
+        assert_eq!(body.ic.call_site_count, 1);
+        assert_eq!(body.ic.prop_site_count, 2);
+        match &body.statements[0] {
+            Statement::Expression(Expression::Call(callee, _, call_id)) => {
+                assert_eq!(call_id.0, 0);
+                match callee.as_ref() {
+                    Expression::Member(_, _, id) => assert_eq!(id.0, 0),
+                    _ => panic!("expected Member callee"),
+                }
+            }
+            _ => panic!("expected Call"),
+        }
+    }
+
+    #[test]
+    fn nested_function_body_resets_counters() {
+        let inner_body = body_with(vec![expr_stmt(call(ident("g"), vec![]))]);
+        let func = FunctionExpr {
+            name: None,
+            params: vec![],
+            body: inner_body,
+            is_async: false,
+            is_generator: false,
+            source_text: None,
+            body_is_strict: false,
+        };
+        let mut outer = body_with(vec![expr_stmt(call(
+            Expression::Function(func),
+            vec![prop(ident("o"), "x")],
+        ))]);
+        assign_ic_sites(&mut outer);
+
+        assert_eq!(outer.ic.call_site_count, 1);
+        assert_eq!(outer.ic.prop_site_count, 1);
+
+        match &outer.statements[0] {
+            Statement::Expression(Expression::Call(_, _, id)) => assert_eq!(id.0, 0),
+            _ => panic!("expected outer Call"),
+        }
+
+        let inner_func = match &outer.statements[0] {
+            Statement::Expression(Expression::Call(callee, _, _)) => match callee.as_ref() {
+                Expression::Function(f) => f,
+                _ => panic!("expected Function"),
+            },
+            _ => panic!("expected Call"),
+        };
+        assert_eq!(inner_func.body.ic.call_site_count, 1);
+        assert_eq!(inner_func.body.ic.prop_site_count, 0);
+        match &inner_func.body.statements[0] {
+            Statement::Expression(Expression::Call(_, _, id)) => assert_eq!(id.0, 0),
+            _ => panic!("expected inner Call"),
+        }
+    }
+
+    #[test]
+    fn assign_ic_sites_for_body_counts_only_inner_body() {
+        let mut body = body_with(vec![expr_stmt(call(ident("f"), vec![]))]);
+        assign_ic_sites_for_body(&mut body);
+        assert_eq!(body.ic.call_site_count, 1);
+        assert_eq!(body.ic.prop_site_count, 0);
+    }
+
+    #[test]
+    fn assign_ic_sites_for_module_numbers_top_level_items() {
+        let mut program = Program {
+            source_type: SourceType::Module,
+            body: Body::new(vec![]),
+            module_items: vec![
+                ModuleItem::ExportDeclaration(ExportDeclaration::Default(Box::new(call(
+                    ident("f"),
+                    vec![prop(ident("o"), "x")],
+                )))),
+                ModuleItem::Statement(expr_stmt(call(ident("g"), vec![]))),
+            ],
+            body_is_strict: true,
+        };
+        assign_ic_sites_for_module(&mut program);
+        assert!(program.body.ic.assigned);
+        assert_eq!(program.body.ic.call_site_count, 2);
+        assert_eq!(program.body.ic.prop_site_count, 1);
+    }
 }

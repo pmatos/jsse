@@ -1,8 +1,53 @@
 use super::*;
+use crate::ast::Body;
 
 impl Interpreter {
     pub(crate) fn exec_statements(&mut self, stmts: &[Statement], env: &EnvRef) -> Completion {
         self.exec_statements_cached(stmts, env, None)
+    }
+
+    /// Execute a `Body` as a unit, switching to that body's IC store for the
+    /// duration and restoring the parent body's handle on return. Used for
+    /// top-level scripts, function bodies, `eval` programs, and dynamically
+    /// created functions. See `docs/adr/0001-inline-cache-ast-seam.md`.
+    pub(crate) fn exec_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
+        let handle = self.ic_store.for_body(body);
+        let prev = self.current_ic_handle;
+        self.current_ic_handle = handle;
+        let result = self.exec_statements_cached(body.as_slice(), env, None);
+        self.current_ic_handle = prev;
+        result
+    }
+
+    /// Execute an `eval` / ShadowRealm-eval body. Like `exec_body`, this switches
+    /// `current_ic_handle` to the body's own IC store (dynamic code gets its own
+    /// dense site namespace via `assign_ic_sites`). Unlike `exec_body`, it does
+    /// NOT run the function-body hoisting pass: eval callers run
+    /// `eval_declaration_instantiation` first (which applies the eval-specific
+    /// var/function hoisting rules), and re-hoisting here with function-body
+    /// semantics would corrupt those bindings. Returns the last statement's
+    /// completion value (eval's result), matching PerformEval / PerformShadowRealmEval.
+    pub(crate) fn exec_eval_body(&mut self, body: &Body, env: &EnvRef) -> Completion {
+        let handle = self.ic_store.for_body(body);
+        let prev = self.current_ic_handle;
+        self.current_ic_handle = handle;
+        let mut last = Completion::Empty;
+        for stmt in body.as_slice() {
+            self.gc_root_completion(&last);
+            self.gc_safepoint();
+            let comp = self.exec_statement(stmt, env);
+            self.gc_unroot_completion(&last);
+            match comp {
+                Completion::Normal(v) => last = Completion::Normal(v),
+                Completion::Empty => {}
+                other => {
+                    last = other;
+                    break;
+                }
+            }
+        }
+        self.current_ic_handle = prev;
+        last
     }
 
     /// Core statement-sequence executor. `analysis`, when `Some`, supplies the
@@ -340,7 +385,7 @@ impl Interpreter {
         let func = JsFunction::User {
             name: Some(f.name.clone()),
             params: Rc::new(f.params.clone()),
-            body: Rc::new(f.body.clone()),
+            body: f.body.clone(),
             closure: env.clone(),
             is_arrow: false,
             is_strict: f.body_is_strict || enclosing_strict,
@@ -2335,7 +2380,7 @@ impl Interpreter {
                     let func = JsFunction::User {
                         name: Some(f.name.clone()),
                         params: Rc::new(f.params.clone()),
-                        body: Rc::new(f.body.clone()),
+                        body: f.body.clone(),
                         closure: switch_env.clone(),
                         is_arrow: false,
                         is_strict: f.body_is_strict || enclosing_strict,

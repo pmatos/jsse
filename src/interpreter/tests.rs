@@ -258,6 +258,26 @@ fn module_cycle_preserves_live_bindings_and_reuses_registry_entries() {
 }
 
 #[test]
+fn module_top_level_call_and_member_evaluate() {
+    let dir = temp_case_dir("module-ic-fallback");
+    let main_path = write_case_file(
+        &dir,
+        "main.mjs",
+        r#"
+        globalThis.f = function() { return 42; };
+        globalThis.m = { n: 7 };
+        globalThis.result = globalThis.f() + globalThis.m.n;
+        export const dummy = 1;
+        "#,
+    );
+
+    let interp = run_module_with_path(&fs::read_to_string(&main_path).unwrap(), &main_path);
+    assert_eq!(global_number(&interp, "result"), 49.0);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn dynamic_import_waits_for_async_module_fulfillment_in_leaf_to_root_order() {
     let dir = temp_case_dir("issue-79-fulfillment");
     let main_path = write_case_file(
