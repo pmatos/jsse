@@ -1554,6 +1554,139 @@ fn date_set_utc_full_year_on_invalid_date_seeds_missing_args_from_epoch_not_nan(
     assert_eq!(global_number(&interp, "__d"), 1.0);
 }
 
+// §21.4.4 Date.prototype getters/receiver checks. Every method first extracts
+// `this`'s [[DateValue]] (thisTimeValue), throwing a TypeError when `this` is
+// not a Date; component getters then return NaN for an invalid Date and
+// otherwise project one field of the (optionally localized) time. These tests
+// pin that observable contract at the public Date.prototype seam so it survives
+// the consolidation of the per-method receiver check and getter bodies. Expected
+// values are Node's for the same instants, not recomputed the way jsse does.
+
+#[test]
+fn date_utc_getters_return_exact_components() {
+    let interp = run_script(
+        r#"
+        var d = new Date(Date.UTC(2023, 5, 15, 13, 30, 45, 123));
+        globalThis.__t = d.getTime();
+        globalThis.__v = d.valueOf();
+        globalThis.__y = d.getUTCFullYear();
+        globalThis.__mo = d.getUTCMonth();
+        globalThis.__da = d.getUTCDate();
+        globalThis.__day = d.getUTCDay();
+        globalThis.__h = d.getUTCHours();
+        globalThis.__mi = d.getUTCMinutes();
+        globalThis.__s = d.getUTCSeconds();
+        globalThis.__ms = d.getUTCMilliseconds();
+        "#,
+    );
+    assert_eq!(global_number(&interp, "__t"), 1686835845123.0);
+    assert_eq!(global_number(&interp, "__v"), 1686835845123.0);
+    assert_eq!(global_number(&interp, "__y"), 2023.0);
+    assert_eq!(global_number(&interp, "__mo"), 5.0);
+    assert_eq!(global_number(&interp, "__da"), 15.0);
+    assert_eq!(global_number(&interp, "__day"), 4.0);
+    assert_eq!(global_number(&interp, "__h"), 13.0);
+    assert_eq!(global_number(&interp, "__mi"), 30.0);
+    assert_eq!(global_number(&interp, "__s"), 45.0);
+    assert_eq!(global_number(&interp, "__ms"), 123.0);
+}
+
+#[test]
+fn date_getters_on_invalid_date_return_nan() {
+    // An invalid Date yields NaN from every component getter — including the
+    // local-time projections and getTimezoneOffset — without throwing.
+    let interp = run_script(
+        r#"
+        var d = new Date(NaN);
+        function nanOf(fn) { return Number.isNaN(fn.call(d)) ? 1 : 0; }
+        globalThis.__n =
+            nanOf(Date.prototype.getTime) +
+            nanOf(Date.prototype.getUTCFullYear) +
+            nanOf(Date.prototype.getFullYear) +
+            nanOf(Date.prototype.getMonth) +
+            nanOf(Date.prototype.getDate) +
+            nanOf(Date.prototype.getDay) +
+            nanOf(Date.prototype.getHours) +
+            nanOf(Date.prototype.getMinutes) +
+            nanOf(Date.prototype.getSeconds) +
+            nanOf(Date.prototype.getMilliseconds) +
+            nanOf(Date.prototype.getTimezoneOffset);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "__n"), 11.0);
+}
+
+#[test]
+fn date_methods_throw_type_error_on_non_date_receiver() {
+    // The [[DateValue]] brand check runs before any other work, so a non-Date
+    // receiver throws TypeError across getters, setters, string methods, and the
+    // Annex B methods alike.
+    let interp = run_script(
+        r#"
+        function throwsType(fn, args) {
+            try { fn.apply({}, args || []); return 0; }
+            catch (e) { return (e instanceof TypeError) ? 1 : 0; }
+        }
+        globalThis.__c =
+            throwsType(Date.prototype.getTime) +
+            throwsType(Date.prototype.valueOf) +
+            throwsType(Date.prototype.getUTCHours) +
+            throwsType(Date.prototype.getTimezoneOffset) +
+            throwsType(Date.prototype.setUTCFullYear, [2000]) +
+            throwsType(Date.prototype.setTime, [0]) +
+            throwsType(Date.prototype.toISOString) +
+            throwsType(Date.prototype.toUTCString) +
+            throwsType(Date.prototype.toDateString) +
+            throwsType(Date.prototype.getYear) +
+            throwsType(Date.prototype.setYear, [99]);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "__c"), 11.0);
+}
+
+#[test]
+fn date_string_methods_format_and_signal_invalid() {
+    // toISOString rejects an invalid Date with a RangeError (not a TypeError),
+    // while toString reports "Invalid Date".
+    let interp = run_script(
+        r#"
+        var d = new Date(Date.UTC(2023, 5, 15, 13, 30, 45, 123));
+        globalThis.__iso = d.toISOString();
+        globalThis.__utc = d.toUTCString();
+        var kind = "none";
+        try { new Date(NaN).toISOString(); }
+        catch (e) { kind = (e instanceof RangeError) ? "range" : (e instanceof TypeError ? "type" : "other"); }
+        globalThis.__isoInvalid = kind;
+        globalThis.__toStringInvalid = new Date(NaN).toString();
+        "#,
+    );
+    assert_eq!(global_string(&interp, "__iso"), "2023-06-15T13:30:45.123Z");
+    assert_eq!(
+        global_string(&interp, "__utc"),
+        "Thu, 15 Jun 2023 13:30:45 GMT"
+    );
+    assert_eq!(global_string(&interp, "__isoInvalid"), "range");
+    assert_eq!(global_string(&interp, "__toStringInvalid"), "Invalid Date");
+}
+
+#[test]
+fn date_annexb_get_year_and_set_year_use_local_time() {
+    // getYear returns the local full year minus 1900; setYear maps 0..=99 to
+    // 1900+year. Both use local time; a mid-year, mid-day instant keeps the
+    // result timezone-independent.
+    let interp = run_script(
+        r#"
+        var d = new Date(Date.UTC(2023, 5, 15, 13, 30, 45, 123));
+        globalThis.__gy = d.getYear();
+        var d2 = new Date(Date.UTC(2000, 5, 15, 12, 0, 0));
+        d2.setYear(99);
+        globalThis.__sy = d2.getFullYear();
+        "#,
+    );
+    assert_eq!(global_number(&interp, "__gy"), 123.0);
+    assert_eq!(global_number(&interp, "__sy"), 1999.0);
+}
+
 // §7.1.5 ToIntegerOrInfinity — the combined `? ToIntegerOrInfinity(argument)`
 // coercion method that sits alongside to_number_value / to_string_value / to_index.
 // Expected values are the spec's, not recomputed the way the code does it.
