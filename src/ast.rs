@@ -1002,10 +1002,21 @@ fn assign_class_sites(c: &mut ClassDecl, call_id: &mut u32, prop_id: &mut u32) {
         match el {
             ClassElement::Method(m) => assign_class_method_sites(m, call_id, prop_id),
             ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
+                // Computed keys are evaluated once, at class-definition time,
+                // under the surrounding body's IC handle — number them here.
                 if let PropertyKey::Computed(e) = &mut p.key {
                     assign_expr_sites(e, call_id, prop_id);
                 }
-                if let Some(v) = p.value.as_mut() {
+                // Static field initializers also run at class-definition time,
+                // so their sites belong to this body. Instance field and
+                // instance auto-accessor initializers run later, during
+                // construction, under whatever body invokes the constructor —
+                // numbering their sites here would make them index that body's
+                // (possibly smaller) IC store and panic. Leave them UNASSIGNED
+                // so they take the IC slow path wherever they execute.
+                if p.is_static
+                    && let Some(v) = p.value.as_mut()
+                {
                     assign_expr_sites(v, call_id, prop_id);
                 }
             }
@@ -1150,10 +1161,17 @@ fn assign_expr_sites(expr: &mut Expression, call_id: &mut u32, prop_id: &mut u32
                 match el {
                     ClassElement::Method(m) => assign_class_method_sites(m, call_id, prop_id),
                     ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
+                        // See assign_class_sites: number computed keys and static
+                        // initializers (evaluated at class-definition time), but
+                        // leave instance field / auto-accessor initializers
+                        // UNASSIGNED so they take the IC slow path when they run
+                        // during construction under the constructor's handle.
                         if let PropertyKey::Computed(e) = &mut p.key {
                             assign_expr_sites(e, call_id, prop_id);
                         }
-                        if let Some(v) = p.value.as_mut() {
+                        if p.is_static
+                            && let Some(v) = p.value.as_mut()
+                        {
                             assign_expr_sites(v, call_id, prop_id);
                         }
                     }
