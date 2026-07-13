@@ -158,6 +158,9 @@ impl Interpreter {
             for val in m.exports.values() {
                 Self::collect_value_roots(val, &mut worklist);
             }
+            if let Some(ms) = &m.module_source {
+                Self::collect_value_roots(ms, &mut worklist);
+            }
             if let Some((promise, resolve, reject)) = &m.top_level_capability {
                 Self::collect_value_roots(promise, &mut worklist);
                 Self::collect_value_roots(resolve, &mut worklist);
@@ -169,6 +172,9 @@ impl Interpreter {
             Self::collect_env_roots(&m.env, &mut worklist);
             for val in m.exports.values() {
                 Self::collect_value_roots(val, &mut worklist);
+            }
+            if let Some(ms) = &m.module_source {
+                Self::collect_value_roots(ms, &mut worklist);
             }
         }
         // Trace active call stack environments

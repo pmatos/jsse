@@ -1176,13 +1176,23 @@ impl Interpreter {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
                 };
-                // Per spec §16.2.1.7.2: GetModuleSource of SourceTextModule always throws SyntaxError
-                let _ = source;
-                let err = self.create_error(
-                    "SyntaxError",
-                    "Source phase imports are not available for this module",
-                );
-                self.create_rejected_promise(err)
+                // ContinueDynamicImport with source phase: resolve to the
+                // target module's [[ModuleSource]]. A Source Text Module has an
+                // empty [[ModuleSource]] (GetModuleSource throws SyntaxError).
+                let referrer = self.current_module_path.clone();
+                match self.resolve_source_phase_target(&source, referrer.as_deref()) {
+                    Ok((_, module)) => match module.borrow().module_source.clone() {
+                        Some(ms) => self.create_resolved_promise(ms),
+                        None => {
+                            let err = self.create_error(
+                                "SyntaxError",
+                                "Source phase imports are not available for this module",
+                            );
+                            self.create_rejected_promise(err)
+                        }
+                    },
+                    Err(e) => self.create_rejected_promise(e),
+                }
             }
             Expression::Template(tmpl) => {
                 let mut code_units: Vec<u16> = Vec::new();

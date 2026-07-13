@@ -388,6 +388,10 @@ pub struct Realm {
     /// ECMA-402 %Intl%.[[FallbackSymbol]]: a fresh per-realm Symbol with
     /// description "IntlLegacyConstructedSymbol", minted lazily on first use.
     pub(crate) intl_fallback_symbol: Option<JsValue>,
+    /// %AbstractModuleSource% constructor (source-phase imports proposal),
+    /// minted lazily on first use. Its `prototype` is the [[Prototype]] of
+    /// every host-provided Module Source object.
+    pub(crate) abstract_module_source_ctor: Option<JsValue>,
     pub(crate) error_prototype: Option<u64>,
     pub(crate) type_error_prototype: Option<u64>,
     pub(crate) range_error_prototype: Option<u64>,
@@ -485,6 +489,7 @@ impl Realm {
             intl_date_time_format_ctor: None,
             intl_duration_format_ctor: None,
             intl_fallback_symbol: None,
+            abstract_module_source_ctor: None,
             error_prototype: None,
             type_error_prototype: None,
             range_error_prototype: None,
@@ -598,6 +603,7 @@ impl Realm {
             &self.intl_date_time_format_ctor,
             &self.intl_duration_format_ctor,
             &self.typed_array_constructor,
+            &self.abstract_module_source_ctor,
         ] {
             if let Some(JsValue::Object(o)) = ctor {
                 worklist.push(o.id);
