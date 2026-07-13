@@ -3963,10 +3963,9 @@ impl Interpreter {
 
                 // 6. Else,
                 let return_method = return_method.unwrap();
-                //   a. Let result be Call(return, O, « undefined »).
+                //   a. Let result be Call(return, O, « »).
                 //   b. IfAbruptRejectPromise(result, promiseCapability).
-                let result = match interp.call_function(&return_method, this, &[JsValue::Undefined])
-                {
+                let result = match interp.call_function(&return_method, this, &[]) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => {
                         interp.reject_promise(cap_promise_id, e);
