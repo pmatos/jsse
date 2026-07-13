@@ -1217,6 +1217,140 @@ fn assign_expr_sites(expr: &mut Expression, call_id: &mut u32, prop_id: &mut u32
     }
 }
 
+/// Reset the inline-cache site ids reachable from `expr` (without descending
+/// into nested function/arrow bodies) to `UNASSIGNED`, forcing the IC slow path.
+///
+/// Used for generator/async state-machine *terminator* expressions — yield /
+/// await / return / throw values, `ConditionalGoto` and `SwitchDispatch`
+/// conditions, and `ForOfInit` iterables. The state driver evaluates these after
+/// `exec_body` has restored the previous `current_ic_handle`, i.e. under whatever
+/// body is driving the generator (often the caller), not under any state body's
+/// store. A numbered site would then index the wrong store and panic, so these
+/// expressions must stay unnumbered. Nested function/arrow bodies are left intact
+/// because they execute under their own stores; a class literal's `extends`,
+/// computed keys, and static-field initializers are cleared because they evaluate
+/// at class-definition time (i.e. when the terminator expression runs).
+pub fn clear_expr_ic_sites(expr: &mut Expression) {
+    match expr {
+        Expression::Call(callee, args, site) => {
+            clear_expr_ic_sites(callee);
+            for a in args.iter_mut() {
+                clear_expr_ic_sites(a);
+            }
+            *site = CallSiteId::UNASSIGNED;
+        }
+        Expression::New(callee, args, site) => {
+            clear_expr_ic_sites(callee);
+            for a in args.iter_mut() {
+                clear_expr_ic_sites(a);
+            }
+            *site = CallSiteId::UNASSIGNED;
+        }
+        Expression::Member(obj, prop, site) => {
+            clear_expr_ic_sites(obj);
+            if let MemberProperty::Computed(e) = prop {
+                clear_expr_ic_sites(e);
+            }
+            *site = PropSiteId::UNASSIGNED;
+        }
+        Expression::OptionalChain(base, chain) => {
+            clear_expr_ic_sites(base);
+            clear_expr_ic_sites(chain);
+        }
+        Expression::Unary(_, e)
+        | Expression::Update(_, _, e)
+        | Expression::Spread(e)
+        | Expression::Yield(Some(e), _)
+        | Expression::Await(e)
+        | Expression::Typeof(e)
+        | Expression::Void(e)
+        | Expression::Delete(e) => clear_expr_ic_sites(e),
+        Expression::Yield(None, _) => {}
+        Expression::Binary(_, l, r)
+        | Expression::Logical(_, l, r)
+        | Expression::Assign(_, l, r) => {
+            clear_expr_ic_sites(l);
+            clear_expr_ic_sites(r);
+        }
+        Expression::Conditional(t, c, a) => {
+            clear_expr_ic_sites(t);
+            clear_expr_ic_sites(c);
+            clear_expr_ic_sites(a);
+        }
+        Expression::Array(elems, _) => {
+            for e in elems.iter_mut().flatten() {
+                clear_expr_ic_sites(e);
+            }
+        }
+        Expression::Object(props) => {
+            for p in props.iter_mut() {
+                if let PropertyKey::Computed(e) = &mut p.key {
+                    clear_expr_ic_sites(e);
+                }
+                clear_expr_ic_sites(&mut p.value);
+            }
+        }
+        // Nested function/arrow bodies run under their own IC store — leave them.
+        Expression::Function(_) | Expression::ArrowFunction(_) => {}
+        Expression::Class(c) => {
+            if let Some(sc) = c.super_class.as_mut() {
+                clear_expr_ic_sites(sc);
+            }
+            for el in c.body.iter_mut() {
+                match el {
+                    ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
+                        if let PropertyKey::Computed(e) = &mut p.key {
+                            clear_expr_ic_sites(e);
+                        }
+                        if p.is_static
+                            && let Some(v) = p.value.as_mut()
+                        {
+                            clear_expr_ic_sites(v);
+                        }
+                    }
+                    ClassElement::Method(m) => {
+                        if let PropertyKey::Computed(e) = &mut m.key {
+                            clear_expr_ic_sites(e);
+                        }
+                    }
+                    ClassElement::StaticBlock(_) => {}
+                }
+            }
+        }
+        Expression::TaggedTemplate(tag, tpl) => {
+            clear_expr_ic_sites(tag);
+            for e in tpl.expressions.iter_mut() {
+                clear_expr_ic_sites(e);
+            }
+        }
+        Expression::Template(tpl) => {
+            for e in tpl.expressions.iter_mut() {
+                clear_expr_ic_sites(e);
+            }
+        }
+        Expression::Comma(exprs) | Expression::Sequence(exprs) => {
+            for e in exprs.iter_mut() {
+                clear_expr_ic_sites(e);
+            }
+        }
+        Expression::Import(spec, opts)
+        | Expression::ImportDefer(spec, opts)
+        | Expression::ImportSource(spec, opts) => {
+            clear_expr_ic_sites(spec);
+            if let Some(opts) = opts.as_mut() {
+                clear_expr_ic_sites(opts);
+            }
+        }
+        Expression::Literal(_)
+        | Expression::Identifier(_)
+        | Expression::This
+        | Expression::Super
+        | Expression::ImportMeta
+        | Expression::NewTarget
+        | Expression::PrivateIdentifier(_) => {}
+    }
+}
+
 fn class_extends_or_computed_keys_use_arguments(
     super_class: Option<&Expression>,
     body: &[ClassElement],

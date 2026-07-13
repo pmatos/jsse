@@ -88,6 +88,23 @@ pub enum StateTerminator {
     Completed,
 }
 
+/// Reset IC site ids in a terminator's expressions to UNASSIGNED. See
+/// `ast::clear_expr_ic_sites`: terminator expressions run under the caller's IC
+/// handle rather than any state body's store, so they must take the slow path.
+fn clear_terminator_ic_sites(t: &mut StateTerminator) {
+    use crate::ast::clear_expr_ic_sites;
+    match t {
+        StateTerminator::Yield { value: Some(v), .. } => clear_expr_ic_sites(v),
+        StateTerminator::Return(Some(v)) => clear_expr_ic_sites(v),
+        StateTerminator::Throw(v) => clear_expr_ic_sites(v),
+        StateTerminator::ConditionalGoto { condition, .. } => clear_expr_ic_sites(condition),
+        StateTerminator::SwitchDispatch { discriminant, .. } => clear_expr_ic_sites(discriminant),
+        StateTerminator::ForOfInit { iterable, .. } => clear_expr_ic_sites(iterable),
+        StateTerminator::Await { value, .. } => clear_expr_ic_sites(value),
+        _ => {}
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CatchInfo {
     pub state: usize,
@@ -195,6 +212,12 @@ impl TransformContext {
             }
             let mut body = Body::new(stmts);
             crate::ast::assign_ic_sites_for_body(&mut body);
+            // Terminator expressions (yield/await/return/throw values, branch and
+            // switch conditions, for-of iterables) are evaluated by the state
+            // driver under the caller's IC handle, not this state body's store,
+            // so their site ids must stay UNASSIGNED (IC slow path).
+            let mut terminator = terminator;
+            clear_terminator_ic_sites(&mut terminator);
             self.states[self.current_state_id].body = body;
             self.states[self.current_state_id].terminator = terminator;
         }
