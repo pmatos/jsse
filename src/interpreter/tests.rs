@@ -570,7 +570,7 @@ fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
         vec![obj_val.clone()],
         Box::new(|_| Completion::Normal(JsValue::Undefined)),
     ));
-    interp.gc_requested = true;
+    interp.gc.request();
     interp.gc_safepoint();
     assert!(
         interp.get_object_cell(id).is_some(),
@@ -578,7 +578,7 @@ fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
     );
 
     interp.scheduler.clear_microtasks();
-    interp.gc_requested = true;
+    interp.gc.request();
     interp.gc_safepoint();
     assert!(
         interp.get_object_cell(id).is_none(),
@@ -610,12 +610,12 @@ fn gc_keeps_module_exports_alive_until_registry_entry_is_removed() {
         panic!("expected exported object");
     };
 
-    interp.gc_requested = true;
+    interp.gc.request();
     interp.gc_safepoint();
     assert!(interp.get_object_cell(obj_ref.id).is_some());
 
     interp.module_registry.remove(&key);
-    interp.gc_requested = true;
+    interp.gc.request();
     interp.gc_safepoint();
     assert!(interp.get_object_cell(obj_ref.id).is_none());
 

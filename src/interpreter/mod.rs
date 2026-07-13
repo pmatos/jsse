@@ -82,11 +82,8 @@ pub struct Interpreter {
     pub(crate) well_known_symbols: HashMap<String, crate::types::JsSymbol>,
     next_symbol_id: u64,
     new_target: Option<JsValue>,
-    gc_alloc_count: usize,
-    gc_requested: bool,
-    gc_bytes_since_gc: usize,
-    gc_external_bytes: usize,
-    gc_threshold_bytes: usize,
+    // Allocation-pressure pacing: decides when to collect (see gc::GcPacer).
+    gc: crate::interpreter::gc::GcPacer,
     // Reusable mark bitmap scratch buffer, cleared+resized each GC collection.
     gc_marks: Vec<bool>,
     generator_context: Option<GeneratorContext>,
@@ -239,11 +236,7 @@ impl Interpreter {
             well_known_symbols: HashMap::new(),
             next_symbol_id: 1,
             new_target: None,
-            gc_alloc_count: 0,
-            gc_requested: false,
-            gc_bytes_since_gc: 0,
-            gc_external_bytes: 0,
-            gc_threshold_bytes: GC_INITIAL_THRESHOLD_BYTES,
+            gc: crate::interpreter::gc::GcPacer::new(),
             gc_marks: Vec::new(),
             generator_context: None,
             destructuring_yield: false,
@@ -366,7 +359,7 @@ impl Interpreter {
             "gc".to_string(),
             0,
             |interp, _this, _args| {
-                interp.gc_requested = true;
+                interp.gc.request();
                 interp.gc_safepoint();
                 Completion::Normal(JsValue::Undefined)
             },
