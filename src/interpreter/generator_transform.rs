@@ -92,16 +92,51 @@ pub enum StateTerminator {
 /// `ast::clear_expr_ic_sites`: terminator expressions run under the caller's IC
 /// handle rather than any state body's store, so they must take the slow path.
 fn clear_terminator_ic_sites(t: &mut StateTerminator) {
-    use crate::ast::clear_expr_ic_sites;
+    use crate::ast::{clear_expr_ic_sites, clear_for_in_of_left, clear_pattern_ic_sites};
     match t {
-        StateTerminator::Yield { value: Some(v), .. } => clear_expr_ic_sites(v),
-        StateTerminator::Return(Some(v)) => clear_expr_ic_sites(v),
+        StateTerminator::Yield { value, .. } => {
+            if let Some(v) = value {
+                clear_expr_ic_sites(v);
+            }
+        }
+        StateTerminator::Return(v) => {
+            if let Some(v) = v {
+                clear_expr_ic_sites(v);
+            }
+        }
         StateTerminator::Throw(v) => clear_expr_ic_sites(v),
         StateTerminator::ConditionalGoto { condition, .. } => clear_expr_ic_sites(condition),
-        StateTerminator::SwitchDispatch { discriminant, .. } => clear_expr_ic_sites(discriminant),
+        StateTerminator::SwitchDispatch {
+            discriminant,
+            cases,
+            ..
+        } => {
+            clear_expr_ic_sites(discriminant);
+            for case in cases.iter_mut() {
+                clear_expr_ic_sites(&mut case.test);
+            }
+        }
+        // ForOfInit only evaluates `iterable` here; the `left` binding is applied
+        // later in ForOfHead, which is where its sites are cleared.
         StateTerminator::ForOfInit { iterable, .. } => clear_expr_ic_sites(iterable),
+        StateTerminator::ForOfHead { left, .. } => clear_for_in_of_left(left),
         StateTerminator::Await { value, .. } => clear_expr_ic_sites(value),
-        _ => {}
+        StateTerminator::TryEnter { catch_state, .. } => {
+            if let Some(ci) = catch_state
+                && let Some(p) = ci.param.as_mut()
+            {
+                clear_pattern_ic_sites(p);
+            }
+        }
+        StateTerminator::EnterCatch { param, .. } => {
+            if let Some(p) = param {
+                clear_pattern_ic_sites(p);
+            }
+        }
+        StateTerminator::Goto(_)
+        | StateTerminator::TryExit { .. }
+        | StateTerminator::EnterFinally { .. }
+        | StateTerminator::Completed => {}
     }
 }
 

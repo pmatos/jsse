@@ -1482,7 +1482,7 @@ fn clear_stmt_ic_sites(stmt: &mut Statement) {
     }
 }
 
-fn clear_for_in_of_left(left: &mut ForInOfLeft) {
+pub fn clear_for_in_of_left(left: &mut ForInOfLeft) {
     match left {
         ForInOfLeft::Variable(decl) => {
             for d in decl.declarations.iter_mut() {
@@ -1498,8 +1498,9 @@ fn clear_for_in_of_left(left: &mut ForInOfLeft) {
 }
 
 /// Pattern companion to [`clear_expr_ic_sites`], for patterns reachable from a
-/// terminator (e.g. destructuring declarations inside a class static block).
-fn clear_pattern_ic_sites(pat: &mut Pattern) {
+/// terminator (e.g. destructuring declarations inside a class static block, or
+/// a for-of binding / catch parameter evaluated at a state transition).
+pub fn clear_pattern_ic_sites(pat: &mut Pattern) {
     match pat {
         Pattern::Identifier(_) => {}
         Pattern::Array(elems) => {
