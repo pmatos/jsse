@@ -1293,29 +1293,7 @@ pub fn clear_expr_ic_sites(expr: &mut Expression) {
         // Nested function/arrow bodies run under their own IC store — leave them.
         Expression::Function(_) | Expression::ArrowFunction(_) => {}
         Expression::Class(c) => {
-            if let Some(sc) = c.super_class.as_mut() {
-                clear_expr_ic_sites(sc);
-            }
-            for el in c.body.iter_mut() {
-                match el {
-                    ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
-                        if let PropertyKey::Computed(e) = &mut p.key {
-                            clear_expr_ic_sites(e);
-                        }
-                        if p.is_static
-                            && let Some(v) = p.value.as_mut()
-                        {
-                            clear_expr_ic_sites(v);
-                        }
-                    }
-                    ClassElement::Method(m) => {
-                        if let PropertyKey::Computed(e) = &mut m.key {
-                            clear_expr_ic_sites(e);
-                        }
-                    }
-                    ClassElement::StaticBlock(_) => {}
-                }
-            }
+            clear_class_def_ic_sites(c.super_class.as_deref_mut(), &mut c.body);
         }
         Expression::TaggedTemplate(tag, tpl) => {
             clear_expr_ic_sites(tag);
@@ -1348,6 +1326,223 @@ pub fn clear_expr_ic_sites(expr: &mut Expression) {
         | Expression::ImportMeta
         | Expression::NewTarget
         | Expression::PrivateIdentifier(_) => {}
+    }
+}
+
+/// Clear IC sites in the parts of a class literal that are evaluated at
+/// class-definition time (`extends`, computed keys, static-field initializers,
+/// static blocks). Used from `clear_expr_ic_sites` when a class appears inside a
+/// generator/async terminator expression: those parts run while the terminator
+/// is evaluated (under the caller's IC handle), so their sites must be cleared.
+/// Method bodies and instance-field initializers run under their own stores /
+/// the construction handle and are left untouched.
+fn clear_class_def_ic_sites(super_class: Option<&mut Expression>, body: &mut [ClassElement]) {
+    if let Some(sc) = super_class {
+        clear_expr_ic_sites(sc);
+    }
+    for el in body.iter_mut() {
+        match el {
+            ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
+                if let PropertyKey::Computed(e) = &mut p.key {
+                    clear_expr_ic_sites(e);
+                }
+                if p.is_static
+                    && let Some(v) = p.value.as_mut()
+                {
+                    clear_expr_ic_sites(v);
+                }
+            }
+            ClassElement::Method(m) => {
+                if let PropertyKey::Computed(e) = &mut m.key {
+                    clear_expr_ic_sites(e);
+                }
+            }
+            ClassElement::StaticBlock(stmts) => {
+                for s in stmts.iter_mut() {
+                    clear_stmt_ic_sites(s);
+                }
+            }
+        }
+    }
+}
+
+/// Statement companion to [`clear_expr_ic_sites`]. Resets IC sites in statements
+/// reachable from a generator/async terminator (e.g. inside a class static block
+/// that runs at class-definition time). Nested function-declaration bodies are
+/// left intact — they execute under their own stores.
+fn clear_stmt_ic_sites(stmt: &mut Statement) {
+    match stmt {
+        Statement::Expression(e) => clear_expr_ic_sites(e),
+        Statement::Block(stmts) => {
+            for s in stmts.iter_mut() {
+                clear_stmt_ic_sites(s);
+            }
+        }
+        Statement::Variable(decl) => {
+            for d in decl.declarations.iter_mut() {
+                clear_pattern_ic_sites(&mut d.pattern);
+                if let Some(init) = d.init.as_mut() {
+                    clear_expr_ic_sites(init);
+                }
+            }
+        }
+        Statement::If(i) => {
+            clear_expr_ic_sites(&mut i.test);
+            clear_stmt_ic_sites(&mut i.consequent);
+            if let Some(alt) = i.alternate.as_mut() {
+                clear_stmt_ic_sites(alt);
+            }
+        }
+        Statement::While(w) => {
+            clear_expr_ic_sites(&mut w.test);
+            clear_stmt_ic_sites(&mut w.body);
+        }
+        Statement::DoWhile(d) => {
+            clear_stmt_ic_sites(&mut d.body);
+            clear_expr_ic_sites(&mut d.test);
+        }
+        Statement::For(f) => {
+            if let Some(init) = f.init.as_mut() {
+                match init {
+                    ForInit::Expression(e) => clear_expr_ic_sites(e),
+                    ForInit::Variable(decl) => {
+                        for d in decl.declarations.iter_mut() {
+                            clear_pattern_ic_sites(&mut d.pattern);
+                            if let Some(init) = d.init.as_mut() {
+                                clear_expr_ic_sites(init);
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(test) = f.test.as_mut() {
+                clear_expr_ic_sites(test);
+            }
+            if let Some(update) = f.update.as_mut() {
+                clear_expr_ic_sites(update);
+            }
+            clear_stmt_ic_sites(&mut f.body);
+        }
+        Statement::ForIn(f) => {
+            clear_for_in_of_left(&mut f.left);
+            clear_expr_ic_sites(&mut f.right);
+            clear_stmt_ic_sites(&mut f.body);
+        }
+        Statement::ForOf(f) => {
+            clear_for_in_of_left(&mut f.left);
+            clear_expr_ic_sites(&mut f.right);
+            clear_stmt_ic_sites(&mut f.body);
+        }
+        Statement::Return(e) => {
+            if let Some(e) = e.as_mut() {
+                clear_expr_ic_sites(e);
+            }
+        }
+        Statement::Throw(e) => clear_expr_ic_sites(e),
+        Statement::Try(t) => {
+            for s in t.block.iter_mut() {
+                clear_stmt_ic_sites(s);
+            }
+            if let Some(h) = t.handler.as_mut() {
+                if let Some(param) = h.param.as_mut() {
+                    clear_pattern_ic_sites(param);
+                }
+                for s in h.body.iter_mut() {
+                    clear_stmt_ic_sites(s);
+                }
+            }
+            if let Some(f) = t.finalizer.as_mut() {
+                for s in f.iter_mut() {
+                    clear_stmt_ic_sites(s);
+                }
+            }
+        }
+        Statement::Switch(s) => {
+            clear_expr_ic_sites(&mut s.discriminant);
+            for c in s.cases.iter_mut() {
+                if let Some(test) = c.test.as_mut() {
+                    clear_expr_ic_sites(test);
+                }
+                for stmt in c.consequent.iter_mut() {
+                    clear_stmt_ic_sites(stmt);
+                }
+            }
+        }
+        Statement::Labeled(_, s) => clear_stmt_ic_sites(s),
+        Statement::With(e, s) => {
+            clear_expr_ic_sites(e);
+            clear_stmt_ic_sites(s);
+        }
+        // Nested function bodies execute under their own IC store — leave them.
+        Statement::FunctionDeclaration(_) => {}
+        Statement::ClassDeclaration(c) => {
+            clear_class_def_ic_sites(c.super_class.as_deref_mut(), &mut c.body);
+        }
+        Statement::Empty | Statement::Break(_) | Statement::Continue(_) | Statement::Debugger => {}
+    }
+}
+
+fn clear_for_in_of_left(left: &mut ForInOfLeft) {
+    match left {
+        ForInOfLeft::Variable(decl) => {
+            for d in decl.declarations.iter_mut() {
+                clear_pattern_ic_sites(&mut d.pattern);
+                if let Some(init) = d.init.as_mut() {
+                    clear_expr_ic_sites(init);
+                }
+            }
+        }
+        ForInOfLeft::Pattern(p) => clear_pattern_ic_sites(p),
+        ForInOfLeft::Expression(e) => clear_expr_ic_sites(e),
+    }
+}
+
+/// Pattern companion to [`clear_expr_ic_sites`], for patterns reachable from a
+/// terminator (e.g. destructuring declarations inside a class static block).
+fn clear_pattern_ic_sites(pat: &mut Pattern) {
+    match pat {
+        Pattern::Identifier(_) => {}
+        Pattern::Array(elems) => {
+            for e in elems.iter_mut().flatten() {
+                match e {
+                    ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
+                        clear_pattern_ic_sites(p)
+                    }
+                }
+            }
+        }
+        Pattern::Object(props) => {
+            for p in props.iter_mut() {
+                match p {
+                    ObjectPatternProperty::KeyValue(key, pat) => {
+                        if let PropertyKey::Computed(e) = key {
+                            clear_expr_ic_sites(e);
+                        }
+                        clear_pattern_ic_sites(pat);
+                    }
+                    ObjectPatternProperty::Shorthand(_) => {}
+                    ObjectPatternProperty::Rest(pat) => clear_pattern_ic_sites(pat),
+                }
+            }
+        }
+        Pattern::Assign(pat, expr) => {
+            clear_pattern_ic_sites(pat);
+            clear_expr_ic_sites(expr);
+        }
+        Pattern::Rest(pat) => clear_pattern_ic_sites(pat),
+        Pattern::MemberExpression(e) => {
+            // The top-level member is an assignment target (no IC site of its
+            // own); only its sub-expressions carry sites.
+            match &mut **e {
+                Expression::Member(obj, prop, _) => {
+                    clear_expr_ic_sites(obj);
+                    if let MemberProperty::Computed(e) = prop {
+                        clear_expr_ic_sites(e);
+                    }
+                }
+                other => clear_expr_ic_sites(other),
+            }
+        }
     }
 }
 
