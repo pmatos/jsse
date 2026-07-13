@@ -88,16 +88,34 @@ pub enum StateTerminator {
     Completed,
 }
 
+/// Clear IC sites in a sent-value binding pattern (the destructuring target of
+/// `x = yield` / `x = await`). The pattern is applied to the resumed value before
+/// the next `exec_body` switches to a state-body store, so any computed-key or
+/// default-value sites in it run under the caller's handle and must be cleared.
+fn clear_sent_value_binding(binding: &mut Option<SentValueBinding>) {
+    if let Some(SentValueBinding {
+        kind: SentValueBindingKind::Pattern(p),
+    }) = binding
+    {
+        crate::ast::clear_pattern_ic_sites(p);
+    }
+}
+
 /// Reset IC site ids in a terminator's expressions to UNASSIGNED. See
 /// `ast::clear_expr_ic_sites`: terminator expressions run under the caller's IC
 /// handle rather than any state body's store, so they must take the slow path.
 fn clear_terminator_ic_sites(t: &mut StateTerminator) {
     use crate::ast::{clear_expr_ic_sites, clear_for_in_of_left, clear_pattern_ic_sites};
     match t {
-        StateTerminator::Yield { value, .. } => {
+        StateTerminator::Yield {
+            value,
+            sent_value_binding,
+            ..
+        } => {
             if let Some(v) = value {
                 clear_expr_ic_sites(v);
             }
+            clear_sent_value_binding(sent_value_binding);
         }
         StateTerminator::Return(v) => {
             if let Some(v) = v {
@@ -120,7 +138,14 @@ fn clear_terminator_ic_sites(t: &mut StateTerminator) {
         // later in ForOfHead, which is where its sites are cleared.
         StateTerminator::ForOfInit { iterable, .. } => clear_expr_ic_sites(iterable),
         StateTerminator::ForOfHead { left, .. } => clear_for_in_of_left(left),
-        StateTerminator::Await { value, .. } => clear_expr_ic_sites(value),
+        StateTerminator::Await {
+            value,
+            sent_value_binding,
+            ..
+        } => {
+            clear_expr_ic_sites(value);
+            clear_sent_value_binding(sent_value_binding);
+        }
         StateTerminator::TryEnter { catch_state, .. } => {
             if let Some(ci) = catch_state
                 && let Some(p) = ci.param.as_mut()
