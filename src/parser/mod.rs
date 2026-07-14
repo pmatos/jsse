@@ -389,33 +389,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn collect_bound_names(pattern: &Pattern, names: &mut Vec<String>) {
-        match pattern {
-            Pattern::Identifier(n) => names.push(n.clone()),
-            Pattern::Array(elems) => {
-                for elem in elems.iter().flatten() {
-                    match elem {
-                        ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
-                            Self::collect_bound_names(p, names);
-                        }
-                    }
-                }
-            }
-            Pattern::Object(props) => {
-                for prop in props {
-                    match prop {
-                        ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
-                            Self::collect_bound_names(p, names);
-                        }
-                        ObjectPatternProperty::Shorthand(n) => names.push(n.clone()),
-                    }
-                }
-            }
-            Pattern::Assign(p, _) | Pattern::Rest(p) => Self::collect_bound_names(p, names),
-            Pattern::MemberExpression(_) => {}
-        }
-    }
-
     fn is_simple_parameter_list(params: &[Pattern]) -> bool {
         params.iter().all(|p| matches!(p, Pattern::Identifier(_)))
     }
@@ -424,7 +397,7 @@ impl<'a> Parser<'a> {
         let mut seen = HashSet::new();
         let mut names = Vec::new();
         for p in params {
-            Self::collect_bound_names(p, &mut names);
+            p.bound_names(&mut names);
         }
         for name in &names {
             if !seen.insert(name.as_str()) {
@@ -459,7 +432,7 @@ impl<'a> Parser<'a> {
     fn check_strict_params(&self, params: &[Pattern]) -> Result<(), ParseError> {
         let mut names = Vec::new();
         for p in params {
-            Self::collect_bound_names(p, &mut names);
+            p.bound_names(&mut names);
         }
         for name in &names {
             if name == "eval" || name == "arguments" {
@@ -1202,53 +1175,13 @@ impl<'a> Parser<'a> {
             Statement::Variable(var) => {
                 let mut names = Vec::new();
                 for d in &var.declarations {
-                    self.collect_pattern_names(&d.pattern, &mut names);
+                    d.pattern.bound_names(&mut names);
                 }
                 names
             }
             Statement::FunctionDeclaration(f) => vec![f.name.clone()],
             Statement::ClassDeclaration(c) => vec![c.name.clone()],
             _ => vec![],
-        }
-    }
-
-    fn collect_pattern_names(&self, pattern: &Pattern, names: &mut Vec<String>) {
-        match pattern {
-            Pattern::Identifier(name) => names.push(name.clone()),
-            Pattern::Array(elements) => {
-                for elem in elements.iter().flatten() {
-                    match elem {
-                        ArrayPatternElement::Pattern(p) => {
-                            self.collect_pattern_names(p, names);
-                        }
-                        ArrayPatternElement::Rest(p) => {
-                            self.collect_pattern_names(p, names);
-                        }
-                    }
-                }
-            }
-            Pattern::Object(props) => {
-                for prop in props {
-                    match prop {
-                        ObjectPatternProperty::KeyValue(_, value) => {
-                            self.collect_pattern_names(value, names);
-                        }
-                        ObjectPatternProperty::Shorthand(name) => {
-                            names.push(name.clone());
-                        }
-                        ObjectPatternProperty::Rest(pat) => {
-                            self.collect_pattern_names(pat, names);
-                        }
-                    }
-                }
-            }
-            Pattern::Assign(inner, _) => {
-                self.collect_pattern_names(inner, names);
-            }
-            Pattern::Rest(inner) => {
-                self.collect_pattern_names(inner, names);
-            }
-            Pattern::MemberExpression(_) => {}
         }
     }
 
@@ -1319,7 +1252,7 @@ impl<'a> Parser<'a> {
             Statement::Variable(decl) if decl.kind == VarKind::Var => {
                 for d in &decl.declarations {
                     let mut n = Vec::new();
-                    self.collect_pattern_names(&d.pattern, &mut n);
+                    d.pattern.bound_names(&mut n);
                     names.extend(n);
                 }
             }
@@ -1336,7 +1269,7 @@ impl<'a> Parser<'a> {
             Statement::Variable(decl) if decl.kind != VarKind::Var => {
                 for d in &decl.declarations {
                     let mut n = Vec::new();
-                    self.collect_pattern_names(&d.pattern, &mut n);
+                    d.pattern.bound_names(&mut n);
                     for name in n {
                         if !names.insert(name.clone()) {
                             return Err(self
