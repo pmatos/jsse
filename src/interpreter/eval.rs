@@ -13445,7 +13445,7 @@ impl Interpreter {
         match stmt {
             Statement::Variable(decl) if decl.kind == VarKind::Var => {
                 for d in &decl.declarations {
-                    Self::collect_pattern_names(&d.pattern, names);
+                    d.pattern.bound_names(names);
                 }
             }
             Statement::Block(stmts) => {
@@ -13466,7 +13466,7 @@ impl Interpreter {
                     && decl.kind == VarKind::Var
                 {
                     for d in &decl.declarations {
-                        Self::collect_pattern_names(&d.pattern, names);
+                        d.pattern.bound_names(names);
                     }
                 }
                 Self::collect_eval_var_names_from_stmt(&f.body, names);
@@ -13476,7 +13476,7 @@ impl Interpreter {
                     && decl.kind == VarKind::Var
                 {
                     for d in &decl.declarations {
-                        Self::collect_pattern_names(&d.pattern, names);
+                        d.pattern.bound_names(names);
                     }
                 }
                 Self::collect_eval_var_names_from_stmt(&fi.body, names);
@@ -13486,7 +13486,7 @@ impl Interpreter {
                     && decl.kind == VarKind::Var
                 {
                     for d in &decl.declarations {
-                        Self::collect_pattern_names(&d.pattern, names);
+                        d.pattern.bound_names(names);
                     }
                 }
                 Self::collect_eval_var_names_from_stmt(&fo.body, names);
@@ -13765,7 +13765,7 @@ impl Interpreter {
                     };
                     for d in &decl.declarations {
                         let mut names = Vec::new();
-                        Self::collect_pattern_names(&d.pattern, &mut names);
+                        d.pattern.bound_names(&mut names);
                         for name in names {
                             lex_env.borrow_mut().bindings.insert(
                                 name,
@@ -13821,7 +13821,7 @@ impl Interpreter {
                             if matches!(decl.kind, VarKind::Let | VarKind::Const) =>
                         {
                             for d in &decl.declarations {
-                                Self::collect_pattern_names(&d.pattern, &mut eval_lexical_names);
+                                d.pattern.bound_names(&mut eval_lexical_names);
                             }
                         }
                         Statement::ClassDeclaration(cls) => {
@@ -16099,45 +16099,7 @@ impl Interpreter {
                         && !matches!(decl.kind, VarKind::Var)
                     {
                         if let Some(d) = decl.declarations.first() {
-                            fn collect_pattern_names(p: &Pattern, out: &mut Vec<String>) {
-                                match p {
-                                    Pattern::Identifier(n) => out.push(n.clone()),
-                                    Pattern::Object(props) => {
-                                        for prop in props {
-                                            match prop {
-                                                crate::ast::ObjectPatternProperty::KeyValue(
-                                                    _,
-                                                    p,
-                                                ) => {
-                                                    collect_pattern_names(p, out);
-                                                }
-                                                crate::ast::ObjectPatternProperty::Shorthand(n) => {
-                                                    out.push(n.clone());
-                                                }
-                                                crate::ast::ObjectPatternProperty::Rest(p) => {
-                                                    collect_pattern_names(p, out);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Pattern::Array(elems) => {
-                                        for e in elems.iter().flatten() {
-                                            match e {
-                                                crate::ast::ArrayPatternElement::Pattern(p) => {
-                                                    collect_pattern_names(p, out)
-                                                }
-                                                crate::ast::ArrayPatternElement::Rest(p) => {
-                                                    collect_pattern_names(p, out)
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Pattern::Assign(inner, _) => collect_pattern_names(inner, out),
-                                    Pattern::Rest(inner) => collect_pattern_names(inner, out),
-                                    Pattern::MemberExpression(_) => {}
-                                }
-                            }
-                            collect_pattern_names(&d.pattern, &mut tdz_names);
+                            d.pattern.bound_names(&mut tdz_names);
                         }
                         // Save current binding state, then declare as uninitialized
                         for name in &tdz_names {

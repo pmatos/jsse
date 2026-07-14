@@ -40,7 +40,7 @@ impl<'a> Parser<'a> {
             }
             // "let" cannot be a bound name in let/const declarations (§13.3.1.1)
             let mut names = Vec::new();
-            Self::collect_bound_names(&d.pattern, &mut names);
+            d.pattern.bound_names(&mut names);
             for name in &names {
                 if name == "let" {
                     return Err(self
@@ -1258,7 +1258,7 @@ impl<'a> Parser<'a> {
         let mut names = HashSet::new();
         for p in params {
             let mut bound = Vec::new();
-            Self::collect_bound_names(p, &mut bound);
+            p.bound_names(&mut bound);
             names.extend(bound);
         }
         self.function_param_names = Some(names);
@@ -1341,7 +1341,7 @@ impl<'a> Parser<'a> {
                     {
                         let mut names = Vec::new();
                         for decl in &vd.declarations {
-                            Self::collect_bound_names(&decl.pattern, &mut names);
+                            decl.pattern.bound_names(&mut names);
                         }
                         for name in &names {
                             if param_names.contains(name) {

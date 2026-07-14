@@ -313,52 +313,16 @@ impl<'a> Parser<'a> {
     pub(super) fn bound_names_from_decl(decl: &VariableDeclaration) -> Vec<String> {
         let mut names = Vec::new();
         for d in &decl.declarations {
-            Self::bound_names_from_pattern(&d.pattern, &mut names);
+            d.pattern.bound_names(&mut names);
         }
         names
-    }
-
-    fn bound_names_from_pattern(pat: &Pattern, names: &mut Vec<String>) {
-        match pat {
-            Pattern::Identifier(name) => names.push(name.clone()),
-            Pattern::Array(elems) => {
-                for elem in elems.iter().flatten() {
-                    match elem {
-                        ArrayPatternElement::Pattern(p) => {
-                            Self::bound_names_from_pattern(p, names);
-                        }
-                        ArrayPatternElement::Rest(p) => {
-                            Self::bound_names_from_pattern(p, names);
-                        }
-                    }
-                }
-            }
-            Pattern::Object(props) => {
-                for prop in props {
-                    match prop {
-                        ObjectPatternProperty::KeyValue(_, p) => {
-                            Self::bound_names_from_pattern(p, names);
-                        }
-                        ObjectPatternProperty::Shorthand(name) => {
-                            names.push(name.clone());
-                        }
-                        ObjectPatternProperty::Rest(p) => {
-                            Self::bound_names_from_pattern(p, names);
-                        }
-                    }
-                }
-            }
-            Pattern::Assign(inner, _) => Self::bound_names_from_pattern(inner, names),
-            Pattern::Rest(inner) => Self::bound_names_from_pattern(inner, names),
-            Pattern::MemberExpression(_) => {}
-        }
     }
 
     pub(super) fn collect_var_declared_names(stmt: &Statement, names: &mut Vec<String>) {
         match stmt {
             Statement::Variable(decl) if decl.kind == VarKind::Var => {
                 for d in &decl.declarations {
-                    Self::bound_names_from_pattern(&d.pattern, names);
+                    d.pattern.bound_names(names);
                 }
             }
             Statement::Block(stmts) => {
@@ -379,7 +343,7 @@ impl<'a> Parser<'a> {
                     && decl.kind == VarKind::Var
                 {
                     for d in &decl.declarations {
-                        Self::bound_names_from_pattern(&d.pattern, names);
+                        d.pattern.bound_names(names);
                     }
                 }
                 Self::collect_var_declared_names(&f.body, names);
@@ -389,7 +353,7 @@ impl<'a> Parser<'a> {
                     && decl.kind == VarKind::Var
                 {
                     for d in &decl.declarations {
-                        Self::bound_names_from_pattern(&d.pattern, names);
+                        d.pattern.bound_names(names);
                     }
                 }
                 Self::collect_var_declared_names(&fi.body, names);
@@ -399,7 +363,7 @@ impl<'a> Parser<'a> {
                     && decl.kind == VarKind::Var
                 {
                     for d in &decl.declarations {
-                        Self::bound_names_from_pattern(&d.pattern, names);
+                        d.pattern.bound_names(names);
                     }
                 }
                 Self::collect_var_declared_names(&fo.body, names);
@@ -440,7 +404,7 @@ impl<'a> Parser<'a> {
         // Check duplicate bound names in ForDeclaration
         let mut bound = Vec::new();
         if let Some(d) = decls.first() {
-            Self::bound_names_from_pattern(&d.pattern, &mut bound);
+            d.pattern.bound_names(&mut bound);
         }
         // "let" cannot be a bound name in let/const/using declarations
         if matches!(
@@ -1056,7 +1020,7 @@ impl<'a> Parser<'a> {
                     {
                         let mut names = Vec::new();
                         for d in &decls {
-                            Self::collect_bound_names(&d.pattern, &mut names);
+                            d.pattern.bound_names(&mut names);
                         }
                         let mut seen = HashSet::new();
                         for name in &names {
@@ -1139,7 +1103,7 @@ impl<'a> Parser<'a> {
                 {
                     let mut names = Vec::new();
                     for d in &decls {
-                        Self::collect_bound_names(&d.pattern, &mut names);
+                        d.pattern.bound_names(&mut names);
                     }
                     let mut seen = HashSet::new();
                     for name in &names {
@@ -1243,7 +1207,7 @@ impl<'a> Parser<'a> {
         {
             let mut bound = Vec::new();
             for d in &vd.declarations {
-                Self::bound_names_from_pattern(&d.pattern, &mut bound);
+                d.pattern.bound_names(&mut bound);
             }
             let mut var_names = Vec::new();
             Self::collect_var_declared_names(&body, &mut var_names);
@@ -1349,7 +1313,7 @@ impl<'a> Parser<'a> {
             // §13.15.1: Validate CatchParameter has no duplicate names
             if let Some(ref p) = param {
                 let mut bound = Vec::new();
-                Self::collect_bound_names(p, &mut bound);
+                p.bound_names(&mut bound);
                 let mut seen = HashSet::new();
                 for name in &bound {
                     if !seen.insert(name.as_str()) {
@@ -1375,7 +1339,7 @@ impl<'a> Parser<'a> {
             // LexicallyDeclaredNames of Block
             if let Some(ref p) = param {
                 let mut bound = Vec::new();
-                Self::collect_bound_names(p, &mut bound);
+                p.bound_names(&mut bound);
                 if !bound.is_empty() {
                     let mut lex_names = Vec::new();
                     for stmt in &body {

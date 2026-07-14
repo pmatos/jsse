@@ -135,14 +135,14 @@ impl Interpreter {
                         }
                         Statement::Variable(decl) if decl.kind == VarKind::Var => {
                             for d in &decl.declarations {
-                                Self::collect_pattern_names(&d.pattern, &mut top_level_var_names);
+                                d.pattern.bound_names(&mut top_level_var_names);
                             }
                         }
                         Statement::Variable(decl)
                             if matches!(decl.kind, VarKind::Let | VarKind::Const) =>
                         {
                             for d in &decl.declarations {
-                                Self::collect_pattern_names(&d.pattern, &mut lexical_names);
+                                d.pattern.bound_names(&mut lexical_names);
                             }
                         }
                         Statement::ClassDeclaration(cls) => {
@@ -270,7 +270,7 @@ impl Interpreter {
             match stmt {
                 Statement::Variable(decl) if matches!(decl.kind, VarKind::Let | VarKind::Const) => {
                     for d in &decl.declarations {
-                        Self::collect_pattern_names(&d.pattern, &mut names);
+                        d.pattern.bound_names(&mut names);
                     }
                 }
                 Statement::ClassDeclaration(c) if !c.name.is_empty() => {
@@ -424,7 +424,7 @@ impl Interpreter {
                     };
                     for d in &decl.declarations {
                         let mut names = Vec::new();
-                        Self::collect_pattern_names(&d.pattern, &mut names);
+                        d.pattern.bound_names(&mut names);
                         for name in names {
                             env.borrow_mut().declare(&name, kind);
                         }
@@ -435,35 +435,6 @@ impl Interpreter {
                 }
                 _ => {}
             }
-        }
-    }
-
-    pub(crate) fn collect_pattern_names(pat: &Pattern, names: &mut Vec<String>) {
-        match pat {
-            Pattern::Identifier(name) => names.push(name.clone()),
-            Pattern::Array(elems) => {
-                for elem in elems.iter().flatten() {
-                    match elem {
-                        ArrayPatternElement::Pattern(p) | ArrayPatternElement::Rest(p) => {
-                            Self::collect_pattern_names(p, names);
-                        }
-                    }
-                }
-            }
-            Pattern::Object(props) => {
-                for prop in props {
-                    match prop {
-                        ObjectPatternProperty::KeyValue(_, p) | ObjectPatternProperty::Rest(p) => {
-                            Self::collect_pattern_names(p, names);
-                        }
-                        ObjectPatternProperty::Shorthand(name) => names.push(name.clone()),
-                    }
-                }
-            }
-            Pattern::Assign(inner, _) | Pattern::Rest(inner) => {
-                Self::collect_pattern_names(inner, names);
-            }
-            Pattern::MemberExpression(_) => {}
         }
     }
 
@@ -724,7 +695,7 @@ impl Interpreter {
                                 if matches!(decl.kind, VarKind::Let | VarKind::Const) =>
                             {
                                 for d in &decl.declarations {
-                                    Self::collect_pattern_names(&d.pattern, &mut block_lexicals);
+                                    d.pattern.bound_names(&mut block_lexicals);
                                 }
                             }
                             Statement::ClassDeclaration(cls) => {
@@ -801,7 +772,7 @@ impl Interpreter {
                         && matches!(decl.kind, VarKind::Let | VarKind::Const)
                     {
                         for d in &decl.declarations {
-                            Self::collect_pattern_names(&d.pattern, blocked);
+                            d.pattern.bound_names(blocked);
                         }
                     }
                     Self::collect_annexb_function_names(
@@ -817,7 +788,7 @@ impl Interpreter {
                         && matches!(decl.kind, VarKind::Let | VarKind::Const)
                     {
                         for d in &decl.declarations {
-                            Self::collect_pattern_names(&d.pattern, blocked);
+                            d.pattern.bound_names(blocked);
                         }
                     }
                     Self::collect_annexb_function_names(
@@ -833,7 +804,7 @@ impl Interpreter {
                         && matches!(decl.kind, VarKind::Let | VarKind::Const)
                     {
                         for d in &decl.declarations {
-                            Self::collect_pattern_names(&d.pattern, blocked);
+                            d.pattern.bound_names(blocked);
                         }
                     }
                     Self::collect_annexb_function_names(
@@ -867,10 +838,7 @@ impl Interpreter {
                                     if matches!(decl.kind, VarKind::Let | VarKind::Const) =>
                                 {
                                     for d in &decl.declarations {
-                                        Self::collect_pattern_names(
-                                            &d.pattern,
-                                            &mut switch_lexicals,
-                                        );
+                                        d.pattern.bound_names(&mut switch_lexicals);
                                     }
                                 }
                                 Statement::ClassDeclaration(cls) => {
@@ -912,7 +880,7 @@ impl Interpreter {
                             // B.3.5: simple BindingIdentifier catch params
                             // do NOT block var redeclaration
                             if !matches!(param, Pattern::Identifier(_)) {
-                                Self::collect_pattern_names(param, blocked);
+                                param.bound_names(blocked);
                             }
                         }
                         Self::collect_annexb_function_names(&h.body, names, blocked);
@@ -1760,7 +1728,7 @@ impl Interpreter {
                 };
                 let mut names = Vec::new();
                 for d in &decl.declarations {
-                    Self::collect_pattern_names(&d.pattern, &mut names);
+                    d.pattern.bound_names(&mut names);
                 }
                 names.into_iter().map(|n| (n, kind)).collect()
             } else {
@@ -1899,7 +1867,7 @@ impl Interpreter {
                 && let Some(d) = decl.declarations.first()
             {
                 let mut names = Vec::new();
-                Self::collect_pattern_names(&d.pattern, &mut names);
+                d.pattern.bound_names(&mut names);
                 for name in &names {
                     tdz_env.borrow_mut().declare(name, BindingKind::Let);
                 }
