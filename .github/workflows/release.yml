@@ -121,8 +121,28 @@ jobs:
         run: |
           set -euo pipefail
           git add Cargo.toml Cargo.lock
-          git commit -m "chore(release): $TAG"
-          git tag -a "$TAG" -m "Release $TAG"
+          # Idempotent: a retry that re-targets the already-bumped version stages
+          # nothing, so only commit when the bump actually changed the manifest.
+          if git diff --cached --quiet; then
+            echo "No version change to commit (already at ${TAG#v}); reusing existing commit."
+          else
+            git commit -m "chore(release): $TAG"
+          fi
+          # Create the tag only if it does not already exist. If it does (a prior
+          # run got this far), it must point at the commit we are about to
+          # release; otherwise abort rather than silently move or reuse it.
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            existing="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+            head="$(git rev-parse "HEAD^{commit}")"
+            if [ "$existing" != "$head" ]; then
+              echo "Tag ${TAG} already exists at ${existing}, not HEAD ${head}." >&2
+              echo "Delete the tag (and any release) and re-run to recover." >&2
+              exit 1
+            fi
+            echo "Tag ${TAG} already exists at HEAD; reusing it."
+          else
+            git tag -a "$TAG" -m "Release $TAG"
+          fi
 
       - name: Build release binary
         run: cargo build --release --locked
@@ -149,10 +169,12 @@ jobs:
           TAG: ${{ steps.bump.outputs.tag }}
         run: |
           set -euo pipefail
+          # Both pushes are no-ops ("Everything up-to-date") when a prior run
+          # already advanced main / published the tag, so reruns are safe.
           git push origin "HEAD:${GITHUB_REF_NAME}"
           git push origin "$TAG"
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.bump.outputs.tag }}
@@ -160,12 +182,22 @@ jobs:
           PRERELEASE: ${{ inputs.prerelease }}
         run: |
           set -euo pipefail
-          args=(--generate-notes --title "$TAG")
-          if [ "$DRAFT" = "true" ]; then args+=(--draft); fi
-          if [ "$PRERELEASE" = "true" ]; then args+=(--prerelease); fi
-          gh release create "$TAG" \
-            "${args[@]}" \
-            ./release-upload/*
+          # Idempotent publish: if a release for this tag already exists (e.g. a
+          # prior run created it but failed during asset upload), re-upload the
+          # assets with --clobber instead of failing on `gh release create`.
+          # This makes a same-version re-dispatch complete a partially-published
+          # release rather than leaving it stuck.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; re-uploading assets."
+            gh release upload "$TAG" ./release-upload/* --clobber
+          else
+            args=(--generate-notes --title "$TAG")
+            if [ "$DRAFT" = "true" ]; then args+=(--draft); fi
+            if [ "$PRERELEASE" = "true" ]; then args+=(--prerelease); fi
+            gh release create "$TAG" \
+              "${args[@]}" \
+              ./release-upload/*
+          fi
 
       - name: Upload build artifacts (for debugging / reruns)
         if: always()
