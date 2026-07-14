@@ -1755,6 +1755,11 @@ impl Interpreter {
         // For deferred imports, load without evaluation.
         for item in &program.module_items {
             let (specifier, is_deferred, import_type) = match item {
+                // Source-phase imports load only the requested module's source
+                // representation (shallow) — never its dependency graph.
+                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
+                    (None, false, None)
+                }
                 ModuleItem::ImportDeclaration(import) => {
                     let is_defer = import
                         .specifiers
@@ -1986,6 +1991,19 @@ impl Interpreter {
         }
 
         Ok(())
+    }
+
+    /// Whether an ImportDeclaration is a source-phase import
+    /// (`import source X from '...'`), which has exactly one SourcePhase
+    /// specifier. Such imports must be skipped by the module-graph pre-load
+    /// passes: source-phase loading is shallow and never loads/links the
+    /// target's dependency graph (it is handled by `process_source_phase_import`
+    /// / `resolve_source_phase_target`).
+    fn is_source_phase_import(import: &ImportDeclaration) -> bool {
+        matches!(
+            import.specifiers.as_slice(),
+            [ImportSpecifier::SourcePhase(_)]
+        )
     }
 
     /// `import source X from '<specifier>'` — bind `X` to the target module's
@@ -2507,6 +2525,11 @@ impl Interpreter {
         // For non-deferred, load normally (which includes evaluation).
         for item in &program.module_items {
             let (specifier, is_deferred, itype) = match item {
+                // Source-phase imports load only the requested module's source
+                // representation (shallow) — never its dependency graph.
+                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
+                    (None, false, None)
+                }
                 ModuleItem::ImportDeclaration(import) => {
                     let is_defer = import
                         .specifiers
@@ -2738,6 +2761,11 @@ impl Interpreter {
         // Pre-load pass: load sub-dependencies
         for item in &program.module_items {
             let (specifier, itype) = match item {
+                // Source-phase imports load only the requested module's source
+                // representation (shallow) — never its dependency graph.
+                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
+                    (None, None)
+                }
                 ModuleItem::ImportDeclaration(import) => (
                     Some(import.source.as_str()),
                     import_module_type(&import.attributes),
