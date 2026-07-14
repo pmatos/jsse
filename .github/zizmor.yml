@@ -23,6 +23,10 @@ rules:
   artipacked:
     ignore:
       - claude.yml
+      # release.yml persists checkout credentials so the version-bump commit and
+      # tag can be pushed back to main. It uploads only the packaged binary and
+      # checksums (no .git), so the token cannot leak via artifacts.
+      - release.yml
 
   # semgrep/semgrep-action is archived. Migrating off it (to the semgrep CLI /
   # container) changes an existing, green scan job, so it is tracked as a
