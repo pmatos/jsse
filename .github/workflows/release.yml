@@ -4,6 +4,13 @@ name: Release
 # Linux `jsse` binary, and publishes a GitHub Release with the packaged
 # tarball + checksums. Adapted for this Rust crate from the pewpew release
 # workflow (which targets a Node/Electron app).
+#
+# Retrying a partial failure: the commit/tag/publish steps are rerunnable, but
+# only when you re-dispatch with the SAME target version. To complete a release
+# that pushed the bump commit/tag but failed before/during publish, re-run with
+# the `version` input set to that exact version (e.g. `1.2.3`). A `bump`
+# dispatch (no `version`) always mints the NEXT version from `main` by design,
+# so it starts a new release rather than completing the stuck one.
 
 on:
   workflow_dispatch:
@@ -185,8 +192,11 @@ jobs:
           # Idempotent publish: if a release for this tag already exists (e.g. a
           # prior run created it but failed during asset upload), re-upload the
           # assets with --clobber instead of failing on `gh release create`.
-          # This makes a same-version re-dispatch complete a partially-published
-          # release rather than leaving it stuck.
+          # This completes a partially-published release ONLY when the run
+          # re-dispatched with the same explicit `version` (so $TAG matches the
+          # stuck release). A `bump` dispatch computes the next version from
+          # `main` and mints a new tag/release by design — see the retry note in
+          # the workflow header.
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release $TAG already exists; re-uploading assets."
             gh release upload "$TAG" ./release-upload/* --clobber
