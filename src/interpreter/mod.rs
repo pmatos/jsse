@@ -198,7 +198,9 @@ pub struct LoadedModule {
     pub cached_import_meta: Option<JsValue>,        // cached import.meta object per §16.2.1.5.2
     pub error: Option<JsValue>,                     // if module evaluation threw, the error
     pub namespace_imports: HashMap<String, PathBuf>, // local_name -> source module path (for `import * as ns`)
-    pub star_export_sources: Vec<String>,            // source specifiers from `export * from '...'`
+    pub source_imports: HashMap<String, PathBuf>, // local_name -> source-phase target path (for `import source X`)
+    pub module_source: Option<JsValue>, // [[ModuleSource]]: source-phase representation (empty for Source Text Modules)
+    pub star_export_sources: Vec<String>, // source specifiers from `export * from '...'`
     pub evaluated: bool,
     pub is_evaluating: bool,
     pub has_tla: bool,
@@ -675,7 +677,23 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("agent".to_string(), agent_val);
 
-        // $262.AbstractModuleSource — §28.1.1.1
+        // $262.AbstractModuleSource — §28.1.1.1 (source-phase imports proposal)
+        let ams_fn = self.abstract_module_source_constructor(realm_id);
+        self.get_object_cell_expect(dollar_262_id)
+            .borrow_mut()
+            .insert_builtin("AbstractModuleSource".to_string(), ams_fn);
+
+        JsValue::Object(crate::types::JsObject { id: dollar_262_id })
+    }
+
+    /// Get (or lazily mint) the per-realm %AbstractModuleSource% constructor.
+    /// The constructor throws on `[[Construct]]`; its `prototype` is the
+    /// [[Prototype]] shared by every host-provided Module Source object.
+    pub(crate) fn abstract_module_source_constructor(&mut self, realm_id: usize) -> JsValue {
+        if let Some(ctor) = self.realms[realm_id].abstract_module_source_ctor.clone() {
+            return ctor;
+        }
+
         let ams_fn = self.create_function(JsFunction::native(
             "AbstractModuleSource".to_string(),
             0,
@@ -691,7 +709,7 @@ impl Interpreter {
             unreachable!()
         };
 
-        // AbstractModuleSource.prototype_id
+        // %AbstractModuleSource.prototype%
         let ams_proto_id = self.create_object_id();
         // constructor property
         self.get_object_cell_expect(ams_proto_id)
@@ -731,11 +749,102 @@ impl Interpreter {
             );
         }
 
-        self.get_object_cell_expect(dollar_262_id)
-            .borrow_mut()
-            .insert_builtin("AbstractModuleSource".to_string(), ams_fn);
+        self.realms[realm_id].abstract_module_source_ctor = Some(ams_fn.clone());
+        ams_fn
+    }
 
-        JsValue::Object(crate::types::JsObject { id: dollar_262_id })
+    /// Return the [[Prototype]] object id for host-provided Module Source
+    /// objects — i.e. `%AbstractModuleSource.prototype%` in the current realm.
+    fn abstract_module_source_prototype_id(&mut self) -> Option<u64> {
+        let ctor = self.abstract_module_source_constructor(self.current_realm_id);
+        if let JsValue::Object(o) = ctor
+            && let JsValue::Object(p) = self.get_property_on_id(o.id, "prototype")
+        {
+            return Some(p.id);
+        }
+        None
+    }
+
+    /// Get (or lazily create) the host module that the `<module source>`
+    /// test262 specifier resolves to. Its `[[ModuleSource]]` is a fresh
+    /// %AbstractModuleSource% instance; it exposes no bindings.
+    fn get_or_create_module_source_module(&mut self) -> Rc<RefCell<LoadedModule>> {
+        let sentinel = PathBuf::from("<module source>");
+        if let Some(existing) = self.module_registry_get(&sentinel) {
+            return existing;
+        }
+
+        // The Module Source object: an ordinary object whose [[Prototype]] is
+        // %AbstractModuleSource.prototype% so `x instanceof AbstractModuleSource`.
+        let source_id = self.create_object_id();
+        let proto_id = self.abstract_module_source_prototype_id();
+        {
+            let mut obj = self.get_object_cell_expect(source_id).borrow_mut();
+            obj.prototype_id = proto_id;
+            obj.class_name = "AbstractModuleSource".to_string();
+        }
+        let source_val = JsValue::Object(crate::types::JsObject { id: source_id });
+
+        let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
+        module_env.borrow_mut().strict = true;
+        let module = Rc::new(RefCell::new(LoadedModule {
+            path: sentinel.clone(),
+            env: module_env,
+            exports: HashMap::new(),
+            export_bindings: HashMap::new(),
+            cached_namespace: None,
+            cached_deferred_namespace: None,
+            cached_import_meta: None,
+            error: None,
+            namespace_imports: HashMap::new(),
+            source_imports: HashMap::new(),
+            module_source: Some(source_val),
+            star_export_sources: Vec::new(),
+            evaluated: true,
+            is_evaluating: false,
+            deferred_only: false,
+            has_tla: false,
+            program_ast: None,
+            async_evaluation_order: None,
+            pending_async_dependencies: 0,
+            async_parent_modules: Vec::new(),
+            cycle_root: None,
+            top_level_capability: None,
+            dfs_index: None,
+            dfs_ancestor_index: None,
+        }));
+        self.module_registry_insert(sentinel, module.clone());
+        module
+    }
+
+    /// Resolve the `[[ModuleSource]]` for a source-phase import (`import source
+    /// X from '<specifier>'` / `import.source('<specifier>')`), returning the
+    /// resolved path and the source object (`None` when the target has no
+    /// source-phase representation, which the caller turns into a SyntaxError).
+    ///
+    /// The test262 `<module source>` host specifier maps to a synthetic host
+    /// module whose `[[ModuleSource]]` is populated. For any other specifier,
+    /// source-phase loading is *shallow*: it resolves the requested specifier
+    /// (a genuine host-resolution failure of that specifier surfaces here as a
+    /// non-SyntaxError) but must NOT load, link, or evaluate the target — the
+    /// source phase never triggers host loads for the target's transitive
+    /// dependencies, nor consults `[[EvaluationError]]`. jsse has no concrete
+    /// Module Source kind, so every resolvable file is an ordinary Source Text
+    /// Module with an empty `[[ModuleSource]]`; returning `None` here lets the
+    /// caller reject with the source-phase SyntaxError without exposing the
+    /// target's dependency-resolution, link, or cached evaluation errors.
+    fn resolve_source_phase_target(
+        &mut self,
+        specifier: &str,
+        referrer: Option<&Path>,
+    ) -> Result<(PathBuf, Option<JsValue>), JsValue> {
+        if specifier == "<module source>" {
+            let module = self.get_or_create_module_source_module();
+            let module_source = module.borrow().module_source.clone();
+            return Ok((PathBuf::from("<module source>"), module_source));
+        }
+        let resolved = self.resolve_module_specifier(specifier, referrer)?;
+        Ok((resolved, None))
     }
 
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
@@ -1580,6 +1689,8 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            source_imports: HashMap::new(),
+            module_source: None,
             star_export_sources: Vec::new(),
             evaluated: false,
             is_evaluating: false,
@@ -1644,6 +1755,11 @@ impl Interpreter {
         // For deferred imports, load without evaluation.
         for item in &program.module_items {
             let (specifier, is_deferred, import_type) = match item {
+                // Source-phase imports load only the requested module's source
+                // representation (shallow) — never its dependency graph.
+                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
+                    (None, false, None)
+                }
                 ModuleItem::ImportDeclaration(import) => {
                     let is_defer = import
                         .specifiers
@@ -1776,6 +1892,15 @@ impl Interpreter {
 
     fn process_import(&mut self, import: &ImportDeclaration, env: &EnvRef) -> Result<(), JsValue> {
         let module_path = self.current_module_path.clone();
+
+        // Source-phase import (`import source X from '...'`) — a source-phase
+        // ImportDeclaration has exactly one SourcePhase specifier. Handle it
+        // before the generic specifier resolution, which cannot resolve the
+        // host `<module source>` specifier.
+        if let [ImportSpecifier::SourcePhase(local)] = import.specifiers.as_slice() {
+            return self.process_source_phase_import(local, &import.source, env);
+        }
+
         let resolved = self.resolve_module_specifier(&import.source, module_path.as_deref())?;
 
         let itype = import_module_type(&import.attributes);
@@ -1868,6 +1993,57 @@ impl Interpreter {
         Ok(())
     }
 
+    /// Whether an ImportDeclaration is a source-phase import
+    /// (`import source X from '...'`), which has exactly one SourcePhase
+    /// specifier. Such imports must be skipped by the module-graph pre-load
+    /// passes: source-phase loading is shallow and never loads/links the
+    /// target's dependency graph (it is handled by `process_source_phase_import`
+    /// / `resolve_source_phase_target`).
+    fn is_source_phase_import(import: &ImportDeclaration) -> bool {
+        matches!(
+            import.specifiers.as_slice(),
+            [ImportSpecifier::SourcePhase(_)]
+        )
+    }
+
+    /// `import source X from '<specifier>'` — bind `X` to the target module's
+    /// `[[ModuleSource]]` (source-phase imports proposal, InitializeEnvironment
+    /// step 7.d.v / 7.e). A Source Text Module has an empty `[[ModuleSource]]`,
+    /// which is a SyntaxError.
+    fn process_source_phase_import(
+        &mut self,
+        local: &str,
+        specifier: &str,
+        env: &EnvRef,
+    ) -> Result<(), JsValue> {
+        let referrer = self.current_module_path.clone();
+        let (target_path, module_source) =
+            self.resolve_source_phase_target(specifier, referrer.as_deref())?;
+
+        let Some(module_source) = module_source else {
+            return Err(self.create_error(
+                "SyntaxError",
+                &format!("Module '{specifier}' has no source phase representation"),
+            ));
+        };
+
+        env.borrow_mut().declare(local, BindingKind::Const);
+        env.borrow_mut().initialize_binding(local, module_source);
+
+        // Record the source-phase target so `export { X }` re-exports resolve
+        // to the same ResolvedBinding { [[Module]], [[BindingName]]: ~source~ }.
+        if let Some(ref mp) = referrer {
+            let canon = mp.canonicalize().unwrap_or_else(|_| mp.clone());
+            if let Some(current_mod) = self.module_registry_get(&canon) {
+                current_mod
+                    .borrow_mut()
+                    .source_imports
+                    .insert(local.to_string(), target_path);
+            }
+        }
+        Ok(())
+    }
+
     fn create_import_binding_for(
         &mut self,
         local: &str,
@@ -1897,6 +2073,24 @@ impl Interpreter {
                         let ns = self.create_namespace_for_env(&source_env);
                         env.borrow_mut().declare(local, BindingKind::Const);
                         env.borrow_mut().initialize_binding(local, ns);
+                    } else if binding_name == "*source*" {
+                        // Resolved to a source-phase binding — bind to the
+                        // target module's [[ModuleSource]] (InitializeEnvironment
+                        // step 7.d.v). Empty [[ModuleSource]] is a SyntaxError.
+                        match self.module_source_for_env(&source_env) {
+                            Some(ms) => {
+                                env.borrow_mut().declare(local, BindingKind::Const);
+                                env.borrow_mut().initialize_binding(local, ms);
+                            }
+                            None => {
+                                return Err(self.create_error(
+                                    "SyntaxError",
+                                    &format!(
+                                        "Module '{imported}' has no source phase representation"
+                                    ),
+                                ));
+                            }
+                        }
                     } else {
                         env.borrow_mut()
                             .create_import_binding(local, source_env, binding_name);
@@ -2158,6 +2352,8 @@ impl Interpreter {
                 cached_import_meta: None,
                 error: None,
                 namespace_imports: HashMap::new(),
+                source_imports: HashMap::new(),
+                module_source: None,
                 star_export_sources: Vec::new(),
                 evaluated: true,
                 is_evaluating: false,
@@ -2228,6 +2424,8 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            source_imports: HashMap::new(),
+            module_source: None,
             star_export_sources: Vec::new(),
             evaluated: false,
             is_evaluating: false,
@@ -2308,7 +2506,12 @@ impl Interpreter {
                 }) => Some(s.as_str()),
                 _ => None,
             };
+            // The test262 `<module source>` host specifier is resolved by the
+            // host (source-phase imports), not as a file path; every other
+            // specifier — including source-phase targets like `<do not resolve>`
+            // — must still surface unresolvable-specifier errors here.
             if let Some(spec) = specifier
+                && spec != "<module source>"
                 && let Err(e) = self.resolve_module_specifier(spec, Some(&canon_path))
             {
                 Self::cache_module_error(&loaded_module, &e);
@@ -2322,6 +2525,11 @@ impl Interpreter {
         // For non-deferred, load normally (which includes evaluation).
         for item in &program.module_items {
             let (specifier, is_deferred, itype) = match item {
+                // Source-phase imports load only the requested module's source
+                // representation (shallow) — never its dependency graph.
+                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
+                    (None, false, None)
+                }
                 ModuleItem::ImportDeclaration(import) => {
                     let is_defer = import
                         .specifiers
@@ -2485,6 +2693,8 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            source_imports: HashMap::new(),
+            module_source: None,
             star_export_sources: Vec::new(),
             evaluated: false,
             is_evaluating: false,
@@ -2551,6 +2761,11 @@ impl Interpreter {
         // Pre-load pass: load sub-dependencies
         for item in &program.module_items {
             let (specifier, itype) = match item {
+                // Source-phase imports load only the requested module's source
+                // representation (shallow) — never its dependency graph.
+                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
+                    (None, None)
+                }
                 ModuleItem::ImportDeclaration(import) => (
                     Some(import.source.as_str()),
                     import_module_type(&import.attributes),
@@ -2664,6 +2879,8 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            source_imports: HashMap::new(),
+            module_source: None,
             star_export_sources: Vec::new(),
             evaluated: true,
             is_evaluating: false,
@@ -3628,12 +3845,23 @@ impl Interpreter {
                     let binding_name = binding.clone();
                     let env = module_ref.env.clone();
                     let ns_path = module_ref.namespace_imports.get(&binding_name).cloned();
+                    let source_path = module_ref.source_imports.get(&binding_name).cloned();
                     drop(module_ref);
                     // Namespace import (import * as foo) resolves to the source module
                     if let Some(ns_path) = ns_path
                         && let Ok(ns_mod) = self.load_module(&ns_path)
                     {
                         return Ok((ns_mod.borrow().env.clone(), "*namespace*".to_string()));
+                    }
+                    // Source-phase import (import source foo) re-exported via
+                    // `export { foo }` resolves to ResolvedBinding { [[Module]]:
+                    // source-phase target, [[BindingName]]: ~source~ }. Two
+                    // re-exports of the same `<module source>` therefore compare
+                    // equal (same target env + "*source*"), so are unambiguous.
+                    if let Some(source_path) = source_path
+                        && let Ok(source_mod) = self.load_module(&source_path)
+                    {
+                        return Ok((source_mod.borrow().env.clone(), "*source*".to_string()));
                     }
                     // Check if it's an indirect (imported) binding
                     if let Some(ref indirect_map) = env.borrow().indirect_bindings
@@ -4141,6 +4369,18 @@ impl Interpreter {
             return self.create_module_namespace(&module);
         }
         JsValue::Undefined
+    }
+
+    /// Find the [[ModuleSource]] of the module whose environment is `target_env`.
+    /// Used to resolve `~source~` re-export bindings to the source object.
+    fn module_source_for_env(&self, target_env: &EnvRef) -> Option<JsValue> {
+        let realm_id = self.current_realm_id;
+        self.module_registry
+            .iter()
+            .filter(|((rid, _), _)| *rid == realm_id)
+            .map(|(_, module)| module)
+            .find(|m| Rc::ptr_eq(&m.borrow().env, target_env))
+            .and_then(|m| m.borrow().module_source.clone())
     }
 
     fn hoist_module_statement(&mut self, stmt: &Statement, env: &EnvRef) {
