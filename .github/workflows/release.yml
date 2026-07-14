@@ -1,0 +1,219 @@
+name: Release
+
+# Manually-triggered release. Bumps the crate version, tags it, builds the
+# Linux `jsse` binary, and publishes a GitHub Release with the packaged
+# tarball + checksums. Adapted for this Rust crate from the pewpew release
+# workflow (which targets a Node/Electron app).
+#
+# Retrying a partial failure: the commit/tag/publish steps are rerunnable, but
+# only when you re-dispatch with the SAME target version. To complete a release
+# that pushed the bump commit/tag but failed before/during publish, re-run with
+# the `version` input set to that exact version (e.g. `1.2.3`). A `bump`
+# dispatch (no `version`) always mints the NEXT version from `main` by design,
+# so it starts a new release rather than completing the stuck one.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Semver bump (ignored if explicit `version` is set)'
+        type: choice
+        required: true
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+      version:
+        description: 'Explicit version (e.g. 1.2.3). Overrides `bump` if set.'
+        type: string
+        required: false
+        default: ''
+      draft:
+        description: 'Publish release as draft'
+        type: boolean
+        required: false
+        default: false
+      prerelease:
+        description: 'Mark release as pre-release'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# Least-privilege default; the release job widens to contents: write below.
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Bump version and build Linux artifacts
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # Needed to push the version-bump commit + tag and to create the Release.
+    permissions:
+      contents: write
+    steps:
+      # Full history so the tag lands on the right commit. Checkout credentials
+      # are persisted (the default) so the bump commit + tag can be pushed back
+      # to main; uploaded artifacts contain only the packaged binary (no .git),
+      # so the token cannot leak. No submodules: the release build does not need
+      # the (large) test262/spec test-data submodules.
+      - name: Checkout (full history for tagging)
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Validate branch
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "main" ]; then
+            echo "Release must be run from 'main' (got ${GITHUB_REF_NAME})." >&2
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Configure git author
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Verify tree (fmt + clippy + tests)
+        run: |
+          cargo fmt --check
+          cargo clippy --release -- -D warnings
+          cargo test --release
+
+      - name: Bump version
+        id: bump
+        env:
+          VERSION: ${{ inputs.version }}
+          BUMP: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          CURRENT="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          if [ -n "$VERSION" ]; then
+            NEW_VERSION="$VERSION"
+          else
+            IFS='.' read -r major minor patch <<< "$CURRENT"
+            case "$BUMP" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              patch) patch=$((patch + 1)) ;;
+              *) echo "Unknown bump: $BUMP" >&2; exit 1 ;;
+            esac
+            NEW_VERSION="${major}.${minor}.${patch}"
+          fi
+          # Rewrite the [package] version, then re-lock just this crate so
+          # Cargo.lock stays in sync (only the jsse entry changes).
+          sed -i "0,/^version = \"${CURRENT}\"/s//version = \"${NEW_VERSION}\"/" Cargo.toml
+          cargo update -p jsse
+          echo "version=${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${NEW_VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Bumped ${CURRENT} -> ${NEW_VERSION}"
+
+      - name: Commit + tag
+        env:
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git add Cargo.toml Cargo.lock
+          # Idempotent: a retry that re-targets the already-bumped version stages
+          # nothing, so only commit when the bump actually changed the manifest.
+          if git diff --cached --quiet; then
+            echo "No version change to commit (already at ${TAG#v}); reusing existing commit."
+          else
+            git commit -m "chore(release): $TAG"
+          fi
+          # Create the tag only if it does not already exist. If it does (a prior
+          # run got this far), it must point at the commit we are about to
+          # release; otherwise abort rather than silently move or reuse it.
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            existing="$(git rev-parse "refs/tags/${TAG}^{commit}")"
+            head="$(git rev-parse "HEAD^{commit}")"
+            if [ "$existing" != "$head" ]; then
+              echo "Tag ${TAG} already exists at ${existing}, not HEAD ${head}." >&2
+              echo "Delete the tag (and any release) and re-run to recover." >&2
+              exit 1
+            fi
+            echo "Tag ${TAG} already exists at HEAD; reusing it."
+          else
+            git tag -a "$TAG" -m "Release $TAG"
+          fi
+
+      - name: Build release binary
+        run: cargo build --release --locked
+
+      - name: Collect release artifacts
+        id: artifacts
+        env:
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TARGET=x86_64-unknown-linux-gnu
+          STAGE="jsse-${TAG}-${TARGET}"
+          mkdir -p "./release-upload/${STAGE}"
+          strip target/release/jsse
+          cp target/release/jsse "./release-upload/${STAGE}/"
+          cp README.md LICENSE "./release-upload/${STAGE}/"
+          tar -czf "./release-upload/${STAGE}.tar.gz" -C ./release-upload "${STAGE}"
+          rm -rf "./release-upload/${STAGE:?}"
+          (cd ./release-upload && sha256sum -- * > SHA256SUMS.txt)
+          ls -la ./release-upload
+
+      - name: Push version bump + tag
+        env:
+          TAG: ${{ steps.bump.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # Both pushes are no-ops ("Everything up-to-date") when a prior run
+          # already advanced main / published the tag, so reruns are safe.
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "$TAG"
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.bump.outputs.tag }}
+          DRAFT: ${{ inputs.draft }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          set -euo pipefail
+          # Idempotent publish: if a release for this tag already exists (e.g. a
+          # prior run created it but failed during asset upload), re-upload the
+          # assets with --clobber instead of failing on `gh release create`.
+          # This completes a partially-published release ONLY when the run
+          # re-dispatched with the same explicit `version` (so $TAG matches the
+          # stuck release). A `bump` dispatch computes the next version from
+          # `main` and mints a new tag/release by design — see the retry note in
+          # the workflow header.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; re-uploading assets."
+            gh release upload "$TAG" ./release-upload/* --clobber
+          else
+            args=(--generate-notes --title "$TAG")
+            if [ "$DRAFT" = "true" ]; then args+=(--draft); fi
+            if [ "$PRERELEASE" = "true" ]; then args+=(--prerelease); fi
+            gh release create "$TAG" \
+              "${args[@]}" \
+              ./release-upload/*
+          fi
+
+      - name: Upload build artifacts (for debugging / reruns)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-artifacts-${{ steps.bump.outputs.tag }}
+          path: release-upload/
+          if-no-files-found: warn
+          retention-days: 14
