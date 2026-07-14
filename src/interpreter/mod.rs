@@ -822,6 +822,13 @@ impl Interpreter {
     /// `<module source>` host specifier maps to a synthetic host module whose
     /// `[[ModuleSource]]` is populated; any other specifier resolves as a
     /// normal Source Text Module (whose `[[ModuleSource]]` is empty).
+    ///
+    /// Loads via `load_module_no_eval`: the source phase never evaluates the
+    /// target and `GetModuleSource` does not consult `[[EvaluationError]]`, so a
+    /// module that previously evaluated-and-threw (e.g. via an earlier plain
+    /// `import()`) must still surface its `[[ModuleSource]]` result — here, the
+    /// source-phase SyntaxError — rather than replaying the cached eval error.
+    /// Parse/link errors are still surfaced (they precede evaluation).
     fn resolve_source_phase_target(
         &mut self,
         specifier: &str,
@@ -832,7 +839,7 @@ impl Interpreter {
             return Ok((PathBuf::from("<module source>"), module));
         }
         let resolved = self.resolve_module_specifier(specifier, referrer)?;
-        let module = self.load_module(&resolved)?;
+        let module = self.load_module_no_eval(&resolved)?;
         Ok((resolved, module))
     }
 
