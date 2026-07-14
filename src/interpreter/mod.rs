@@ -817,30 +817,34 @@ impl Interpreter {
         module
     }
 
-    /// Resolve the target module for a source-phase import (`import source X
-    /// from '<specifier>'` / `import.source('<specifier>')`). The test262
-    /// `<module source>` host specifier maps to a synthetic host module whose
-    /// `[[ModuleSource]]` is populated; any other specifier resolves as a
-    /// normal Source Text Module (whose `[[ModuleSource]]` is empty).
+    /// Resolve the `[[ModuleSource]]` for a source-phase import (`import source
+    /// X from '<specifier>'` / `import.source('<specifier>')`), returning the
+    /// resolved path and the source object (`None` when the target has no
+    /// source-phase representation, which the caller turns into a SyntaxError).
     ///
-    /// Loads via `load_module_no_eval`: the source phase never evaluates the
-    /// target and `GetModuleSource` does not consult `[[EvaluationError]]`, so a
-    /// module that previously evaluated-and-threw (e.g. via an earlier plain
-    /// `import()`) must still surface its `[[ModuleSource]]` result — here, the
-    /// source-phase SyntaxError — rather than replaying the cached eval error.
-    /// Parse/link errors are still surfaced (they precede evaluation).
+    /// The test262 `<module source>` host specifier maps to a synthetic host
+    /// module whose `[[ModuleSource]]` is populated. For any other specifier,
+    /// source-phase loading is *shallow*: it resolves the requested specifier
+    /// (a genuine host-resolution failure of that specifier surfaces here as a
+    /// non-SyntaxError) but must NOT load, link, or evaluate the target — the
+    /// source phase never triggers host loads for the target's transitive
+    /// dependencies, nor consults `[[EvaluationError]]`. jsse has no concrete
+    /// Module Source kind, so every resolvable file is an ordinary Source Text
+    /// Module with an empty `[[ModuleSource]]`; returning `None` here lets the
+    /// caller reject with the source-phase SyntaxError without exposing the
+    /// target's dependency-resolution, link, or cached evaluation errors.
     fn resolve_source_phase_target(
         &mut self,
         specifier: &str,
         referrer: Option<&Path>,
-    ) -> Result<(PathBuf, Rc<RefCell<LoadedModule>>), JsValue> {
+    ) -> Result<(PathBuf, Option<JsValue>), JsValue> {
         if specifier == "<module source>" {
             let module = self.get_or_create_module_source_module();
-            return Ok((PathBuf::from("<module source>"), module));
+            let module_source = module.borrow().module_source.clone();
+            return Ok((PathBuf::from("<module source>"), module_source));
         }
         let resolved = self.resolve_module_specifier(specifier, referrer)?;
-        let module = self.load_module_no_eval(&resolved)?;
-        Ok((resolved, module))
+        Ok((resolved, None))
     }
 
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
@@ -1995,10 +1999,9 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Result<(), JsValue> {
         let referrer = self.current_module_path.clone();
-        let (target_path, target) =
+        let (target_path, module_source) =
             self.resolve_source_phase_target(specifier, referrer.as_deref())?;
 
-        let module_source = target.borrow().module_source.clone();
         let Some(module_source) = module_source else {
             return Err(self.create_error(
                 "SyntaxError",

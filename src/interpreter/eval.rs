@@ -1181,16 +1181,14 @@ impl Interpreter {
                 // empty [[ModuleSource]] (GetModuleSource throws SyntaxError).
                 let referrer = self.current_module_path.clone();
                 match self.resolve_source_phase_target(&source, referrer.as_deref()) {
-                    Ok((_, module)) => match module.borrow().module_source.clone() {
-                        Some(ms) => self.create_resolved_promise(ms),
-                        None => {
-                            let err = self.create_error(
-                                "SyntaxError",
-                                "Source phase imports are not available for this module",
-                            );
-                            self.create_rejected_promise(err)
-                        }
-                    },
+                    Ok((_, Some(ms))) => self.create_resolved_promise(ms),
+                    Ok((_, None)) => {
+                        let err = self.create_error(
+                            "SyntaxError",
+                            "Source phase imports are not available for this module",
+                        );
+                        self.create_rejected_promise(err)
+                    }
                     Err(e) => self.create_rejected_promise(e),
                 }
             }
