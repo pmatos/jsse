@@ -386,6 +386,7 @@
       this._fatal = !!options.fatal;
       this._ignoreBOM = !!options.ignoreBOM;
       this._pending = null; // trailing bytes buffered across stream chunks
+      this._bomHandled = false; // only the leading BOM of the stream is stripped
     };
     Object.defineProperty(TextDecoderShim.prototype, "encoding", {
       get: function () {
@@ -426,7 +427,11 @@
         combined.set(bytes, this._pending.length);
         bytes = combined;
       }
-      var res = utf8Decode(bytes, this._fatal, this._ignoreBOM, stream);
+      // Only the BOM at the very start of the stream is stripped; once any bytes
+      // have been processed an interior BOM at a chunk boundary is literal.
+      var ignoreBOM = this._ignoreBOM || this._bomHandled;
+      var res = utf8Decode(bytes, this._fatal, ignoreBOM, stream);
+      if (bytes.length > 0) this._bomHandled = true;
       // On a streaming call, retain the trailing incomplete sequence; otherwise
       // finalize (any incomplete tail was already replaced with U+FFFD) and drop
       // the buffer.
@@ -477,19 +482,24 @@
           (typeof SharedArrayBuffer !== "undefined" &&
             value instanceof SharedArrayBuffer)
         ) {
-          // Share the backing memory (Node semantics). Validate the offset and
-          // length numerically (not via `| 0`, which would wrap 2**32 to 0 and
-          // silently expose the whole buffer); an out-of-range offset/length is
-          // a RangeError, and a negative length is an empty view.
-          var offset = encodingOrOffset === undefined ? 0 : Number(encodingOrOffset);
-          if (offset !== offset || offset < 0 || offset > value.byteLength) {
+          // Share the backing memory (Node semantics). Apply ToInteger to the
+          // offset/length (truncate toward zero, NaN → 0) BEFORE deriving the
+          // default length — not `| 0` (wraps 2**32 to 0) nor raw Number (a
+          // fractional offset would skew byteLength - offset). An out-of-range
+          // offset/length is a RangeError; a negative length is an empty view.
+          var offset =
+            encodingOrOffset === undefined
+              ? 0
+              : Math.trunc(Number(encodingOrOffset));
+          if (offset !== offset) offset = 0; // NaN
+          if (offset < 0 || offset > value.byteLength) {
             throw new RangeError('"offset" is outside of buffer bounds');
           }
           var len;
           if (length === undefined) {
             len = value.byteLength - offset;
           } else {
-            len = Number(length);
+            len = Math.trunc(Number(length));
             if (len !== len || len < 0) len = 0;
             if (offset + len > value.byteLength) {
               throw new RangeError('"length" is outside of buffer bounds');
@@ -737,8 +747,7 @@
           throw new RangeError('"offset" is outside of buffer bounds');
         }
         var remaining = this.length - offset;
-        length = length | 0;
-        if (length < 0 || length > remaining) {
+        if (!Number.isInteger(length) || length < 0 || length > remaining) {
           throw new RangeError('"length" is outside of buffer bounds');
         }
         var bytes = strToBytes(string, encoding);
@@ -793,7 +802,13 @@
         ) {
           throw new RangeError('"sourceStart" is out of range');
         }
-        sourceEnd = sourceEnd === undefined ? this.length : sourceEnd | 0;
+        // sourceEnd: ToInteger (not `| 0`, which wraps 2**32 to 0); a negative
+        // end is a RangeError, a too-large end clamps to the source length.
+        sourceEnd =
+          sourceEnd === undefined ? this.length : Math.trunc(Number(sourceEnd));
+        if (sourceEnd !== sourceEnd || sourceEnd < 0) {
+          throw new RangeError('"sourceEnd" is out of range');
+        }
         if (sourceEnd > this.length) sourceEnd = this.length;
         var n = Math.min(sourceEnd - sourceStart, target.length - targetStart);
         if (n <= 0) return 0;
@@ -896,8 +911,12 @@
       var needle = toSearchBytes(value, encoding);
       var len = buf.length;
       var start;
+      // ToInteger the byteOffset (not `| 0`, which wraps Infinity/2**32 to 0 and
+      // would search from the start instead of finding no match).
       if (forward) {
-        start = byteOffset === undefined ? 0 : byteOffset | 0;
+        start =
+          byteOffset === undefined ? 0 : Math.trunc(Number(byteOffset));
+        if (start !== start) start = 0; // NaN
         if (start < 0) start = Math.max(len + start, 0);
         if (needle.length === 0) return start <= len ? start : len;
         for (var i = start; i + needle.length <= len; i++) {
@@ -905,7 +924,11 @@
         }
         return -1;
       }
-      start = byteOffset === undefined ? len - needle.length : byteOffset | 0;
+      start =
+        byteOffset === undefined
+          ? len - needle.length
+          : Math.trunc(Number(byteOffset));
+      if (start !== start) start = len - needle.length; // NaN
       if (start < 0) start = len + start;
       if (start > len - needle.length) start = len - needle.length;
       if (needle.length === 0) return start < 0 ? 0 : start;
