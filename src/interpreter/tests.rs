@@ -2136,4 +2136,23 @@ mod node_host_tests {
         assert_eq!(interp.pending_exit, Some(5));
         assert_eq!(global_string(&interp, "after"), "no");
     }
+
+    #[test]
+    fn host_exit_during_dispose_async_await_propagates_abrupt() {
+        // A microtask that calls __host_exit while AsyncDisposableStack's
+        // disposeAsync is awaiting must make the disposeAsync() call return
+        // abruptly, so a sibling in expression position does not run.
+        // (PR #237 review round 7, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.after = "no";
+            Promise.resolve().then(() => { __host_exit(23); });
+            const s = new AsyncDisposableStack();
+            s.use(null);
+            s.disposeAsync(), (globalThis.after = "yes"); // RHS must NOT run
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(23));
+        assert_eq!(global_string(&interp, "after"), "no");
+    }
 }

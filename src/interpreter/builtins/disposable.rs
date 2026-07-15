@@ -559,6 +559,13 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 let result = interp.async_disposable_stack_dispose(this);
+                // A pending `__host_exit` (issue #229) must propagate abruptly,
+                // not be wrapped into a (resolved/rejected) promise returned as
+                // `Normal(promise)` — that would let the caller keep evaluating
+                // in expression position. Inert unless the node host floor is on.
+                if interp.pending_exit.is_some() {
+                    return Completion::Throw(JsValue::Undefined);
+                }
                 match result {
                     Completion::Normal(_) => interp.create_resolved_promise(JsValue::Undefined),
                     Completion::Throw(e) => interp.create_rejected_promise(e),
@@ -1078,6 +1085,10 @@ impl Interpreter {
             }
             if needs_await && !has_awaited {
                 let _ = self.await_value(&JsValue::Undefined);
+                // The final await may have run a job requesting `__host_exit`.
+                if self.pending_exit.is_some() {
+                    return Completion::Throw(JsValue::Undefined);
+                }
             }
 
             if let Some(err) = current_error {

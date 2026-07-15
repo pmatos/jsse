@@ -16729,6 +16729,15 @@ impl Interpreter {
 
         self.gc_unroot_frame(gc_frame);
 
+        // A job drained above may have requested `__host_exit` (issue #229) with
+        // no await result recorded. Return the abrupt sentinel so EVERY caller
+        // propagates the exit uniformly, rather than falling through as
+        // `Normal(undefined)` and relying on each caller to re-poll. Inert
+        // unless the node host floor is enabled.
+        if self.pending_exit.is_some() {
+            return Completion::Throw(JsValue::Undefined);
+        }
+
         match result.borrow_mut().take() {
             Some(Ok(v)) => Completion::Normal(v),
             Some(Err(e)) => Completion::Throw(e),
