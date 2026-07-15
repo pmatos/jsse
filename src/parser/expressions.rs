@@ -510,6 +510,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_exponentiation(&mut self) -> Result<Expression, ParseError> {
+        // Depth guard: `**` is right-associative and recurses here, bypassing
+        // parse_assignment_expression, so it needs its own bound.
+        self.enter_recursion()?;
+        let r = self.parse_exponentiation_inner();
+        self.exit_recursion();
+        r
+    }
+
+    fn parse_exponentiation_inner(&mut self) -> Result<Expression, ParseError> {
         let start = self.current_token_start;
         let base = self.parse_unary()?;
         if self.current == Token::Exponent {
@@ -540,6 +549,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_unary(&mut self) -> Result<Expression, ParseError> {
+        // Depth guard: prefix unary operators (!, -, +, ~, typeof, void,
+        // delete, await, ++/--) recurse here, bypassing
+        // parse_assignment_expression, so they need their own bound.
+        self.enter_recursion()?;
+        let r = self.parse_unary_inner();
+        self.exit_recursion();
+        r
+    }
+
+    fn parse_unary_inner(&mut self) -> Result<Expression, ParseError> {
         match &self.current {
             Token::Keyword(Keyword::Delete) => {
                 self.advance()?;
@@ -793,6 +812,15 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_new_expression(&mut self) -> Result<Expression, ParseError> {
+        // Depth guard: `new new … X` recurses here, bypassing
+        // parse_assignment_expression, so it needs its own bound.
+        self.enter_recursion()?;
+        let r = self.parse_new_expression_inner();
+        self.exit_recursion();
+        r
+    }
+
+    fn parse_new_expression_inner(&mut self) -> Result<Expression, ParseError> {
         self.advance()?; // new
         if self.current == Token::Dot {
             self.advance()?; // .

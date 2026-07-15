@@ -40,3 +40,22 @@ try {
 if (!threw2) {
   throw new Error("expected deeply nested blocks to throw at parse time");
 }
+
+// Recursive expression productions that bypass parse_assignment_expression
+// (prefix unary, right-associative **, and `new new …`) must be bounded too —
+// otherwise a single assignment expression recurses natively and aborts.
+function mustThrow(label, src) {
+  var threw = false;
+  try {
+    eval(src);
+  } catch (e) {
+    threw = true;
+  }
+  if (!threw) {
+    throw new Error("expected " + label + " to throw at parse time");
+  }
+}
+mustThrow("prefix unary chain", "!".repeat(200000) + "0");
+mustThrow("unary minus chain", "- ".repeat(200000) + "0");
+mustThrow("exponentiation chain", "2" + "**2".repeat(200000));
+mustThrow("new-expression chain", "new ".repeat(200000) + "X");
