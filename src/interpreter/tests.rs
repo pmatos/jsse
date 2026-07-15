@@ -1930,4 +1930,40 @@ mod node_host_tests {
         assert_eq!(interp.pending_exit, Some(9));
         assert_eq!(global_string(&interp, "log"), "then;");
     }
+
+    #[test]
+    fn host_exit_skips_iterator_return_cleanup() {
+        // A pending exit must not run the iterator's user-defined return()
+        // during for-of unwinding — it could re-enter __host_exit and overwrite
+        // the code, or run arbitrary side effects. (PR #237 review, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.cleanup = "no";
+            const iter = {
+              [Symbol.iterator]() { return this; },
+              next() { return { value: 1, done: false }; },
+              return() { globalThis.cleanup = "ran"; __host_exit(99); return { done: true }; },
+            };
+            for (const x of iter) { __host_exit(7); }
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(7)); // not overwritten by return()'s exit(99)
+        assert_eq!(global_string(&interp, "cleanup"), "no");
+    }
+
+    #[test]
+    fn host_exit_skips_using_disposal() {
+        // A pending exit must not run Symbol.dispose from a `using` declaration.
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.disposed = "no";
+            {
+              using r = { [Symbol.dispose]() { globalThis.disposed = "ran"; } };
+              __host_exit(3);
+            }
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(3));
+        assert_eq!(global_string(&interp, "disposed"), "no");
+    }
 }

@@ -2552,6 +2552,13 @@ impl Interpreter {
     }
 
     pub(crate) fn dispose_resources(&mut self, env: &EnvRef, completion: Completion) -> Completion {
+        // A pending `__host_exit` (issue #229) makes the exit immediate: skip
+        // running `Symbol.dispose`/`Symbol.asyncDispose` (user code that could
+        // re-enter `__host_exit` or overwrite the code), matching Node's
+        // `process.exit`. Inert unless the node host floor is enabled.
+        if self.pending_exit.is_some() {
+            return completion;
+        }
         let stack = env.borrow_mut().dispose_stack.take();
         let Some(mut stack) = stack else {
             return completion;
