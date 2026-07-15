@@ -495,10 +495,61 @@ impl Interpreter {
         Completion::Normal(JsValue::Boolean(true))
     }
 
-    /// Classifies the post-lookup state of `(obj_id, key)` into a
-    /// `PropIcSlot::Mono { kind: ... }` ready for caching, or `None` if the
-    /// site is not IC-able under the v1 narrow scope. Caller uses this after
-    /// the slow path returns successfully. Issue #71, plan Step 11.
+    /// Serve a property-access IC hit for a cached `kind`, assuming the
+    /// receiver's `(obj_id, shape_id)` has already matched the cached entry.
+    /// Returns `Some(value)` on a confirmed hit, or `None` to fall through to
+    /// the slow path. Shared by the `Mono` and `Poly` probe paths.
+    ///
+    /// The receiver-shape match alone is not sufficient for the prototype-based
+    /// kinds — reassigning `[[Prototype]]` (`__proto__` / `setPrototypeOf`)
+    /// sets `prototype_id` directly WITHOUT bumping the receiver's shape_id — so
+    /// `ProtoData`/`Missing` re-verify the prototype identity (and, for
+    /// `ProtoData`, the prototype's shape) here. A stale entry self-heals: the
+    /// caller's slow path re-records it.
+    fn ic_probe_prop_kind(
+        &self,
+        obj_rc: &Rc<RefCell<JsObjectData>>,
+        key: &str,
+        kind: crate::interpreter::ic::PropIcKind,
+    ) -> Option<JsValue> {
+        use crate::interpreter::ic::PropIcKind;
+        match kind {
+            PropIcKind::OwnData => obj_rc
+                .borrow()
+                .properties
+                .get(key)
+                .and_then(|d| d.value.clone()),
+            PropIcKind::Missing { proto_id, .. } => {
+                if obj_rc.borrow().prototype_id == proto_id {
+                    Some(JsValue::Undefined)
+                } else {
+                    None
+                }
+            }
+            PropIcKind::ProtoData {
+                proto_id,
+                proto_shape_id,
+            } => {
+                if obj_rc.borrow().prototype_id == Some(proto_id)
+                    && let Some(proto_rc) = self.get_object(proto_id)
+                {
+                    let pb = proto_rc.borrow();
+                    if pb.shape_id == proto_shape_id {
+                        return pb.properties.get(key).and_then(|d| d.value.clone());
+                    }
+                }
+                None
+            }
+            // Reserved kinds are never recorded in this scope, so a probe
+            // should never see them; treat as a miss defensively.
+            PropIcKind::OwnAccessor | PropIcKind::TypedArrayElement => None,
+        }
+    }
+
+    /// Classifies the post-lookup state of `(obj_id, key)` into a `PropIcEntry`
+    /// ready for caching, or `None` if the site is not IC-able under the narrow
+    /// scope. Caller feeds the result into `PropIcSlot::advance` after the slow
+    /// path returns successfully. Issue #71, plan Step 11.
     ///
     /// Scope:
     /// - Object must NOT be a proxy / module-namespace / typed-array.
@@ -511,8 +562,8 @@ impl Interpreter {
         &self,
         obj_id: u64,
         key: &str,
-    ) -> Option<crate::interpreter::ic::PropIcSlot> {
-        use crate::interpreter::ic::{PropIcKind, PropIcSlot};
+    ) -> Option<crate::interpreter::ic::PropIcEntry> {
+        use crate::interpreter::ic::{PropIcEntry, PropIcKind};
         let obj_rc = self.get_object(obj_id)?;
         let obj = obj_rc.borrow();
         // Non-cacheable categories (plan "Excluded from IC in v1").
@@ -525,7 +576,7 @@ impl Interpreter {
         // Own property?
         if let Some(d) = obj.properties.get(key) {
             if d.is_data_descriptor() {
-                return Some(PropIcSlot::Mono {
+                return Some(PropIcEntry {
                     obj_id,
                     obj_shape_id: obj.shape_id,
                     kind: PropIcKind::OwnData,
@@ -540,7 +591,7 @@ impl Interpreter {
         // deeper stays uncached.
         let proto_id = match obj.prototype_id {
             None => {
-                return Some(PropIcSlot::Mono {
+                return Some(PropIcEntry {
                     obj_id,
                     obj_shape_id: obj.shape_id,
                     kind: PropIcKind::Missing {
@@ -571,7 +622,7 @@ impl Interpreter {
             Some(d) if d.is_data_descriptor() => {
                 // Re-read the receiver shape (the borrow was dropped above).
                 let obj_shape_id = obj_rc.borrow().shape_id;
-                Some(PropIcSlot::Mono {
+                Some(PropIcEntry {
                     obj_id,
                     obj_shape_id,
                     kind: PropIcKind::ProtoData {
@@ -792,75 +843,31 @@ impl Interpreter {
                     && self.with_scope_depth == 0
                 {
                     use crate::interpreter::ic::{PropIcKind, PropIcSlot};
-                    let slot = *self.prop_slot(site_id);
-                    if let PropIcSlot::Mono {
-                        obj_id,
-                        obj_shape_id,
-                        kind,
-                    } = slot
-                        && o.id == obj_id
+                    // Probe: find the cached entry whose object identity matches
+                    // the current receiver, without copying the slot (the `Poly`
+                    // variant owns a heap `Vec`). Extract just the Copy fields we
+                    // need for the shape check + dispatch, then release the
+                    // borrow before touching any object.
+                    let cached: Option<(u64, PropIcKind)> = match self.prop_slot(site_id) {
+                        PropIcSlot::Mono {
+                            obj_id,
+                            obj_shape_id,
+                            kind,
+                        } if *obj_id == o.id => Some((*obj_shape_id, *kind)),
+                        PropIcSlot::Poly(entries) => entries
+                            .iter()
+                            .find(|e| e.obj_id == o.id)
+                            .map(|e| (e.obj_shape_id, e.kind)),
+                        _ => None,
+                    };
+                    if let Some((want_shape, kind)) = cached
                         && let Some(obj_rc) = self.get_object(o.id)
-                        && obj_rc.borrow().shape_id == obj_shape_id
+                        && obj_rc.borrow().shape_id == want_shape
+                        && let Some(v) = self.ic_probe_prop_kind(&obj_rc, &key, kind)
                     {
-                        // Shape match — IC hit. Dispatch on kind.
-                        match kind {
-                            PropIcKind::OwnData => {
-                                let val = {
-                                    let b = obj_rc.borrow();
-                                    b.properties.get(&key).and_then(|d| d.value.clone())
-                                };
-                                if let Some(v) = val {
-                                    self.ic_hit_count.set(self.ic_hit_count.get() + 1);
-                                    return Completion::Normal(v);
-                                }
-                                // Slot stale (descriptor flipped to accessor or
-                                // value field cleared) — fall through.
-                            }
-                            PropIcKind::Missing { proto_id, .. } => {
-                                let cur_proto = obj_rc.borrow().prototype_id;
-                                if cur_proto == proto_id {
-                                    self.ic_hit_count.set(self.ic_hit_count.get() + 1);
-                                    return Completion::Normal(JsValue::Undefined);
-                                }
-                            }
-                            PropIcKind::ProtoData {
-                                proto_id,
-                                proto_shape_id,
-                            } => {
-                                // CRITICAL: reassigning `[[Prototype]]`
-                                // (`__proto__` / `Object.setPrototypeOf`) sets
-                                // `prototype_id` directly WITHOUT bumping the
-                                // receiver's shape_id, so the receiver-shape
-                                // match above is NOT sufficient. We must also
-                                // confirm the receiver still points at the same
-                                // prototype, then confirm that prototype's shape
-                                // is unchanged (so the property hasn't been
-                                // added/removed/reordered/flipped on it).
-                                let cur_proto = obj_rc.borrow().prototype_id;
-                                if cur_proto == Some(proto_id)
-                                    && let Some(proto_rc) = self.get_object(proto_id)
-                                {
-                                    let val = {
-                                        let pb = proto_rc.borrow();
-                                        if pb.shape_id == proto_shape_id {
-                                            pb.properties.get(&key).and_then(|d| d.value.clone())
-                                        } else {
-                                            None
-                                        }
-                                    };
-                                    if let Some(v) = val {
-                                        self.ic_hit_count.set(self.ic_hit_count.get() + 1);
-                                        return Completion::Normal(v);
-                                    }
-                                }
-                                // Proto swapped, proto shape advanced, or the
-                                // descriptor lost its value — fall through.
-                            }
-                            // OwnAccessor / TypedArrayElement not recorded in
-                            // this narrow scope; they'd be unreachable here.
-                            // Safe to fall through.
-                            _ => {}
-                        }
+                        // Shape match + confirmed dispatch — IC hit.
+                        self.ic_hit_count.set(self.ic_hit_count.get() + 1);
+                        return Completion::Normal(v);
                     }
                     // Probe miss — fall to the slow path and record afterwards.
                     self.ic_slow_path_count
@@ -868,21 +875,9 @@ impl Interpreter {
                     let result = self.get_object_property(o.id, &key, &obj_val.clone());
                     if let Completion::Normal(_) = &result {
                         // Classify for IC recording. Cheap one-borrow walk.
-                        let new_slot = self.classify_for_prop_ic(o.id, &key);
-                        // Apply the state-machine transition (plan Step 10):
-                        // Empty → Mono(new); Mono(A)→same-obj refresh; Mono(A)→different-obj Megamorphic.
-                        let next = match (slot, new_slot) {
-                            (PropIcSlot::Megamorphic, _) => PropIcSlot::Megamorphic,
-                            (_, None) => PropIcSlot::Empty, // not IC-able; leave Empty
-                            (PropIcSlot::Empty, Some(s)) => s,
-                            (
-                                PropIcSlot::Mono {
-                                    obj_id: prev_id, ..
-                                },
-                                Some(s @ PropIcSlot::Mono { obj_id: new_id, .. }),
-                            ) if prev_id == new_id => s,
-                            (PropIcSlot::Mono { .. }, Some(_)) => PropIcSlot::Megamorphic,
-                        };
+                        let observed = self.classify_for_prop_ic(o.id, &key);
+                        // Drive the Empty → Mono → Poly → Megamorphic machine.
+                        let next = self.prop_slot(site_id).advance(observed);
                         *self.prop_slot(site_id) = next;
                     }
                     return result;

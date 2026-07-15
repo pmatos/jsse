@@ -1157,29 +1157,117 @@ fn call_ic_invalidates_on_function_replacement() {
 }
 
 #[test]
-fn ic_megamorphic_after_distinct_objects_at_same_site() {
-    // Same call site sees two different objects; the second access shape
-    // mismatches and transitions to Megamorphic. Behavioural correctness
-    // must still hold.
+fn ic_polymorphic_after_two_distinct_objects_at_same_site() {
+    // Same call site sees two different objects. The first miss records Mono(a);
+    // the second promotes the site to a two-entry Poly([a, b]); the third
+    // access re-sees `a` and must HIT the poly entry (not fall to the slow
+    // path). Correctness AND the hit counter are asserted.
     let interp = run_script(
         r#"
         var a = {x: 1};
         var b = {x: 2};
         function read(o) { return o.x; }
-        var v1 = read(a);
-        var v2 = read(b);
-        var v3 = read(a);
+        var v1 = read(a);   // Empty -> Mono(a)      (miss)
+        var v2 = read(b);   // Mono(a) -> Poly([a,b]) (miss)
+        var v3 = read(a);   // Poly hit on `a`
         var result = v1 + "|" + v2 + "|" + v3;
         "#,
     );
     assert_eq!(global_string(&interp, "result"), "1|2|1");
+    assert!(
+        interp.ic_hit_count() > 0,
+        "the third read of `a` must hit the polymorphic slot; got 0 hits \
+         (the probe never recognised the second cached shape)"
+    );
+}
+
+#[test]
+fn ic_polymorphic_two_shapes_hit_in_hot_loop() {
+    // A site alternating between two long-lived objects must cache both and hit
+    // on every steady-state access after the two-iteration warmup.
+    let interp = run_script(
+        r#"
+        var a = {x: 10};
+        var b = {x: 20};
+        function read(o) { return o.x; }
+        var sum = 0;
+        for (var i = 0; i < 50; i++) { sum += read(a); sum += read(b); }
+        "#,
+    );
+    assert_eq!(
+        global_number(&interp, "sum"),
+        1500.0,
+        "behavioral correctness"
+    );
+    assert!(
+        interp.ic_hit_count() > 0,
+        "expected polymorphic IC hits across two alternating shapes; got 0"
+    );
+}
+
+#[test]
+fn ic_polymorphic_four_shapes_hit() {
+    // Four distinct objects fill the polymorphic slot to its arity; each is
+    // re-hit in steady state. Correctness plus a positive hit count prove all
+    // four entries are served from the cache.
+    let interp = run_script(
+        r#"
+        var a = {x: 1}, b = {x: 2}, c = {x: 3}, d = {x: 4};
+        function read(o) { return o.x; }
+        var sum = 0;
+        for (var i = 0; i < 20; i++) {
+            sum += read(a) + read(b) + read(c) + read(d);
+        }
+        "#,
+    );
+    assert_eq!(
+        global_number(&interp, "sum"),
+        200.0,
+        "behavioral correctness"
+    );
+    assert!(
+        interp.ic_hit_count() > 0,
+        "expected polymorphic IC hits across four cached shapes; got 0"
+    );
+}
+
+#[test]
+fn ic_megamorphic_after_fifth_distinct_shape() {
+    // The polymorphic slot caps at four entries. A fifth distinct object
+    // overflows it to Megamorphic, which is terminal: subsequent reads of a
+    // previously-cached object must NOT re-enter the cache and hit. The warmup
+    // itself produces no hits (each object is first-seen), so a zero total hit
+    // count proves the site went — and stayed — megamorphic.
+    let interp = run_script(
+        r#"
+        var a = {x: 1}, b = {x: 2}, c = {x: 3}, d = {x: 4}, e = {x: 5};
+        function read(o) { return o.x; }
+        // Five distinct shapes at one site: a,b,c,d fill the Poly; e overflows.
+        var warm = read(a) + read(b) + read(c) + read(d) + read(e);
+        var sum = 0;
+        for (var i = 0; i < 10; i++) sum += read(a);  // Megamorphic: no hits
+        var result = warm + "|" + sum;
+        "#,
+    );
+    assert_eq!(
+        global_string(&interp, "result"),
+        "15|10",
+        "behavioral correctness"
+    );
+    assert_eq!(
+        interp.ic_hit_count(),
+        0,
+        "a site that overflowed to Megamorphic must not be demoted and start \
+         hitting again"
+    );
 }
 
 #[test]
 fn ic_megamorphic_stays_terminal_after_non_cacheable_miss() {
-    // A site that has already gone Megamorphic must not be demoted back to
-    // Empty when it later sees a non-cacheable proxy lookup. If it were
-    // demoted, the final hot reads of `a.x` would re-enter Mono and hit.
+    // A polymorphic site that then meets a non-cacheable proxy lookup must go
+    // Megamorphic and stay there — never demoted back to Empty. If it were
+    // demoted, the final hot reads of `a.x` would re-enter the cache and hit.
+    // This exercises the `Poly + None -> Megamorphic` transition specifically.
     let interp = run_script(
         r#"
         var a = {x: 1};
@@ -1188,9 +1276,9 @@ fn ic_megamorphic_stays_terminal_after_non_cacheable_miss() {
         function read(o) { return o.x; }
         var sum = 0;
         sum += read(a);  // Empty -> Mono(a)
-        sum += read(b);  // Mono(a) -> Megamorphic
-        sum += read(p);  // non-cacheable; must stay Megamorphic
-        for (var i = 0; i < 10; i++) sum += read(a);
+        sum += read(b);  // Mono(a) -> Poly([a,b])
+        sum += read(p);  // non-cacheable at a Poly site -> Megamorphic
+        for (var i = 0; i < 10; i++) sum += read(a);  // must stay terminal
         var result = sum;
         "#,
     );

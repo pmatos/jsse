@@ -179,7 +179,7 @@ mod tests {
             CallIcSlot::Megamorphic
         ));
         assert!(matches!(
-            *interp.ic_store.store_mut(handle).prop_slot(PropSiteId(0)),
+            &*interp.ic_store.store_mut(handle).prop_slot(PropSiteId(0)),
             PropIcSlot::Megamorphic
         ));
     }
