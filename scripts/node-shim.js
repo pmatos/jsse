@@ -102,10 +102,7 @@
             var label = isIdentifierKey(k) ? k : quoteString(k);
             parts.push(label + ": " + renderMember(v, k, depth));
           }
-          var ctorName =
-            v.constructor && v.constructor.name && v.constructor.name !== "Object"
-              ? v.constructor.name + " "
-              : "";
+          var ctorName = constructorName(v);
           out = parts.length
             ? ctorName + "{ " + parts.join(", ") + " }"
             : ctorName + "{}";
@@ -127,6 +124,29 @@
         return desc.get ? (desc.set ? "[Getter/Setter]" : "[Getter]") : "[Setter]";
       }
       return render(desc ? desc.value : container[key], depth - 1);
+    }
+
+    // Derive the "ClassName " prefix without a plain `v.constructor` get, which
+    // would invoke an accessor `constructor` or a Proxy get-trap — Node reads
+    // constructor metadata via the prototype chain, not by calling a getter. Use
+    // data descriptors only, and treat any exotic-trap throw as "no prefix".
+    function constructorName(v) {
+      try {
+        var ctor;
+        var own = Object.getOwnPropertyDescriptor(v, "constructor");
+        if (own) {
+          if (!own.get && !own.set) ctor = own.value;
+        } else {
+          var proto = Object.getPrototypeOf(v);
+          var pd = proto
+            ? Object.getOwnPropertyDescriptor(proto, "constructor")
+            : null;
+          if (pd && !pd.get && !pd.set) ctor = pd.value;
+        }
+        return ctor && ctor.name && ctor.name !== "Object" ? ctor.name + " " : "";
+      } catch (e) {
+        return "";
+      }
     }
 
     return render(value, maxDepth);

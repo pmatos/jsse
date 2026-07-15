@@ -167,6 +167,32 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
     configurable: true,
   });
   eq(util.inspect(arrGetter), "[ 1, [Getter] ]", "inspect does not invoke array getters");
+  // The constructor-name prefix must not invoke an accessor `constructor` or a
+  // Proxy get-trap (Node derives it from prototype metadata).
+  var ctorGetter = { a: 1 };
+  Object.defineProperty(ctorGetter, "constructor", {
+    get: function () {
+      throw new Error("boom");
+    },
+    enumerable: false,
+    configurable: true,
+  });
+  eq(util.inspect(ctorGetter), "{ a: 1 }", "inspect does not invoke a constructor getter");
+  var ctorProxy = new Proxy(
+    { a: 1 },
+    {
+      get: function (t, k) {
+        if (k === "constructor") throw new Error("trap");
+        return t[k];
+      },
+    }
+  );
+  eq(util.inspect(ctorProxy), "{ a: 1 }", "inspect does not trip a Proxy constructor trap");
+  // A normal named class still gets its "ClassName " prefix.
+  function Widget() {
+    this.a = 1;
+  }
+  eq(util.inspect(new Widget()), "Widget { a: 1 }", "inspect keeps the class-name prefix");
 })();
 
 // ---- process fields -------------------------------------------------------
