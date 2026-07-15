@@ -29,12 +29,16 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 LIBS_DIR="$SCRIPT_DIR/libs"
 CACHE_ROOT="/tmp/jsse-libtests"
-TOOLING_DIR="$CACHE_ROOT/tooling"
 JSSE="$PROJECT_DIR/target/release/jsse"
 
 # Pinned esbuild so every library bundles identically and reproducibly (the
-# per-repo `npx esbuild` this replaces silently tracked npx-latest).
+# per-repo `npx esbuild` this replaces silently tracked npx-latest). The
+# tooling dir is version-keyed: a plain `[ -x esbuild ]` existence check can't
+# tell versions apart, so bumping ESBUILD_VERSION must land in a fresh dir
+# rather than silently reuse a cached older binary. (`--clean` only wipes the
+# per-library cache, not this shared tooling dir.)
 ESBUILD_VERSION="0.25.0"
+TOOLING_DIR="$CACHE_ROOT/tooling/$ESBUILD_VERSION"
 
 # ---- argument parsing ------------------------------------------------------
 LIB=""
