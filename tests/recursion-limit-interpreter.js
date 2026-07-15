@@ -43,3 +43,58 @@ function factorialish(n) {
 if (factorialish(50) !== 50) {
   throw new Error("engine did not recover after a stack-overflow RangeError");
 }
+
+// ---------------------------------------------------------------------------
+// Deep eval-time expression recursion (jsse#241).
+//
+// Binary/logical operators parse in a left-associative *loop*, so a flat
+// expression like "1+1+1+…" never trips the parser depth limit — the tree is
+// only walked recursively later, by eval_expr, once per operand. That walk
+// used to exhaust the native stack (SIGABRT) instead of throwing. It must now
+// throw a *catchable* RangeError, just like deep call recursion above.
+
+function evalMustRangeError(label, src) {
+  var threw = false;
+  var err = null;
+  try {
+    eval(src);
+  } catch (e) {
+    threw = true;
+    err = e;
+  }
+  if (!threw) {
+    throw new Error("expected " + label + " to throw at eval time");
+  }
+  if (!(err instanceof RangeError)) {
+    throw new Error(
+      "expected " + label + " to throw a RangeError, got " +
+        (err && err.name) + ": " + (err && err.message)
+    );
+  }
+  if (!/stack/i.test(String(err.message))) {
+    throw new Error(
+      "expected " + label + " message to mention the stack, got: " + err.message
+    );
+  }
+}
+
+// Additive (left-nested Binary) and logical (left-nested Logical) arms both
+// descend through eval_expr and must both be bounded.
+evalMustRangeError("deep additive expression", "1" + "+1".repeat(500000));
+evalMustRangeError("deep logical expression", "1" + "&&1".repeat(500000));
+
+// The eval-depth counter must unwind on the throw path, not leak. If it did,
+// repeated deep-eval failures would accumulate phantom depth until an
+// expression well *below* the limit spuriously threw. Trip the limit many
+// times, then require a moderately deep (but legal) expression to still
+// evaluate to the right value in the same process.
+for (var i = 0; i < 20; i++) {
+  try {
+    eval("1" + "+1".repeat(60000));
+  } catch (e) {
+    // expected RangeError, swallow
+  }
+}
+if (eval("1" + "+1".repeat(10000)) !== 10001) {
+  throw new Error("eval-depth counter leaked: a below-limit expression failed after recovery");
+}

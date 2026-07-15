@@ -5,6 +5,21 @@ mod access;
 mod literals;
 mod modules;
 
+/// RAII guard that decrements the interpreter's expression-evaluation depth
+/// counter on every exit path of `eval_expr` — the tail return, each of its
+/// ~100 early `return`s, and any unwind. It holds an `Rc<Cell<usize>>` rather
+/// than a borrow of `Interpreter` so `eval_expr` can keep using `&mut self`
+/// across the whole match without a borrow conflict; because the counter lives
+/// in its own allocation, nested `&mut self` reborrows never invalidate the
+/// handle (a raw pointer into `self` would be unsound here).
+struct EvalDepthGuard(std::rc::Rc<std::cell::Cell<usize>>);
+
+impl Drop for EvalDepthGuard {
+    fn drop(&mut self) {
+        self.0.set(self.0.get() - 1);
+    }
+}
+
 /// StringToBigInt per spec §7.1.14 — handles empty string, hex, octal, binary.
 fn string_to_bigint_for_comparison(s: &str) -> Option<num_bigint::BigInt> {
     let trimmed = s.trim();
@@ -292,6 +307,31 @@ impl Interpreter {
     }
 
     pub(crate) fn eval_expr(&mut self, expr: &Expression, env: &EnvRef) -> Completion {
+        // Catchable stack-depth guard for expression evaluation. Every
+        // expression node — and each recursive descent into an operand —
+        // funnels through here, so bounding this depth bounds the native
+        // recursion a deeply left-nested AST (`1+1+1+…`, `1&&1&&1…`, parsed in
+        // a loop so it never trips the parser's `MAX_PARSE_DEPTH`) would
+        // otherwise use to overflow the stack (SIGABRT).
+        //
+        // Kept a single function on purpose. Splitting the depth accounting
+        // into a thin wrapper around an inner `_impl` added a call frame per
+        // operand, which roughly *tripled* the native stack each level consumes
+        // — lowering the overflow ceiling and eroding the headroom the
+        // `call_depth` guard depends on. Instead, `EvalDepthGuard` decrements on
+        // every one of this match's exit paths (its many early `return`s and
+        // any unwind included), so the counter reflects real native depth
+        // without splitting the hot function.
+        use crate::interpreter::EVAL_DEPTH_LIMIT;
+        let depth = self.eval_depth.get();
+        if depth >= EVAL_DEPTH_LIMIT {
+            // Check before incrementing: the throw path never touches the counter.
+            return Completion::Throw(
+                self.create_error("RangeError", "Maximum call stack size exceeded"),
+            );
+        }
+        self.eval_depth.set(depth + 1);
+        let _depth_guard = EvalDepthGuard(std::rc::Rc::clone(&self.eval_depth));
         match expr {
             Expression::Literal(lit) => Completion::Normal(self.eval_literal(lit)),
             Expression::Identifier(name) => {
