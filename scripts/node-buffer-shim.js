@@ -443,10 +443,24 @@
           (typeof SharedArrayBuffer !== "undefined" &&
             value instanceof SharedArrayBuffer)
         ) {
-          // Share the backing memory (Node semantics).
-          var offset = encodingOrOffset === undefined ? 0 : encodingOrOffset | 0;
-          var len =
-            length === undefined ? value.byteLength - offset : length | 0;
+          // Share the backing memory (Node semantics). Validate the offset and
+          // length numerically (not via `| 0`, which would wrap 2**32 to 0 and
+          // silently expose the whole buffer); an out-of-range offset/length is
+          // a RangeError, and a negative length is an empty view.
+          var offset = encodingOrOffset === undefined ? 0 : Number(encodingOrOffset);
+          if (offset !== offset || offset < 0 || offset > value.byteLength) {
+            throw new RangeError('"offset" is outside of buffer bounds');
+          }
+          var len;
+          if (length === undefined) {
+            len = value.byteLength - offset;
+          } else {
+            len = Number(length);
+            if (len !== len || len < 0) len = 0;
+            if (offset + len > value.byteLength) {
+              throw new RangeError('"length" is outside of buffer bounds');
+            }
+          }
           return new Buffer(value, offset, len);
         }
         if (value instanceof Uint8Array) {
@@ -663,8 +677,13 @@
         if (offset < 0 || offset > this.length) {
           throw new RangeError('"offset" is outside of buffer bounds');
         }
+        var remaining = this.length - offset;
+        length = length | 0;
+        if (length < 0 || length > remaining) {
+          throw new RangeError('"length" is outside of buffer bounds');
+        }
         var bytes = strToBytes(string, encoding);
-        var n = Math.min(bytes.length, length | 0, this.length - offset);
+        var n = Math.min(bytes.length, length);
         for (var i = 0; i < n; i++) this[offset + i] = bytes[i];
         return n;
       }
@@ -877,6 +896,21 @@
         false,
       ],
     ];
+    // The accepted [min, max] for a fixed-width write, derived from the setter.
+    // Floats have no range; integers/BigInts must fit their width or Node throws
+    // RangeError (DataView setters would silently wrap/truncate instead).
+    function rangeFor(set, size) {
+      if (set.indexOf("Float") !== -1) return null;
+      var bits = size * 8;
+      if (set.indexOf("Big") !== -1) {
+        return set.indexOf("Uint") !== -1
+          ? [0n, (1n << 64n) - 1n]
+          : [-(1n << 63n), (1n << 63n) - 1n];
+      }
+      return set.indexOf("Uint") !== -1
+        ? [0, Math.pow(2, bits) - 1]
+        : [-Math.pow(2, bits - 1), Math.pow(2, bits - 1) - 1];
+    }
     FIXED.forEach(function (spec) {
       var rd = spec[0],
         wr = spec[1],
@@ -884,6 +918,7 @@
         set = spec[3],
         size = spec[4],
         le = spec[5];
+      var range = rangeFor(set, size);
       Buffer.prototype[rd] = function (offset) {
         offset = offset === undefined ? 0 : offset | 0;
         var dv = dvOf(this);
@@ -891,6 +926,9 @@
       };
       Buffer.prototype[wr] = function (value, offset) {
         offset = offset === undefined ? 0 : offset | 0;
+        if (range !== null && (value < range[0] || value > range[1])) {
+          throw new RangeError('The value of "value" is out of range');
+        }
         var dv = dvOf(this);
         if (le === null) dv[set](offset, value);
         else dv[set](offset, value, le);
@@ -990,10 +1028,10 @@
       return this.writeUIntBE(value, offset, byteLength);
     };
 
-    // Node exposes SlowBuffer as a deprecated alias of the allocator.
+    // Note: the legacy `SlowBuffer` global is intentionally NOT defined — it was
+    // removed from Node (undefined in the `buffer` module of current releases),
+    // so adding it would diverge from the reference engine. Buffer.allocUnsafeSlow
+    // (still a documented Node API) remains available as the static method.
     globalThis.Buffer = Buffer;
-    if (typeof globalThis.SlowBuffer === "undefined") {
-      globalThis.SlowBuffer = Buffer.allocUnsafeSlow;
-    }
   }
 })();
