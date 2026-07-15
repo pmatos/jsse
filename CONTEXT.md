@@ -12,6 +12,10 @@ _Avoid_: function body, script body, code unit.
 A specific call or property-access location in a Body that can be inline-cached at runtime.
 _Avoid_: cache entry, IC slot (when referring to the location rather than the stored value).
 
+**IC State**:
+Where a property-access IC Site sits on the `Empty → Mono → Poly → Megamorphic` lattice. `Mono` caches one object; `Poly` caches up to `MAX_POLY_PROP` distinct objects (issue #71); `Megamorphic` is the terminal give-up state. Driven by `PropIcSlot::advance`.
+_Avoid_: cache mode, IC level.
+
 **CallSiteId**:
 A dense identifier assigned to a call IC site within a single Body.
 _Avoid_: call IC index, call cache id.
