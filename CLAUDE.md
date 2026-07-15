@@ -83,14 +83,20 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - Configuration in `.cargo/mutants.toml`. Generated tables (`unicode_tables.rs`, `emoji_strings.rs`) and two combinatorially-explosive Temporal helpers (`duration.rs`, `plain_date_time.rs`) are excluded.
 - Output in `mutants.out/` (gitignored): `caught.txt`, `missed.txt`, `unviable.txt`, `outcomes.json`, plus per-mutant diffs/logs.
 
-## Acorn Tests
-- Run acorn tests: `./scripts/run-acorn-tests.sh`
-- Compare with Node baseline: `./scripts/run-acorn-tests.sh --node`
-- Force a fresh clone: `./scripts/run-acorn-tests.sh --clean`
-- The script clones acorn into `/tmp/acorn`, bundles its test suite with esbuild into a single IIFE, prepends runtime shims (`scripts/acorn-shim.js`), and runs it on jsse.
-- Cloned acorn and esbuild bundle are cached in `/tmp/`; use `--clean` to rebuild from scratch.
+## Library Tests (Node-compat harness)
+Real-world npm libraries are run as engine stress tests via a generalized
+harness. See `scripts/README.md` for the full recipe and how to add a library.
+- Run one library: `./scripts/run-library-tests.sh <lib>` (e.g. `decimal.js`, `big.js`, `acorn`).
+- Run on Node only (reference oracle): `./scripts/run-library-tests.sh <lib> --node`.
+- Force a fresh clone/rebuild: `./scripts/run-library-tests.sh <lib> --clean`.
+- Each library has a config at `scripts/libs/<lib>.sh` (pinned repo/ref, bundle entry, prepare hook, verdict). The runner clones the pinned ref, bundles with a pinned esbuild, prepends `scripts/node-shim.js` (a JS-only Node-globals shim — never baked into jsse's globals, so test262 is unaffected), runs on jsse, and cross-checks the test count against Node. Caches live under `/tmp/jsse-libtests/<lib>/`.
+- The `node-shim.js` stubs are guarded so they are inert on Node, letting `--node` run the identical bundle as the reference.
+- **Currently green (cross-checked vs Node):** `decimal.js` (22,624), `big.js` (47,456; ~7 min — heavy arbitrary-precision arithmetic on the tree-walker), `acorn` (13,507).
+- **`bignumber.js`** is wired but blocked on a jsse bug it surfaced (strict-mode `return <call-returning-non-object>` in a constructor returns that value instead of `this`, jsse#238); it goes green once that engine bug is fixed.
+
+### Acorn (`./scripts/run-acorn-tests.sh` — thin wrapper over the harness)
+- Pinned to **acorn 8.16.0** (13,507 tests, green on jsse and Node). 8.17.0+ added a parser stack-guard test (`"[".repeat(2000)`) that expects the engine to *throw* a "stack space" error; jsse's tree-walker aborts (SIGABRT) before acorn's guard fires — a jsse deep-recursion robustness gap tracked separately. Bump the pin once that lands.
 - **esbuild comment stripping**: esbuild removes comments from function bodies. The `TestComments` test relies on `Function.prototype.toString()` preserving comments, so a pre-bundle patch (`scripts/patch-acorn-comments.js`) replaces the `.toString()` call with a string literal.
-- All 13,507 acorn tests should pass on both jsse and Node.
 
 ## Architecture Notes
 - The interpreter is a single-pass tree-walker over the AST. A bytecode compiler/VM exists in `bytecode/` as an experimental fast path (feature-flagged off by default via `bytecode_enabled`). Property-access MOP operations ([[Get]], [[Set]], [[DefineOwnProperty]], [[Delete]], [[HasProperty]], proxy traps, array/typed-array exotic) are consolidated in `property.rs`.
