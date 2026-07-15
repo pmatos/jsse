@@ -2555,9 +2555,11 @@ impl Interpreter {
         // A pending `__host_exit` (issue #229) makes the exit immediate: skip
         // running `Symbol.dispose`/`Symbol.asyncDispose` (user code that could
         // re-enter `__host_exit` or overwrite the code), matching Node's
-        // `process.exit`. Inert unless the node host floor is enabled.
+        // `process.exit`. Return an ABRUPT sentinel (not the possibly-Normal
+        // input completion) so the caller's `exec_statements` unwinds instead
+        // of running trailing statements. Inert unless the floor is enabled.
         if self.pending_exit.is_some() {
-            return completion;
+            return Completion::Throw(JsValue::Undefined);
         }
         let stack = env.borrow_mut().dispose_stack.take();
         let Some(mut stack) = stack else {
@@ -2577,9 +2579,11 @@ impl Interpreter {
         for resource in &stack {
             // A prior disposer may have requested `__host_exit` (issue #229):
             // stop before running the remaining disposers so the exit is
-            // immediate. Inert unless the node host floor is enabled.
+            // immediate. Return an ABRUPT sentinel (the block may have been
+            // completing normally) so trailing statements don't run. Inert
+            // unless the node host floor is enabled.
             if self.pending_exit.is_some() {
-                return completion;
+                return Completion::Throw(JsValue::Undefined);
             }
             // §10.4.4.3 Dispose: If method is undefined, result is undefined; else Call(method, V)
             let result = if matches!(resource.dispose_method, JsValue::Undefined) {
@@ -2590,16 +2594,17 @@ impl Interpreter {
             // The disposer itself may have requested `__host_exit` (issue #229):
             // stop before `wrap_suppressed_error`, which would call the
             // user-replaceable `SuppressedError` constructor (arbitrary JS
-            // after the supposedly-immediate exit). Inert off-path.
+            // after the supposedly-immediate exit). Abrupt sentinel so trailing
+            // statements don't run. Inert off-path.
             if self.pending_exit.is_some() {
-                return completion;
+                return Completion::Throw(JsValue::Undefined);
             }
             match result {
                 Completion::Normal(v) if resource.hint == DisposeHint::Async => {
                     let awaited = self.await_value(&v);
                     // Awaiting an async disposer may likewise have requested exit.
                     if self.pending_exit.is_some() {
-                        return completion;
+                        return Completion::Throw(JsValue::Undefined);
                     }
                     if let Completion::Throw(e) = awaited {
                         current_error = Some(self.wrap_suppressed_error(e, current_error));

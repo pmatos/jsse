@@ -16660,6 +16660,12 @@ impl Interpreter {
             if done.get() {
                 break;
             }
+            // A job/completion run below may have requested `__host_exit`
+            // (issue #229): stop draining immediately so no further queued user
+            // job runs after the exit. Inert unless the node host floor is on.
+            if self.pending_exit.is_some() {
+                break;
+            }
             if let Some((roots, job)) = self.scheduler.pop_microtask() {
                 let mt_frame = self.gc_root_frame();
                 for val in &roots {
@@ -16677,6 +16683,10 @@ impl Interpreter {
             if !completions.is_empty() {
                 for f in completions {
                     f(self);
+                    // Stop before the rest of the batch if a callback exited.
+                    if self.pending_exit.is_some() {
+                        break;
+                    }
                 }
                 continue;
             }

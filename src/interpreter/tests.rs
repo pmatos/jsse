@@ -2041,4 +2041,42 @@ mod node_host_tests {
         assert_eq!(global_string(&interp, "aRan"), "no"); // earlier resource not disposed
         assert_eq!(global_string(&interp, "caught"), "no"); // exit is uncatchable
     }
+
+    #[test]
+    fn host_exit_from_disposer_propagates_abrupt() {
+        // A disposer calling __host_exit while the block completes NORMALLY must
+        // make dispose_resources return an abrupt completion, so the statement
+        // after the block does not run. (PR #237 review round 4, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.after = "no";
+            {
+              using r = { [Symbol.dispose]() { __host_exit(4); } };
+            }
+            globalThis.after = "yes"; // must NOT run
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(4));
+        assert_eq!(global_string(&interp, "after"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_async_disposer_propagates_abrupt() {
+        // Async disposal awaits via await_value's own drain loop; an exit there
+        // must stop draining and propagate abruptly. (PR #237 review round 4.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.afterAsync = "no";
+            async function f() {
+              {
+                await using r = { async [Symbol.asyncDispose]() { __host_exit(6); } };
+              }
+              globalThis.afterAsync = "yes"; // must NOT run
+            }
+            f();
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(6));
+        assert_eq!(global_string(&interp, "afterAsync"), "no");
+    }
 }
