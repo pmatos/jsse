@@ -944,6 +944,11 @@ impl Interpreter {
                             ) {
                                 Completion::Throw(e) => Err(e),
                                 Completion::Normal(v) => Ok(v),
+                                // A `__host_exit` inside the reaction handler
+                                // (issue #242) propagates out of the job as
+                                // `Completion::Exit` — the Promise reaction must
+                                // not consume it into a fulfillment/rejection.
+                                Completion::Exit(code) => return Completion::Exit(code),
                                 _ => Ok(JsValue::Undefined),
                             }
                         } else {
@@ -1006,6 +1011,12 @@ impl Interpreter {
             Box::new(move |interp| {
                 let result =
                     interp.call_function(&then_fn, &thenable, &[resolve_fn, reject_fn.clone()]);
+                // A `__host_exit` inside the user `then` (issue #242) propagates
+                // out of the job as `Completion::Exit` rather than being turned
+                // into a rejection.
+                if let Completion::Exit(code) = result {
+                    return Completion::Exit(code);
+                }
                 if let Completion::Throw(e) = result
                     && let Completion::Throw(e2) =
                         interp.call_function(&reject_fn, &JsValue::Undefined, &[e])

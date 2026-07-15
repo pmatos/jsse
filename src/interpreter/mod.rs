@@ -155,10 +155,13 @@ pub struct Interpreter {
     /// installed and every host-floor check below is inert — the global
     /// environment is byte-identical to a build without this feature.
     pub(crate) node_host_enabled: bool,
-    /// Set by `__host_exit(code)` to signal an uncatchable process exit. When
-    /// `Some`, the try/catch handler propagates instead of catching, the
-    /// microtask drain loop stops, and `main` uses the code as the process
-    /// exit status. Always `None` when `node_host_enabled` is false.
+    /// Terminal exit-code sink for `__host_exit` (issue #242). The exit itself
+    /// propagates structurally as `Completion::Exit(code)`, which is
+    /// uncatchable by construction; this field is written only where that
+    /// completion crosses a boundary that cannot carry one — the event-loop
+    /// drain (microtask jobs), an inline `await` drain, an iterator `return()`,
+    /// or module top-level await — and is read by `main`/`run` to set the
+    /// process exit status. Always `None` when `node_host_enabled` is false.
     pub(crate) pending_exit: Option<i32>,
     /// Monotonic clock anchor for `__host_hrtime`. Set when the host floor is
     /// enabled so elapsed nanoseconds are measured from a stable origin.
@@ -1697,6 +1700,12 @@ impl Interpreter {
             }
             SourceType::Module => self.run_module(program, None),
         };
+        // A top-level `__host_exit` (issue #242) latches its code into the
+        // terminal `pending_exit` sink (read by `main`) and skips draining —
+        // `drain_microtasks_until_idle` early-returns while the sink is set.
+        if let Completion::Exit(code) = &result {
+            self.pending_exit = Some(*code);
+        }
         self.drain_microtasks_until_idle();
         result
     }
@@ -1712,6 +1721,11 @@ impl Interpreter {
                     global.borrow_mut().strict = true;
                 }
                 let r = self.exec_body(&program.body, &global);
+                // A top-level `__host_exit` (issue #242) latches its code (read
+                // by `main`) so draining is skipped.
+                if let Completion::Exit(code) = &r {
+                    self.pending_exit = Some(*code);
+                }
                 // Drain microtasks before restoring path so async callbacks can use relative imports
                 self.drain_microtasks_until_idle();
                 self.current_module_path = prev;
@@ -1719,6 +1733,9 @@ impl Interpreter {
             }
             SourceType::Module => {
                 let r = self.run_module(program, Some(path.to_path_buf()));
+                if let Completion::Exit(code) = &r {
+                    self.pending_exit = Some(*code);
+                }
                 // Keep path set during microtask draining so async callbacks can use relative imports
                 let prev = self.current_module_path.take();
                 self.current_module_path = Some(path.to_path_buf());
@@ -3235,7 +3252,14 @@ impl Interpreter {
         let prev_path = self.current_module_path.take();
         self.current_module_path = Some(module_path.to_path_buf());
         self.static_module_load_depth += 1;
-        self.async_function_resume(async_id, JsValue::Undefined, false);
+        // Module top-level `await` (issue #242): this driver returns `()`, so a
+        // `__host_exit` from top-level module code is recorded in the terminal
+        // `pending_exit` sink rather than carried as a completion.
+        if let Completion::Exit(code) =
+            self.async_function_resume(async_id, JsValue::Undefined, false)
+        {
+            self.pending_exit = Some(code);
+        }
         self.static_module_load_depth -= 1;
         self.current_module_path = prev_path;
     }
@@ -4779,11 +4803,11 @@ impl Interpreter {
     pub(crate) fn drain_microtasks(&mut self) {
         let mut iterations = 0u64;
         loop {
-            // Backstop for `__host_exit` (issue #229): a throw raised from an
-            // async body / Promise reaction is swallowed into a rejection rather
-            // than propagating, so the try/catch guard alone cannot stop the
-            // loop. Bail here the moment an exit is pending. Inert (always
-            // `None`) unless the node host floor is enabled.
+            // Terminal-sink read for `__host_exit` (issue #242): a job below may
+            // have run user code that latched the sink through a boundary that
+            // cannot carry a completion (e.g. an iterator `return()`). Bail the
+            // moment the sink is set. `pending_exit` is always `None` unless the
+            // node host floor is enabled.
             if self.pending_exit.is_some() {
                 return;
             }
@@ -4792,8 +4816,16 @@ impl Interpreter {
                 for val in &roots {
                     self.gc_root_value(val);
                 }
-                let _ = job(self);
+                let job_result = job(self);
                 self.gc_unroot_frame(mt_frame);
+                // A `__host_exit` inside the job (issue #242) surfaces as
+                // `Completion::Exit`; the drain loop is a `()`-returning
+                // event-loop boundary, so latch the code into the terminal sink
+                // and stop — no further queued job runs after the exit.
+                if let Completion::Exit(code) = job_result {
+                    self.pending_exit = Some(code);
+                    return;
+                }
                 iterations += 1;
                 // Periodically check agent async completions (e.g. waitAsync timeouts)
                 // so they get processed even when the microtask queue stays busy
@@ -4859,8 +4891,9 @@ impl Interpreter {
     /// with no `.then` / `await`) does not block process exit.
     pub(crate) fn drain_microtasks_until_idle(&mut self) {
         self.drain_microtasks();
-        // A pending `__host_exit` (issue #229) stops the loop immediately;
-        // don't block up to 120s waiting on timers/host-async work.
+        // Terminal-sink read for `__host_exit` (issue #242): the drain above
+        // latches `pending_exit` when a job exits. Stop immediately; don't block
+        // up to 120s waiting on timers/host-async work.
         if self.pending_exit.is_some() {
             return;
         }
@@ -4871,9 +4904,9 @@ impl Interpreter {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         loop {
             self.drain_microtasks();
-            // A host callback drained above may have requested `__host_exit`
-            // (issue #229): stop immediately instead of waiting up to 120s on
-            // any still-pending timer/async job. Inert unless the floor is on.
+            // See above (issue #242): a job drained above may have latched the
+            // exit sink — stop immediately instead of waiting up to 120s on any
+            // still-pending timer/async job. Inert unless the floor is on.
             if self.pending_exit.is_some() {
                 return;
             }
@@ -4933,8 +4966,17 @@ impl Interpreter {
                 for val in &roots {
                     self.gc_root_value(val);
                 }
-                let _ = job(self);
+                let job_result = job(self);
                 self.gc_unroot_frame(mt_frame);
+                // A `__host_exit` inside the job (issue #242) latches the
+                // terminal sink and stops draining.
+                if let Completion::Exit(code) = job_result {
+                    self.pending_exit = Some(code);
+                    return;
+                }
+            }
+            if self.pending_exit.is_some() {
+                return;
             }
             let completions: Vec<_> = {
                 let mut lock = self.agent_async_completions.0.lock().unwrap();

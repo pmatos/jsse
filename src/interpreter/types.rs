@@ -212,6 +212,13 @@ pub enum Completion {
         this: JsValue,
         args: Vec<JsValue>,
     },
+    /// A host-requested process exit (`__host_exit`, issue #242). Propagates
+    /// like `Throw` — it is abrupt and unwinds the stack — but is structurally
+    /// uncatchable: it does not match the `Throw` arm any `catch`, `finally`,
+    /// disposer, iterator `return()`, or Promise reaction inspects, so no user
+    /// code can ever consume it. Only the node host floor produces it (behind
+    /// `--node`), so it never arises with the floor off.
+    Exit(i32),
     Empty,
 }
 
