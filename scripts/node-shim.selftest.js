@@ -101,6 +101,20 @@ eq(util.format("%f", 2), "2", "%f integer");
 // ---- util.format: %j %c %% ------------------------------------------------
 eq(util.format("%j", { a: 1, b: [2, 3] }), '{"a":1,"b":[2,3]}', "%j json");
 eq(util.format("%j", undefined), "undefined", "%j undefined");
+(function () {
+  var circular = {};
+  circular.self = circular;
+  eq(util.format("%j", circular), "[Circular]", "%j circular structure -> [Circular]");
+  // Node's %j re-throws non-circular serialization errors (BigInt etc.) rather
+  // than masking them as [Circular].
+  var threw = false;
+  try {
+    util.format("%j", 1n);
+  } catch (e) {
+    threw = true;
+  }
+  truthy(threw, "%j of a BigInt re-throws instead of masking");
+})();
 eq(util.format("%c", "color:red"), "", "%c ignored (consumes arg)");
 
 // %% only substitutes when at least one argument is present: a lone string is
@@ -144,6 +158,15 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
     configurable: true,
   });
   eq(util.inspect(throwingGetter), "{ x: [Getter] }", "inspect does not invoke getters");
+  var arrGetter = [1];
+  Object.defineProperty(arrGetter, "1", {
+    get: function () {
+      throw new Error("boom");
+    },
+    enumerable: true,
+    configurable: true,
+  });
+  eq(util.inspect(arrGetter), "[ 1, [Getter] ]", "inspect does not invoke array getters");
 })();
 
 // ---- process fields -------------------------------------------------------

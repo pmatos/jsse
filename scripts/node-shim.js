@@ -92,7 +92,7 @@
       try {
         if (Array.isArray(v)) {
           var items = [];
-          for (var i = 0; i < v.length; i++) items.push(render(v[i], depth - 1));
+          for (var i = 0; i < v.length; i++) items.push(renderMember(v, i, depth));
           out = items.length ? "[ " + items.join(", ") + " ]" : "[]";
         } else {
           var keys = Object.keys(v);
@@ -100,22 +100,7 @@
           for (var j = 0; j < keys.length; j++) {
             var k = keys[j];
             var label = isIdentifierKey(k) ? k : quoteString(k);
-            // Render accessors without invoking them — Node's util.inspect shows
-            // [Getter]/[Setter] rather than calling the getter, so a throwing or
-            // side-effecting getter cannot make a diagnostic print throw/mutate
-            // under jsse where it would not under Node.
-            var desc = Object.getOwnPropertyDescriptor(v, k);
-            var valueStr;
-            if (desc && (desc.get || desc.set)) {
-              valueStr = desc.get
-                ? desc.set
-                  ? "[Getter/Setter]"
-                  : "[Getter]"
-                : "[Setter]";
-            } else {
-              valueStr = render(desc ? desc.value : v[k], depth - 1);
-            }
-            parts.push(label + ": " + valueStr);
+            parts.push(label + ": " + renderMember(v, k, depth));
           }
           var ctorName =
             v.constructor && v.constructor.name && v.constructor.name !== "Object"
@@ -129,6 +114,19 @@
         seen.pop();
       }
       return out;
+    }
+
+    // Render one own property/element WITHOUT invoking accessors — Node's
+    // util.inspect shows [Getter]/[Setter] rather than calling the getter, so a
+    // throwing or side-effecting accessor (object property or array element)
+    // cannot make a diagnostic print throw/mutate under jsse where it would not
+    // under Node.
+    function renderMember(container, key, depth) {
+      var desc = Object.getOwnPropertyDescriptor(container, key);
+      if (desc && (desc.get || desc.set)) {
+        return desc.get ? (desc.set ? "[Getter/Setter]" : "[Getter]") : "[Setter]";
+      }
+      return render(desc ? desc.value : container[key], depth - 1);
     }
 
     return render(value, maxDepth);
@@ -180,7 +178,14 @@
       var s = JSON.stringify(v);
       return s === undefined ? "undefined" : s;
     } catch (e) {
-      return "[Circular]";
+      // Node's %j suppresses ONLY circular-structure failures (returning
+      // "[Circular]") and re-throws everything else — BigInt, and user
+      // toJSON/getter exceptions. jsse's circular error is
+      // "Converting circular structure to JSON"; its BigInt/toJSON errors do not
+      // mention "circular", so matching the message is safe here (the shim is
+      // inert on Node, so this only ever sees jsse's error text).
+      if (e && /circular/i.test(String(e.message))) return "[Circular]";
+      throw e;
     }
   }
 
