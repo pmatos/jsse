@@ -132,7 +132,16 @@ fi
 # ---- step 2: clone (pinned, cached) ----------------------------------------
 if [ ! -d "$REPO_DIR" ]; then
     echo "Cloning $LIB ($LIB_REPO @ $LIB_REF)..."
-    git clone --depth 1 --branch "$LIB_REF" "$LIB_REPO" "$REPO_DIR"
+    # A shallow --branch clone is fastest, but `git clone --branch` only accepts
+    # a branch/tag name — a commit-SHA pin fails with "Remote branch <sha> not
+    # found". LIB_REF advertises tag/branch/sha, so fall back to a full clone +
+    # detached checkout of the exact revision when the shallow clone can't
+    # resolve the ref (i.e. a SHA pin).
+    if ! git clone --depth 1 --branch "$LIB_REF" "$LIB_REPO" "$REPO_DIR" 2>/dev/null; then
+        rm -rf "$REPO_DIR"
+        git clone "$LIB_REPO" "$REPO_DIR"
+        git -C "$REPO_DIR" checkout --detach "$LIB_REF"
+    fi
 else
     echo "Using cached clone at $REPO_DIR"
 fi
