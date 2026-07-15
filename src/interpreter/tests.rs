@@ -1779,3 +1779,155 @@ mod to_integer_or_infinity_value_tests {
         assert_eq!(global_string(&interp, "R"), "threw");
     }
 }
+
+/// Node host-compat "syscall floor" (issue #229). These exercise the ON-path
+/// (`enable_node_host`); the OFF-path 0-regression guarantee is covered by the
+/// full test262 run, which never enables the floor.
+mod node_host_tests {
+    use super::*;
+
+    fn run_node_script(source: &str) -> (Interpreter, Completion) {
+        let program = parse_program(source);
+        let mut interp = Interpreter::new();
+        interp.enable_node_host();
+        let c = interp.run(&program);
+        (interp, c)
+    }
+
+    /// Enable the floor, run `source`, and assert it finished without throwing.
+    /// JS-level `throw new Error(...)` inside `source` is how each case reports
+    /// a failed assertion.
+    fn assert_node_ok(source: &str) {
+        let (_interp, c) = run_node_script(source);
+        assert!(
+            matches!(c, Completion::Normal(_) | Completion::Empty),
+            "unexpected completion: {c:?}"
+        );
+    }
+
+    #[test]
+    fn host_globals_absent_when_floor_off() {
+        // `typeof` on an undeclared name is safe (no ReferenceError).
+        let interp = run_script(
+            r#"
+            var r = [
+              typeof __host_write,
+              typeof globalThis.__host_exit,
+              typeof __host_hrtime,
+              typeof __host_random_bytes,
+            ].join(",");
+            "#,
+        );
+        assert_eq!(
+            global_string(&interp, "r"),
+            "undefined,undefined,undefined,undefined"
+        );
+    }
+
+    #[test]
+    fn host_globals_are_non_enumerable_functions() {
+        assert_node_ok(
+            r#"
+            for (const name of ["__host_write","__host_exit","__host_hrtime","__host_random_bytes"]) {
+              const d = Object.getOwnPropertyDescriptor(globalThis, name);
+              if (!d) throw new Error(name + " missing");
+              if (d.enumerable) throw new Error(name + " is enumerable");
+              if (typeof globalThis[name] !== "function") throw new Error(name + " not a function");
+              if (Object.keys(globalThis).includes(name)) throw new Error(name + " shows in keys");
+            }
+            "#,
+        );
+    }
+
+    #[test]
+    fn host_write_returns_utf8_byte_count() {
+        // "€" encodes to 3 UTF-8 bytes; a lone surrogate becomes U+FFFD (also
+        // 3 bytes), matching Node's lossy handling.
+        assert_node_ok(
+            r#"
+            if (__host_write(1, "abc") !== 3) throw new Error("ascii");
+            if (__host_write(1, "€") !== 3) throw new Error("euro");
+            if (__host_write(2, String.fromCharCode(0xD800)) !== 3) throw new Error("surrogate");
+            if (__host_write(1, "") !== 0) throw new Error("empty");
+            "#,
+        );
+    }
+
+    #[test]
+    fn host_hrtime_is_monotonic_bigint() {
+        assert_node_ok(
+            r#"
+            const a = __host_hrtime();
+            const b = __host_hrtime();
+            if (typeof a !== "bigint") throw new Error("not a bigint");
+            if (a < 0n) throw new Error("negative");
+            if (!(b >= a)) throw new Error("not monotonic");
+            "#,
+        );
+    }
+
+    #[test]
+    fn host_random_bytes_length_and_entropy() {
+        assert_node_ok(
+            r#"
+            const a = __host_random_bytes(16);
+            if (!(a instanceof Uint8Array)) throw new Error("not Uint8Array");
+            if (a.length !== 16) throw new Error("wrong length");
+            if (__host_random_bytes(0).length !== 0) throw new Error("zero length");
+            const b = __host_random_bytes(16);
+            // Two independent 16-byte draws colliding is ~2^-128.
+            let same = true;
+            for (let i = 0; i < 16; i++) if (a[i] !== b[i]) { same = false; break; }
+            if (same) throw new Error("no entropy");
+            "#,
+        );
+    }
+
+    #[test]
+    fn host_random_bytes_rejects_out_of_range() {
+        assert_node_ok(
+            r#"
+            let threw = false;
+            try { __host_random_bytes(-1); } catch (e) { threw = e instanceof RangeError; }
+            if (!threw) throw new Error("negative not rejected");
+            threw = false;
+            try { __host_random_bytes(2 ** 31); } catch (e) { threw = e instanceof RangeError; }
+            if (!threw) throw new Error("oversize not rejected");
+            "#,
+        );
+    }
+
+    #[test]
+    fn host_exit_is_uncatchable_and_records_code() {
+        let (interp, c) = run_node_script(
+            r#"
+            globalThis.reached = "before";
+            try { __host_exit(42); globalThis.reached = "after-exit"; }
+            catch (e) { globalThis.reached = "caught"; }
+            finally { globalThis.reached = "finally"; }
+            globalThis.reached = "end";
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(42));
+        // Execution stopped at __host_exit: catch, finally, and the trailing
+        // statement never ran.
+        assert_eq!(global_string(&interp, "reached"), "before");
+        assert!(matches!(c, Completion::Throw(_)));
+    }
+
+    #[test]
+    fn host_exit_from_async_reaction_stops_drain() {
+        // The drain-loop backstop: a throw raised inside a Promise reaction is
+        // swallowed into a rejection, so only the loop's `pending_exit` check
+        // stops further microtasks from running.
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.log = "";
+            Promise.resolve().then(() => { globalThis.log += "then;"; __host_exit(9); globalThis.log += "after;"; });
+            Promise.resolve().then(() => { globalThis.log += "second;"; });
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(9));
+        assert_eq!(global_string(&interp, "log"), "then;");
+    }
+}

@@ -6,6 +6,7 @@ mod date;
 mod disposable;
 mod intl;
 mod iterators;
+pub(crate) mod node_host;
 mod number;
 mod promise;
 pub(crate) mod regexp;

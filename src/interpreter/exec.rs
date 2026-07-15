@@ -2293,6 +2293,10 @@ impl Interpreter {
         // §14.2.2: DisposeResources for the try block's scope (using declarations)
         let result = self.dispose_resources(&block_env, result);
         let result = match result {
+            // An in-flight `__host_exit` (issue #229) is uncatchable: skip the
+            // catch handler and let the sentinel throw propagate. `pending_exit`
+            // is always `None` unless the node host floor is enabled.
+            c @ Completion::Throw(_) if self.pending_exit.is_some() => c,
             Completion::Throw(val) => {
                 if let Some(handler) = &t.handler {
                     let catch_env = Environment::new(Some(env.clone()));
@@ -2314,6 +2318,11 @@ impl Interpreter {
             other => other,
         };
         if let Some(finalizer) = &t.finalizer {
+            // A pending `__host_exit` (issue #229) skips `finally`, matching
+            // Node's `process.exit` (immediate teardown, no finally).
+            if self.pending_exit.is_some() {
+                return result;
+            }
             // If we're yielding, don't run finally - generator will handle it on return/throw
             if matches!(result, Completion::Yield(_)) {
                 return result;
