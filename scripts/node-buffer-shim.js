@@ -48,8 +48,30 @@
   // UTF-8 encode a JS (UTF-16) string to a Uint8Array. Surrogate pairs combine
   // into a 4-byte sequence; a lone surrogate becomes U+FFFD (matching the Rust
   // host floor's __host_write).
+  // Write the UTF-8 bytes of a single code point into `target` (array or typed
+  // array) at `pos`; returns the position past the last byte written.
+  function encodeCodePointInto(code, target, pos) {
+    if (code < 0x80) {
+      target[pos++] = code;
+    } else if (code < 0x800) {
+      target[pos++] = 0xc0 | (code >> 6);
+      target[pos++] = 0x80 | (code & 0x3f);
+    } else if (code < 0x10000) {
+      target[pos++] = 0xe0 | (code >> 12);
+      target[pos++] = 0x80 | ((code >> 6) & 0x3f);
+      target[pos++] = 0x80 | (code & 0x3f);
+    } else {
+      target[pos++] = 0xf0 | (code >> 18);
+      target[pos++] = 0x80 | ((code >> 12) & 0x3f);
+      target[pos++] = 0x80 | ((code >> 6) & 0x3f);
+      target[pos++] = 0x80 | (code & 0x3f);
+    }
+    return pos;
+  }
+
   function utf8Encode(str) {
     var out = [];
+    var n = 0;
     for (var i = 0; i < str.length; i++) {
       var code = str.charCodeAt(i);
       if (code >= 0xd800 && code <= 0xdbff) {
@@ -63,24 +85,7 @@
       } else if (code >= 0xdc00 && code <= 0xdfff) {
         code = 0xfffd;
       }
-      if (code < 0x80) {
-        out.push(code);
-      } else if (code < 0x800) {
-        out.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
-      } else if (code < 0x10000) {
-        out.push(
-          0xe0 | (code >> 12),
-          0x80 | ((code >> 6) & 0x3f),
-          0x80 | (code & 0x3f)
-        );
-      } else {
-        out.push(
-          0xf0 | (code >> 18),
-          0x80 | ((code >> 12) & 0x3f),
-          0x80 | ((code >> 6) & 0x3f),
-          0x80 | (code & 0x3f)
-        );
-      }
+      n = encodeCodePointInto(code, out, n);
     }
     return Uint8Array.from(out);
   }
@@ -112,7 +117,12 @@
     }
     while (i < len) {
       var b0 = bytes[i];
-      var size, cp, min;
+      // size, cp, and the legal range for the *first* continuation byte, which
+      // depends on the lead (WHATWG UTF-8 decoder). Getting these bounds right
+      // is what rejects overlong encodings and surrogate/out-of-range code
+      // points per byte, so malformed input yields the same count of U+FFFD as
+      // Node/TextDecoder (e.g. `[e0,80,41]` → "��A", not "�A").
+      var size, cp, lower, upper;
       if (b0 < 0x80) {
         out.push(b0);
         i++;
@@ -120,41 +130,43 @@
       } else if (b0 >= 0xc2 && b0 <= 0xdf) {
         size = 2;
         cp = b0 & 0x1f;
-        min = 0x80;
+        lower = 0x80;
+        upper = 0xbf;
       } else if (b0 >= 0xe0 && b0 <= 0xef) {
         size = 3;
         cp = b0 & 0x0f;
-        min = 0x800;
+        lower = b0 === 0xe0 ? 0xa0 : 0x80; // reject 3-byte overlong
+        upper = b0 === 0xed ? 0x9f : 0xbf; // reject surrogates (ED A0..)
       } else if (b0 >= 0xf0 && b0 <= 0xf4) {
         size = 4;
         cp = b0 & 0x07;
-        min = 0x10000;
+        lower = b0 === 0xf0 ? 0x90 : 0x80; // reject 4-byte overlong
+        upper = b0 === 0xf4 ? 0x8f : 0xbf; // reject > U+10FFFF
       } else {
         // Invalid lead byte (0x80-0xC1, 0xF5-0xFF): consume one byte.
         fail();
         i++;
         continue;
       }
-      var j = 1;
+      // Validate each continuation byte against its legal range *before*
+      // accumulating; consume only the bytes that were valid, leaving the
+      // offending byte to be reprocessed (maximal-subpart substitution).
+      var consumed = 1;
       var ok = true;
-      for (; j < size; j++) {
+      for (var j = 1; j < size; j++) {
         var bx = bytes[i + j];
-        if (bx === undefined || (bx & 0xc0) !== 0x80) {
+        var lo = j === 1 ? lower : 0x80;
+        var hi = j === 1 ? upper : 0xbf;
+        if (bx === undefined || bx < lo || bx > hi) {
           ok = false;
           break;
         }
         cp = (cp << 6) | (bx & 0x3f);
+        consumed++;
       }
       if (!ok) {
-        // Consume the lead + any valid continuation bytes seen so far; the
-        // byte that broke the sequence is left for the next iteration.
         fail();
-        i += j;
-        continue;
-      }
-      if (cp < min || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)) {
-        fail();
-        i += size;
+        i += consumed;
         continue;
       }
       out.push(cp);
@@ -312,12 +324,35 @@
       return utf8Encode(input === undefined ? "" : String(input));
     };
     TextEncoderShim.prototype.encodeInto = function (source, dest) {
-      var bytes = utf8Encode(String(source));
-      var n = Math.min(bytes.length, dest.length);
-      for (var i = 0; i < n; i++) dest[i] = bytes[i];
-      // `read` (source code units consumed) is best-effort: report the whole
-      // source when everything fit, else leave it approximate.
-      return { read: n === bytes.length ? source.length : n, written: n };
+      // Encode code point by code point, stopping before any character whose
+      // UTF-8 bytes would not fit — a partial multibyte sequence is never
+      // written (Web/Node semantics). `read` counts source UTF-16 code units
+      // consumed, `written` counts bytes written.
+      source = String(source);
+      var written = 0;
+      var read = 0;
+      var cap = dest.length;
+      for (var i = 0; i < source.length; ) {
+        var code = source.charCodeAt(i);
+        var consumed = 1;
+        if (code >= 0xd800 && code <= 0xdbff) {
+          var next = source.charCodeAt(i + 1);
+          if (next >= 0xdc00 && next <= 0xdfff) {
+            code = 0x10000 + ((code - 0xd800) << 10) + (next - 0xdc00);
+            consumed = 2;
+          } else {
+            code = 0xfffd;
+          }
+        } else if (code >= 0xdc00 && code <= 0xdfff) {
+          code = 0xfffd;
+        }
+        var need = code < 0x80 ? 1 : code < 0x800 ? 2 : code < 0x10000 ? 3 : 4;
+        if (written + need > cap) break;
+        written = encodeCodePointInto(code, dest, written);
+        read += consumed;
+        i += consumed;
+      }
+      return { read: read, written: written };
     };
     globalThis.TextEncoder = TextEncoderShim;
   }
@@ -393,15 +428,24 @@
             length === undefined ? value.byteLength - offset : length | 0;
           return new Buffer(value, offset, len);
         }
+        if (value instanceof Uint8Array) {
+          // Byte view (incl. Buffer) → copy the bytes 1:1.
+          var copyU8 = new Buffer(value.length);
+          copyU8.set(value);
+          return copyU8;
+        }
         if (ArrayBuffer.isView(value)) {
-          // TypedArray / DataView / Buffer → copy the bytes.
-          var src =
-            value instanceof Uint8Array
-              ? value
-              : new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
-          var copy = new Buffer(src.length);
-          copy.set(src);
-          return copy;
+          // Other TypedArray → copy the *elements*, each truncated to a byte
+          // (Node: `Buffer.from(new Uint16Array([0x1234])) === <34>`, not the
+          // raw little-endian backing bytes). set() does the per-element ToUint8
+          // conversion. A DataView has no element `length`, so Node yields an
+          // empty Buffer — the `typeof length` guard routes it there.
+          if (typeof value.length === "number") {
+            var copyEl = new Buffer(value.length);
+            copyEl.set(value);
+            return copyEl;
+          }
+          return new Buffer(0);
         }
         if (value != null && typeof value.length === "number") {
           // Array-like of octets: each element is coerced via ToUint8.
@@ -602,15 +646,13 @@
         sourceStart = sourceStart === undefined ? 0 : sourceStart | 0;
         sourceEnd = sourceEnd === undefined ? this.length : sourceEnd | 0;
         if (sourceEnd > this.length) sourceEnd = this.length;
-        var n = 0;
-        for (
-          var i = sourceStart;
-          i < sourceEnd && targetStart + n < target.length;
-          i++
-        ) {
-          target[targetStart + n] = this[i];
-          n++;
-        }
+        var n = Math.min(sourceEnd - sourceStart, target.length - targetStart);
+        if (n <= 0) return 0;
+        // memmove semantics: snapshot the source range first so an overlapping
+        // in-place copy (target aliases this) can't read bytes it has already
+        // overwritten (Node: copy [0,4) of "abcde" to offset 1 → "aabcd").
+        var src = new Uint8Array(this.subarray(sourceStart, sourceStart + n));
+        target.set(src, targetStart);
         return n;
       }
 
