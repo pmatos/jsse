@@ -12328,6 +12328,20 @@ impl Interpreter {
         let mut result = self.call_function_inner(func, this, args, false);
         let had_explicit_return = self.last_call_had_explicit_return;
         let final_this = self.last_call_this_value.take();
+        // The constructor's frame is popped from the call stack the moment its
+        // body returns a `TailCall`, and `last_call_this_value` is not a GC root
+        // — so while the tail-call chain runs (its callees can allocate or call
+        // `$262.gc()`) the freshly constructed object is reachable only through
+        // these Rust locals. Temp-root it across the drive so it cannot be swept
+        // before `[[Construct]]` returns it. Rooting `final_this` covers the base
+        // path's `this_val` (same object); rooting `this` also guards the
+        // `unwrap_or(this_val)` fallback and is a no-op for the derived path's
+        // `undefined`.
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(this);
+        if let Some(v) = &final_this {
+            self.gc_root_value(v);
+        }
         while let Completion::TailCall {
             func,
             this,
@@ -12336,6 +12350,7 @@ impl Interpreter {
         {
             result = self.call_function_inner(&func, &this, &tc_args, false);
         }
+        self.gc_unroot_frame(gc_frame);
         (result, had_explicit_return, final_this)
     }
 
