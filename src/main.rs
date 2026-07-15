@@ -179,13 +179,17 @@ fn run_repl(interp: &mut interpreter::Interpreter) -> ExitCode {
             Ok(_) => {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() {
-                    match run_source_with_interp(interp, trimmed, false, None) {
+                    let repl_result = run_source_with_interp(interp, trimmed, false, None);
+                    // A `__host_exit` (issue #229) surfaces as a sentinel
+                    // Runtime error; honor the exit code before reporting it,
+                    // matching the file/eval paths' `exit_code_from_result`.
+                    if let Some(code) = interp.pending_exit {
+                        return ExitCode::from((code as u32 & 0xff) as u8);
+                    }
+                    match repl_result {
                         Ok(()) => {}
                         Err(EngineError::Parse(msg)) => eprintln!("SyntaxError: {msg}"),
                         Err(EngineError::Runtime(msg)) => eprintln!("{msg}"),
-                    }
-                    if let Some(code) = interp.pending_exit {
-                        return ExitCode::from((code as u32 & 0xff) as u8);
                     }
                 }
             }

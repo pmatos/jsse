@@ -2119,4 +2119,21 @@ mod node_host_tests {
         assert_eq!(global_string(&interp, "side"), "no");
         assert_eq!(global_string(&interp, "afterStack"), "no");
     }
+
+    #[test]
+    fn host_exit_from_sync_async_body_stops_expression_position() {
+        // The statement-level chokepoint can't stop a sibling expression that
+        // evaluates before control returns to the statement loop; the producer
+        // guard in call_async_function must return abrupt so the comma RHS does
+        // not run. (PR #237 review round 6, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.after = "no";
+            async function f() { __host_exit(5); }
+            f(), (globalThis.after = "yes"); // RHS must NOT run
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(5));
+        assert_eq!(global_string(&interp, "after"), "no");
+    }
 }

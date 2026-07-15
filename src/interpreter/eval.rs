@@ -15519,6 +15519,11 @@ impl Interpreter {
                     let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                     self.drain_microtasks();
                     self.gc_unroot_frame(gc_frame);
+                    // A default-param expression may have called `__host_exit`
+                    // (issue #229): return abrupt so the caller unwinds.
+                    if self.pending_exit.is_some() {
+                        return Completion::Throw(JsValue::Undefined);
+                    }
                     return Completion::Normal(promise);
                 }
                 break;
@@ -15528,6 +15533,10 @@ impl Interpreter {
                 let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                 self.drain_microtasks();
                 self.gc_unroot_frame(gc_frame);
+                // See above: a default-param `__host_exit` must unwind abruptly.
+                if self.pending_exit.is_some() {
+                    return Completion::Throw(JsValue::Undefined);
+                }
                 return Completion::Normal(promise);
             }
         }
@@ -15575,6 +15584,14 @@ impl Interpreter {
         self.async_function_resume(async_id, JsValue::Undefined, false);
 
         self.gc_unroot_frame(gc_frame);
+        // The synchronous drive above may have requested `__host_exit`
+        // (issue #229). Returning `Normal(promise)` here would let the CALLER
+        // keep evaluating — including in expression position (`f(), g()`;
+        // `h(f())`), which the statement-level chokepoint can't reach. Return
+        // the abrupt sentinel instead. Inert unless the node host floor is on.
+        if self.pending_exit.is_some() {
+            return Completion::Throw(JsValue::Undefined);
+        }
         Completion::Normal(promise)
     }
 
