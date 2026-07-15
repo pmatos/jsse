@@ -57,6 +57,13 @@ run_one() {
         echo "  → $label: FAIL (exit $rc)"
         return 1
     fi
+    # A clean exit with no assertion-count marker means the fixture never
+    # reached its report line (e.g. an accidental early return) — that must be a
+    # failure, not a silent green with zero verified assertions.
+    if [ -z "$COUNT" ]; then
+        echo "  → $label: FAIL (no SHIM-FIXTURE count reported)"
+        return 1
+    fi
     echo "  → $label: PASS ($COUNT assertions)"
     return 0
 }

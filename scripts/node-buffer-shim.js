@@ -846,6 +846,23 @@
       return new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     }
 
+    // Validate a read/write offset the way Node does, rather than `| 0` (which
+    // would turn 1.9 / Infinity / 2**32 into an in-bounds index and read the
+    // wrong bytes): a non-number is a TypeError; a non-integer / negative /
+    // out-of-range offset is a RangeError. The caller defaults undefined to 0.
+    function assertOffset(offset, size, buf) {
+      if (typeof offset !== "number") {
+        throw new TypeError('"offset" must be a number');
+      }
+      if (
+        !Number.isInteger(offset) ||
+        offset < 0 ||
+        offset + size > buf.length
+      ) {
+        throw new RangeError('"offset" is out of range');
+      }
+    }
+
     // [readName, writeName, DataView getter, DataView setter, size, littleEndian]
     // littleEndian === null → single-byte accessor (no endianness argument).
     var FIXED = [
@@ -920,12 +937,14 @@
         le = spec[5];
       var range = rangeFor(set, size);
       Buffer.prototype[rd] = function (offset) {
-        offset = offset === undefined ? 0 : offset | 0;
+        offset = offset === undefined ? 0 : offset;
+        assertOffset(offset, size, this);
         var dv = dvOf(this);
         return le === null ? dv[get](offset) : dv[get](offset, le);
       };
       Buffer.prototype[wr] = function (value, offset) {
-        offset = offset === undefined ? 0 : offset | 0;
+        offset = offset === undefined ? 0 : offset;
+        assertOffset(offset, size, this);
         if (range !== null && (value < range[0] || value > range[1])) {
           throw new RangeError('The value of "value" is out of range');
         }
@@ -942,16 +961,18 @@
     // lie inside the buffer, else RangeError — so a truncated read yields an
     // exception, not NaN, and a write can't run past the end.
     function checkVarWidth(buf, offset, byteLength) {
-      if (byteLength < 1 || byteLength > 6) {
-        throw new RangeError('"byteLength" must be >= 1 and <= 6');
+      if (
+        typeof byteLength !== "number" ||
+        !Number.isInteger(byteLength) ||
+        byteLength < 1 ||
+        byteLength > 6
+      ) {
+        throw new RangeError('"byteLength" must be an integer >= 1 and <= 6');
       }
-      if (offset < 0 || offset + byteLength > buf.length) {
-        throw new RangeError('"offset" is out of bounds');
-      }
+      assertOffset(offset, byteLength, buf);
     }
     Buffer.prototype.readUIntLE = function (offset, byteLength) {
-      offset = offset | 0;
-      byteLength = byteLength | 0;
+      offset = offset === undefined ? 0 : offset;
       checkVarWidth(this, offset, byteLength);
       var val = 0;
       var mul = 1;
@@ -962,8 +983,7 @@
       return val;
     };
     Buffer.prototype.readUIntBE = function (offset, byteLength) {
-      offset = offset | 0;
-      byteLength = byteLength | 0;
+      offset = offset === undefined ? 0 : offset;
       checkVarWidth(this, offset, byteLength);
       var val = 0;
       for (var i = 0; i < byteLength; i++) val = val * 0x100 + this[offset + i];
@@ -971,19 +991,18 @@
     };
     Buffer.prototype.readIntLE = function (offset, byteLength) {
       var val = this.readUIntLE(offset, byteLength);
-      var max = Math.pow(2, 8 * (byteLength | 0));
+      var max = Math.pow(2, 8 * byteLength);
       if (val >= max / 2) val -= max;
       return val;
     };
     Buffer.prototype.readIntBE = function (offset, byteLength) {
       var val = this.readUIntBE(offset, byteLength);
-      var max = Math.pow(2, 8 * (byteLength | 0));
+      var max = Math.pow(2, 8 * byteLength);
       if (val >= max / 2) val -= max;
       return val;
     };
     Buffer.prototype.writeUIntLE = function (value, offset, byteLength) {
-      offset = offset | 0;
-      byteLength = byteLength | 0;
+      offset = offset === undefined ? 0 : offset;
       checkVarWidth(this, offset, byteLength);
       if (value < 0 || value >= Math.pow(2, 8 * byteLength)) {
         throw new RangeError('"value" is out of range');
@@ -996,8 +1015,7 @@
       return offset + byteLength;
     };
     Buffer.prototype.writeUIntBE = function (value, offset, byteLength) {
-      offset = offset | 0;
-      byteLength = byteLength | 0;
+      offset = offset === undefined ? 0 : offset;
       checkVarWidth(this, offset, byteLength);
       if (value < 0 || value >= Math.pow(2, 8 * byteLength)) {
         throw new RangeError('"value" is out of range');
@@ -1010,7 +1028,6 @@
       return offset + byteLength;
     };
     Buffer.prototype.writeIntLE = function (value, offset, byteLength) {
-      byteLength = byteLength | 0;
       var limit = Math.pow(2, 8 * byteLength - 1);
       if (value < -limit || value >= limit) {
         throw new RangeError('"value" is out of range');
@@ -1019,7 +1036,6 @@
       return this.writeUIntLE(value, offset, byteLength);
     };
     Buffer.prototype.writeIntBE = function (value, offset, byteLength) {
-      byteLength = byteLength | 0;
       var limit = Math.pow(2, 8 * byteLength - 1);
       if (value < -limit || value >= limit) {
         throw new RangeError('"value" is out of range');
