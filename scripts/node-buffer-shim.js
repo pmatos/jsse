@@ -560,9 +560,20 @@
 
       static byteLength(value, encoding) {
         if (typeof value !== "string") {
-          if (value instanceof ArrayBuffer) return value.byteLength;
-          if (ArrayBuffer.isView(value)) return value.byteLength;
-          value = String(value);
+          if (
+            value instanceof ArrayBuffer ||
+            (typeof SharedArrayBuffer !== "undefined" &&
+              value instanceof SharedArrayBuffer) ||
+            ArrayBuffer.isView(value)
+          ) {
+            return value.byteLength;
+          }
+          // Node throws for anything else rather than measuring String(value)
+          // (which would make byteLength(123) return 3).
+          throw new TypeError(
+            'The "string" argument must be of type string or an instance of ' +
+              "Buffer or ArrayBuffer."
+          );
         }
         encoding = normalizeEncoding(encoding);
         switch (encoding) {
@@ -673,8 +684,7 @@
           if (length === undefined) length = this.length - offset;
           if (encoding === undefined) encoding = "utf8";
         }
-        offset = offset | 0;
-        if (offset < 0 || offset > this.length) {
+        if (!Number.isInteger(offset) || offset < 0 || offset > this.length) {
           throw new RangeError('"offset" is outside of buffer bounds');
         }
         var remaining = this.length - offset;
@@ -706,6 +716,9 @@
       }
 
       compare(target, targetStart, targetEnd, sourceStart, sourceEnd) {
+        if (!(target instanceof Uint8Array)) {
+          throw new TypeError('The "target" argument must be a Buffer or Uint8Array');
+        }
         return bufCompare(
           this,
           sourceStart === undefined ? 0 : sourceStart | 0,
@@ -717,8 +730,20 @@
       }
 
       copy(target, targetStart, sourceStart, sourceEnd) {
+        if (!(target instanceof Uint8Array)) {
+          throw new TypeError('The "target" argument must be a Buffer or Uint8Array');
+        }
+        // targetStart is lenient in Node (coerced/floored; out-of-range → 0
+        // copied), but sourceStart is strictly validated.
         targetStart = targetStart === undefined ? 0 : targetStart | 0;
-        sourceStart = sourceStart === undefined ? 0 : sourceStart | 0;
+        sourceStart = sourceStart === undefined ? 0 : sourceStart;
+        if (
+          !Number.isInteger(sourceStart) ||
+          sourceStart < 0 ||
+          sourceStart > this.length
+        ) {
+          throw new RangeError('"sourceStart" is out of range');
+        }
         sourceEnd = sourceEnd === undefined ? this.length : sourceEnd | 0;
         if (sourceEnd > this.length) sourceEnd = this.length;
         var n = Math.min(sourceEnd - sourceStart, target.length - targetStart);
@@ -732,8 +757,23 @@
       }
 
       fill(value, offset, end, encoding) {
-        offset = offset === undefined ? 0 : offset | 0;
-        end = end === undefined ? this.length : end | 0;
+        // fill(value, encoding) — a string second arg is the encoding.
+        if (typeof offset === "string") {
+          encoding = offset;
+          offset = 0;
+          end = this.length;
+        } else if (typeof end === "string") {
+          encoding = end;
+          end = this.length;
+        }
+        offset = offset === undefined ? 0 : offset;
+        end = end === undefined ? this.length : end;
+        if (!Number.isInteger(offset) || offset < 0 || offset > this.length) {
+          throw new RangeError('"offset" is out of range');
+        }
+        if (!Number.isInteger(end) || end < 0 || end > this.length) {
+          throw new RangeError('"end" is out of range');
+        }
         if (typeof value === "number") {
           for (var i = offset; i < end; i++) this[i] = value & 0xff;
           return this;
