@@ -30,6 +30,7 @@
   var hostWrite = typeof __host_write !== "undefined" ? __host_write : null;
   var hostHrtime = typeof __host_hrtime !== "undefined" ? __host_hrtime : null;
   var hostExit = typeof __host_exit !== "undefined" ? __host_exit : null;
+  var fallbackConsoleLog = console.log;
 
   var NS_PER_SEC = 1000000000;
 
@@ -254,6 +255,7 @@
     }
     // Fallback: jsse without the syscall floor only exposes newline-appending
     // console.log, so accumulate partial writes and emit one line at a time.
+    // Use the original native log because this shim replaces console.log below.
     var buf = "";
     return {
       fd: fd,
@@ -262,7 +264,7 @@
         buf += String(chunk);
         var idx;
         while ((idx = buf.indexOf("\n")) !== -1) {
-          console.log(buf.slice(0, idx));
+          fallbackConsoleLog.call(console, buf.slice(0, idx));
           buf = buf.slice(idx + 1);
         }
         var callback = typeof encodingOrCb === "function" ? encodingOrCb : cb;
@@ -271,7 +273,7 @@
       },
       _flush: function () {
         if (buf.length) {
-          console.log(buf);
+          fallbackConsoleLog.call(console, buf);
           buf = "";
         }
       },

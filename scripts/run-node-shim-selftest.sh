@@ -106,6 +106,48 @@ check_exit() {  # <label> <cmd...>
 check_exit jsse "$JSSE" --node
 command -v node >/dev/null 2>&1 && check_exit node node
 
+# ---- no-host fallback probe -----------------------------------------------
+# The library harness always passes --node, but node-shim.js documents a
+# degraded pure-JS fallback for plain jsse runs. Cover that path directly so the
+# fallback stream never recurses through the shimmed console methods.
+echo ""
+echo "== jsse fallback without --node =="
+FALLBACK_PROBE="$TMP/fallback-probe.js"
+cat "$SCRIPT_DIR/node-shim.js" > "$FALLBACK_PROBE"
+cat >> "$FALLBACK_PROBE" <<'PROBE'
+process.stdout.write("fallback stdout\n");
+process.stderr.write("fallback stderr\n");
+console.log("fallback console");
+console.error("fallback error");
+process.stdout.write("partial");
+process.exit(0);
+PROBE
+
+fallback_rc=0
+"$JSSE" "$FALLBACK_PROBE" > "$TMP/jsse-fallback.out" 2> "$TMP/jsse-fallback.err" || fallback_rc=$?
+if [ "$fallback_rc" -ne 0 ]; then
+    echo "FAIL: jsse fallback without --node exited $fallback_rc" >&2
+    [ -s "$TMP/jsse-fallback.out" ] && cat "$TMP/jsse-fallback.out" >&2
+    [ -s "$TMP/jsse-fallback.err" ] && cat "$TMP/jsse-fallback.err" >&2
+    FAIL=1
+elif ! diff -u - "$TMP/jsse-fallback.out" > "$TMP/fallback.diff" <<'EXPECTED'; then
+fallback stdout
+fallback stderr
+fallback console
+fallback error
+partial
+EXPECTED
+    echo "FAIL: jsse fallback without --node output differed:" >&2
+    cat "$TMP/fallback.diff" >&2
+    FAIL=1
+elif [ -s "$TMP/jsse-fallback.err" ]; then
+    echo "FAIL: jsse fallback without --node wrote stderr:" >&2
+    cat "$TMP/jsse-fallback.err" >&2
+    FAIL=1
+else
+    echo "  jsse: fallback stdout/stderr/console without --node — OK"
+fi
+
 echo ""
 if [ "$FAIL" -eq 0 ]; then
     echo "OK: node-shim self-test passed on jsse (cross-checked against Node)"
