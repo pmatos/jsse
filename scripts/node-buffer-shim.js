@@ -671,9 +671,11 @@
           totalLength = 0;
           for (var s = 0; s < list.length; s++) totalLength += list[s].length;
         } else if (typeof totalLength !== "number") {
-          // A non-number totalLength is a TypeError; a negative/NaN number is a
-          // RangeError (the constructor validates the numeric value).
           throw new TypeError('"totalLength" argument must be of type number');
+        } else if (!Number.isInteger(totalLength)) {
+          // Unlike alloc (which floors a fractional size), concat rejects a
+          // non-integer totalLength (Node).
+          throw new RangeError('"totalLength" is out of range');
         }
         var out = new Buffer(totalLength);
         var pos = 0;
@@ -747,6 +749,9 @@
       }
 
       write(string, offset, length, encoding) {
+        if (typeof string !== "string") {
+          throw new TypeError('The "string" argument must be of type string');
+        }
         if (offset === undefined) {
           encoding = "utf8";
           offset = 0;
@@ -834,12 +839,12 @@
         targetStart =
           targetStart === undefined ? 0 : Math.trunc(Number(targetStart));
         if (targetStart !== targetStart) targetStart = 0; // NaN
-        sourceStart = sourceStart === undefined ? 0 : sourceStart;
-        if (
-          !Number.isInteger(sourceStart) ||
-          sourceStart < 0 ||
-          sourceStart > this.length
-        ) {
+        // sourceStart is ToInteger-coerced (floored), like Node — not a strict
+        // integer — but must land within the source buffer.
+        sourceStart =
+          sourceStart === undefined ? 0 : Math.trunc(Number(sourceStart));
+        if (sourceStart !== sourceStart) sourceStart = 0; // NaN → 0
+        if (sourceStart < 0 || sourceStart > this.length) {
           throw new RangeError('"sourceStart" is out of range');
         }
         // sourceEnd: ToInteger (not `| 0`, which wraps 2**32 to 0); a negative
