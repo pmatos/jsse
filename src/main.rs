@@ -38,24 +38,19 @@ struct Cli {
     /// Enable the bytecode compiler + VM for eligible functions
     #[arg(long = "bytecode")]
     bytecode: bool,
+
+    /// Enable the Node host-compat syscall floor (issue #229): installs the
+    /// internal, non-enumerable `__host_*` globals (byte I/O, OS entropy,
+    /// monotonic clock, process exit) used by the Node prelude. Off by default;
+    /// deliberately NOT auto-enabled by `--prelude`, since the test262 harness
+    /// loads via `--prelude` and must keep the default global environment.
+    #[arg(long = "node")]
+    node: bool,
 }
 
 enum EngineError {
     Parse(String),
     Runtime(String),
-}
-
-fn run_source(
-    source: &str,
-    is_module: bool,
-    path: Option<&Path>,
-    can_block: bool,
-    bytecode: bool,
-) -> Result<(), EngineError> {
-    let mut interp = interpreter::Interpreter::new();
-    interp.can_block = can_block;
-    interp.bytecode_enabled = bytecode;
-    run_source_with_interp(&mut interp, source, is_module, path)
 }
 
 fn run_source_with_interp(
@@ -83,14 +78,19 @@ fn run_source_with_interp(
     }
 }
 
-fn execute_code(
-    code: &str,
-    is_module: bool,
-    path: Option<&Path>,
-    can_block: bool,
-    bytecode: bool,
+/// Map a run result to a process exit code. A pending `__host_exit` (issue
+/// #229) takes precedence: its code becomes the process status and the sentinel
+/// throw is not reported as an error. `pending_exit` is always `None` unless the
+/// node host floor was enabled, so this is behaviour-identical to before when
+/// `--node` is absent.
+fn exit_code_from_result(
+    interp: &interpreter::Interpreter,
+    result: Result<(), EngineError>,
 ) -> ExitCode {
-    match run_source(code, is_module, path, can_block, bytecode) {
+    if let Some(code) = interp.pending_exit {
+        return ExitCode::from((code as u32 & 0xff) as u8);
+    }
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(EngineError::Parse(msg)) => {
             eprintln!("SyntaxError: {msg}");
@@ -109,7 +109,36 @@ fn execute_code(
     }
 }
 
-fn run_file(path: &Path, force_module: bool, can_block: bool, bytecode: bool) -> ExitCode {
+fn new_interp(can_block: bool, bytecode: bool, node: bool) -> interpreter::Interpreter {
+    let mut interp = interpreter::Interpreter::new();
+    interp.can_block = can_block;
+    interp.bytecode_enabled = bytecode;
+    if node {
+        interp.enable_node_host();
+    }
+    interp
+}
+
+fn execute_code(
+    code: &str,
+    is_module: bool,
+    path: Option<&Path>,
+    can_block: bool,
+    bytecode: bool,
+    node: bool,
+) -> ExitCode {
+    let mut interp = new_interp(can_block, bytecode, node);
+    let result = run_source_with_interp(&mut interp, code, is_module, path);
+    exit_code_from_result(&interp, result)
+}
+
+fn run_file(
+    path: &Path,
+    force_module: bool,
+    can_block: bool,
+    bytecode: bool,
+    node: bool,
+) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -119,13 +148,19 @@ fn run_file(path: &Path, force_module: bool, can_block: bool, bytecode: bool) ->
     };
     let is_module = force_module || path.extension().is_some_and(|ext| ext == "mjs");
     let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    execute_code(&source, is_module, Some(&abs_path), can_block, bytecode)
+    execute_code(
+        &source,
+        is_module,
+        Some(&abs_path),
+        can_block,
+        bytecode,
+        node,
+    )
 }
 
-fn run_repl() -> ExitCode {
+fn run_repl(interp: &mut interpreter::Interpreter) -> ExitCode {
     let stdin = io::stdin();
     let mut stdout = io::stdout();
-    let mut interp = interpreter::Interpreter::new();
 
     println!("jsse v{}", env!("CARGO_PKG_VERSION"));
     println!("Type JavaScript expressions. Press Ctrl-D to exit.");
@@ -144,7 +179,14 @@ fn run_repl() -> ExitCode {
             Ok(_) => {
                 let trimmed = line.trim();
                 if !trimmed.is_empty() {
-                    match run_source_with_interp(&mut interp, trimmed, false, None) {
+                    let repl_result = run_source_with_interp(interp, trimmed, false, None);
+                    // A `__host_exit` (issue #229) surfaces as a sentinel
+                    // Runtime error; honor the exit code before reporting it,
+                    // matching the file/eval paths' `exit_code_from_result`.
+                    if let Some(code) = interp.pending_exit {
+                        return ExitCode::from((code as u32 & 0xff) as u8);
+                    }
+                    match repl_result {
                         Ok(()) => {}
                         Err(EngineError::Parse(msg)) => eprintln!("SyntaxError: {msg}"),
                         Err(EngineError::Runtime(msg)) => eprintln!("{msg}"),
@@ -194,20 +236,26 @@ fn run_main() -> ExitCode {
     // If no preludes, use simpler path
     if cli.prelude.is_empty() {
         if let Some(code) = &cli.eval {
-            return execute_code(code, cli.module, None, cli.can_block, cli.bytecode);
+            return execute_code(
+                code,
+                cli.module,
+                None,
+                cli.can_block,
+                cli.bytecode,
+                cli.node,
+            );
         }
 
         if let Some(path) = &cli.file {
-            return run_file(path, cli.module, cli.can_block, cli.bytecode);
+            return run_file(path, cli.module, cli.can_block, cli.bytecode, cli.node);
         }
 
-        return run_repl();
+        let mut interp = new_interp(cli.can_block, cli.bytecode, cli.node);
+        return run_repl(&mut interp);
     }
 
     // With preludes, we need to use a single interpreter instance
-    let mut interp = interpreter::Interpreter::new();
-    interp.can_block = cli.can_block;
-    interp.bytecode_enabled = cli.bytecode;
+    let mut interp = new_interp(cli.can_block, cli.bytecode, cli.node);
 
     // Run prelude files as scripts
     for prelude_path in &cli.prelude {
@@ -218,7 +266,12 @@ fn run_main() -> ExitCode {
                 return ExitCode::from(1);
             }
         };
-        if let Err(e) = run_source_with_interp(&mut interp, &source, false, None) {
+        let prelude_result = run_source_with_interp(&mut interp, &source, false, None);
+        // A prelude that called `__host_exit` is a clean exit, not an error.
+        if interp.pending_exit.is_some() {
+            return exit_code_from_result(&interp, prelude_result);
+        }
+        if let Err(e) = prelude_result {
             match e {
                 EngineError::Parse(msg) => {
                     eprintln!("SyntaxError in prelude: {msg}");
@@ -232,19 +285,10 @@ fn run_main() -> ExitCode {
         }
     }
 
-    // Now run the main file
+    // Now run the main input.
     if let Some(code) = &cli.eval {
-        match run_source_with_interp(&mut interp, code, cli.module, None) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(EngineError::Parse(msg)) => {
-                eprintln!("SyntaxError: {msg}");
-                ExitCode::from(2)
-            }
-            Err(EngineError::Runtime(msg)) => {
-                eprintln!("{msg}");
-                ExitCode::from(1)
-            }
-        }
+        let result = run_source_with_interp(&mut interp, code, cli.module, None);
+        exit_code_from_result(&interp, result)
     } else if let Some(path) = &cli.file {
         let source = match std::fs::read_to_string(path) {
             Ok(s) => s,
@@ -255,18 +299,9 @@ fn run_main() -> ExitCode {
         };
         let is_module = cli.module || path.extension().is_some_and(|ext| ext == "mjs");
         let abs_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        match run_source_with_interp(&mut interp, &source, is_module, Some(&abs_path)) {
-            Ok(()) => ExitCode::SUCCESS,
-            Err(EngineError::Parse(msg)) => {
-                eprintln!("SyntaxError: {msg}");
-                ExitCode::from(2)
-            }
-            Err(EngineError::Runtime(msg)) => {
-                eprintln!("{msg}");
-                ExitCode::from(1)
-            }
-        }
+        let result = run_source_with_interp(&mut interp, &source, is_module, Some(&abs_path));
+        exit_code_from_result(&interp, result)
     } else {
-        run_repl()
+        run_repl(&mut interp)
     }
 }

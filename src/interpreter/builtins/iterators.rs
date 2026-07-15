@@ -4735,6 +4735,13 @@ impl Interpreter {
     /// IteratorClose per §7.4.6 - called during abrupt completion (e.g., break/throw in for-of).
     /// The original completion takes priority over errors from return().
     pub(crate) fn iterator_close(&mut self, iterator: &JsValue, _completion: JsValue) -> JsValue {
+        // A pending `__host_exit` (issue #229) makes the exit immediate: skip
+        // the iterator's user-defined `return()` (arbitrary side effects / a
+        // possible re-entrant `__host_exit`), matching Node's `process.exit`.
+        // Inert unless the node host floor is enabled.
+        if self.pending_exit.is_some() {
+            return _completion;
+        }
         if let JsValue::Object(io) = iterator {
             // GetMethod(iterator, "return"): undefined/null → no-op, non-callable → TypeError
             let return_val = match self.get_object_property(io.id, "return", iterator) {
@@ -4757,6 +4764,11 @@ impl Interpreter {
 
     /// IteratorClose for normal completion paths (no abrupt completion to prioritize).
     pub(crate) fn iterator_close_result(&mut self, iterator: &JsValue) -> Result<(), JsValue> {
+        // See `iterator_close`: a pending `__host_exit` (issue #229) skips the
+        // iterator's `return()` so the exit is immediate. Inert off-path.
+        if self.pending_exit.is_some() {
+            return Ok(());
+        }
         if let JsValue::Object(io) = iterator {
             // GetMethod(iterator, "return"): undefined/null → no-op, non-callable → TypeError
             let return_val = match self.get_object_property(io.id, "return", iterator) {

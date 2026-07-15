@@ -45,6 +45,12 @@ impl Interpreter {
                     break;
                 }
             }
+            // See exec_statements_cached: stop on a pending `__host_exit`
+            // (issue #229) even when the statement completed non-abruptly.
+            if self.pending_exit.is_some() {
+                last = Completion::Throw(JsValue::Undefined);
+                break;
+            }
         }
         self.current_ic_handle = prev;
         last
@@ -225,6 +231,15 @@ impl Interpreter {
                     self.call_stack_envs.pop();
                     return other;
                 }
+            }
+            // Chokepoint for `__host_exit` (issue #229): a statement may set
+            // `pending_exit` while returning a non-abrupt completion — an async
+            // call that rejected its promise, or `using` disposal. Stop the
+            // sequence so trailing statements don't run, regardless of which
+            // path requested the exit. Inert unless the node host floor is on.
+            if self.pending_exit.is_some() {
+                self.call_stack_envs.pop();
+                return Completion::Throw(JsValue::Undefined);
             }
         }
         self.call_stack_envs.pop();
@@ -2302,6 +2317,10 @@ impl Interpreter {
         // §14.2.2: DisposeResources for the try block's scope (using declarations)
         let result = self.dispose_resources(&block_env, result);
         let result = match result {
+            // An in-flight `__host_exit` (issue #229) is uncatchable: skip the
+            // catch handler and let the sentinel throw propagate. `pending_exit`
+            // is always `None` unless the node host floor is enabled.
+            c @ Completion::Throw(_) if self.pending_exit.is_some() => c,
             Completion::Throw(val) => {
                 if let Some(handler) = &t.handler {
                     let catch_env = Environment::new(Some(env.clone()));
@@ -2330,6 +2349,11 @@ impl Interpreter {
             other => other,
         };
         if let Some(finalizer) = &t.finalizer {
+            // A pending `__host_exit` (issue #229) skips `finally`, matching
+            // Node's `process.exit` (immediate teardown, no finally).
+            if self.pending_exit.is_some() {
+                return result;
+            }
             // If we're yielding, don't run finally - generator will handle it on return/throw
             if matches!(result, Completion::Yield(_)) {
                 return result;
@@ -2562,6 +2586,15 @@ impl Interpreter {
     }
 
     pub(crate) fn dispose_resources(&mut self, env: &EnvRef, completion: Completion) -> Completion {
+        // A pending `__host_exit` (issue #229) makes the exit immediate: skip
+        // running `Symbol.dispose`/`Symbol.asyncDispose` (user code that could
+        // re-enter `__host_exit` or overwrite the code), matching Node's
+        // `process.exit`. Return an ABRUPT sentinel (not the possibly-Normal
+        // input completion) so the caller's `exec_statements` unwinds instead
+        // of running trailing statements. Inert unless the floor is enabled.
+        if self.pending_exit.is_some() {
+            return Completion::Throw(JsValue::Undefined);
+        }
         let stack = env.borrow_mut().dispose_stack.take();
         let Some(mut stack) = stack else {
             return completion;
@@ -2578,20 +2611,37 @@ impl Interpreter {
         let _had_error = current_error.is_some();
 
         for resource in &stack {
+            // A prior disposer may have requested `__host_exit` (issue #229):
+            // stop before running the remaining disposers so the exit is
+            // immediate. Return an ABRUPT sentinel (the block may have been
+            // completing normally) so trailing statements don't run. Inert
+            // unless the node host floor is enabled.
+            if self.pending_exit.is_some() {
+                return Completion::Throw(JsValue::Undefined);
+            }
             // §10.4.4.3 Dispose: If method is undefined, result is undefined; else Call(method, V)
             let result = if matches!(resource.dispose_method, JsValue::Undefined) {
                 Completion::Normal(JsValue::Undefined)
             } else {
                 self.call_function(&resource.dispose_method, &resource.value, &[])
             };
+            // The disposer itself may have requested `__host_exit` (issue #229):
+            // stop before `wrap_suppressed_error`, which would call the
+            // user-replaceable `SuppressedError` constructor (arbitrary JS
+            // after the supposedly-immediate exit). Abrupt sentinel so trailing
+            // statements don't run. Inert off-path.
+            if self.pending_exit.is_some() {
+                return Completion::Throw(JsValue::Undefined);
+            }
             match result {
                 Completion::Normal(v) if resource.hint == DisposeHint::Async => {
-                    match self.await_value(&v) {
-                        Completion::Normal(_) => {}
-                        Completion::Throw(e) => {
-                            current_error = Some(self.wrap_suppressed_error(e, current_error));
-                        }
-                        _ => {}
+                    let awaited = self.await_value(&v);
+                    // Awaiting an async disposer may likewise have requested exit.
+                    if self.pending_exit.is_some() {
+                        return Completion::Throw(JsValue::Undefined);
+                    }
+                    if let Completion::Throw(e) = awaited {
+                        current_error = Some(self.wrap_suppressed_error(e, current_error));
                     }
                 }
                 Completion::Throw(e) => {

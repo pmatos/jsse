@@ -6299,7 +6299,13 @@ impl Interpreter {
                 return Completion::Normal(self.create_iter_result_object(yield_val, false));
             }
             if let Completion::Throw(e) = stmt_result {
-                if let Some(try_info) = current_try_stack.pop() {
+                // A pending `__host_exit` (issue #229) is uncatchable: don't
+                // route the sentinel throw into the generator/async body's
+                // catch/finally states — let it complete the machine and
+                // propagate. Inert unless the node host floor is enabled.
+                if self.pending_exit.is_none()
+                    && let Some(try_info) = current_try_stack.pop()
+                {
                     if let Some(catch_state) = try_info.catch_state {
                         pending_exception = Some(e);
                         current_id = catch_state;
@@ -6404,7 +6410,11 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
                                 // Route through try-stack for proper catch/finally handling
-                                if let Some(try_info) = current_try_stack.pop() {
+                                // — unless `__host_exit` is pending (issue #229), which is
+                                // uncatchable and must complete the machine instead.
+                                if self.pending_exit.is_none()
+                                    && let Some(try_info) = current_try_stack.pop()
+                                {
                                     if let Some(catch_state) = try_info.catch_state {
                                         pending_exception = Some(e);
                                         current_id = catch_state;
@@ -9819,7 +9829,13 @@ impl Interpreter {
             };
 
             if let Completion::Throw(e) = stmt_result {
-                if let Some(try_info) = current_try_stack.pop() {
+                // A pending `__host_exit` (issue #229) is uncatchable: don't
+                // route the sentinel throw into the generator/async body's
+                // catch/finally states — let it complete the machine and
+                // propagate. Inert unless the node host floor is enabled.
+                if self.pending_exit.is_none()
+                    && let Some(try_info) = current_try_stack.pop()
+                {
                     if let Some(catch_state) = try_info.catch_state {
                         pending_exception = Some(e);
                         current_id = catch_state;
@@ -10007,7 +10023,11 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
                                 // Route through try-stack for proper catch/finally handling
-                                if let Some(try_info) = current_try_stack.pop() {
+                                // — unless `__host_exit` is pending (issue #229), which is
+                                // uncatchable and must complete the machine instead.
+                                if self.pending_exit.is_none()
+                                    && let Some(try_info) = current_try_stack.pop()
+                                {
                                     if let Some(catch_state) = try_info.catch_state {
                                         pending_exception = Some(e);
                                         current_id = catch_state;
@@ -15540,6 +15560,11 @@ impl Interpreter {
                     let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                     self.drain_microtasks();
                     self.gc_unroot_frame(gc_frame);
+                    // A default-param expression may have called `__host_exit`
+                    // (issue #229): return abrupt so the caller unwinds.
+                    if self.pending_exit.is_some() {
+                        return Completion::Throw(JsValue::Undefined);
+                    }
                     return Completion::Normal(promise);
                 }
                 break;
@@ -15549,6 +15574,10 @@ impl Interpreter {
                 let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
                 self.drain_microtasks();
                 self.gc_unroot_frame(gc_frame);
+                // See above: a default-param `__host_exit` must unwind abruptly.
+                if self.pending_exit.is_some() {
+                    return Completion::Throw(JsValue::Undefined);
+                }
                 return Completion::Normal(promise);
             }
         }
@@ -15596,6 +15625,14 @@ impl Interpreter {
         self.async_function_resume(async_id, JsValue::Undefined, false);
 
         self.gc_unroot_frame(gc_frame);
+        // The synchronous drive above may have requested `__host_exit`
+        // (issue #229). Returning `Normal(promise)` here would let the CALLER
+        // keep evaluating — including in expression position (`f(), g()`;
+        // `h(f())`), which the statement-level chokepoint can't reach. Return
+        // the abrupt sentinel instead. Inert unless the node host floor is on.
+        if self.pending_exit.is_some() {
+            return Completion::Throw(JsValue::Undefined);
+        }
         Completion::Normal(promise)
     }
 
@@ -15759,6 +15796,16 @@ impl Interpreter {
                 )
                 && let Some(exc) = pending_exception.take()
             {
+                // A pending `__host_exit` (issue #229) is uncatchable: reject
+                // the promise without routing the sentinel through the async
+                // body's catch/finally handlers, and stop driving the machine.
+                // Inert unless the node host floor is enabled. Mirrors the
+                // unhandled-throw path below.
+                if self.pending_exit.is_some() {
+                    self.scheduler.remove_async_function_state(async_id);
+                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exc]);
+                    return;
+                }
                 let mut handled = false;
                 for i in (0..try_stack.len()).rev() {
                     if !try_stack[i].entered_catch
@@ -16671,6 +16718,12 @@ impl Interpreter {
             if done.get() {
                 break;
             }
+            // A job/completion run below may have requested `__host_exit`
+            // (issue #229): stop draining immediately so no further queued user
+            // job runs after the exit. Inert unless the node host floor is on.
+            if self.pending_exit.is_some() {
+                break;
+            }
             if let Some((roots, job)) = self.scheduler.pop_microtask() {
                 let mt_frame = self.gc_root_frame();
                 for val in &roots {
@@ -16688,6 +16741,10 @@ impl Interpreter {
             if !completions.is_empty() {
                 for f in completions {
                     f(self);
+                    // Stop before the rest of the batch if a callback exited.
+                    if self.pending_exit.is_some() {
+                        break;
+                    }
                 }
                 continue;
             }
@@ -16712,6 +16769,15 @@ impl Interpreter {
         }
 
         self.gc_unroot_frame(gc_frame);
+
+        // A job drained above may have requested `__host_exit` (issue #229) with
+        // no await result recorded. Return the abrupt sentinel so EVERY caller
+        // propagates the exit uniformly, rather than falling through as
+        // `Normal(undefined)` and relying on each caller to re-poll. Inert
+        // unless the node host floor is enabled.
+        if self.pending_exit.is_some() {
+            return Completion::Throw(JsValue::Undefined);
+        }
 
         match result.borrow_mut().take() {
             Some(Ok(v)) => Completion::Normal(v),

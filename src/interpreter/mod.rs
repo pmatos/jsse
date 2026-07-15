@@ -150,6 +150,19 @@ pub struct Interpreter {
     pub(crate) call_ic_fast_dispatch_count: std::cell::Cell<u64>,
     pub(crate) bytecode_enabled: bool,
     pub(crate) bytecode_chunks_executed: usize,
+    /// Node host-compat "syscall floor" gate (issue #229). When false (the
+    /// default, and always the case under test262), no `__host_*` globals are
+    /// installed and every host-floor check below is inert — the global
+    /// environment is byte-identical to a build without this feature.
+    pub(crate) node_host_enabled: bool,
+    /// Set by `__host_exit(code)` to signal an uncatchable process exit. When
+    /// `Some`, the try/catch handler propagates instead of catching, the
+    /// microtask drain loop stops, and `main` uses the code as the process
+    /// exit status. Always `None` when `node_host_enabled` is false.
+    pub(crate) pending_exit: Option<i32>,
+    /// Monotonic clock anchor for `__host_hrtime`. Set when the host floor is
+    /// enabled so elapsed nanoseconds are measured from a stable origin.
+    pub(crate) host_clock_start: Option<std::time::Instant>,
     /// Per-function-body hoisting-analysis cache keyed by body `Rc` identity
     /// (#72). The key `*const Vec<Statement>` is used purely as an identity —
     /// never dereferenced. Cannot go stale: ASTs are immutable post-parse and
@@ -335,6 +348,9 @@ impl Interpreter {
             call_ic_fast_dispatch_count: std::cell::Cell::new(0),
             bytecode_enabled: false,
             bytecode_chunks_executed: 0,
+            node_host_enabled: false,
+            pending_exit: None,
+            host_clock_start: None,
             hoist_cache: FxHashMap::default(),
             ic_store: ic_store::IcStore::new(),
             current_ic_handle: ic_store::BodyStoreHandle(0),
@@ -4736,6 +4752,14 @@ impl Interpreter {
     pub(crate) fn drain_microtasks(&mut self) {
         let mut iterations = 0u64;
         loop {
+            // Backstop for `__host_exit` (issue #229): a throw raised from an
+            // async body / Promise reaction is swallowed into a rejection rather
+            // than propagating, so the try/catch guard alone cannot stop the
+            // loop. Bail here the moment an exit is pending. Inert (always
+            // `None`) unless the node host floor is enabled.
+            if self.pending_exit.is_some() {
+                return;
+            }
             if let Some((roots, job)) = self.scheduler.pop_microtask() {
                 let mt_frame = self.gc_root_frame();
                 for val in &roots {
@@ -4772,6 +4796,12 @@ impl Interpreter {
                     }
                     for f in completions {
                         f(self);
+                        // A host callback may have requested `__host_exit`
+                        // (issue #229): stop before running the rest of the
+                        // already-drained batch so the exit is immediate.
+                        if self.pending_exit.is_some() {
+                            return;
+                        }
                     }
                 }
                 continue;
@@ -4785,6 +4815,10 @@ impl Interpreter {
             }
             for f in completions {
                 f(self);
+                // See above: a host callback may have requested `__host_exit`.
+                if self.pending_exit.is_some() {
+                    return;
+                }
             }
         }
     }
@@ -4798,6 +4832,11 @@ impl Interpreter {
     /// with no `.then` / `await`) does not block process exit.
     pub(crate) fn drain_microtasks_until_idle(&mut self) {
         self.drain_microtasks();
+        // A pending `__host_exit` (issue #229) stops the loop immediately;
+        // don't block up to 120s waiting on timers/host-async work.
+        if self.pending_exit.is_some() {
+            return;
+        }
         if !self.has_awaited_pending_async() && self.scheduler.pending_timer_jobs_count() == 0 {
             return;
         }
@@ -4805,6 +4844,12 @@ impl Interpreter {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         loop {
             self.drain_microtasks();
+            // A host callback drained above may have requested `__host_exit`
+            // (issue #229): stop immediately instead of waiting up to 120s on
+            // any still-pending timer/async job. Inert unless the floor is on.
+            if self.pending_exit.is_some() {
+                return;
+            }
             if !self.has_awaited_pending_async() && self.scheduler.pending_timer_jobs_count() == 0 {
                 break;
             }

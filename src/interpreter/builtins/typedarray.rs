@@ -6944,7 +6944,7 @@ fn encode_base64(data: &[u8], alphabet: &str, omit_padding: bool) -> String {
     result
 }
 
-fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Completion {
+pub(crate) fn create_uint8array_from_bytes(interp: &mut Interpreter, bytes: &[u8]) -> Completion {
     let len = bytes.len();
     let buf = bytes.to_vec();
     let buf_rc = Rc::new(RefCell::new(BufferData::Owned(buf)));

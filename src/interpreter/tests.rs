@@ -1779,3 +1779,380 @@ mod to_integer_or_infinity_value_tests {
         assert_eq!(global_string(&interp, "R"), "threw");
     }
 }
+
+/// Node host-compat "syscall floor" (issue #229). These exercise the ON-path
+/// (`enable_node_host`); the OFF-path 0-regression guarantee is covered by the
+/// full test262 run, which never enables the floor.
+mod node_host_tests {
+    use super::*;
+
+    fn run_node_script(source: &str) -> (Interpreter, Completion) {
+        let program = parse_program(source);
+        let mut interp = Interpreter::new();
+        interp.enable_node_host();
+        let c = interp.run(&program);
+        (interp, c)
+    }
+
+    /// Enable the floor, run `source`, and assert it finished without throwing.
+    /// JS-level `throw new Error(...)` inside `source` is how each case reports
+    /// a failed assertion.
+    fn assert_node_ok(source: &str) {
+        let (_interp, c) = run_node_script(source);
+        assert!(
+            matches!(c, Completion::Normal(_) | Completion::Empty),
+            "unexpected completion: {c:?}"
+        );
+    }
+
+    #[test]
+    fn host_globals_absent_when_floor_off() {
+        // `typeof` on an undeclared name is safe (no ReferenceError).
+        let interp = run_script(
+            r#"
+            var r = [
+              typeof __host_write,
+              typeof globalThis.__host_exit,
+              typeof __host_hrtime,
+              typeof __host_random_bytes,
+            ].join(",");
+            "#,
+        );
+        assert_eq!(
+            global_string(&interp, "r"),
+            "undefined,undefined,undefined,undefined"
+        );
+    }
+
+    #[test]
+    fn host_globals_are_non_enumerable_functions() {
+        assert_node_ok(
+            r#"
+            for (const name of ["__host_write","__host_exit","__host_hrtime","__host_random_bytes"]) {
+              const d = Object.getOwnPropertyDescriptor(globalThis, name);
+              if (!d) throw new Error(name + " missing");
+              if (d.enumerable) throw new Error(name + " is enumerable");
+              if (typeof globalThis[name] !== "function") throw new Error(name + " not a function");
+              if (Object.keys(globalThis).includes(name)) throw new Error(name + " shows in keys");
+            }
+            "#,
+        );
+    }
+
+    #[test]
+    fn host_write_returns_utf8_byte_count() {
+        // "€" encodes to 3 UTF-8 bytes; a lone surrogate becomes U+FFFD (also
+        // 3 bytes), matching Node's lossy handling.
+        assert_node_ok(
+            r#"
+            if (__host_write(1, "abc") !== 3) throw new Error("ascii");
+            if (__host_write(1, "€") !== 3) throw new Error("euro");
+            if (__host_write(2, String.fromCharCode(0xD800)) !== 3) throw new Error("surrogate");
+            if (__host_write(1, "") !== 0) throw new Error("empty");
+            "#,
+        );
+    }
+
+    #[test]
+    fn host_hrtime_is_monotonic_bigint() {
+        assert_node_ok(
+            r#"
+            const a = __host_hrtime();
+            const b = __host_hrtime();
+            if (typeof a !== "bigint") throw new Error("not a bigint");
+            if (a < 0n) throw new Error("negative");
+            if (!(b >= a)) throw new Error("not monotonic");
+            "#,
+        );
+    }
+
+    #[test]
+    fn host_random_bytes_length_and_entropy() {
+        assert_node_ok(
+            r#"
+            const a = __host_random_bytes(16);
+            if (!(a instanceof Uint8Array)) throw new Error("not Uint8Array");
+            if (a.length !== 16) throw new Error("wrong length");
+            if (__host_random_bytes(0).length !== 0) throw new Error("zero length");
+            const b = __host_random_bytes(16);
+            // Two independent 16-byte draws colliding is ~2^-128.
+            let same = true;
+            for (let i = 0; i < 16; i++) if (a[i] !== b[i]) { same = false; break; }
+            if (same) throw new Error("no entropy");
+            "#,
+        );
+    }
+
+    #[test]
+    fn host_random_bytes_rejects_out_of_range() {
+        assert_node_ok(
+            r#"
+            let threw = false;
+            try { __host_random_bytes(-1); } catch (e) { threw = e instanceof RangeError; }
+            if (!threw) throw new Error("negative not rejected");
+            threw = false;
+            try { __host_random_bytes(2 ** 31); } catch (e) { threw = e instanceof RangeError; }
+            if (!threw) throw new Error("oversize not rejected");
+            "#,
+        );
+    }
+
+    #[test]
+    fn host_exit_is_uncatchable_and_records_code() {
+        let (interp, c) = run_node_script(
+            r#"
+            globalThis.reached = "before";
+            try { __host_exit(42); globalThis.reached = "after-exit"; }
+            catch (e) { globalThis.reached = "caught"; }
+            finally { globalThis.reached = "finally"; }
+            globalThis.reached = "end";
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(42));
+        // Execution stopped at __host_exit: catch, finally, and the trailing
+        // statement never ran.
+        assert_eq!(global_string(&interp, "reached"), "before");
+        assert!(matches!(c, Completion::Throw(_)));
+    }
+
+    #[test]
+    fn host_exit_from_async_reaction_stops_drain() {
+        // The drain-loop backstop: a throw raised inside a Promise reaction is
+        // swallowed into a rejection, so only the loop's `pending_exit` check
+        // stops further microtasks from running.
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.log = "";
+            Promise.resolve().then(() => { globalThis.log += "then;"; __host_exit(9); globalThis.log += "after;"; });
+            Promise.resolve().then(() => { globalThis.log += "second;"; });
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(9));
+        assert_eq!(global_string(&interp, "log"), "then;");
+    }
+
+    #[test]
+    fn host_exit_skips_iterator_return_cleanup() {
+        // A pending exit must not run the iterator's user-defined return()
+        // during for-of unwinding — it could re-enter __host_exit and overwrite
+        // the code, or run arbitrary side effects. (PR #237 review, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.cleanup = "no";
+            const iter = {
+              [Symbol.iterator]() { return this; },
+              next() { return { value: 1, done: false }; },
+              return() { globalThis.cleanup = "ran"; __host_exit(99); return { done: true }; },
+            };
+            for (const x of iter) { __host_exit(7); }
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(7)); // not overwritten by return()'s exit(99)
+        assert_eq!(global_string(&interp, "cleanup"), "no");
+    }
+
+    #[test]
+    fn host_exit_skips_using_disposal() {
+        // A pending exit must not run Symbol.dispose from a `using` declaration.
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.disposed = "no";
+            {
+              using r = { [Symbol.dispose]() { globalThis.disposed = "ran"; } };
+              __host_exit(3);
+            }
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(3));
+        assert_eq!(global_string(&interp, "disposed"), "no");
+    }
+
+    #[test]
+    fn host_exit_uncatchable_in_generator_body() {
+        // The generator/async state machine routes a Throw through its own
+        // catch/finally states; a pending exit must bypass that. (PR #237
+        // review round 2, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.ran = "no";
+            function* g() { try { yield 0; __host_exit(7); } catch { globalThis.ran = "caught"; } }
+            const it = g();
+            it.next(); // yields 0
+            it.next(); // resumes, calls __host_exit(7)
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(7));
+        assert_eq!(global_string(&interp, "ran"), "no");
+    }
+
+    #[test]
+    fn host_exit_uncatchable_in_async_body() {
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.aran = "no";
+            async function f() { try { await 0; __host_exit(5); } catch { globalThis.aran = "caught"; } }
+            f();
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(5));
+        assert_eq!(global_string(&interp, "aran"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_disposer_stops_remaining_disposers() {
+        // Disposal runs in reverse order: `b` disposes first and calls exit,
+        // so `a`'s disposer must not run. (PR #237 review round 2, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.d = "";
+            {
+              using a = { [Symbol.dispose]() { globalThis.d += "a"; } };
+              using b = { [Symbol.dispose]() { globalThis.d += "b"; __host_exit(4); } };
+            }
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(4));
+        assert_eq!(global_string(&interp, "d"), "b");
+    }
+
+    #[test]
+    fn host_exit_from_disposer_skips_suppressed_error_wrapping() {
+        // When disposal is already unwinding a throw, a disposer that calls
+        // __host_exit must not fall through to wrap_suppressed_error, which
+        // would invoke the (user-replaceable) SuppressedError constructor —
+        // arbitrary JS after the exit. (PR #237 review round 3, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.suppressedCtorRan = "no";
+            globalThis.aRan = "no";
+            globalThis.caught = "no";
+            globalThis.SuppressedError = function () { globalThis.suppressedCtorRan = "ran"; };
+            try {
+              {
+                using a = { [Symbol.dispose]() { globalThis.aRan = "yes"; } };
+                using b = { [Symbol.dispose]() { __host_exit(8); } };
+                throw new Error("boom"); // disposal now unwinds an existing error
+              }
+            } catch (e) { globalThis.caught = "yes"; }
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(8));
+        assert_eq!(global_string(&interp, "suppressedCtorRan"), "no");
+        assert_eq!(global_string(&interp, "aRan"), "no"); // earlier resource not disposed
+        assert_eq!(global_string(&interp, "caught"), "no"); // exit is uncatchable
+    }
+
+    #[test]
+    fn host_exit_from_disposer_propagates_abrupt() {
+        // A disposer calling __host_exit while the block completes NORMALLY must
+        // make dispose_resources return an abrupt completion, so the statement
+        // after the block does not run. (PR #237 review round 4, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.after = "no";
+            {
+              using r = { [Symbol.dispose]() { __host_exit(4); } };
+            }
+            globalThis.after = "yes"; // must NOT run
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(4));
+        assert_eq!(global_string(&interp, "after"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_async_disposer_propagates_abrupt() {
+        // Async disposal awaits via await_value's own drain loop; an exit there
+        // must stop draining and propagate abruptly. (PR #237 review round 4.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.afterAsync = "no";
+            async function f() {
+              {
+                await using r = { async [Symbol.asyncDispose]() { __host_exit(6); } };
+              }
+              globalThis.afterAsync = "yes"; // must NOT run
+            }
+            f();
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(6));
+        assert_eq!(global_string(&interp, "afterAsync"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_sync_async_body_propagates_abrupt() {
+        // An async function that calls __host_exit in its synchronous prologue
+        // rejects its promise and returns Normal(promise) to the caller; the
+        // exec_statements chokepoint must stop the trailing statement.
+        // (PR #237 review round 5, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.after = "no";
+            async function f() { __host_exit(5); }
+            f();
+            globalThis.after = "yes"; // must NOT run
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(5));
+        assert_eq!(global_string(&interp, "after"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_disposable_stack_stops_remaining() {
+        // DisposableStack.prototype.dispose has its own LIFO disposal loop.
+        // The last-deferred disposer (exit) runs first; the earlier one must
+        // not run, and the statement after dispose() must not run.
+        // (PR #237 review round 5, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.side = "no";
+            globalThis.afterStack = "no";
+            const s = new DisposableStack();
+            s.defer(() => { globalThis.side = "ran"; });
+            s.defer(() => { __host_exit(4); });
+            s.dispose();
+            globalThis.afterStack = "yes"; // must NOT run
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(4));
+        assert_eq!(global_string(&interp, "side"), "no");
+        assert_eq!(global_string(&interp, "afterStack"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_sync_async_body_stops_expression_position() {
+        // The statement-level chokepoint can't stop a sibling expression that
+        // evaluates before control returns to the statement loop; the producer
+        // guard in call_async_function must return abrupt so the comma RHS does
+        // not run. (PR #237 review round 6, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.after = "no";
+            async function f() { __host_exit(5); }
+            f(), (globalThis.after = "yes"); // RHS must NOT run
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(5));
+        assert_eq!(global_string(&interp, "after"), "no");
+    }
+
+    #[test]
+    fn host_exit_during_dispose_async_await_propagates_abrupt() {
+        // A microtask that calls __host_exit while AsyncDisposableStack's
+        // disposeAsync is awaiting must make the disposeAsync() call return
+        // abruptly, so a sibling in expression position does not run.
+        // (PR #237 review round 7, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.after = "no";
+            Promise.resolve().then(() => { __host_exit(23); });
+            const s = new AsyncDisposableStack();
+            s.use(null);
+            s.disposeAsync(), (globalThis.after = "yes"); // RHS must NOT run
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(23));
+        assert_eq!(global_string(&interp, "after"), "no");
+    }
+}
