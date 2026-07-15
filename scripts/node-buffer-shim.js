@@ -658,13 +658,23 @@
         if (!Array.isArray(list)) {
           throw new TypeError('"list" argument must be an Array of Buffers');
         }
+        // Every entry must be a Buffer/Uint8Array (Node rejects a plain array or
+        // a wider typed array like Uint16Array with a TypeError).
+        for (var i = 0; i < list.length; i++) {
+          if (!(list[i] instanceof Uint8Array)) {
+            throw new TypeError(
+              '"list[' + i + ']" must be an instance of Buffer or Uint8Array'
+            );
+          }
+        }
         if (totalLength === undefined) {
           totalLength = 0;
-          for (var i = 0; i < list.length; i++) totalLength += list[i].length;
+          for (var s = 0; s < list.length; s++) totalLength += list[s].length;
+        } else if (typeof totalLength !== "number") {
+          // A non-number totalLength is a TypeError; a negative/NaN number is a
+          // RangeError (the constructor validates the numeric value).
+          throw new TypeError('"totalLength" argument must be of type number');
         }
-        // A caller-supplied invalid totalLength (negative/NaN) must throw a
-        // RangeError, not coerce to a giant/zero length — the constructor
-        // validates via toAllocSize.
         var out = new Buffer(totalLength);
         var pos = 0;
         for (var j = 0; j < list.length && pos < out.length; j++) {
@@ -813,9 +823,12 @@
         if (!(target instanceof Uint8Array)) {
           throw new TypeError('The "target" argument must be a Buffer or Uint8Array');
         }
-        // targetStart is lenient in Node (coerced/floored; out-of-range → 0
-        // copied), but sourceStart is strictly validated.
-        targetStart = targetStart === undefined ? 0 : targetStart | 0;
+        // targetStart is lenient in Node (ToInteger, not `| 0` — a target start
+        // at/above 2**32 must stay out of range and copy 0, not wrap to 0 and
+        // overwrite from the start), but sourceStart is strictly validated.
+        targetStart =
+          targetStart === undefined ? 0 : Math.trunc(Number(targetStart));
+        if (targetStart !== targetStart) targetStart = 0; // NaN
         sourceStart = sourceStart === undefined ? 0 : sourceStart;
         if (
           !Number.isInteger(sourceStart) ||
