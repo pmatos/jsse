@@ -482,28 +482,16 @@
           }
           return new Buffer(0);
         }
-        if (value != null && typeof value.length === "number") {
-          // Array-like of octets: each element is coerced via ToUint8. The
-          // length is clamped ToLength-style (negative/NaN → 0, fractional
-          // floored) so a sentinel like { length: -1 } yields an empty buffer
-          // (Node) rather than a multi-GiB allocation.
-          var alen = value.length;
-          alen =
-            alen !== alen || alen < 0
-              ? 0
-              : Math.min(Math.floor(alen), 0xffffffff);
-          var out = new Buffer(alen);
-          for (var i = 0; i < out.length; i++) out[i] = value[i];
-          return out;
-        }
         if (value != null && typeof value === "object") {
           // { type: 'Buffer', data: [...] } — the Buffer#toJSON round-trip.
           if (value.type === "Buffer" && Array.isArray(value.data)) {
             return Buffer.from(value.data);
           }
           // Node honors valueOf() / Symbol.toPrimitive returning a usable value
-          // (e.g. Buffer.from({ valueOf() { return "abc"; } }) === <61 62 63>),
-          // recursing on the converted result.
+          // BEFORE treating an object as array-like, so Buffer.from(new
+          // String("abc")) uses the string "abc" (→ <61 62 63>), not the indexed
+          // characters as octets. A plain array/array-like whose valueOf returns
+          // itself falls through to the array-like path below.
           var prim;
           if (typeof value.valueOf === "function") {
             var vo = value.valueOf();
@@ -518,6 +506,20 @@
           if (prim != null && prim !== value) {
             return Buffer.from(prim, encodingOrOffset, length);
           }
+        }
+        if (value != null && typeof value.length === "number") {
+          // Array-like of octets: each element is coerced via ToUint8. The
+          // length is clamped ToLength-style (negative/NaN → 0, fractional
+          // floored) so a sentinel like { length: -1 } yields an empty buffer
+          // (Node) rather than a multi-GiB allocation.
+          var alen = value.length;
+          alen =
+            alen !== alen || alen < 0
+              ? 0
+              : Math.min(Math.floor(alen), 0xffffffff);
+          var out = new Buffer(alen);
+          for (var i = 0; i < out.length; i++) out[i] = value[i];
+          return out;
         }
         throw new TypeError(
           "The first argument must be of type string or an instance of " +
@@ -622,12 +624,14 @@
       // ----- instance methods -----
       toString(encoding, start, end) {
         var len = this.length;
-        start = start === undefined ? 0 : start | 0;
-        if (start < 0) start = 0;
+        // Clamp numerically (not `| 0`, which wraps Infinity / >32-bit to 0):
+        // start = Infinity → empty slice, end = Infinity → whole buffer (Node).
+        start = start === undefined ? 0 : Math.floor(Number(start));
+        if (start !== start || start < 0) start = 0;
         if (start > len) start = len;
-        end = end === undefined ? len : end | 0;
+        end = end === undefined ? len : Math.floor(Number(end));
+        if (end !== end || end < 0) end = 0;
         if (end > len) end = len;
-        if (end < 0) end = 0;
         if (end <= start) return "";
         encoding = normalizeEncoding(encoding);
         var i, s;
@@ -774,18 +778,27 @@
         if (!Number.isInteger(end) || end < 0 || end > this.length) {
           throw new RangeError('"end" is out of range');
         }
-        if (typeof value === "number") {
-          for (var i = offset; i < end; i++) this[i] = value & 0xff;
+        if (typeof value === "string") {
+          var bytes = strToBytes(value, encoding);
+          if (bytes.length === 0) return this;
+          for (var j = offset, p = 0; j < end; j++, p++) {
+            this[j] = bytes[p % bytes.length];
+          }
           return this;
         }
-        var bytes =
-          value instanceof Uint8Array
-            ? value
-            : strToBytes(String(value), encoding);
-        if (bytes.length === 0) return this;
-        for (var j = offset, p = 0; j < end; j++, p++) {
-          this[j] = bytes[p % bytes.length];
+        if (value instanceof Uint8Array) {
+          if (value.length === 0) return this;
+          for (var k = offset, q = 0; k < end; k++, q++) {
+            this[k] = value[q % value.length];
+          }
+          return this;
         }
+        // Any other value (number, boolean, null, object) is coerced to a single
+        // byte (Node): true → 01, false/null/NaN → 00, 2.9 → 02.
+        var n = Number(value);
+        if (n !== n) n = 0;
+        n = n & 0xff;
+        for (var i = offset; i < end; i++) this[i] = n;
         return this;
       }
 
