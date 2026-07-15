@@ -2587,14 +2587,22 @@ impl Interpreter {
             } else {
                 self.call_function(&resource.dispose_method, &resource.value, &[])
             };
+            // The disposer itself may have requested `__host_exit` (issue #229):
+            // stop before `wrap_suppressed_error`, which would call the
+            // user-replaceable `SuppressedError` constructor (arbitrary JS
+            // after the supposedly-immediate exit). Inert off-path.
+            if self.pending_exit.is_some() {
+                return completion;
+            }
             match result {
                 Completion::Normal(v) if resource.hint == DisposeHint::Async => {
-                    match self.await_value(&v) {
-                        Completion::Normal(_) => {}
-                        Completion::Throw(e) => {
-                            current_error = Some(self.wrap_suppressed_error(e, current_error));
-                        }
-                        _ => {}
+                    let awaited = self.await_value(&v);
+                    // Awaiting an async disposer may likewise have requested exit.
+                    if self.pending_exit.is_some() {
+                        return completion;
+                    }
+                    if let Completion::Throw(e) = awaited {
+                        current_error = Some(self.wrap_suppressed_error(e, current_error));
                     }
                 }
                 Completion::Throw(e) => {

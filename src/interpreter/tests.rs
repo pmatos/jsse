@@ -2014,4 +2014,31 @@ mod node_host_tests {
         assert_eq!(interp.pending_exit, Some(4));
         assert_eq!(global_string(&interp, "d"), "b");
     }
+
+    #[test]
+    fn host_exit_from_disposer_skips_suppressed_error_wrapping() {
+        // When disposal is already unwinding a throw, a disposer that calls
+        // __host_exit must not fall through to wrap_suppressed_error, which
+        // would invoke the (user-replaceable) SuppressedError constructor —
+        // arbitrary JS after the exit. (PR #237 review round 3, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.suppressedCtorRan = "no";
+            globalThis.aRan = "no";
+            globalThis.caught = "no";
+            globalThis.SuppressedError = function () { globalThis.suppressedCtorRan = "ran"; };
+            try {
+              {
+                using a = { [Symbol.dispose]() { globalThis.aRan = "yes"; } };
+                using b = { [Symbol.dispose]() { __host_exit(8); } };
+                throw new Error("boom"); // disposal now unwinds an existing error
+              }
+            } catch (e) { globalThis.caught = "yes"; }
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(8));
+        assert_eq!(global_string(&interp, "suppressedCtorRan"), "no");
+        assert_eq!(global_string(&interp, "aRan"), "no"); // earlier resource not disposed
+        assert_eq!(global_string(&interp, "caught"), "no"); // exit is uncatchable
+    }
 }
