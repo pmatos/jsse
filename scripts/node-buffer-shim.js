@@ -687,6 +687,11 @@
       }
 
       static compare(a, b) {
+        if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array)) {
+          throw new TypeError(
+            "The arguments must be one of type Buffer or Uint8Array"
+          );
+        }
         return bufCompare(a, 0, a.length, b, 0, b.length);
       }
 
@@ -856,17 +861,25 @@
       }
 
       fill(value, offset, end, encoding) {
-        // fill(value, encoding) — a string second arg is the encoding.
-        if (typeof offset === "string") {
-          encoding = offset;
-          offset = 0;
-          end = this.length;
-        } else if (typeof end === "string") {
-          encoding = end;
-          end = this.length;
+        // fill(value, encoding) — a string second/third arg is the encoding ONLY
+        // when the fill value is itself a string; for a numeric/Uint8Array value
+        // a string in the offset/end position is an invalid offset (Node throws
+        // TypeError), not an encoding.
+        if (typeof value === "string") {
+          if (typeof offset === "string") {
+            encoding = offset;
+            offset = 0;
+            end = this.length;
+          } else if (typeof end === "string") {
+            encoding = end;
+            end = this.length;
+          }
         }
         offset = offset === undefined ? 0 : offset;
         end = end === undefined ? this.length : end;
+        if (typeof offset !== "number" || typeof end !== "number") {
+          throw new TypeError('"offset"/"end" must be numbers');
+        }
         if (!Number.isInteger(offset) || offset < 0 || offset > this.length) {
           throw new RangeError('"offset" is out of range');
         }
