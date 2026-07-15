@@ -498,16 +498,13 @@ impl Interpreter {
 
             let mut current_error: Option<JsValue> = None;
             for resource in stack.iter().rev() {
-                // A pending `__host_exit` (issue #229) makes the exit immediate:
-                // stop before running further disposers or `wrap_suppressed_error`
-                // (a user-replaceable `SuppressedError`). Abrupt so callers
-                // unwind. Inert unless the node host floor is enabled.
-                if self.pending_exit.is_some() {
-                    return Completion::Throw(JsValue::Undefined);
-                }
                 let result = self.call_function(&resource.dispose_method, &resource.value, &[]);
-                if self.pending_exit.is_some() {
-                    return Completion::Throw(JsValue::Undefined);
+                // A disposer that called `__host_exit` (issue #242) makes the
+                // exit immediate: propagate the `Completion::Exit` before
+                // running further disposers or `wrap_suppressed_error` (a
+                // user-replaceable `SuppressedError`). Inert off-path.
+                if let Completion::Exit(code) = result {
+                    return Completion::Exit(code);
                 }
                 match result {
                     Completion::Normal(_) => {}
@@ -559,13 +556,11 @@ impl Interpreter {
             0,
             |interp, this, _args| {
                 let result = interp.async_disposable_stack_dispose(this);
-                // A pending `__host_exit` (issue #229) must propagate abruptly,
-                // not be wrapped into a (resolved/rejected) promise returned as
-                // `Normal(promise)` — that would let the caller keep evaluating
-                // in expression position. Inert unless the node host floor is on.
-                if interp.pending_exit.is_some() {
-                    return Completion::Throw(JsValue::Undefined);
-                }
+                // A disposer that called `__host_exit` (issue #242) surfaces as
+                // `Completion::Exit`; it must propagate abruptly (via the `other`
+                // arm) rather than being wrapped into a resolved/rejected promise
+                // returned as `Normal`, which would let the caller keep
+                // evaluating in expression position.
                 match result {
                     Completion::Normal(_) => interp.create_resolved_promise(JsValue::Undefined),
                     Completion::Throw(e) => interp.create_rejected_promise(e),
@@ -1050,11 +1045,6 @@ impl Interpreter {
             let mut needs_await = false;
             let mut has_awaited = false;
             for resource in stack.iter().rev() {
-                // A pending `__host_exit` (issue #229) stops async disposal
-                // immediately; abrupt so callers unwind. Inert off-path.
-                if self.pending_exit.is_some() {
-                    return Completion::Throw(JsValue::Undefined);
-                }
                 if resource.hint == DisposeHint::Async
                     && matches!(resource.dispose_method, JsValue::Undefined)
                 {
@@ -1062,16 +1052,18 @@ impl Interpreter {
                     continue;
                 }
                 let result = self.call_function(&resource.dispose_method, &resource.value, &[]);
-                if self.pending_exit.is_some() {
-                    return Completion::Throw(JsValue::Undefined);
+                // A disposer that called `__host_exit` (issue #242) stops async
+                // disposal immediately; propagate the exit. Inert off-path.
+                if let Completion::Exit(code) = result {
+                    return Completion::Exit(code);
                 }
                 match result {
                     Completion::Normal(v) if resource.hint == DisposeHint::Async => {
                         needs_await = true;
                         has_awaited = true;
                         let awaited = self.await_value(&v);
-                        if self.pending_exit.is_some() {
-                            return Completion::Throw(JsValue::Undefined);
+                        if let Completion::Exit(code) = awaited {
+                            return Completion::Exit(code);
                         }
                         if let Completion::Throw(e) = awaited {
                             current_error = Some(self.wrap_suppressed_error(e, current_error));
@@ -1084,10 +1076,10 @@ impl Interpreter {
                 }
             }
             if needs_await && !has_awaited {
-                let _ = self.await_value(&JsValue::Undefined);
-                // The final await may have run a job requesting `__host_exit`.
-                if self.pending_exit.is_some() {
-                    return Completion::Throw(JsValue::Undefined);
+                // The final await may have run a job that called `__host_exit`
+                // (issue #242): propagate the `Completion::Exit` abruptly.
+                if let Completion::Exit(code) = self.await_value(&JsValue::Undefined) {
+                    return Completion::Exit(code);
                 }
             }
 

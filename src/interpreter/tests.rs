@@ -1912,7 +1912,9 @@ mod node_host_tests {
         // Execution stopped at __host_exit: catch, finally, and the trailing
         // statement never ran.
         assert_eq!(global_string(&interp, "reached"), "before");
-        assert!(matches!(c, Completion::Throw(_)));
+        // The exit propagates structurally as `Completion::Exit` (issue #242) —
+        // not a `Throw` — so no `catch`/`finally` can consume it.
+        assert!(matches!(c, Completion::Exit(42)));
     }
 
     #[test]
@@ -1972,7 +1974,7 @@ mod node_host_tests {
         // The generator/async state machine routes a Throw through its own
         // catch/finally states; a pending exit must bypass that. (PR #237
         // review round 2, Codex P2.)
-        let (interp, _c) = run_node_script(
+        let (interp, c) = run_node_script(
             r#"
             globalThis.ran = "no";
             function* g() { try { yield 0; __host_exit(7); } catch { globalThis.ran = "caught"; } }
@@ -1983,6 +1985,9 @@ mod node_host_tests {
         );
         assert_eq!(interp.pending_exit, Some(7));
         assert_eq!(global_string(&interp, "ran"), "no");
+        // The generator state machine surfaces the exit as `Completion::Exit`
+        // rather than routing it into the body's catch state (issue #242).
+        assert!(matches!(c, Completion::Exit(7)));
     }
 
     #[test]
@@ -2002,7 +2007,7 @@ mod node_host_tests {
     fn host_exit_from_disposer_stops_remaining_disposers() {
         // Disposal runs in reverse order: `b` disposes first and calls exit,
         // so `a`'s disposer must not run. (PR #237 review round 2, Codex P2.)
-        let (interp, _c) = run_node_script(
+        let (interp, c) = run_node_script(
             r#"
             globalThis.d = "";
             {
@@ -2013,6 +2018,8 @@ mod node_host_tests {
         );
         assert_eq!(interp.pending_exit, Some(4));
         assert_eq!(global_string(&interp, "d"), "b");
+        // dispose_resources returns `Completion::Exit` structurally (issue #242).
+        assert!(matches!(c, Completion::Exit(4)));
     }
 
     #[test]
@@ -2104,7 +2111,7 @@ mod node_host_tests {
         // The last-deferred disposer (exit) runs first; the earlier one must
         // not run, and the statement after dispose() must not run.
         // (PR #237 review round 5, Codex P2.)
-        let (interp, _c) = run_node_script(
+        let (interp, c) = run_node_script(
             r#"
             globalThis.side = "no";
             globalThis.afterStack = "no";
@@ -2118,6 +2125,92 @@ mod node_host_tests {
         assert_eq!(interp.pending_exit, Some(4));
         assert_eq!(global_string(&interp, "side"), "no");
         assert_eq!(global_string(&interp, "afterStack"), "no");
+        // DisposableStack.prototype.dispose returns `Completion::Exit` (issue #242).
+        assert!(matches!(c, Completion::Exit(4)));
+    }
+
+    #[test]
+    fn host_exit_from_chained_reaction_stops_chain() {
+        // A `__host_exit` in a Promise reaction handler (issue #242) must
+        // propagate out of the reaction job as `Completion::Exit` — not be
+        // swallowed into a fulfillment — so the drain loop stops and the
+        // chained `.then` never runs. This is load-bearing: if the reaction
+        // job's completion match dropped `Exit`, `chained` would become "yes".
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.chained = "no";
+            Promise.resolve()
+              .then(() => { __host_exit(3); })
+              .then(() => { globalThis.chained = "yes"; });
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(3));
+        assert_eq!(global_string(&interp, "chained"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_reject_reaction_stops_drain() {
+        // The reject-reaction path must also propagate `Completion::Exit`
+        // (issue #242): a `.catch` handler that calls `__host_exit` stops the
+        // drain, and a following queued microtask does not run.
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.after = "no";
+            Promise.reject(0).catch(() => { __host_exit(1); });
+            Promise.resolve().then(() => { globalThis.after = "yes"; });
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(1));
+        assert_eq!(global_string(&interp, "after"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_thenable_resolve() {
+        // Resolving a promise with a thenable runs a job that calls the user
+        // `then`; a `__host_exit` there (issue #242) must propagate out of that
+        // job rather than being turned into a rejection.
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.after = "no";
+            Promise.resolve({ then(_res, _rej) { __host_exit(2); } });
+            Promise.resolve().then(() => { globalThis.after = "yes"; });
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(2));
+        assert_eq!(global_string(&interp, "after"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_iterator_return_during_throw_is_uncatchable() {
+        // When a for-of unwinds a *genuine* throw, the iterator's `return()`
+        // runs — and if it calls `__host_exit` (issue #242), the exit must stay
+        // uncatchable even though `return()` returns a `JsValue` and so cannot
+        // carry a `Completion::Exit`. The sink is latched in `iterator_close`
+        // and honored at the `try` boundary, so the surrounding `catch` and
+        // `finally` do not run.
+        let (interp, c) = run_node_script(
+            r#"
+            globalThis.caught = "no";
+            globalThis.cleanup = "no";
+            globalThis.fin = "no";
+            const iter = {
+              [Symbol.iterator]() { return this; },
+              next() { return { value: 1, done: false }; },
+              return() { globalThis.cleanup = "ran"; __host_exit(5); return { done: true }; },
+            };
+            try {
+              for (const x of iter) { throw new Error("boom"); }
+            } catch (e) { globalThis.caught = "yes"; }
+            finally { globalThis.fin = "ran"; }
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(5));
+        // `return()` ran (genuine throw unwind) and requested the exit...
+        assert_eq!(global_string(&interp, "cleanup"), "ran");
+        // ...but the exit is uncatchable: neither catch nor finally ran.
+        assert_eq!(global_string(&interp, "caught"), "no");
+        assert_eq!(global_string(&interp, "fin"), "no");
+        assert!(matches!(c, Completion::Exit(5)));
     }
 
     #[test]

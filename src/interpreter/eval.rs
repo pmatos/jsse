@@ -6298,14 +6298,32 @@ impl Interpreter {
                 );
                 return Completion::Normal(self.create_iter_result_object(yield_val, false));
             }
+            if let Completion::Exit(code) = stmt_result {
+                // `__host_exit` (issue #242) is uncatchable and immediate:
+                // complete the generator without routing through its
+                // catch/finally states or disposing, and propagate the exit.
+                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                    IteratorState::StateMachineGenerator {
+                        state_machine,
+                        func_env,
+                        is_strict,
+                        execution_state: StateMachineExecutionState::Completed,
+                        _sent_value: JsValue::Undefined,
+                        try_stack: vec![],
+                        pending_binding: None,
+                        delegated_iterator: None,
+                        pending_exception: None,
+                        pending_return: None,
+                    },
+                );
+                self.generator_inline_iters.remove(&o.id);
+                return Completion::Exit(code);
+            }
             if let Completion::Throw(e) = stmt_result {
-                // A pending `__host_exit` (issue #229) is uncatchable: don't
-                // route the sentinel throw into the generator/async body's
-                // catch/finally states — let it complete the machine and
-                // propagate. Inert unless the node host floor is enabled.
-                if self.pending_exit.is_none()
-                    && let Some(try_info) = current_try_stack.pop()
-                {
+                // Route genuine throws through the generator body's
+                // catch/finally states (a `Completion::Exit` was handled
+                // above and never reaches here).
+                if let Some(try_info) = current_try_stack.pop() {
                     if let Some(catch_state) = try_info.catch_state {
                         pending_exception = Some(e);
                         current_id = catch_state;
@@ -6409,12 +6427,11 @@ impl Interpreter {
                         match _result {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
-                                // Route through try-stack for proper catch/finally handling
-                                // — unless `__host_exit` is pending (issue #229), which is
-                                // uncatchable and must complete the machine instead.
-                                if self.pending_exit.is_none()
-                                    && let Some(try_info) = current_try_stack.pop()
-                                {
+                                // Route genuine throws through the try-stack for
+                                // catch/finally handling (a `Completion::Exit`
+                                // takes the `other` arm below and never reaches
+                                // here — issue #242).
+                                if let Some(try_info) = current_try_stack.pop() {
                                     if let Some(catch_state) = try_info.catch_state {
                                         pending_exception = Some(e);
                                         current_id = catch_state;
@@ -9828,14 +9845,33 @@ impl Interpreter {
                 None
             };
 
+            if let Completion::Exit(code) = stmt_result {
+                // `__host_exit` (issue #242) is uncatchable and immediate:
+                // complete the async generator without routing to its
+                // catch/finally states, disposing, or settling the result
+                // promise, and propagate the exit.
+                self.generator_inline_iters.remove(&o.id);
+                obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                    IteratorState::StateMachineAsyncGenerator {
+                        state_machine,
+                        func_env,
+                        is_strict,
+                        execution_state: StateMachineExecutionState::Completed,
+                        _sent_value: JsValue::Undefined,
+                        try_stack: vec![],
+                        pending_binding: None,
+                        delegated_iterator: None,
+                        pending_exception: None,
+                        pending_return: None,
+                    },
+                );
+                return Completion::Exit(code);
+            }
             if let Completion::Throw(e) = stmt_result {
-                // A pending `__host_exit` (issue #229) is uncatchable: don't
-                // route the sentinel throw into the generator/async body's
-                // catch/finally states — let it complete the machine and
-                // propagate. Inert unless the node host floor is enabled.
-                if self.pending_exit.is_none()
-                    && let Some(try_info) = current_try_stack.pop()
-                {
+                // Route genuine throws through the async generator body's
+                // catch/finally states (a `Completion::Exit` was handled above
+                // and never reaches here).
+                if let Some(try_info) = current_try_stack.pop() {
                     if let Some(catch_state) = try_info.catch_state {
                         pending_exception = Some(e);
                         current_id = catch_state;
@@ -10022,12 +10058,11 @@ impl Interpreter {
                         match self.eval_expr(expr, &func_env) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
-                                // Route through try-stack for proper catch/finally handling
-                                // — unless `__host_exit` is pending (issue #229), which is
-                                // uncatchable and must complete the machine instead.
-                                if self.pending_exit.is_none()
-                                    && let Some(try_info) = current_try_stack.pop()
-                                {
+                                // Route genuine throws through the try-stack for
+                                // catch/finally handling (a `Completion::Exit`
+                                // takes the `other` arm below and never reaches
+                                // here — issue #242).
+                                if let Some(try_info) = current_try_stack.pop() {
                                     if let Some(catch_state) = try_info.catch_state {
                                         pending_exception = Some(e);
                                         current_id = catch_state;
@@ -15581,30 +15616,34 @@ impl Interpreter {
             },
         );
 
-        self.async_function_resume(async_id, JsValue::Undefined, false);
+        let resume = self.async_function_resume(async_id, JsValue::Undefined, false);
 
         self.gc_unroot_frame(gc_frame);
-        // The synchronous drive above may have requested `__host_exit`
-        // (issue #229). Returning `Normal(promise)` here would let the CALLER
-        // keep evaluating — including in expression position (`f(), g()`;
-        // `h(f())`), which the statement-level chokepoint can't reach. Return
-        // the abrupt sentinel instead. Inert unless the node host floor is on.
-        if self.pending_exit.is_some() {
-            return Completion::Throw(JsValue::Undefined);
+        // If the body ran `__host_exit` synchronously (before any await, issue
+        // #242), propagate the exit as this call's completion — in expression
+        // position too (`f(), g()`; `h(f())`), which a statement-level check
+        // cannot reach — instead of returning the never-to-settle promise.
+        if let Completion::Exit(code) = resume {
+            return Completion::Exit(code);
         }
         Completion::Normal(promise)
     }
 
+    /// Drives an async function's state machine. Returns `Completion::Exit`
+    /// (issue #242) if the body called `__host_exit` — the caller must
+    /// propagate it rather than settling the result promise — and
+    /// `Completion::Normal(undefined)` otherwise (the promise was settled or
+    /// the machine suspended at an await).
     pub(crate) fn async_function_resume(
         &mut self,
         async_id: u64,
         sent_value: JsValue,
         is_error: bool,
-    ) {
+    ) -> Completion {
         use crate::interpreter::generator_transform::{SentValueBindingKind, StateTerminator};
 
         let Some(state) = self.scheduler.remove_async_function_state(async_id) else {
-            return;
+            return Completion::Normal(JsValue::Undefined);
         };
 
         let AsyncFunctionState {
@@ -15703,10 +15742,16 @@ impl Interpreter {
                         Completion::Return(v) => {
                             self.scheduler.remove_async_function_state(async_id);
                             let _ = self.call_function(&resolve_fn, &JsValue::Undefined, &[v]);
-                            return;
+                            return Completion::Normal(JsValue::Undefined);
                         }
                         Completion::Throw(e) => {
                             pending_exception = Some(e);
+                        }
+                        // A disposer that called `__host_exit` (issue #242)
+                        // propagates out uncatchably rather than settling.
+                        Completion::Exit(code) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            return Completion::Exit(code);
                         }
                         _ => {}
                     }
@@ -15737,12 +15782,11 @@ impl Interpreter {
                     &for_of_stack,
                     for_of_iter_env.clone(),
                 );
-                return;
+                return Completion::Normal(JsValue::Undefined);
             }
 
             if current_id >= state_machine.states.len() {
-                self.async_fn_complete(async_id, &func_env, &resolve_fn, &reject_fn);
-                return;
+                return self.async_fn_complete(async_id, &func_env, &resolve_fn, &reject_fn);
             }
             let terminator = state_machine.states[current_id].terminator.clone();
 
@@ -15755,16 +15799,10 @@ impl Interpreter {
                 )
                 && let Some(exc) = pending_exception.take()
             {
-                // A pending `__host_exit` (issue #229) is uncatchable: reject
-                // the promise without routing the sentinel through the async
-                // body's catch/finally handlers, and stop driving the machine.
-                // Inert unless the node host floor is enabled. Mirrors the
-                // unhandled-throw path below.
-                if self.pending_exit.is_some() {
-                    self.scheduler.remove_async_function_state(async_id);
-                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exc]);
-                    return;
-                }
+                // Genuine throws route through the async body's catch/finally
+                // handlers here. A `Completion::Exit` (issue #242) never becomes
+                // a `pending_exception`, so it is not routed and cannot be
+                // caught — it is handled at the body-execution site below.
                 let mut handled = false;
                 for i in (0..try_stack.len()).rev() {
                     if !try_stack[i].entered_catch
@@ -15790,19 +15828,32 @@ impl Interpreter {
                     continue;
                 }
                 let disp = self.dispose_resources(&func_env, Completion::Throw(exc));
+                // A disposer that called `__host_exit` (issue #242) propagates
+                // out uncatchably instead of rejecting the promise.
+                if let Completion::Exit(code) = disp {
+                    self.scheduler.remove_async_function_state(async_id);
+                    return Completion::Exit(code);
+                }
                 let exc = match disp {
                     Completion::Throw(e) => e,
                     _ => JsValue::Undefined,
                 };
                 self.scheduler.remove_async_function_state(async_id);
                 let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exc]);
-                return;
+                return Completion::Normal(JsValue::Undefined);
             }
 
             self.in_state_machine = true;
             let exec_env = for_of_iter_env.as_ref().unwrap_or(&func_env);
             let mut stmt_result = self.exec_body(&state_machine.states[current_id].body, exec_env);
             self.in_state_machine = saved_in_state_machine;
+            // `__host_exit` in the async body (issue #242) propagates out as
+            // `Completion::Exit` instead of settling the result promise; the
+            // caller re-raises it uncatchably.
+            if let Completion::Exit(code) = stmt_result {
+                self.scheduler.remove_async_function_state(async_id);
+                return Completion::Exit(code);
+            }
 
             // Execute tail calls inline — async functions don't use PTC, but
             // strict mode return statements produce TailCall completions.
@@ -15920,7 +15971,7 @@ impl Interpreter {
                     &for_of_stack,
                     for_of_iter_env.clone(),
                 );
-                return;
+                return Completion::Normal(JsValue::Undefined);
             }
 
             let term_env = for_of_iter_env.as_ref().unwrap_or(&func_env).clone();
@@ -15953,7 +16004,7 @@ impl Interpreter {
                                 &for_of_stack,
                                 for_of_iter_env.clone(),
                             );
-                            return;
+                            return Completion::Normal(JsValue::Undefined);
                         }
                         _ => JsValue::Undefined,
                     };
@@ -15974,7 +16025,7 @@ impl Interpreter {
                         &for_of_stack,
                         for_of_iter_env.clone(),
                     );
-                    return;
+                    return Completion::Normal(JsValue::Undefined);
                 }
 
                 StateTerminator::Return(ref expr) => {
@@ -16221,6 +16272,12 @@ impl Interpreter {
                     // Dispose resources from previous iteration (for using/await using)
                     let disp_env = for_of_iter_env.take().unwrap_or_else(|| func_env.clone());
                     let disp = self.dispose_resources(&disp_env, Completion::Empty);
+                    if let Completion::Exit(code) = disp {
+                        // A disposer that called `__host_exit` (issue #242)
+                        // propagates out uncatchably.
+                        self.scheduler.remove_async_function_state(async_id);
+                        return Completion::Exit(code);
+                    }
                     if let Completion::Throw(e) = disp {
                         pending_exception = Some(e);
                         continue;
@@ -16280,7 +16337,7 @@ impl Interpreter {
                                 for_of_iter_env.clone(),
                             );
                             self.in_state_machine = saved_in_state_machine;
-                            return;
+                            return Completion::Normal(JsValue::Undefined);
                         }
                     } else {
                         let iterator = func_env
@@ -16388,8 +16445,7 @@ impl Interpreter {
                 }
 
                 StateTerminator::Completed => {
-                    self.async_fn_complete(async_id, &func_env, &resolve_fn, &reject_fn);
-                    return;
+                    return self.async_fn_complete(async_id, &func_env, &resolve_fn, &reject_fn);
                 }
 
                 StateTerminator::Yield { .. } => {
@@ -16405,15 +16461,20 @@ impl Interpreter {
         func_env: &EnvRef,
         resolve_fn: &JsValue,
         reject_fn: &JsValue,
-    ) {
+    ) -> Completion {
         let disp = self.dispose_resources(func_env, Completion::Normal(JsValue::Undefined));
         self.scheduler.remove_async_function_state(async_id);
         match disp {
+            // A disposer that called `__host_exit` (issue #242) propagates out
+            // uncatchably instead of settling the result promise.
+            Completion::Exit(code) => Completion::Exit(code),
             Completion::Throw(e) => {
                 let _ = self.call_function(reject_fn, &JsValue::Undefined, &[e]);
+                Completion::Normal(JsValue::Undefined)
             }
             _ => {
                 let _ = self.call_function(resolve_fn, &JsValue::Undefined, &[JsValue::Undefined]);
+                Completion::Normal(JsValue::Undefined)
             }
         }
     }
@@ -16469,20 +16530,17 @@ impl Interpreter {
                 let value = v.clone();
                 self.scheduler.enqueue_microtask((
                     vec![resolve_fn.clone(), reject_fn.clone(), value.clone()],
-                    Box::new(move |interp| {
-                        interp.async_function_resume(async_id, value, false);
-                        Completion::Normal(JsValue::Undefined)
-                    }),
+                    // Return the resume completion so a `__host_exit` in the
+                    // resumed body (issue #242) reaches the drain loop as
+                    // `Completion::Exit` instead of being discarded.
+                    Box::new(move |interp| interp.async_function_resume(async_id, value, false)),
                 ));
             }
             Some(PromiseState::Rejected(e)) => {
                 let err = e.clone();
                 self.scheduler.enqueue_microtask((
                     vec![resolve_fn.clone(), reject_fn.clone(), err.clone()],
-                    Box::new(move |interp| {
-                        interp.async_function_resume(async_id, err, true);
-                        Completion::Normal(JsValue::Undefined)
-                    }),
+                    Box::new(move |interp| interp.async_function_resume(async_id, err, true)),
                 ));
             }
             _ => {
@@ -16492,10 +16550,12 @@ impl Interpreter {
                 let fulfill_handler = self.create_function(JsFunction::native(
                     "asyncFnFulfill".to_string(),
                     1,
+                    // Return the resume completion so a `__host_exit` in the
+                    // resumed body (issue #242) propagates as `Completion::Exit`
+                    // through the Promise reaction to the drain loop.
                     move |interp, _this, args| {
                         let v = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        interp.async_function_resume(async_id, v, false);
-                        Completion::Normal(JsValue::Undefined)
+                        interp.async_function_resume(async_id, v, false)
                     },
                 ));
 
@@ -16504,8 +16564,7 @@ impl Interpreter {
                     1,
                     move |interp, _this, args| {
                         let e = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        interp.async_function_resume(async_id, e, true);
-                        Completion::Normal(JsValue::Undefined)
+                        interp.async_function_resume(async_id, e, true)
                     },
                 ));
 
@@ -16677,9 +16736,9 @@ impl Interpreter {
             if done.get() {
                 break;
             }
-            // A job/completion run below may have requested `__host_exit`
-            // (issue #229): stop draining immediately so no further queued user
-            // job runs after the exit. Inert unless the node host floor is on.
+            // Terminal-sink read for `__host_exit` (issue #242): stop draining
+            // immediately so no further queued user job runs after the exit.
+            // Inert unless the node host floor is on.
             if self.pending_exit.is_some() {
                 break;
             }
@@ -16688,8 +16747,15 @@ impl Interpreter {
                 for val in &roots {
                     self.gc_root_value(val);
                 }
-                let _ = job(self);
+                let job_result = job(self);
                 self.gc_unroot_frame(mt_frame);
+                // A `__host_exit` inside the job (issue #242) latches the
+                // terminal sink; the post-loop check turns it into a
+                // `Completion::Exit` returned from this `await`.
+                if let Completion::Exit(code) = job_result {
+                    self.pending_exit = Some(code);
+                    break;
+                }
                 continue;
             }
             // Check agent async completions
@@ -16729,15 +16795,12 @@ impl Interpreter {
 
         self.gc_unroot_frame(gc_frame);
 
-        // A job drained above may have requested `__host_exit` (issue #229) with
-        // no await result recorded. Return the abrupt sentinel so EVERY caller
-        // propagates the exit uniformly, rather than falling through as
-        // `Normal(undefined)` and relying on each caller to re-poll. Inert
-        // unless the node host floor is enabled.
-        if self.pending_exit.is_some() {
-            return Completion::Throw(JsValue::Undefined);
+        // If a drained job requested `__host_exit` (issue #242), propagate the
+        // exit out of this `await` uncatchably instead of yielding the awaited
+        // value; the terminal sink stays set for `main`.
+        if let Some(code) = self.pending_exit {
+            return Completion::Exit(code);
         }
-
         match result.borrow_mut().take() {
             Some(Ok(v)) => Completion::Normal(v),
             Some(Err(e)) => Completion::Throw(e),

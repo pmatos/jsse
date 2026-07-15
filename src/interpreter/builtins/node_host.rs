@@ -80,11 +80,15 @@ impl Interpreter {
 
         // __host_exit(code)
         //
-        // Records the process exit code and unwinds uncatchably. The returned
-        // sentinel Throw stops execution; `pending_exit` — not the thrown value
-        // — is the signal that try/catch, the microtask drain loop, and `main`
-        // all honor, so the exit is not swallowed by user `catch`/`finally` or
-        // by a Promise reaction. Backs process.exit.
+        // Unwinds the stack uncatchably by returning `Completion::Exit(code)`
+        // (issue #242). That completion kind propagates like `Throw` but is
+        // structurally uncatchable — no user `catch`/`finally`, disposer,
+        // iterator `return()`, or Promise reaction ever consumes it — so the
+        // exit is immediate at every site without a per-site flag re-check.
+        // The exit code is carried in the completion; the interpreter's
+        // `pending_exit` sink is written only where `Exit` crosses a boundary
+        // that cannot carry a completion (the event-loop drain, `run`). Backs
+        // process.exit.
         let exit_fn = self.create_function(JsFunction::native(
             "__host_exit".to_string(),
             1,
@@ -97,8 +101,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     },
                 };
-                interp.pending_exit = Some(code);
-                Completion::Throw(JsValue::Undefined)
+                Completion::Exit(code)
             },
         ));
         self.install_host_global("__host_exit", exit_fn);
