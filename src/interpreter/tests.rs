@@ -2079,4 +2079,44 @@ mod node_host_tests {
         assert_eq!(interp.pending_exit, Some(6));
         assert_eq!(global_string(&interp, "afterAsync"), "no");
     }
+
+    #[test]
+    fn host_exit_from_sync_async_body_propagates_abrupt() {
+        // An async function that calls __host_exit in its synchronous prologue
+        // rejects its promise and returns Normal(promise) to the caller; the
+        // exec_statements chokepoint must stop the trailing statement.
+        // (PR #237 review round 5, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.after = "no";
+            async function f() { __host_exit(5); }
+            f();
+            globalThis.after = "yes"; // must NOT run
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(5));
+        assert_eq!(global_string(&interp, "after"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_disposable_stack_stops_remaining() {
+        // DisposableStack.prototype.dispose has its own LIFO disposal loop.
+        // The last-deferred disposer (exit) runs first; the earlier one must
+        // not run, and the statement after dispose() must not run.
+        // (PR #237 review round 5, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.side = "no";
+            globalThis.afterStack = "no";
+            const s = new DisposableStack();
+            s.defer(() => { globalThis.side = "ran"; });
+            s.defer(() => { __host_exit(4); });
+            s.dispose();
+            globalThis.afterStack = "yes"; // must NOT run
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(4));
+        assert_eq!(global_string(&interp, "side"), "no");
+        assert_eq!(global_string(&interp, "afterStack"), "no");
+    }
 }

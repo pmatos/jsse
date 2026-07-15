@@ -45,6 +45,12 @@ impl Interpreter {
                     break;
                 }
             }
+            // See exec_statements_cached: stop on a pending `__host_exit`
+            // (issue #229) even when the statement completed non-abruptly.
+            if self.pending_exit.is_some() {
+                last = Completion::Throw(JsValue::Undefined);
+                break;
+            }
         }
         self.current_ic_handle = prev;
         last
@@ -225,6 +231,15 @@ impl Interpreter {
                     self.call_stack_envs.pop();
                     return other;
                 }
+            }
+            // Chokepoint for `__host_exit` (issue #229): a statement may set
+            // `pending_exit` while returning a non-abrupt completion — an async
+            // call that rejected its promise, or `using` disposal. Stop the
+            // sequence so trailing statements don't run, regardless of which
+            // path requested the exit. Inert unless the node host floor is on.
+            if self.pending_exit.is_some() {
+                self.call_stack_envs.pop();
+                return Completion::Throw(JsValue::Undefined);
             }
         }
         self.call_stack_envs.pop();

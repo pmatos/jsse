@@ -498,7 +498,17 @@ impl Interpreter {
 
             let mut current_error: Option<JsValue> = None;
             for resource in stack.iter().rev() {
+                // A pending `__host_exit` (issue #229) makes the exit immediate:
+                // stop before running further disposers or `wrap_suppressed_error`
+                // (a user-replaceable `SuppressedError`). Abrupt so callers
+                // unwind. Inert unless the node host floor is enabled.
+                if self.pending_exit.is_some() {
+                    return Completion::Throw(JsValue::Undefined);
+                }
                 let result = self.call_function(&resource.dispose_method, &resource.value, &[]);
+                if self.pending_exit.is_some() {
+                    return Completion::Throw(JsValue::Undefined);
+                }
                 match result {
                     Completion::Normal(_) => {}
                     Completion::Throw(e) => {
@@ -1033,6 +1043,11 @@ impl Interpreter {
             let mut needs_await = false;
             let mut has_awaited = false;
             for resource in stack.iter().rev() {
+                // A pending `__host_exit` (issue #229) stops async disposal
+                // immediately; abrupt so callers unwind. Inert off-path.
+                if self.pending_exit.is_some() {
+                    return Completion::Throw(JsValue::Undefined);
+                }
                 if resource.hint == DisposeHint::Async
                     && matches!(resource.dispose_method, JsValue::Undefined)
                 {
@@ -1040,16 +1055,19 @@ impl Interpreter {
                     continue;
                 }
                 let result = self.call_function(&resource.dispose_method, &resource.value, &[]);
+                if self.pending_exit.is_some() {
+                    return Completion::Throw(JsValue::Undefined);
+                }
                 match result {
                     Completion::Normal(v) if resource.hint == DisposeHint::Async => {
                         needs_await = true;
                         has_awaited = true;
-                        match self.await_value(&v) {
-                            Completion::Normal(_) => {}
-                            Completion::Throw(e) => {
-                                current_error = Some(self.wrap_suppressed_error(e, current_error));
-                            }
-                            _ => {}
+                        let awaited = self.await_value(&v);
+                        if self.pending_exit.is_some() {
+                            return Completion::Throw(JsValue::Undefined);
+                        }
+                        if let Completion::Throw(e) = awaited {
+                            current_error = Some(self.wrap_suppressed_error(e, current_error));
                         }
                     }
                     Completion::Throw(e) => {
