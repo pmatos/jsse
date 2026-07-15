@@ -194,6 +194,16 @@ pub struct Interpreter {
     /// exception/finalizer handlers stay live. Saved and reset to 0 on entry to
     /// each function body so it never leaks into callees.
     pub(crate) tco_suppress_depth: u32,
+    /// Current expression-evaluation nesting depth. Incremented on entry to
+    /// every `eval_expr` and decremented (via `EvalDepthGuard`) as it unwinds.
+    /// A deeply *left-nested* binary/logical AST (e.g. `1+1+1+…`, parsed in a
+    /// loop so it never trips the parser's `MAX_PARSE_DEPTH`) recurses once per
+    /// operand through `eval_expr`; bounding this depth throws a catchable
+    /// `RangeError` before the native stack overflows (SIGABRT). Separate from
+    /// `call_depth`: a flat expression drives this without any JS call. Held in
+    /// an `Rc<Cell<>>` so the drop guard can own an independent handle without
+    /// borrowing `self` (see `EvalDepthGuard` in `eval.rs`).
+    pub(crate) eval_depth: std::rc::Rc<std::cell::Cell<usize>>,
 }
 
 /// Soft JS call-depth limit: crossing it throws a catchable `RangeError:
@@ -210,6 +220,22 @@ pub(crate) const CALL_DEPTH_HARD_LIMIT: usize = 5_000;
 /// The soft limit re-arms only after the stack unwinds below this, so a
 /// recovering handler oscillating just under the soft limit does not re-trip.
 pub(crate) const CALL_DEPTH_REARM_LIMIT: usize = 3_000;
+
+/// Expression-evaluation nesting limit: crossing it throws a catchable
+/// `RangeError: Maximum call stack size exceeded` instead of overflowing the
+/// native stack on a deeply left-nested expression tree.
+///
+/// No soft/hard recovery band is needed here (unlike `call_depth`): the only
+/// input that reaches this depth is a single flat expression, which has no
+/// intermediate `catch` points, so the throw fully unwinds every `eval_expr`
+/// frame before any handler runs. Expression nesting reachable *through* JS
+/// calls is bounded first by the `CALL_DEPTH_*` guards (hard 5000 × a few eval
+/// frames per level ≈ well under 20k), so this limit never interferes with
+/// normal recursion. It sits far above that (50k) yet at roughly a third of the
+/// measured native overflow point on the 128 MiB execution stack (a flat
+/// expression SIGABRTs between 140k and 150k operands with the guard removed),
+/// leaving ample headroom for the error object's own construction.
+pub(crate) const EVAL_DEPTH_LIMIT: usize = 50_000;
 
 pub(crate) struct CallFrame {
     pub func_obj_id: u64,
@@ -357,6 +383,7 @@ impl Interpreter {
             call_depth: 0,
             overflow_armed: true,
             tco_suppress_depth: 0,
+            eval_depth: std::rc::Rc::new(std::cell::Cell::new(0)),
         };
         interp.setup_globals();
         interp
