@@ -134,6 +134,16 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
   truthy(typeof ci === "string" && ci.length > 0, "inspect handles cycles without hanging");
   var nested = util.inspect({ a: { b: { c: 1 } } }, { depth: 1 });
   truthy(typeof nested === "string" && nested.length > 0, "inspect respects depth option");
+  // Accessors must not be invoked (Node shows [Getter]); a throwing getter must
+  // not make inspect throw. This IS deterministic across engines, so assert it.
+  var throwingGetter = Object.defineProperty({}, "x", {
+    get: function () {
+      throw new Error("boom");
+    },
+    enumerable: true,
+    configurable: true,
+  });
+  eq(util.inspect(throwingGetter), "{ x: [Getter] }", "inspect does not invoke getters");
 })();
 
 // ---- process fields -------------------------------------------------------

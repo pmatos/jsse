@@ -100,7 +100,22 @@
           for (var j = 0; j < keys.length; j++) {
             var k = keys[j];
             var label = isIdentifierKey(k) ? k : quoteString(k);
-            parts.push(label + ": " + render(v[k], depth - 1));
+            // Render accessors without invoking them — Node's util.inspect shows
+            // [Getter]/[Setter] rather than calling the getter, so a throwing or
+            // side-effecting getter cannot make a diagnostic print throw/mutate
+            // under jsse where it would not under Node.
+            var desc = Object.getOwnPropertyDescriptor(v, k);
+            var valueStr;
+            if (desc && (desc.get || desc.set)) {
+              valueStr = desc.get
+                ? desc.set
+                  ? "[Getter/Setter]"
+                  : "[Getter]"
+                : "[Setter]";
+            } else {
+              valueStr = render(desc ? desc.value : v[k], depth - 1);
+            }
+            parts.push(label + ": " + valueStr);
           }
           var ctorName =
             v.constructor && v.constructor.name && v.constructor.name !== "Object"

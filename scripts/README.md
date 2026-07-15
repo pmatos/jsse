@@ -94,9 +94,13 @@ the runner prepends the shim to a bundle), runs the result on **jsse `--node`**
 and on **Node**, and requires both to exit 0 and emit byte-identical stdout.
 Node is the oracle for the deterministic surfaces — the `util.format` specifiers
 (`%s %d %i %f %j %c %%`), byte-accurate `process.stdout.write`, and the
-`console.count`/`group`/`assert` output shapes are asserted exactly.
-`util.inspect` is intentionally best-effort (depth, cycles, common types) and is
-only smoke-tested structurally, never byte-compared against Node.
+`console.count`/`group`/`assert` output shapes are asserted exactly. The
+byte-exact `%s` guarantee covers primitives and objects with a user-defined
+`toString`; `%s`/`%o`/`%O` of plain objects and arrays route through
+`util.inspect`, which is intentionally best-effort (depth, cycles, common types)
+— it does not invoke getters, but it is only smoke-tested structurally and never
+byte-compared against Node. (Fully Node-accurate `%s` object dispatch is tracked
+separately.)
 
 ## Current status
 
