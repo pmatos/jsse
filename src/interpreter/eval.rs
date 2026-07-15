@@ -12306,6 +12306,39 @@ impl Interpreter {
         }
     }
 
+    /// Invoke a constructor body, then drive any proper-tail-call chain to
+    /// completion — but capture the constructor frame's
+    /// `last_call_had_explicit_return` / `last_call_this_value` side channels
+    /// *before* driving the chain.
+    ///
+    /// A strict-mode `return <call>` in a constructor body produces a
+    /// `Completion::TailCall`. The public `call_function` drives that chain
+    /// internally, leaving the side channels reflecting the tail-callee rather
+    /// than the constructor — so `[[Construct]]`'s "return `this` when the
+    /// result is not an Object" substitution read the wrong `this` and
+    /// explicit-return flag (issue #238). Behaviourally this is `call_function`
+    /// plus a capture between the first `call_function_inner` and the drive
+    /// loop: identical for non-tail-call bodies.
+    fn call_constructor_body(
+        &mut self,
+        func: &JsValue,
+        this: &JsValue,
+        args: &[JsValue],
+    ) -> (Completion, bool, Option<JsValue>) {
+        let mut result = self.call_function_inner(func, this, args, false);
+        let had_explicit_return = self.last_call_had_explicit_return;
+        let final_this = self.last_call_this_value.take();
+        while let Completion::TailCall {
+            func,
+            this,
+            args: tc_args,
+        } = result
+        {
+            result = self.call_function_inner(&func, &this, &tc_args, false);
+        }
+        (result, had_explicit_return, final_this)
+    }
+
     fn call_function_inner(
         &mut self,
         func_val: &JsValue,
@@ -14059,11 +14092,10 @@ impl Interpreter {
             let prev_constructing_derived = self.constructing_derived;
             self.constructing_derived = true;
             self.calling_as_construct = true;
-            let result = self.call_function(&callee_val, &JsValue::Undefined, &evaluated_args);
+            let (result, had_explicit_return, final_this) =
+                self.call_constructor_body(&callee_val, &JsValue::Undefined, &evaluated_args);
             self.gc_unroot_frame(gc_frame);
             self.constructing_derived = prev_constructing_derived;
-            let had_explicit_return = self.last_call_had_explicit_return;
-            let final_this = self.last_call_this_value.take();
             self.new_target = prev_new_target;
             match result {
                 Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
@@ -14271,10 +14303,10 @@ impl Interpreter {
             self.last_call_had_explicit_return = false;
             self.last_call_this_value = None;
             self.calling_as_construct = true;
-            let result = self.call_function(&callee_val, &this_val, &evaluated_args);
+            let (result, had_explicit_return, captured_this) =
+                self.call_constructor_body(&callee_val, &this_val, &evaluated_args);
             self.gc_unroot_frame(gc_frame);
-            let had_explicit_return = self.last_call_had_explicit_return;
-            let final_this = self.last_call_this_value.take().unwrap_or(this_val.clone());
+            let final_this = captured_this.unwrap_or(this_val.clone());
             self.new_target = prev_new_target;
             match result {
                 Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
@@ -14381,10 +14413,9 @@ impl Interpreter {
             let prev_constructing_derived = self.constructing_derived;
             self.constructing_derived = true;
             self.calling_as_construct = true;
-            let result = self.call_function(constructor, &JsValue::Undefined, args);
+            let (result, had_explicit_return, final_this) =
+                self.call_constructor_body(constructor, &JsValue::Undefined, args);
             self.constructing_derived = prev_constructing_derived;
-            let had_explicit_return = self.last_call_had_explicit_return;
-            let final_this = self.last_call_this_value.take();
             self.new_target = prev_new_target;
             match result {
                 Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
@@ -14592,9 +14623,9 @@ impl Interpreter {
             self.last_call_had_explicit_return = false;
             self.last_call_this_value = None;
             self.calling_as_construct = true;
-            let result = self.call_function(constructor, &this_val, args);
-            let had_explicit_return = self.last_call_had_explicit_return;
-            let final_this = self.last_call_this_value.take().unwrap_or(this_val.clone());
+            let (result, had_explicit_return, captured_this) =
+                self.call_constructor_body(constructor, &this_val, args);
+            let final_this = captured_this.unwrap_or(this_val.clone());
             self.new_target = prev_new_target;
             match result {
                 Completion::Normal(v) if had_explicit_return && matches!(v, JsValue::Object(_)) => {
