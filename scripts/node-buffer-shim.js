@@ -475,10 +475,26 @@
           return out;
         }
         if (value != null && typeof value === "object") {
-          // { type: 'Buffer', data: [...] } (Buffer#toJSON round-trip) or an
-          // object with valueOf.
+          // { type: 'Buffer', data: [...] } — the Buffer#toJSON round-trip.
           if (value.type === "Buffer" && Array.isArray(value.data)) {
             return Buffer.from(value.data);
+          }
+          // Node honors valueOf() / Symbol.toPrimitive returning a usable value
+          // (e.g. Buffer.from({ valueOf() { return "abc"; } }) === <61 62 63>),
+          // recursing on the converted result.
+          var prim;
+          if (typeof value.valueOf === "function") {
+            var vo = value.valueOf();
+            if (vo !== value) prim = vo;
+          }
+          if (
+            prim === undefined &&
+            typeof value[Symbol.toPrimitive] === "function"
+          ) {
+            prim = value[Symbol.toPrimitive]("default");
+          }
+          if (prim != null && prim !== value) {
+            return Buffer.from(prim, encodingOrOffset, length);
           }
         }
         throw new TypeError(
@@ -508,6 +524,10 @@
       }
 
       static isEncoding(enc) {
+        // Node returns false for any non-string (incl. undefined/null); only a
+        // string naming a known encoding is valid. normalizeEncoding treats
+        // undefined/null as the utf8 default, so guard the type here.
+        if (typeof enc !== "string") return false;
         try {
           normalizeEncoding(enc);
           return true;
@@ -548,7 +568,10 @@
           totalLength = 0;
           for (var i = 0; i < list.length; i++) totalLength += list[i].length;
         }
-        var out = new Buffer(totalLength >>> 0);
+        // A caller-supplied invalid totalLength (negative/NaN) must throw a
+        // RangeError, not coerce to a giant/zero length — the constructor
+        // validates via toAllocSize.
+        var out = new Buffer(totalLength);
         var pos = 0;
         for (var j = 0; j < list.length && pos < out.length; j++) {
           var item = list[j];
