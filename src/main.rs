@@ -163,6 +163,32 @@ fn run_repl() -> ExitCode {
 }
 
 fn main() -> ExitCode {
+    // Run the engine on a thread with a large stack. Deep (but bounded — see
+    // the `CALL_DEPTH_*` limits and the parser's `MAX_PARSE_DEPTH`) recursion
+    // needs room to reach those catchable limits and throw a `RangeError`
+    // before the native stack is exhausted; the default 8 MiB main-thread
+    // stack is too small and overflows into a SIGABRT first. 128 MiB fits
+    // inside the 512 MiB RLIMIT_AS the test harness imposes (a larger
+    // reservation would fail to spawn / starve the heap) while leaving the
+    // limits ample native room before they trip.
+    const ENGINE_STACK_SIZE: usize = 128 * 1024 * 1024;
+    let spawned = std::thread::Builder::new()
+        .name("jsse-main".to_string())
+        .stack_size(ENGINE_STACK_SIZE)
+        .spawn(run_main);
+    match spawned {
+        Ok(child) => match child.join() {
+            Ok(code) => code,
+            // A panic already printed its message; surface the conventional code.
+            Err(_) => ExitCode::from(101),
+        },
+        // If the large stack cannot be reserved (e.g. a tight RLIMIT_AS), fall
+        // back to running on the current thread rather than aborting outright.
+        Err(_) => run_main(),
+    }
+}
+
+fn run_main() -> ExitCode {
     let cli = Cli::parse();
 
     // If no preludes, use simpler path

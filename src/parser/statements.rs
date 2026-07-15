@@ -92,6 +92,16 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_statement(&mut self) -> Result<Statement, ParseError> {
+        // Depth guard: nested statements (blocks, if/else, loops) recurse
+        // through here; bound it so deeply nested statements raise a catchable
+        // parse error instead of overflowing the native stack.
+        self.enter_recursion()?;
+        let r = self.parse_statement_inner();
+        self.exit_recursion();
+        r
+    }
+
+    fn parse_statement_inner(&mut self) -> Result<Statement, ParseError> {
         if self.strict && matches!(&self.current, Token::Keyword(Keyword::Function)) {
             return Err(self.error(
                 "In strict mode code, functions can only be declared at top level or inside a block",

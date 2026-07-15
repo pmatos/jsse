@@ -942,6 +942,7 @@ impl Interpreter {
                     let can_tco = env.borrow().strict
                         && self.generator_context.is_none()
                         && !self.in_state_machine
+                        && self.tco_suppress_depth == 0
                         && Self::expr_may_contain_tail_call(e);
                     if can_tco {
                         self.in_tail_position = true;
@@ -2288,8 +2289,16 @@ impl Interpreter {
     }
 
     fn exec_try(&mut self, t: &TryStatement, env: &EnvRef) -> Completion {
+        // Calls inside the try Block are never in tail position: the catch
+        // and/or finally handlers must remain live on the stack. Suppress TCO
+        // for the block's dynamic extent, then restore. `saved_tco` is this
+        // statement's ambient suppression level (non-zero when nested in an
+        // outer try/finally region within the same function body).
+        let saved_tco = self.tco_suppress_depth;
         let block_env = Environment::new(Some(env.clone()));
+        self.tco_suppress_depth = saved_tco + 1;
         let result = self.exec_statements(&t.block, &block_env);
+        self.tco_suppress_depth = saved_tco;
         // §14.2.2: DisposeResources for the try block's scope (using declarations)
         let result = self.dispose_resources(&block_env, result);
         let result = match result {
@@ -2306,7 +2315,14 @@ impl Interpreter {
                         }
                     }
                     let catch_block_env = Environment::new(Some(catch_env.clone()));
-                    self.exec_statements(&handler.body, &catch_block_env)
+                    // A call in the catch Block is in tail position only when
+                    // there is no finally; otherwise the finalizer must run.
+                    if t.finalizer.is_some() {
+                        self.tco_suppress_depth = saved_tco + 1;
+                    }
+                    let r = self.exec_statements(&handler.body, &catch_block_env);
+                    self.tco_suppress_depth = saved_tco;
+                    r
                 } else {
                     Completion::Throw(val)
                 }
@@ -2318,6 +2334,9 @@ impl Interpreter {
             if matches!(result, Completion::Yield(_)) {
                 return result;
             }
+            // A call in the finally Block IS in tail position (nothing runs
+            // after it), so it must keep whatever ambient suppression applies
+            // but add none of its own — depth is already `saved_tco` here.
             let fin_env = Environment::new(Some(env.clone()));
             let fin_result = self.exec_statements(finalizer, &fin_env);
             if fin_result.is_abrupt() {

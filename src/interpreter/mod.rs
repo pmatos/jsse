@@ -164,7 +164,39 @@ pub struct Interpreter {
     /// this handle to read and write per-body IC slots without threading it
     /// through every recursive call.
     pub(crate) current_ic_handle: ic_store::BodyStoreHandle,
+    /// Current JS call nesting depth. Incremented on entry to every function
+    /// invocation (`call_function_inner`) and decremented as the stack unwinds.
+    /// When it crosses the depth limits a catchable `RangeError` is thrown
+    /// instead of letting native recursion overflow the thread stack (SIGABRT).
+    pub(crate) call_depth: usize,
+    /// Whether the soft depth limit is allowed to fire. Disarmed the moment it
+    /// does, so a JS `catch` handler running deep in the stack (e.g. acorn's
+    /// stack-overflow recovery) can execute in the [`soft`, `hard`) recovery
+    /// band without immediately re-tripping. Re-armed only once the stack has
+    /// unwound below `CALL_DEPTH_REARM_LIMIT`.
+    pub(crate) overflow_armed: bool,
+    /// Nesting count of try/finally regions where a call is NOT in tail
+    /// position (the try Block, a catch Block guarded by a finally, and the
+    /// finally Block). Non-zero suppresses proper-tail-call optimization so the
+    /// exception/finalizer handlers stay live. Saved and reset to 0 on entry to
+    /// each function body so it never leaks into callees.
+    pub(crate) tco_suppress_depth: u32,
 }
+
+/// Soft JS call-depth limit: crossing it throws a catchable `RangeError:
+/// Maximum call stack size exceeded`. Sits well below the native capacity of
+/// the 128 MiB execution stack the engine runs on (see `main.rs`), yet far
+/// above the depth any real program reaches (the old 8 MiB main stack held
+/// every passing test, i.e. depths under ~1500).
+pub(crate) const CALL_DEPTH_SOFT_LIMIT: usize = 4_000;
+/// Hard ceiling enforced even while the soft limit is disarmed (i.e. while a
+/// catch handler is recovering). The [`soft`, `hard`) band gives handlers room
+/// to run; `hard` still sits far below native capacity so it throws rather
+/// than overflowing the stack.
+pub(crate) const CALL_DEPTH_HARD_LIMIT: usize = 5_000;
+/// The soft limit re-arms only after the stack unwinds below this, so a
+/// recovering handler oscillating just under the soft limit does not re-trip.
+pub(crate) const CALL_DEPTH_REARM_LIMIT: usize = 3_000;
 
 pub(crate) struct CallFrame {
     pub func_obj_id: u64,
@@ -306,6 +338,9 @@ impl Interpreter {
             hoist_cache: FxHashMap::default(),
             ic_store: ic_store::IcStore::new(),
             current_ic_handle: ic_store::BodyStoreHandle(0),
+            call_depth: 0,
+            overflow_armed: true,
+            tco_suppress_depth: 0,
         };
         interp.setup_globals();
         interp

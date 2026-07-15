@@ -67,7 +67,18 @@ pub struct Parser<'a> {
     eval_new_target_allowed: bool,
     last_expr_parenthesized: bool,
     last_obj_had_proto_dup: bool,
+    /// Current recursive-descent nesting depth (expressions + statements).
+    /// Guarded against `MAX_PARSE_DEPTH` so pathologically nested source raises
+    /// a catchable parse error instead of overflowing the native stack.
+    parse_depth: u32,
 }
+
+/// Maximum parser recursion depth before a catchable parse error is raised
+/// instead of letting recursive-descent recursion overflow the native stack.
+/// Sits well below the native capacity of the 128 MiB execution stack the
+/// engine runs on (see `main.rs`). test262 contains no nesting near this deep,
+/// and it is comparable to V8's own limit (which rejects ~5000-deep nesting).
+const MAX_PARSE_DEPTH: u32 = 4_000;
 
 impl<'a> Parser<'a> {
     pub fn new(source: &'a str) -> Result<Self, ParseError> {
@@ -118,7 +129,25 @@ impl<'a> Parser<'a> {
             eval_new_target_allowed: false,
             last_expr_parenthesized: false,
             last_obj_had_proto_dup: false,
+            parse_depth: 0,
         })
+    }
+
+    /// Raise the parser recursion depth by one, returning a catchable parse
+    /// error if `MAX_PARSE_DEPTH` is exceeded. Paired with `exit_recursion`.
+    /// Used by the expression and statement recursion funnels so deeply nested
+    /// source raises a parse error rather than overflowing the native stack.
+    fn enter_recursion(&mut self) -> Result<(), ParseError> {
+        self.parse_depth += 1;
+        if self.parse_depth > MAX_PARSE_DEPTH {
+            self.parse_depth -= 1;
+            return Err(self.error("Maximum parse depth exceeded: input nested too deeply"));
+        }
+        Ok(())
+    }
+
+    fn exit_recursion(&mut self) {
+        self.parse_depth -= 1;
     }
 
     fn advance(&mut self) -> Result<Token, ParseError> {

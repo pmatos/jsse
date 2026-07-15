@@ -12309,6 +12309,42 @@ impl Interpreter {
     fn call_function_inner(
         &mut self,
         func_val: &JsValue,
+        this_val: &JsValue,
+        args: &[JsValue],
+        skip_entry_checks: bool,
+    ) -> Completion {
+        // Catchable stack-depth guard: every JS invocation funnels through here,
+        // so bounding this depth bounds native recursion. Throwing a RangeError
+        // before the native stack is exhausted keeps deep recursion catchable in
+        // JS instead of aborting the process (SIGABRT).
+        //
+        // The soft limit fires once, then disarms so a JS catch handler running
+        // deep in the stack (e.g. acorn's stack-overflow recovery) has room to
+        // execute in the [soft, hard) band. The hard ceiling still fires even
+        // while disarmed, and sits far below native capacity.
+        use crate::interpreter::{
+            CALL_DEPTH_HARD_LIMIT, CALL_DEPTH_REARM_LIMIT, CALL_DEPTH_SOFT_LIMIT,
+        };
+        if self.call_depth >= CALL_DEPTH_HARD_LIMIT
+            || (self.overflow_armed && self.call_depth >= CALL_DEPTH_SOFT_LIMIT)
+        {
+            self.overflow_armed = false;
+            return Completion::Throw(
+                self.create_error("RangeError", "Maximum call stack size exceeded"),
+            );
+        }
+        self.call_depth += 1;
+        let result = self.call_function_inner_impl(func_val, this_val, args, skip_entry_checks);
+        self.call_depth -= 1;
+        if self.call_depth <= CALL_DEPTH_REARM_LIMIT {
+            self.overflow_armed = true;
+        }
+        result
+    }
+
+    fn call_function_inner_impl(
+        &mut self,
+        func_val: &JsValue,
         _this_val: &JsValue,
         args: &[JsValue],
         skip_entry_checks: bool,
@@ -12977,7 +13013,12 @@ impl Interpreter {
                         });
                         self.call_stack_envs.push(exec_env.clone());
                         self.in_tail_position = false;
+                        // A fresh function body: its tail positions are
+                        // independent of any try/finally region in the caller.
+                        let saved_tco_suppress = self.tco_suppress_depth;
+                        self.tco_suppress_depth = 0;
                         let result = self.dispatch_body(o.id, &body, &exec_env, _this_val);
+                        self.tco_suppress_depth = saved_tco_suppress;
                         self.call_stack_envs.pop();
                         self.call_stack_frames.pop();
                         let result = self.dispose_resources(&exec_env, result);

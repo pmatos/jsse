@@ -230,6 +230,15 @@ impl<'a> Parser<'a> {
     }
 
     pub(super) fn parse_assignment_expression(&mut self) -> Result<Expression, ParseError> {
+        // Depth guard: every nested sub-expression funnels through here, so
+        // bounding this bounds recursive-descent native recursion.
+        self.enter_recursion()?;
+        let r = self.parse_assignment_expression_inner();
+        self.exit_recursion();
+        r
+    }
+
+    fn parse_assignment_expression_inner(&mut self) -> Result<Expression, ParseError> {
         let saved_proto_dup = self.last_obj_had_proto_dup;
         self.last_obj_had_proto_dup = false;
         // YieldExpression in generator context
