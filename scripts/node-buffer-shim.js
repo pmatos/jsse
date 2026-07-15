@@ -409,6 +409,27 @@
 
   if (typeof globalThis.Buffer === "undefined") {
     var Buffer = class Buffer extends Uint8Array {
+      constructor(arg, encodingOrOffset, length) {
+        if (typeof arg === "string") {
+          // Legacy `new Buffer(string[, encoding])` — deprecated but still used
+          // by older npm packages; route it through Buffer.from(string)'s path
+          // so it yields the same bytes instead of an empty buffer.
+          var strBytes = strToBytes(arg, encodingOrOffset);
+          super(strBytes.length);
+          this.set(strBytes);
+        } else if (typeof arg === "number") {
+          // `new Buffer(size)` (legacy) and every internal size-based
+          // allocation; validate so a negative/NaN size throws a RangeError
+          // instead of coercing into a multi-GiB allocation.
+          super(toAllocSize(arg));
+        } else {
+          // ArrayBuffer[, offset, length] | TypedArray | array-like, and the
+          // @@species path (new Buffer(buffer, byteOffset, length)) that
+          // subarray/slice use — forward verbatim to Uint8Array.
+          super(arg, encodingOrOffset, length);
+        }
+      }
+
       // ----- static factories -----
       static from(value, encodingOrOffset, length) {
         if (typeof value === "string") {
@@ -467,18 +488,19 @@
       }
 
       static alloc(size, fill, encoding) {
-        var b = new Buffer(size >>> 0);
+        // The constructor validates `size` (RangeError on negative/NaN/huge).
+        var b = new Buffer(size);
         if (fill !== undefined && fill !== 0) b.fill(fill, 0, b.length, encoding);
         return b;
       }
 
       static allocUnsafe(size) {
         // jsse zero-fills; that is always a safe superset of "unsafe".
-        return new Buffer(size >>> 0);
+        return new Buffer(size);
       }
 
       static allocUnsafeSlow(size) {
-        return new Buffer(size >>> 0);
+        return new Buffer(size);
       }
 
       static isBuffer(obj) {
@@ -747,6 +769,23 @@
         if (buf[pos + i] !== needle[i]) return false;
       }
       return true;
+    }
+
+    // Validate an allocation size the way Node does: it must be a non-negative
+    // number within range, else RangeError (never a silent multi-GiB coercion).
+    // A fractional size is floored, matching Node.
+    function toAllocSize(size) {
+      if (
+        typeof size !== "number" ||
+        size !== size || // NaN
+        size < 0 ||
+        size > 0xffffffff
+      ) {
+        throw new RangeError(
+          'The value "' + size + '" is invalid for option "size"'
+        );
+      }
+      return Math.floor(size);
     }
 
     // ----- fixed-width numeric read/write via DataView -----
