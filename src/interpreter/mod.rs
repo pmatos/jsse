@@ -4761,6 +4761,12 @@ impl Interpreter {
                     }
                     for f in completions {
                         f(self);
+                        // A host callback may have requested `__host_exit`
+                        // (issue #229): stop before running the rest of the
+                        // already-drained batch so the exit is immediate.
+                        if self.pending_exit.is_some() {
+                            return;
+                        }
                     }
                 }
                 continue;
@@ -4774,6 +4780,10 @@ impl Interpreter {
             }
             for f in completions {
                 f(self);
+                // See above: a host callback may have requested `__host_exit`.
+                if self.pending_exit.is_some() {
+                    return;
+                }
             }
         }
     }
@@ -4799,6 +4809,12 @@ impl Interpreter {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         loop {
             self.drain_microtasks();
+            // A host callback drained above may have requested `__host_exit`
+            // (issue #229): stop immediately instead of waiting up to 120s on
+            // any still-pending timer/async job. Inert unless the floor is on.
+            if self.pending_exit.is_some() {
+                return;
+            }
             if !self.has_awaited_pending_async() && self.scheduler.pending_timer_jobs_count() == 0 {
                 break;
             }

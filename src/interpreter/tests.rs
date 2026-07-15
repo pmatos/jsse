@@ -1966,4 +1966,52 @@ mod node_host_tests {
         assert_eq!(interp.pending_exit, Some(3));
         assert_eq!(global_string(&interp, "disposed"), "no");
     }
+
+    #[test]
+    fn host_exit_uncatchable_in_generator_body() {
+        // The generator/async state machine routes a Throw through its own
+        // catch/finally states; a pending exit must bypass that. (PR #237
+        // review round 2, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.ran = "no";
+            function* g() { try { yield 0; __host_exit(7); } catch { globalThis.ran = "caught"; } }
+            const it = g();
+            it.next(); // yields 0
+            it.next(); // resumes, calls __host_exit(7)
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(7));
+        assert_eq!(global_string(&interp, "ran"), "no");
+    }
+
+    #[test]
+    fn host_exit_uncatchable_in_async_body() {
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.aran = "no";
+            async function f() { try { await 0; __host_exit(5); } catch { globalThis.aran = "caught"; } }
+            f();
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(5));
+        assert_eq!(global_string(&interp, "aran"), "no");
+    }
+
+    #[test]
+    fn host_exit_from_disposer_stops_remaining_disposers() {
+        // Disposal runs in reverse order: `b` disposes first and calls exit,
+        // so `a`'s disposer must not run. (PR #237 review round 2, Codex P2.)
+        let (interp, _c) = run_node_script(
+            r#"
+            globalThis.d = "";
+            {
+              using a = { [Symbol.dispose]() { globalThis.d += "a"; } };
+              using b = { [Symbol.dispose]() { globalThis.d += "b"; __host_exit(4); } };
+            }
+            "#,
+        );
+        assert_eq!(interp.pending_exit, Some(4));
+        assert_eq!(global_string(&interp, "d"), "b");
+    }
 }

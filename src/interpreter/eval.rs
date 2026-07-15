@@ -6299,7 +6299,13 @@ impl Interpreter {
                 return Completion::Normal(self.create_iter_result_object(yield_val, false));
             }
             if let Completion::Throw(e) = stmt_result {
-                if let Some(try_info) = current_try_stack.pop() {
+                // A pending `__host_exit` (issue #229) is uncatchable: don't
+                // route the sentinel throw into the generator/async body's
+                // catch/finally states — let it complete the machine and
+                // propagate. Inert unless the node host floor is enabled.
+                if self.pending_exit.is_none()
+                    && let Some(try_info) = current_try_stack.pop()
+                {
                     if let Some(catch_state) = try_info.catch_state {
                         pending_exception = Some(e);
                         current_id = catch_state;
@@ -6404,7 +6410,11 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
                                 // Route through try-stack for proper catch/finally handling
-                                if let Some(try_info) = current_try_stack.pop() {
+                                // — unless `__host_exit` is pending (issue #229), which is
+                                // uncatchable and must complete the machine instead.
+                                if self.pending_exit.is_none()
+                                    && let Some(try_info) = current_try_stack.pop()
+                                {
                                     if let Some(catch_state) = try_info.catch_state {
                                         pending_exception = Some(e);
                                         current_id = catch_state;
@@ -9819,7 +9829,13 @@ impl Interpreter {
             };
 
             if let Completion::Throw(e) = stmt_result {
-                if let Some(try_info) = current_try_stack.pop() {
+                // A pending `__host_exit` (issue #229) is uncatchable: don't
+                // route the sentinel throw into the generator/async body's
+                // catch/finally states — let it complete the machine and
+                // propagate. Inert unless the node host floor is enabled.
+                if self.pending_exit.is_none()
+                    && let Some(try_info) = current_try_stack.pop()
+                {
                     if let Some(catch_state) = try_info.catch_state {
                         pending_exception = Some(e);
                         current_id = catch_state;
@@ -10007,7 +10023,11 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
                                 // Route through try-stack for proper catch/finally handling
-                                if let Some(try_info) = current_try_stack.pop() {
+                                // — unless `__host_exit` is pending (issue #229), which is
+                                // uncatchable and must complete the machine instead.
+                                if self.pending_exit.is_none()
+                                    && let Some(try_info) = current_try_stack.pop()
+                                {
                                     if let Some(catch_state) = try_info.catch_state {
                                         pending_exception = Some(e);
                                         current_id = catch_state;
@@ -15718,6 +15738,16 @@ impl Interpreter {
                 )
                 && let Some(exc) = pending_exception.take()
             {
+                // A pending `__host_exit` (issue #229) is uncatchable: reject
+                // the promise without routing the sentinel through the async
+                // body's catch/finally handlers, and stop driving the machine.
+                // Inert unless the node host floor is enabled. Mirrors the
+                // unhandled-throw path below.
+                if self.pending_exit.is_some() {
+                    self.scheduler.remove_async_function_state(async_id);
+                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[exc]);
+                    return;
+                }
                 let mut handled = false;
                 for i in (0..try_stack.len()).rev() {
                     if !try_stack[i].entered_catch

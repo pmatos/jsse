@@ -2575,6 +2575,12 @@ impl Interpreter {
         let _had_error = current_error.is_some();
 
         for resource in &stack {
+            // A prior disposer may have requested `__host_exit` (issue #229):
+            // stop before running the remaining disposers so the exit is
+            // immediate. Inert unless the node host floor is enabled.
+            if self.pending_exit.is_some() {
+                return completion;
+            }
             // §10.4.4.3 Dispose: If method is undefined, result is undefined; else Call(method, V)
             let result = if matches!(resource.dispose_method, JsValue::Undefined) {
                 Completion::Normal(JsValue::Undefined)
