@@ -427,18 +427,22 @@
         combined.set(bytes, this._pending.length);
         bytes = combined;
       }
-      // Only the BOM at the very start of the stream is stripped; once any bytes
-      // have been processed an interior BOM at a chunk boundary is literal.
+      // Only the BOM at the very start of the stream is stripped; once bytes
+      // have actually been consumed an interior BOM at a chunk boundary is
+      // literal. A non-streaming (final) decode flushes and RESETS the decoder,
+      // so a reused decoder strips a leading BOM again (Node).
       var ignoreBOM = this._ignoreBOM || this._bomHandled;
       var res = utf8Decode(bytes, this._fatal, ignoreBOM, stream);
-      if (bytes.length > 0) this._bomHandled = true;
-      // On a streaming call, retain the trailing incomplete sequence; otherwise
-      // finalize (any incomplete tail was already replaced with U+FFFD) and drop
-      // the buffer.
-      this._pending =
-        stream && res.pending > 0
-          ? bytes.subarray(bytes.length - res.pending)
-          : null;
+      if (stream) {
+        // Mark BOM-handled only once real bytes were consumed (not merely
+        // buffered), so a BOM split across chunks is still stripped.
+        if (bytes.length - res.pending > 0) this._bomHandled = true;
+        this._pending =
+          res.pending > 0 ? bytes.subarray(bytes.length - res.pending) : null;
+      } else {
+        this._pending = null;
+        this._bomHandled = false;
+      }
       return res.out;
     };
     globalThis.TextDecoder = TextDecoderShim;
@@ -777,13 +781,31 @@
         if (!(target instanceof Uint8Array)) {
           throw new TypeError('The "target" argument must be a Buffer or Uint8Array');
         }
+        targetStart = targetStart === undefined ? 0 : targetStart;
+        targetEnd = targetEnd === undefined ? target.length : targetEnd;
+        sourceStart = sourceStart === undefined ? 0 : sourceStart;
+        sourceEnd = sourceEnd === undefined ? this.length : sourceEnd;
+        // Each slice bound must be an integer within its buffer (Node throws
+        // RangeError otherwise, rather than comparing wrapped indices).
+        if (
+          !Number.isInteger(targetStart) ||
+          !Number.isInteger(targetEnd) ||
+          !Number.isInteger(sourceStart) ||
+          !Number.isInteger(sourceEnd) ||
+          targetStart < 0 ||
+          targetEnd > target.length ||
+          sourceStart < 0 ||
+          sourceEnd > this.length
+        ) {
+          throw new RangeError("out of range index");
+        }
         return bufCompare(
           this,
-          sourceStart === undefined ? 0 : sourceStart | 0,
-          sourceEnd === undefined ? this.length : sourceEnd | 0,
+          sourceStart,
+          sourceEnd,
           target,
-          targetStart === undefined ? 0 : targetStart | 0,
-          targetEnd === undefined ? target.length : targetEnd | 0
+          targetStart,
+          targetEnd
         );
       }
 
