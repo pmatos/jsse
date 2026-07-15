@@ -11,7 +11,8 @@
 #   1. clones the pinned ref (cached under /tmp/jsse-libtests/<lib>/repo),
 #   2. runs the library's prepare hook (npm install / build / patches),
 #   3. bundles the entry with a pinned esbuild into a single IIFE,
-#   4. prepends scripts/node-shim.js (Node-global shim; test262 never sees it),
+#   4. prepends the shared Node-global shims (node-shim.js + node-buffer-shim.js;
+#      test262 never sees them),
 #   5. runs the bundle on jsse (release) and reports the verdict.
 #
 # By default it also runs the same bundle on Node as a reference oracle and
@@ -174,7 +175,10 @@ else
 fi
 
 # ---- step 5: prepend shims -------------------------------------------------
-SHIMS=("$SCRIPT_DIR/node-shim.js")
+# node-buffer-shim.js (Buffer + TextEncoder/TextDecoder) is a shared shim
+# alongside node-shim.js: Buffer is the highest-value host object (many
+# libraries reference it at import time), so every bundle gets it.
+SHIMS=("$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-buffer-shim.js")
 if [ -n "$LIB_SHIM" ]; then
     SHIMS+=("$SCRIPT_DIR/$LIB_SHIM")
 fi

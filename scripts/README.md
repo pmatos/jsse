@@ -5,10 +5,41 @@ Run real-world npm libraries' own test suites on jsse as engine stress tests
 harness: clone a pinned library, bundle its test entry with esbuild into a
 single IIFE, prepend a Node-globals shim, and run it on `target/release/jsse`.
 
-The Node/host surface ships **only** as a prepended JS shim
-(`scripts/node-shim.js`) — it is never added to jsse's default global object, so
-test262 is unaffected. Everything here lives under `scripts/`; no `src/` change
-is required to add a library.
+The Node/host surface ships **only** as prepended JS shims
+(`scripts/node-shim.js` for `process`/`console`, `scripts/node-buffer-shim.js`
+for `Buffer`/`TextEncoder`/`TextDecoder`) — never added to jsse's default global
+object, so test262 is unaffected. Both are prepended to every bundle.
+Everything here lives under `scripts/`; no `src/` change is required to add a
+library.
+
+## Buffer / TextEncoder / TextDecoder (`node-buffer-shim.js`)
+
+`Buffer` is the highest-value host object: many libraries reference it (or
+`TextEncoder`) at import time and fail to load without it. The shim implements
+it in pure JS as a subclass of `Uint8Array` riding jsse's existing
+`TypedArray`/`ArrayBuffer`/`DataView` — so it needs **zero new engine object
+kinds**, and `instanceof Uint8Array` holds. It covers `Buffer.from`/`alloc`/
+`allocUnsafe`/`concat`/`isBuffer`/`byteLength`/`isEncoding`/`compare`; the
+`utf8`/`hex`/`base64`/`base64url`/`latin1`/`ascii`/`ucs2` encodings; fixed- and
+variable-width `read*`/`write*` (LE/BE, including BigInt64); shared-memory
+`slice`/`subarray`; and `equals`/`compare`/`indexOf`/`copy`/`fill`/`write`/
+`toJSON`. `TextEncoder`/`TextDecoder` cover UTF-8 (surrogate handling, `fatal`,
+BOM). Like `node-shim.js`, every global is guarded so the shim is inert on Node.
+
+### Shim fixtures (`run-shim-fixtures.sh`)
+
+`scripts/shim-fixtures/*.fixture.js` are self-verifying tests for the shims: each
+assertion checks a value captured from Node's native `Buffer`/`TextEncoder`.
+
+```sh
+./scripts/run-shim-fixtures.sh [--node] [--no-cross-check]
+```
+
+The runner prepends both shims to each fixture and runs it on **jsse** (shims
+active) and **Node** (shims inert → native APIs). Passing on Node proves the
+asserted values are correct; passing on jsse proves the shim matches Node. Both
+engines must report the same assertion count, so a fixture cannot silently skip
+checks on jsse.
 
 ## Running
 
