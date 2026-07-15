@@ -636,7 +636,13 @@
               "Buffer or ArrayBuffer."
           );
         }
-        encoding = normalizeEncoding(encoding);
+        // Unlike toString/from, byteLength does not throw on an unrecognized
+        // encoding — it falls back to UTF-8 (Node).
+        try {
+          encoding = normalizeEncoding(encoding);
+        } catch (e) {
+          encoding = "utf8";
+        }
         switch (encoding) {
           case "ascii":
           case "latin1":
@@ -892,8 +898,18 @@
           throw new RangeError('"end" is out of range');
         }
         if (typeof value === "string") {
+          // An empty string zero-fills the range (Node), but a non-empty string
+          // that encodes to no bytes (e.g. invalid hex "zz") is an invalid fill.
+          if (value === "") {
+            for (var z = offset; z < end; z++) this[z] = 0;
+            return this;
+          }
           var bytes = strToBytes(value, encoding);
-          if (bytes.length === 0) return this;
+          if (bytes.length === 0) {
+            throw new TypeError(
+              'The value "' + value + '" is invalid for argument "value"'
+            );
+          }
           for (var j = offset, p = 0; j < end; j++, p++) {
             this[j] = bytes[p % bytes.length];
           }
@@ -1178,7 +1194,9 @@
     Buffer.prototype.writeUIntLE = function (value, offset, byteLength) {
       offset = offset === undefined ? 0 : offset;
       checkVarWidth(this, offset, byteLength);
-      if (value < 0 || value >= Math.pow(2, 8 * byteLength)) {
+      // The max is inclusive (2^(8·byteLength) − 1), so a fractional value just
+      // above the max (e.g. 255.9 for 1 byte) is out of range, not truncated.
+      if (value < 0 || value > Math.pow(2, 8 * byteLength) - 1) {
         throw new RangeError('"value" is out of range');
       }
       var v = value;
@@ -1191,7 +1209,7 @@
     Buffer.prototype.writeUIntBE = function (value, offset, byteLength) {
       offset = offset === undefined ? 0 : offset;
       checkVarWidth(this, offset, byteLength);
-      if (value < 0 || value >= Math.pow(2, 8 * byteLength)) {
+      if (value < 0 || value > Math.pow(2, 8 * byteLength) - 1) {
         throw new RangeError('"value" is out of range');
       }
       var v = value;
@@ -1203,7 +1221,7 @@
     };
     Buffer.prototype.writeIntLE = function (value, offset, byteLength) {
       var limit = Math.pow(2, 8 * byteLength - 1);
-      if (value < -limit || value >= limit) {
+      if (value < -limit || value > limit - 1) {
         throw new RangeError('"value" is out of range');
       }
       if (value < 0) value += Math.pow(2, 8 * byteLength);
@@ -1211,7 +1229,7 @@
     };
     Buffer.prototype.writeIntBE = function (value, offset, byteLength) {
       var limit = Math.pow(2, 8 * byteLength - 1);
-      if (value < -limit || value >= limit) {
+      if (value < -limit || value > limit - 1) {
         throw new RangeError('"value" is out of range');
       }
       if (value < 0) value += Math.pow(2, 8 * byteLength);
