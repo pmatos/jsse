@@ -90,13 +90,17 @@
     return Uint8Array.from(out);
   }
 
-  // UTF-8 decode a byte array to a JS string. Invalid sequences emit U+FFFD via
-  // the "maximal subpart" rule (the byte that broke a multibyte sequence is
-  // reprocessed, not consumed) unless `fatal`, which throws a TypeError. A
-  // leading BOM is stripped unless `ignoreBOM`.
-  function utf8Decode(bytes, fatal, ignoreBOM) {
+  // UTF-8 decode a byte array. Invalid sequences emit U+FFFD via the "maximal
+  // subpart" rule (the byte that broke a multibyte sequence is reprocessed, not
+  // consumed) unless `fatal`, which throws a TypeError. A leading BOM is
+  // stripped unless `ignoreBOM`. Returns { out: string, pending: N }: when
+  // `streaming`, a trailing incomplete-but-valid multibyte prefix is NOT
+  // finalized — its N bytes are reported so the caller can buffer them for the
+  // next chunk (Node's TextDecoder `{ stream: true }`).
+  function utf8Decode(bytes, fatal, ignoreBOM, streaming) {
     var out = [];
     var i = 0;
+    var pending = 0;
     var len = bytes.length;
     if (
       !ignoreBOM &&
@@ -153,11 +157,18 @@
       // offending byte to be reprocessed (maximal-subpart substitution).
       var consumed = 1;
       var ok = true;
+      var ranOut = false;
       for (var j = 1; j < size; j++) {
         var bx = bytes[i + j];
+        if (bx === undefined) {
+          // Ran off the end mid-sequence: the bytes so far are a valid prefix.
+          ok = false;
+          ranOut = true;
+          break;
+        }
         var lo = j === 1 ? lower : 0x80;
         var hi = j === 1 ? upper : 0xbf;
-        if (bx === undefined || bx < lo || bx > hi) {
+        if (bx < lo || bx > hi) {
           ok = false;
           break;
         }
@@ -165,6 +176,11 @@
         consumed++;
       }
       if (!ok) {
+        if (ranOut && streaming) {
+          // Buffer the incomplete trailing sequence for the next chunk.
+          pending = len - i;
+          break;
+        }
         fail();
         i += consumed;
         continue;
@@ -172,7 +188,7 @@
       out.push(cp);
       i += size;
     }
-    return codePointsToString(out);
+    return { out: codePointsToString(out), pending: pending };
   }
 
   // Build a string from code points in bounded chunks (fromCharCode/apply on a
@@ -369,6 +385,7 @@
       options = options || {};
       this._fatal = !!options.fatal;
       this._ignoreBOM = !!options.ignoreBOM;
+      this._pending = null; // trailing bytes buffered across stream chunks
     };
     Object.defineProperty(TextDecoderShim.prototype, "encoding", {
       get: function () {
@@ -388,10 +405,11 @@
       },
       configurable: true,
     });
-    TextDecoderShim.prototype.decode = function (input) {
-      if (input === undefined) return "";
+    TextDecoderShim.prototype.decode = function (input, options) {
       var bytes;
-      if (input instanceof Uint8Array) {
+      if (input === undefined) {
+        bytes = new Uint8Array(0);
+      } else if (input instanceof Uint8Array) {
         bytes = input;
       } else if (input instanceof ArrayBuffer) {
         bytes = new Uint8Array(input);
@@ -400,7 +418,23 @@
       } else {
         throw new TypeError("decode() expects a BufferSource");
       }
-      return utf8Decode(bytes, this._fatal, this._ignoreBOM);
+      var stream = !!(options && options.stream);
+      // Prepend any bytes buffered from a previous `{ stream: true }` chunk.
+      if (this._pending && this._pending.length) {
+        var combined = new Uint8Array(this._pending.length + bytes.length);
+        combined.set(this._pending, 0);
+        combined.set(bytes, this._pending.length);
+        bytes = combined;
+      }
+      var res = utf8Decode(bytes, this._fatal, this._ignoreBOM, stream);
+      // On a streaming call, retain the trailing incomplete sequence; otherwise
+      // finalize (any incomplete tail was already replaced with U+FFFD) and drop
+      // the buffer.
+      this._pending =
+        stream && res.pending > 0
+          ? bytes.subarray(bytes.length - res.pending)
+          : null;
+      return res.out;
     };
     globalThis.TextDecoder = TextDecoderShim;
   }
@@ -528,7 +562,12 @@
       }
 
       static alloc(size, fill, encoding) {
-        // The constructor validates `size` (RangeError on negative/NaN/huge).
+        // alloc requires a numeric size (Node: a string/null/object size is a
+        // TypeError — unlike `new Buffer(size)`, where a string is legacy
+        // content). The constructor then range-validates the number.
+        if (typeof size !== "number") {
+          throw new TypeError('The "size" argument must be of type number');
+        }
         var b = new Buffer(size);
         if (fill !== undefined && fill !== 0) b.fill(fill, 0, b.length, encoding);
         return b;
@@ -536,10 +575,16 @@
 
       static allocUnsafe(size) {
         // jsse zero-fills; that is always a safe superset of "unsafe".
+        if (typeof size !== "number") {
+          throw new TypeError('The "size" argument must be of type number');
+        }
         return new Buffer(size);
       }
 
       static allocUnsafeSlow(size) {
+        if (typeof size !== "number") {
+          throw new TypeError('The "size" argument must be of type number');
+        }
         return new Buffer(size);
       }
 
@@ -637,7 +682,7 @@
         var i, s;
         switch (encoding) {
           case "utf8":
-            return utf8Decode(this.subarray(start, end), false, true);
+            return utf8Decode(this.subarray(start, end), false, true).out;
           case "ascii":
             s = "";
             for (i = start; i < end; i++) {
