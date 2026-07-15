@@ -10,6 +10,17 @@ The Node/host surface ships **only** as a prepended JS shim
 test262 is unaffected. Everything here lives under `scripts/`; no `src/` change
 is required to add a library.
 
+The shim's readable-output layer (`process`, the full `console` method set, and
+the `util.format` / `util.inspect` core they share) is built on top of the
+flag-gated Rust "syscall floor" (issue #229): `__host_write` (byte-accurate fd
+I/O), `__host_hrtime` (monotonic clock), and `__host_exit` (real process exit).
+The runner therefore invokes **jsse with `--node`** so those primitives exist
+(never Node — it has no such flag and doesn't need one). The shim is guarded to
+be a complete no-op on real Node, where `process`, the full `console`, and
+`require('util')` already exist; that inertness is what lets the identical bundle
+run on Node as the reference oracle. When the floor is absent (jsse without
+`--node`) each surface degrades to a pure-JS fallback.
+
 ## Running
 
 ```sh
@@ -68,6 +79,24 @@ These share a self-contained runner that loads each module with a **dynamic**
 reads the original entry, extracts the module list / require prefix / harness
 global, and emits an equivalent entry using literal `require()` calls. Each
 config's `lib_prepare` invokes it (see `scripts/libs/decimal.js.sh`).
+
+## Shim self-test
+
+`scripts/run-node-shim-selftest.sh` exercises the readable-output layer directly,
+independent of any library:
+
+```sh
+./scripts/run-node-shim-selftest.sh [--no-build]
+```
+
+It concatenates `node-shim.js` in front of `node-shim.selftest.js` (exactly as
+the runner prepends the shim to a bundle), runs the result on **jsse `--node`**
+and on **Node**, and requires both to exit 0 and emit byte-identical stdout.
+Node is the oracle for the deterministic surfaces — the `util.format` specifiers
+(`%s %d %i %f %j %c %%`), byte-accurate `process.stdout.write`, and the
+`console.count`/`group`/`assert` output shapes are asserted exactly.
+`util.inspect` is intentionally best-effort (depth, cycles, common types) and is
+only smoke-tested structurally, never byte-compared against Node.
 
 ## Current status
 
