@@ -869,16 +869,24 @@ impl Interpreter {
                         self.ic_hit_count.set(self.ic_hit_count.get() + 1);
                         return Completion::Normal(v);
                     }
-                    // Probe miss — fall to the slow path and record afterwards.
+                    // Probe miss — snapshot the pre-miss slot BEFORE the slow
+                    // path, then record afterwards. `get_object_property` can
+                    // run user code (an accessor getter or a proxy `get` trap)
+                    // that re-enters this same body + `PropSiteId` and mutates
+                    // the slot; capturing here keeps the state-machine
+                    // transition operating on the slot as it stood before this
+                    // access, honoring `PropIcSlot::advance`'s contract. The
+                    // clone is on the cold miss path only and allocates nothing
+                    // unless the slot was already `Poly`.
                     self.ic_slow_path_count
                         .set(self.ic_slow_path_count.get() + 1);
+                    let prev = self.prop_slot(site_id).clone();
                     let result = self.get_object_property(o.id, &key, &obj_val.clone());
                     if let Completion::Normal(_) = &result {
                         // Classify for IC recording. Cheap one-borrow walk.
                         let observed = self.classify_for_prop_ic(o.id, &key);
                         // Drive the Empty → Mono → Poly → Megamorphic machine.
-                        let next = self.prop_slot(site_id).advance(observed);
-                        *self.prop_slot(site_id) = next;
+                        *self.prop_slot(site_id) = prev.advance(observed);
                     }
                     return result;
                 }

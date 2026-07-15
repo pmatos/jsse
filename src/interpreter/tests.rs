@@ -1263,6 +1263,44 @@ fn ic_megamorphic_after_fifth_distinct_shape() {
 }
 
 #[test]
+fn ic_record_uses_pre_slow_path_slot_snapshot() {
+    // The slow path can run user code (here an own-accessor getter) that
+    // re-enters the SAME body + prop site and mutates the slot before recording
+    // resumes. The record step must transition from the slot as it stood BEFORE
+    // this access, not the reentrancy-mutated slot.
+    //
+    // `read(reenter)` misses as a non-cacheable own accessor (classify → None).
+    // Its getter recursively runs `read(a)` and `read(b)` at the same site,
+    // driving the slot Empty → Mono(a) → Poly([a,b]). If the outer record read
+    // the slot AFTER the getter, it would see Poly and apply Poly+None →
+    // Megamorphic, terminalizing the site so the following `read(a)` loop can
+    // never hit. Snapshotting before the slow path yields Empty+None → Empty,
+    // so the loop re-primes Mono(a) and hits. A positive hit count proves the
+    // site was not wrongly terminalized.
+    let interp = run_script(
+        r#"
+        var a = {x: 1};
+        var b = {x: 2};
+        function read(o) { return o.x; }
+        var reenter = { get x() { read(a); read(b); return 0; } };
+        read(reenter);                                // reentrant getter mutates the slot
+        var sum = 0;
+        for (var i = 0; i < 10; i++) sum += read(a);  // must be able to cache + hit
+        "#,
+    );
+    assert_eq!(
+        global_number(&interp, "sum"),
+        10.0,
+        "behavioral correctness"
+    );
+    assert!(
+        interp.ic_hit_count() > 0,
+        "the site must survive the reentrant slow path and re-cache `a`; got 0 \
+         hits (a stale post-slow-path read terminalized it to Megamorphic)"
+    );
+}
+
+#[test]
 fn ic_megamorphic_stays_terminal_after_non_cacheable_miss() {
     // A polymorphic site that then meets a non-cacheable proxy lookup must go
     // Megamorphic and stay there — never demoted back to Empty. If it were
