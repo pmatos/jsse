@@ -2076,11 +2076,14 @@ pub(super) fn translate_js_pattern_ex(
         let c = chars[i];
 
         if c == '[' && !in_char_class {
-            // An empty JS character class is a valid always-failing atom.
-            // fancy-regex rejects `[]`, so preserve its ECMAScript semantics
-            // with an impossible negative lookahead.
+            // An empty JS character class matches nothing, but it is a
+            // *consuming* atom: under a zero-permitting quantifier (`[]*`,
+            // `[]?`, `[]{0,n}`) it still yields an empty match, while bare `[]`
+            // and `[]+` fail. fancy-regex rejects the literal `[]`, so translate
+            // to the negated-everything class `[^\s\S]`, which preserves both
+            // behaviours (a zero-width `(?!)` would fail even when quantified).
             if i + 1 < len && chars[i + 1] == ']' {
-                result.push_str("(?!)");
+                result.push_str("[^\\s\\S]");
                 i += 2;
                 continue;
             }
