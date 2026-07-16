@@ -3699,6 +3699,38 @@ pub(crate) struct SetRecord {
 }
 
 #[cfg(test)]
+mod shared_buffer_tests {
+    use super::SharedBufferInner;
+
+    #[test]
+    fn shared_buffer_byte_views_survive_mutation_and_resize() {
+        let buffer = SharedBufferInner::new((0..10).collect(), 1);
+        assert_eq!(buffer.to_vec(), (0..10).collect::<Vec<_>>());
+
+        buffer.with_write(|bytes| {
+            bytes[0] = 10;
+            bytes[9] = 19;
+        });
+        assert_eq!(buffer.to_vec(), vec![10, 1, 2, 3, 4, 5, 6, 7, 8, 19]);
+
+        buffer.resize(13, 0xaa);
+        assert_eq!(
+            buffer.to_vec(),
+            vec![10, 1, 2, 3, 4, 5, 6, 7, 8, 19, 0xaa, 0xaa, 0xaa]
+        );
+
+        buffer.resize(3, 0);
+        assert_eq!(buffer.to_vec(), vec![10, 1, 2]);
+
+        buffer.resize(10, 0xbb);
+        assert_eq!(
+            buffer.to_vec(),
+            vec![10, 1, 2, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb, 0xbb]
+        );
+    }
+}
+
+#[cfg(test)]
 mod kind_accessor_tests {
     use super::*;
 
