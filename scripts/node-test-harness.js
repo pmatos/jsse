@@ -1270,6 +1270,20 @@
       }
     }
 
+    // Emit a TAP `not ok` for the current counter value plus its YAML diagnostic
+    // block, and bump the failure count. Shared by failing tests and failing
+    // suite-level hooks so both report identically.
+    function reportFailure(name, errText) {
+      console.log("not ok " + counter + " - " + name);
+      console.log("  ---");
+      var lines = String(errText).split("\n");
+      for (var i = 0; i < lines.length; i++) {
+        console.log("  " + lines[i]);
+      }
+      console.log("  ...");
+      failed++;
+    }
+
     async function runOneTest(t) {
       counter++;
       var name = fullName(t.suite, t.name);
@@ -1304,30 +1318,50 @@
         console.log("ok " + counter + " - " + name);
         passed++;
       } else {
-        console.log("not ok " + counter + " - " + name);
-        console.log("  ---");
-        var lines = String(errText).split("\n");
-        for (var e2 = 0; e2 < lines.length; e2++) {
-          console.log("  " + lines[e2]);
-        }
-        console.log("  ...");
-        failed++;
+        reportFailure(name, errText);
       }
     }
 
     async function runSuite(suite) {
       var ctx = {};
-      await runHooks(suite.before, ctx);
-      // Children run in definition order (tests interleaved with nested suites).
-      for (var i = 0; i < suite.children.length; i++) {
-        var child = suite.children[i];
-        if (child.kind === "test") {
-          await runOneTest(child.test);
-        } else {
-          await runSuite(child.suite);
+      // Suite-level before/after hooks are contained the same way per-test hooks
+      // are in runOneTest: a failing hook (thrown, done(error), or timed out) is
+      // recorded as a single `not ok` and the run continues, rather than the
+      // rejection propagating to the top-level harness catch and collapsing every
+      // count to PASS: 0  FAIL: 1  TOTAL: 1. A failed `before all` skips this
+      // suite's children (their fixture state is unreliable) but lets sibling
+      // suites still run; `after all` runs regardless, for cleanup.
+      var beforeFailed = false;
+      try {
+        await runHooks(suite.before, ctx);
+      } catch (e) {
+        counter++;
+        beforeFailed = true;
+        reportFailure(
+          fullName(suite, '"before all" hook'),
+          e && e.stack ? e.stack : String(e)
+        );
+      }
+      if (!beforeFailed) {
+        // Children run in definition order (tests interleaved with nested suites).
+        for (var i = 0; i < suite.children.length; i++) {
+          var child = suite.children[i];
+          if (child.kind === "test") {
+            await runOneTest(child.test);
+          } else {
+            await runSuite(child.suite);
+          }
         }
       }
-      await runHooks(suite.after, ctx);
+      try {
+        await runHooks(suite.after, ctx);
+      } catch (e) {
+        counter++;
+        reportFailure(
+          fullName(suite, '"after all" hook'),
+          e && e.stack ? e.stack : String(e)
+        );
+      }
     }
 
     async function runAll() {
