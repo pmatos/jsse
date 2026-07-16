@@ -43,9 +43,11 @@ JSSE will use approach 3.
 
 ## Design
 
-The `Expression::Unary` evaluation arm will save `in_tail_position`, set it to
-`false` for the recursive operand evaluation, and restore the saved value on
-both normal and abrupt completion paths. The unary operation then consumes the
+The `Expression::Unary`, `Expression::Typeof`, `Expression::Void`, and
+`Expression::Delete` evaluation arms will suppress `in_tail_position` for
+recursive operand evaluation and restore the saved value on both normal and
+abrupt completion paths. These four AST variants collectively represent all
+seven unary-expression productions. The unary operation then consumes the
 normal operand value as before. No parser, AST, call-dispatch, or general
 tail-call changes are needed.
 
