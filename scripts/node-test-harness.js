@@ -488,9 +488,26 @@
       var prev = currentModule;
       currentModule = mod;
       if (typeof nested === "function") {
-        // Modern QUnit passes the hooks object as the callback argument (as well
-        // as `this`): QUnit.module('m', function (hooks) { hooks.beforeEach(…) }).
-        nested.call(mod.hooks, mod.hooks);
+        // Modern QUnit passes a registrar whose before/beforeEach/afterEach/after
+        // methods STORE the supplied callbacks, e.g.
+        // QUnit.module('m', function (hooks) { hooks.beforeEach(fn) }). (Passing
+        // the plain hooks object wouldn't work — its fields are the callbacks the
+        // runner reads, not registration methods.)
+        var registrar = {
+          before: function (fn) {
+            mod.hooks.before = fn;
+          },
+          beforeEach: function (fn) {
+            mod.hooks.beforeEach = fn;
+          },
+          afterEach: function (fn) {
+            mod.hooks.afterEach = fn;
+          },
+          after: function (fn) {
+            mod.hooks.after = fn;
+          },
+        };
+        nested.call(registrar, registrar);
         currentModule = prev;
       }
     }
@@ -781,7 +798,6 @@
           // so it never lingers as a pending timer that would delay process exit.
           unschedule(guardId);
         }
-        await runHook(hooks.afterEach, testObj, assert);
       } catch (e) {
         pushFailure(
           testObj,
@@ -789,6 +805,18 @@
             testObj.testName +
             ": " +
             (e && e.stack ? e.stack : e)
+        );
+      }
+
+      // afterEach must run even when beforeEach or the test body threw — QUnit
+      // suites reset fixtures/globals/timers here, so skipping it would leak
+      // dirty state into later tests. A throw here is recorded as a failure.
+      try {
+        await runHook(hooks.afterEach, testObj, assert);
+      } catch (e) {
+        pushFailure(
+          testObj,
+          "afterEach hook threw: " + (e && e.stack ? e.stack : e)
         );
       }
 
