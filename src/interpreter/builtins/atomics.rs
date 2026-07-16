@@ -1486,3 +1486,111 @@ fn write_i64_to_buffer(buf: &mut [u8], offset: usize, kind: TypedArrayKind, val:
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn completion_number(completion: Completion) -> f64 {
+        match completion {
+            Completion::Normal(JsValue::Number(value)) => value,
+            _ => panic!("expected a numeric normal completion"),
+        }
+    }
+
+    fn bigint(value: i64) -> JsValue {
+        JsValue::BigInt(JsBigInt {
+            value: num_bigint::BigInt::from(value),
+        })
+    }
+
+    fn completion_bigint(completion: Completion) -> num_bigint::BigInt {
+        match completion {
+            Completion::Normal(JsValue::BigInt(value)) => value.value,
+            _ => panic!("expected a BigInt normal completion"),
+        }
+    }
+
+    #[test]
+    fn shared_atomic_helpers_cover_all_integer_widths() {
+        let buffer = SharedBufferInner::new(vec![0; 32], 1);
+        let number_kinds = [
+            (TypedArrayKind::Int8, 0),
+            (TypedArrayKind::Uint8, 1),
+            (TypedArrayKind::Int16, 2),
+            (TypedArrayKind::Uint16, 4),
+            (TypedArrayKind::Int32, 8),
+            (TypedArrayKind::Uint32, 12),
+        ];
+
+        for (kind, offset) in number_kinds {
+            atomic_store_shared(&buffer, offset, kind, false, &JsValue::Number(5.0));
+            assert_eq!(
+                completion_number(atomic_load_shared(&buffer, offset, kind, false)),
+                5.0
+            );
+            assert_eq!(
+                completion_number(atomic_compare_exchange_shared(
+                    &buffer,
+                    offset,
+                    kind,
+                    false,
+                    &JsValue::Number(5.0),
+                    &JsValue::Number(7.0),
+                )),
+                5.0
+            );
+            assert_eq!(
+                completion_number(atomic_rmw_shared(
+                    &buffer,
+                    offset,
+                    kind,
+                    false,
+                    &JsValue::Number(3.0),
+                    i64::wrapping_add,
+                    i64::wrapping_add,
+                )),
+                7.0
+            );
+            assert_eq!(
+                completion_number(atomic_load_shared(&buffer, offset, kind, false)),
+                10.0
+            );
+        }
+
+        let kind = TypedArrayKind::BigInt64;
+        let offset = 16;
+        atomic_store_shared(&buffer, offset, kind, true, &bigint(5));
+        assert_eq!(
+            completion_bigint(atomic_load_shared(&buffer, offset, kind, true)),
+            num_bigint::BigInt::from(5)
+        );
+        assert_eq!(
+            completion_bigint(atomic_compare_exchange_shared(
+                &buffer,
+                offset,
+                kind,
+                true,
+                &bigint(5),
+                &bigint(7),
+            )),
+            num_bigint::BigInt::from(5)
+        );
+        assert_eq!(
+            completion_bigint(atomic_rmw_shared(
+                &buffer,
+                offset,
+                kind,
+                true,
+                &bigint(3),
+                i64::wrapping_add,
+                i64::wrapping_add,
+            )),
+            num_bigint::BigInt::from(7)
+        );
+        assert_eq!(
+            completion_bigint(atomic_load_shared(&buffer, offset, kind, true)),
+            num_bigint::BigInt::from(10)
+        );
+    }
+}

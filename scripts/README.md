@@ -167,8 +167,16 @@ prints — the line the verdict parses — equals the one real `qunit-extras` pr
 on Node. `config.noglobals` is intentionally **not** enforced on the jsse side:
 the Node oracle enforces it and the suite passes it there, so enforcing on jsse
 could only add jsse-specific failures the oracle lacks and diverge the count.
-Async tests (`assert.async`) are bounded by a 30 s per-test timeout so a `done()`
-that never fires becomes a failure instead of stalling the run.
+QUnit uses default autostart after synchronous registration (and `QUnit.load()`
+re-checks it), while nested modules inherit outer hooks with QUnit's module and
+per-test ordering. Async QUnit tests (`assert.async`) and callback-style TAP
+tests/hooks (`function (done) { ... }`) are bounded by a 10 s timeout so a
+completion callback that never fires becomes a failure instead of stalling the
+run.
+
+The assembled bundle uses a `.cjs` suffix so Node always evaluates the
+reference oracle as CommonJS. This is independent of any unrelated ancestor
+`package.json` that may declare `"type": "module"` above the `/tmp` cache.
 
 ### Harness self-test (`run-harness-selftest.sh`)
 
@@ -201,6 +209,7 @@ assertions).
 | `big.js` | v6.2.2 | ✅ 47,456 (cross-checked) | ~7 min — heavy arbitrary-precision division/sqrt/pow on the tree-walker |
 | `lodash` | 4.17.21 | ✅ 6,794 (cross-checked) | QUnit via the shared harness; a few tests skipped on jsse — see below |
 | `ajv` | v8.17.1 | ⚠️ 5,466 / 5,480 (Node: 5,480) | ~4 min; four codegen option variants across drafts 6, 7, 2019-09, and 2020-12; residuals tracked in #274 and #275 |
+| `js-sha256` | v0.11.1 | ✅ 916 (cross-checked) | Pure-JS SHA-224/SHA-256 and HMAC vectors; string, Buffer, TypedArray, and ArrayBuffer inputs |
 | `bignumber.js` | v9.1.2 | ⚠️ blocked | see below; green on Node today |
 
 ### lodash skip list (jsse only; each preserves the assertion count via `skipAssert`)

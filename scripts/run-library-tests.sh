@@ -116,10 +116,11 @@ source "$CONFIG"
 LIB_CACHE="$CACHE_ROOT/$LIB"
 REPO_DIR="$LIB_CACHE/repo"
 BUNDLE="$LIB_CACHE/bundle.js"
-# Use .cjs for the Node oracle so an unrelated ancestor package.json with
-# `"type": "module"` (for example /tmp/package.json on a development host)
-# cannot reinterpret esbuild's IIFE as ESM and disable its dynamic-require
-# bridge. jsse parses the contents independently of the filename extension.
+# Use a .cjs suffix so Node always treats the reference bundle as CommonJS,
+# even when an unrelated ancestor package.json (for example /tmp/package.json)
+# declares "type": "module". esbuild's platform=node output may retain dynamic
+# requires for Node built-ins, so accidentally loading it as ESM breaks the
+# reference oracle before the library suite starts.
 FINAL="$LIB_CACHE/final.cjs"
 PREPARED_MARKER="$LIB_CACHE/.prepared"
 
