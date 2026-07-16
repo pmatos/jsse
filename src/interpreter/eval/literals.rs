@@ -166,34 +166,42 @@ impl Interpreter {
         elements: &[Option<Expression>],
         env: &EnvRef,
     ) -> Completion {
-        let mut items: Vec<Option<JsValue>> = Vec::new();
-        for elem in elements {
-            match elem {
-                Some(Expression::Spread(inner)) => {
-                    let val = match self.eval_expr(inner, env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    match self.iterate_to_vec(&val) {
-                        Ok(spread_items) => {
-                            for item in spread_items {
-                                items.push(Some(item));
+        let gc_frame = self.gc_root_frame();
+        let result = (|| {
+            let mut items: Vec<Option<JsValue>> = Vec::new();
+            for elem in elements {
+                match elem {
+                    Some(Expression::Spread(inner)) => {
+                        let val = match self.eval_expr(inner, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        self.gc_root_value(&val);
+                        match self.iterate_to_vec(&val) {
+                            Ok(spread_items) => {
+                                for item in spread_items {
+                                    self.gc_root_value(&item);
+                                    items.push(Some(item));
+                                }
                             }
+                            Err(e) => return Completion::Throw(e),
                         }
-                        Err(e) => return Completion::Throw(e),
                     }
+                    Some(expr) => {
+                        let val = match self.eval_expr(expr, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        self.gc_root_value(&val);
+                        items.push(Some(val));
+                    }
+                    None => items.push(None), // elision — no own property
                 }
-                Some(expr) => {
-                    let val = match self.eval_expr(expr, env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    items.push(Some(val));
-                }
-                None => items.push(None), // elision — no own property
             }
-        }
-        Completion::Normal(self.create_array_with_holes(items))
+            Completion::Normal(self.create_array_with_holes(items))
+        })();
+        self.gc_unroot_frame(gc_frame);
+        result
     }
 
     pub(crate) fn eval_class(
