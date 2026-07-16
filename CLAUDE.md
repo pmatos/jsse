@@ -89,8 +89,9 @@ harness. See `scripts/README.md` for the full recipe and how to add a library.
 - Run one library: `./scripts/run-library-tests.sh <lib>` (e.g. `decimal.js`, `big.js`, `acorn`).
 - Run on Node only (reference oracle): `./scripts/run-library-tests.sh <lib> --node`.
 - Force a fresh clone/rebuild: `./scripts/run-library-tests.sh <lib> --clean`.
-- Each library has a config at `scripts/libs/<lib>.sh` (pinned repo/ref, bundle entry, prepare hook, verdict). The runner clones the pinned ref, bundles with a pinned esbuild, prepends `scripts/node-shim.js` (a JS-only Node-globals shim — never baked into jsse's globals, so test262 is unaffected), runs on jsse, and cross-checks the test count against Node. Caches live under `/tmp/jsse-libtests/<lib>/`.
-- The `node-shim.js` stubs are guarded so they are inert on Node, letting `--node` run the identical bundle as the reference.
+- Each library has a config at `scripts/libs/<lib>.sh` (pinned repo/ref, bundle entry, prepare hook, verdict). The runner clones the pinned ref, bundles with a pinned esbuild, prepends the shared JS-only Node-globals shims (`scripts/node-shim.js` for `process`/`console`, `scripts/node-buffer-shim.js` for `Buffer`/`TextEncoder`/`TextDecoder`) — never baked into jsse's globals, so test262 is unaffected — runs on jsse, and cross-checks the test count against Node. Caches live under `/tmp/jsse-libtests/<lib>/`.
+- The shim stubs are guarded so they are inert on Node, letting `--node` run the identical bundle as the reference.
+- **`Buffer`** is a pure-JS subclass of `Uint8Array` (`node-buffer-shim.js`), needing zero new engine object kinds; `instanceof Uint8Array` holds. Self-verifying fixtures live in `scripts/shim-fixtures/`; run them (jsse + Node cross-checked) with `./scripts/run-shim-fixtures.sh`.
 - **Currently green (cross-checked vs Node):** `decimal.js` (22,624), `big.js` (47,456; ~7 min — heavy arbitrary-precision arithmetic on the tree-walker), `acorn` (13,507).
 - **`bignumber.js`** is wired but blocked on a jsse bug it surfaced (strict-mode `return <call-returning-non-object>` in a constructor returns that value instead of `this`, jsse#238); it goes green once that engine bug is fixed.
 
