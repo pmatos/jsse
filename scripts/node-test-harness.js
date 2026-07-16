@@ -935,8 +935,10 @@
 
     // Module-level before/after run once per module (before its first test /
     // after its last), sharing `mod.sharedEnv`; each test gets a shallow copy of
-    // that env (see runTest). Assertions or throws in a hook fold into the stats
-    // like a test's would.
+    // that env (see runTest). For nested modules, `mod.sharedEnv` is seeded from
+    // the parent chain when the module is opened (see runAll), so a hook here
+    // also sees ancestor `before` state. Assertions or throws in a hook fold
+    // into the stats like a test's would.
     async function runModuleHook(mod, kind) {
       var hook = mod.hooks && mod.hooks[kind];
       if (typeof hook !== "function") return;
@@ -1016,8 +1018,17 @@
         }
         activeModules.length = common;
         for (var open = common; open < nextModules.length; open++) {
-          await runModuleHook(nextModules[open], "before");
-          activeModules.push(nextModules[open]);
+          var opening = nextModules[open];
+          // Inherit the ancestor chain's module env so a nested module's own
+          // before/after hooks and its tests see `this` state set by parent
+          // module hooks — QUnit's nested testEnvironment inheritance. The
+          // parent (nextModules[open - 1]) is already open with its before hook
+          // applied; layer this module's own env (if re-entered) on top of a
+          // shallow copy of it, matching QUnit's per-module testEnvironment copy.
+          var parentEnv = open > 0 ? nextModules[open - 1].sharedEnv : null;
+          opening.sharedEnv = Object.assign({}, parentEnv, opening.sharedEnv);
+          await runModuleHook(opening, "before");
+          activeModules.push(opening);
         }
 
         await runTest(testObj);
