@@ -116,7 +116,11 @@ source "$CONFIG"
 LIB_CACHE="$CACHE_ROOT/$LIB"
 REPO_DIR="$LIB_CACHE/repo"
 BUNDLE="$LIB_CACHE/bundle.js"
-FINAL="$LIB_CACHE/final.js"
+# Use .cjs for the Node oracle so an unrelated ancestor package.json with
+# `"type": "module"` (for example /tmp/package.json on a development host)
+# cannot reinterpret esbuild's IIFE as ESM and disable its dynamic-require
+# bridge. jsse parses the contents independently of the filename extension.
+FINAL="$LIB_CACHE/final.cjs"
 PREPARED_MARKER="$LIB_CACHE/.prepared"
 
 if [ "$CLEAN" -eq 1 ]; then

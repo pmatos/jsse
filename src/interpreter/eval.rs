@@ -365,10 +365,22 @@ impl Interpreter {
                 self.create_type_error("Private identifier can only be used with 'in' operator"),
             ),
             Expression::Unary(op, operand) => {
+                // HasCallInTailPosition: a call nested in a unary expression
+                // is not in tail position. This matters when the
+                // unary expression is reached through a conditional/logical
+                // branch that is otherwise evaluated in tail position: the
+                // call result still has to be transformed by the unary
+                // operator before the surrounding function can return.
+                let saved_tail = self.in_tail_position;
+                self.in_tail_position = false;
                 let val = match self.eval_expr(operand, env) {
                     Completion::Normal(v) => v,
-                    other => return other,
+                    other => {
+                        self.in_tail_position = saved_tail;
+                        return other;
+                    }
                 };
+                self.in_tail_position = saved_tail;
                 self.eval_unary(*op, &val)
             }
             Expression::Binary(op, left, right) => {

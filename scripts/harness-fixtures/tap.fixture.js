@@ -4,13 +4,15 @@
 //
 // Covers: nested suites, definition-order execution, before/after (once per
 // suite) and beforeEach/afterEach (per test, parent chain), async it bodies,
-// the test() alias, and — via one deliberate throw — failure detection.
+// Mocha's suite context and skip helpers, the test() alias, and — via one
+// deliberate throw — failure detection.
 //
-// Expected summary: PASS: 4  FAIL: 1  TOTAL: 5
+// Expected summary: PASS: 7  FAIL: 1  TOTAL: 8
 
 var order = [];
 
 describe("outer", function () {
+  this.timeout(1000).slow(100).retries(0);
   before(function () { order.push("before-outer"); });
   beforeEach(function () { order.push("beforeEach-outer"); });
   afterEach(function () { order.push("afterEach-outer"); });
@@ -39,6 +41,22 @@ describe("outer", function () {
     });
   });
 });
+
+describe.skip("skipped suite", function () {
+  before(function () { throw new Error("skipped suite hook ran"); });
+  it("registers its tests without running them", function () {
+    throw new Error("skipped suite test ran");
+  });
+  describe("nested skipped suite", function () {
+    it("inherits the skipped state", function () {
+      throw new Error("nested skipped suite test ran");
+    });
+  });
+});
+
+it.skip("skipped test registers without running", function () {
+  throw new Error("skipped test ran");
+}).timeout(1000);
 
 test("top-level test() alias runs last (definition order)", function () {
   if (order.indexOf("before-outer") === -1) {

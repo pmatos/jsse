@@ -1098,10 +1098,11 @@
   // suites use and is self-verified by scripts/shim-fixtures. Emits TAP 13.
   // ==========================================================================
   function installTap() {
-    function makeSuite(name, parent) {
-      return {
+    function makeSuite(name, parent, skipped) {
+      var suite = {
         name: name,
         parent: parent,
+        skipped: !!skipped,
         // A single ordered list of children (tests and nested suites) so
         // execution follows definition order, the way mocha/jest run them.
         children: [],
@@ -1110,37 +1111,74 @@
         beforeEach: [],
         afterEach: [],
       };
+      // Mocha exposes timeout configuration through the suite callback's
+      // `this`. The shared harness owns one global watchdog instead of
+      // per-suite timers, so accept these calls as chainable no-ops.
+      suite.timeout = suite.slow = suite.retries = function () {
+        return suite;
+      };
+      return suite;
     }
 
-    var rootSuite = makeSuite("", null);
+    var rootSuite = makeSuite("", null, false);
     var currentSuite = rootSuite;
     var started = false;
     var counter = 0;
     var passed = 0,
       failed = 0;
 
-    function describe(name, fn) {
-      var suite = makeSuite(name, currentSuite);
+    function addSuite(name, fn, skipped) {
+      var suite = makeSuite(
+        name,
+        currentSuite,
+        skipped || currentSuite.skipped
+      );
       currentSuite.children.push({ kind: "suite", suite: suite });
       var prev = currentSuite;
       currentSuite = suite;
       if (typeof fn === "function") fn.call(suite);
       currentSuite = prev;
+      return suite;
+    }
+
+    function describe(name, fn) {
+      return addSuite(name, fn, false);
+    }
+
+    function addTest(name, fn, skipped) {
+      var test = {
+        name: name,
+        fn: fn,
+        suite: currentSuite,
+        skip: !!skipped || currentSuite.skipped,
+      };
+      currentSuite.children.push({
+        kind: "test",
+        test: test,
+      });
+      test.timeout = test.slow = test.retries = function () {
+        return test;
+      };
+      return test;
     }
 
     function it(name, fn) {
-      currentSuite.children.push({
-        kind: "test",
-        test: { name: name, fn: fn, suite: currentSuite },
-      });
+      return addTest(name, fn, false);
     }
 
     function xit(name) {
-      currentSuite.children.push({
-        kind: "test",
-        test: { name: name, fn: null, suite: currentSuite, skip: true },
-      });
+      return addTest(name, null, true);
     }
+
+    // Mocha's skip helpers still execute suite definition callbacks so nested
+    // tests are registered and included in the total, but their bodies/hooks
+    // do not run. AJV's JSON-Schema-Test-Suite uses both forms extensively.
+    describe.skip = function (name, fn) {
+      return addSuite(name, fn, true);
+    };
+    describe.only = describe;
+    it.skip = xit;
+    it.only = it;
 
     function hookRegister(kind) {
       return function (fn) {
@@ -1229,7 +1267,7 @@
 
     async function runSuite(suite) {
       var ctx = {};
-      await runHooks(suite.before, ctx);
+      if (!suite.skipped) await runHooks(suite.before, ctx);
       // Children run in definition order (tests interleaved with nested suites).
       for (var i = 0; i < suite.children.length; i++) {
         var child = suite.children[i];
@@ -1239,7 +1277,7 @@
           await runSuite(child.suite);
         }
       }
-      await runHooks(suite.after, ctx);
+      if (!suite.skipped) await runHooks(suite.after, ctx);
     }
 
     async function runAll() {
@@ -1277,7 +1315,7 @@
       it: it,
       xit: xit,
       xdescribe: function (name) {
-        describe(name, function () {});
+        return addSuite(name, function () {}, true);
       },
       before: hookRegister("before"),
       after: hookRegister("after"),
