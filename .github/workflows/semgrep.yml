@@ -20,7 +20,7 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: astral-sh/setup-uv@v7
+
       - name: Run Semgrep
-        uses: semgrep/semgrep-action@v1
-        with:
-          config: auto
+        run: uvx semgrep@1.170.0 scan --config auto --error --jobs 1 src/
