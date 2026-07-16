@@ -90,6 +90,11 @@ pub struct Interpreter {
     generator_context: Option<GeneratorContext>,
     pub(crate) destructuring_yield: bool,
     pub(crate) pending_iter_close: Vec<JsValue>,
+    /// Object IDs whose `Array.prototype.join` calls are currently converting
+    /// elements. Re-entering `join` for the same receiver through element
+    /// stringification contributes an empty string instead of recursing until
+    /// the native-stack guard fires.
+    pub(crate) active_array_joins: Vec<u64>,
     pub(crate) generator_inline_iters: FxHashMap<u64, Vec<JsValue>>,
     pub(crate) scheduler: scheduler::JobScheduler,
     cached_has_instance_key: Option<String>,
@@ -327,6 +332,7 @@ impl Interpreter {
             generator_context: None,
             destructuring_yield: false,
             pending_iter_close: Vec::new(),
+            active_array_joins: Vec::new(),
             generator_inline_iters: FxHashMap::default(),
             scheduler: scheduler::JobScheduler::default(),
             cached_has_instance_key: None,
