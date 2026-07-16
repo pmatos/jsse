@@ -167,8 +167,12 @@ prints — the line the verdict parses — equals the one real `qunit-extras` pr
 on Node. `config.noglobals` is intentionally **not** enforced on the jsse side:
 the Node oracle enforces it and the suite passes it there, so enforcing on jsse
 could only add jsse-specific failures the oracle lacks and diverge the count.
-Async tests (`assert.async`) are bounded by a 30 s per-test timeout so a `done()`
-that never fires becomes a failure instead of stalling the run.
+QUnit uses default autostart after synchronous registration (and `QUnit.load()`
+re-checks it), while nested modules inherit outer hooks with QUnit's module and
+per-test ordering. Async QUnit tests (`assert.async`) and callback-style TAP
+tests/hooks (`function (done) { ... }`) are bounded by a 10 s timeout so a
+completion callback that never fires becomes a failure instead of stalling the
+run.
 
 ### Harness self-test (`run-harness-selftest.sh`)
 

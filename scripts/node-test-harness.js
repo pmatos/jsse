@@ -452,10 +452,10 @@
       modules: [],
     };
 
-    var modules = [];
     var rootModule = { name: "", tests: [] };
-    modules.push(rootModule);
     var currentModule = rootModule;
+    var moduleStack = [];
+    var testsInOrder = [];
 
     var stats = { all: 0, bad: 0 };
     var doneCbs = [],
@@ -464,6 +464,7 @@
       moduleDoneCbs = [],
       logCbs = [];
     var started = false;
+    var autostartScheduled = false;
     var totalTests = 0;
 
     function normalizeHooks(hooks) {
@@ -483,9 +484,16 @@
         nested = hooks;
         hooks = undefined;
       }
-      var mod = { name: name, tests: [], hooks: normalizeHooks(hooks) };
-      modules.push(mod);
       var prev = currentModule;
+      var parent = moduleStack.length
+        ? moduleStack[moduleStack.length - 1]
+        : rootModule;
+      var mod = {
+        name: name,
+        parent: parent,
+        tests: [],
+        hooks: normalizeHooks(hooks),
+      };
       currentModule = mod;
       if (typeof nested === "function") {
         // Modern QUnit passes a registrar whose before/beforeEach/afterEach/after
@@ -507,27 +515,36 @@
             mod.hooks.after = fn;
           },
         };
-        nested.call(registrar, registrar);
-        currentModule = prev;
+        moduleStack.push(mod);
+        try {
+          nested.call(registrar, registrar);
+        } finally {
+          moduleStack.pop();
+          currentModule = prev;
+        }
       }
     }
 
     function testFn(name, callback) {
-      currentModule.tests.push({
+      var testObj = {
         testName: name,
         module: currentModule,
         callback: callback,
-      });
+      };
+      currentModule.tests.push(testObj);
+      testsInOrder.push(testObj);
       totalTests++;
     }
 
     function skipFn(name) {
-      currentModule.tests.push({
+      var testObj = {
         testName: name,
         module: currentModule,
         callback: null,
         skip: true,
-      });
+      };
+      currentModule.tests.push(testObj);
+      testsInOrder.push(testObj);
       totalTests++;
     }
 
@@ -745,6 +762,23 @@
       }
     }
 
+    function moduleChain(mod) {
+      var chain = [];
+      while (mod && mod !== rootModule) {
+        chain.unshift(mod);
+        mod = mod.parent;
+      }
+      return chain;
+    }
+
+    async function runTestHooks(testObj, kind, assert) {
+      var chain = moduleChain(testObj.module);
+      if (kind === "afterEach") chain.reverse();
+      for (var i = 0; i < chain.length; i++) {
+        await runHook(chain[i].hooks[kind], testObj, assert);
+      }
+    }
+
     async function runTest(testObj) {
       testObj.assertions = [];
       testObj.expected = null;
@@ -764,10 +798,9 @@
       }
 
       var assert = makeAssert(testObj);
-      var hooks = testObj.module.hooks || {};
 
       try {
-        await runHook(hooks.beforeEach, testObj, assert);
+        await runTestHooks(testObj, "beforeEach", assert);
         var ret = testObj.callback.call(testObj.testEnv, assert);
         await Promise.resolve(ret);
         if (testObj.pending > 0) {
@@ -812,7 +845,7 @@
       // suites reset fixtures/globals/timers here, so skipping it would leak
       // dirty state into later tests. A throw here is recorded as a failure.
       try {
-        await runHook(hooks.afterEach, testObj, assert);
+        await runTestHooks(testObj, "afterEach", assert);
       } catch (e) {
         pushFailure(
           testObj,
@@ -966,23 +999,40 @@
       }, GLOBAL_WATCHDOG_MS);
 
       var count = 0;
-      for (var m = 0; m < modules.length && !aborted; m++) {
-        var mod = modules[m];
-        if (mod.tests.length === 0) continue;
-        await runModuleHook(mod, "before");
-        for (var t = 0; t < mod.tests.length && !aborted; t++) {
-          await runTest(mod.tests[t]);
-          count++;
-          if (count % 200 === 0) await yieldTick();
-          // Liveness on stderr (ignored by the verdict, which parses the final
-          // stdout summary) so a slow tree-walker run is visibly progressing.
-          if (count % 1000 === 0) {
-            process.stderr.write(
-              "… " + count + " tests run (" + stats.bad + " failing assertions)\n"
-            );
-          }
+      var activeModules = [];
+      for (var t = 0; t < testsInOrder.length && !aborted; t++) {
+        var testObj = testsInOrder[t];
+        var nextModules = moduleChain(testObj.module);
+        var common = 0;
+        while (
+          common < activeModules.length &&
+          common < nextModules.length &&
+          activeModules[common] === nextModules[common]
+        ) {
+          common++;
         }
-        await runModuleHook(mod, "after");
+        for (var close = activeModules.length - 1; close >= common; close--) {
+          await runModuleHook(activeModules[close], "after");
+        }
+        activeModules.length = common;
+        for (var open = common; open < nextModules.length; open++) {
+          await runModuleHook(nextModules[open], "before");
+          activeModules.push(nextModules[open]);
+        }
+
+        await runTest(testObj);
+        count++;
+        if (count % 200 === 0) await yieldTick();
+        // Liveness on stderr (ignored by the verdict, which parses the final
+        // stdout summary) so a slow tree-walker run is visibly progressing.
+        if (count % 1000 === 0) {
+          process.stderr.write(
+            "… " + count + " tests run (" + stats.bad + " failing assertions)\n"
+          );
+        }
+      }
+      for (var close = activeModules.length - 1; close >= 0; close--) {
+        await runModuleHook(activeModules[close], "after");
       }
       if (aborted) abortedAt = count;
       // The run is done — cancel the watchdog so no pending host timer keeps the
@@ -1046,6 +1096,15 @@
       });
     }
 
+    function scheduleAutostart() {
+      if (autostartScheduled) return;
+      autostartScheduled = true;
+      Promise.resolve().then(function () {
+        autostartScheduled = false;
+        if (config.autostart && totalTests > 0) start();
+      });
+    }
+
     var QUnit = {
       config: config,
       module: moduleFn,
@@ -1054,7 +1113,7 @@
       todo: testFn,
       only: testFn,
       start: start,
-      load: function () {},
+      load: scheduleAutostart,
       begin: function (cb) {
         beginCbs.push(cb);
       },
@@ -1087,6 +1146,7 @@
         return objectType(obj) === type;
       },
     };
+    scheduleAutostart();
     return QUnit;
   }
 
@@ -1176,9 +1236,37 @@
       return out;
     }
 
+    function invokeRunnable(fn, ctx) {
+      if (fn.length === 0) return Promise.resolve(fn.call(ctx));
+      return new Promise(function (resolve, reject) {
+        var settled = false;
+        var guardId = schedule(function () {
+          if (settled) return;
+          settled = true;
+          reject(
+            new Error(
+              "done callback timed out after " + ASYNC_TIMEOUT_MS + "ms"
+            )
+          );
+        }, ASYNC_TIMEOUT_MS);
+        function done(error) {
+          if (settled) return;
+          settled = true;
+          unschedule(guardId);
+          if (error) reject(error);
+          else resolve();
+        }
+        try {
+          fn.call(ctx, done);
+        } catch (e) {
+          done(e);
+        }
+      });
+    }
+
     async function runHooks(hooks, ctx) {
       for (var i = 0; i < hooks.length; i++) {
-        await Promise.resolve(hooks[i].call(ctx));
+        await invokeRunnable(hooks[i], ctx);
       }
     }
 
@@ -1195,7 +1283,7 @@
         errText = "";
       try {
         await runHooks(eachHook(t.suite, "beforeEach"), testCtx);
-        await Promise.resolve(t.fn.call(testCtx));
+        await invokeRunnable(t.fn, testCtx);
       } catch (e) {
         ok = false;
         errText = e && e.stack ? e.stack : String(e);
