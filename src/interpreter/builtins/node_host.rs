@@ -129,8 +129,8 @@ impl Interpreter {
         // __host_random_bytes(n) -> Uint8Array
         //
         // A fresh Uint8Array of `n` cryptographically-secure bytes from the OS
-        // entropy source. Backs getRandomValues / crypto.randomBytes. (jsse's
-        // Math.random is deterministic, so this is the only real entropy.)
+        // entropy source. Backs getRandomValues / crypto.randomBytes;
+        // Math.random remains a non-cryptographic PRNG.
         let random_fn = self.create_function(JsFunction::native(
             "__host_random_bytes".to_string(),
             1,
