@@ -732,7 +732,12 @@
       testObj.assertions = [];
       testObj.expected = null;
       testObj.pending = 0;
-      testObj.testEnv = {};
+      // Each test gets a shallow copy of its module's shared env (populated by a
+      // module `before` hook), matching QUnit's per-test testEnvironment copy.
+      testObj.testEnv = Object.assign(
+        {},
+        testObj.module && testObj.module.sharedEnv
+      );
       config.current = testObj;
 
       if (testObj.skip) {
@@ -867,6 +872,40 @@
       failedTests.push(lines.join("\n"));
     }
 
+    // Module-level before/after run once per module (before its first test /
+    // after its last), sharing `mod.sharedEnv`; each test gets a shallow copy of
+    // that env (see runTest). Assertions or throws in a hook fold into the stats
+    // like a test's would.
+    async function runModuleHook(mod, kind) {
+      var hook = mod.hooks && mod.hooks[kind];
+      if (typeof hook !== "function") return;
+      mod.sharedEnv = mod.sharedEnv || {};
+      var pseudo = {
+        testName: mod.name + " [module " + kind + "]",
+        module: mod,
+        assertions: [],
+        expected: null,
+        pending: 0,
+        testEnv: mod.sharedEnv,
+      };
+      var assert = makeAssert(pseudo);
+      try {
+        await Promise.resolve(hook.call(mod.sharedEnv, assert));
+      } catch (e) {
+        pushFailure(
+          pseudo,
+          "module " + kind + " hook threw: " + (e && e.stack ? e.stack : e)
+        );
+      }
+      var bad = 0;
+      stats.all += pseudo.assertions.length;
+      for (var i = 0; i < pseudo.assertions.length; i++) {
+        if (!pseudo.assertions[i].result) bad++;
+      }
+      stats.bad += bad;
+      if (bad) recordFailure(pseudo);
+    }
+
     async function runAll() {
       for (var b = 0; b < beginCbs.length; b++) {
         beginCbs[b]({ totalTests: totalTests });
@@ -901,6 +940,8 @@
       var count = 0;
       for (var m = 0; m < modules.length && !aborted; m++) {
         var mod = modules[m];
+        if (mod.tests.length === 0) continue;
+        await runModuleHook(mod, "before");
         for (var t = 0; t < mod.tests.length && !aborted; t++) {
           await runTest(mod.tests[t]);
           count++;
@@ -913,6 +954,7 @@
             );
           }
         }
+        await runModuleHook(mod, "after");
       }
       if (aborted) abortedAt = count;
       // The run is done — cancel the watchdog so no pending host timer keeps the
@@ -1126,10 +1168,21 @@
       try {
         await runHooks(eachHook(t.suite, "beforeEach"), testCtx);
         await Promise.resolve(t.fn.call(testCtx));
-        await runHooks(eachHook(t.suite, "afterEach"), testCtx);
       } catch (e) {
         ok = false;
         errText = e && e.stack ? e.stack : String(e);
+      }
+      // afterEach must run even when beforeEach or the test body threw (mocha/
+      // jest do this) so suites that reset globals/timers/shared state there
+      // don't leak dirty state into later tests. A throw here fails the test if
+      // it was otherwise passing.
+      try {
+        await runHooks(eachHook(t.suite, "afterEach"), testCtx);
+      } catch (e) {
+        if (ok) {
+          ok = false;
+          errText = "afterEach hook: " + (e && e.stack ? e.stack : String(e));
+        }
       }
       if (ok) {
         console.log("ok " + counter + " - " + name);
