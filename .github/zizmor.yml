@@ -27,10 +27,3 @@ rules:
       # tag can be pushed back to main. It uploads only the packaged binary and
       # checksums (no .git), so the token cannot leak via artifacts.
       - release.yml
-
-  # semgrep/semgrep-action is archived. Migrating off it (to the semgrep CLI /
-  # container) changes an existing, green scan job, so it is tracked as a
-  # separate follow-up rather than bundled into this hardening change.
-  archived-uses:
-    ignore:
-      - semgrep.yml
