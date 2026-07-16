@@ -1236,6 +1236,24 @@
       return this.writeUIntBE(value, offset, byteLength);
     };
 
+    // Node's Buffer#inspect: `<Buffer 01 02 …>` (lowercase hex, up to
+    // INSPECT_MAX_BYTES=50 bytes, then a "… N more byte(s)" tail).
+    Buffer.prototype.inspect = function inspect() {
+      var max = 50;
+      var n = this.length < max ? this.length : max;
+      var parts = [];
+      for (var i = 0; i < n; i++) {
+        var h = this[i].toString(16);
+        parts.push(h.length < 2 ? "0" + h : h);
+      }
+      var body = parts.join(" ");
+      if (this.length > max) {
+        var extra = this.length - max;
+        body += " ... " + extra + " more byte" + (extra > 1 ? "s" : "");
+      }
+      return "<Buffer " + body + ">";
+    };
+
     // Note: the legacy `SlowBuffer` global is intentionally NOT defined — it was
     // removed from Node (undefined in the `buffer` module of current releases),
     // so adding it would diverge from the reference engine. Buffer.allocUnsafeSlow
