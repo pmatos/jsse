@@ -1438,6 +1438,362 @@ fn resolve_hour_cycle(opts: &DtfOptions) -> &str {
     locale_default_hour_cycle(&opts.locale)
 }
 
+#[derive(Default)]
+struct IcuDateTimePartsWriter {
+    parts: Vec<(String, String)>,
+    active_parts: Vec<writeable::Part>,
+}
+
+impl std::fmt::Write for IcuDateTimePartsWriter {
+    fn write_str(&mut self, value: &str) -> std::fmt::Result {
+        let part_type = self
+            .active_parts
+            .iter()
+            .rev()
+            .find(|part| part.category == "datetime")
+            .map_or("literal", |part| part.value);
+
+        if let Some((last_type, last_value)) = self.parts.last_mut()
+            && last_type == part_type
+        {
+            last_value.push_str(value);
+        } else {
+            self.parts.push((part_type.to_string(), value.to_string()));
+        }
+        Ok(())
+    }
+}
+
+impl writeable::PartsWrite for IcuDateTimePartsWriter {
+    type SubPartsWrite = Self;
+
+    fn with_part(
+        &mut self,
+        part: writeable::Part,
+        mut write: impl FnMut(&mut Self::SubPartsWrite) -> std::fmt::Result,
+    ) -> std::fmt::Result {
+        self.active_parts.push(part);
+        let result = write(self);
+        self.active_parts.pop();
+        result
+    }
+}
+
+fn icu_datetime_length(opts: &DtfOptions) -> Option<icu::datetime::options::Length> {
+    use icu::datetime::options::Length;
+
+    let style_length = |style: &str| match style {
+        "full" | "long" => Some(Length::Long),
+        "medium" => Some(Length::Medium),
+        "short" => Some(Length::Short),
+        _ => None,
+    };
+
+    if let Some(style) = opts.date_style.as_deref() {
+        return style_length(style);
+    }
+    if let Some(style) = opts.time_style.as_deref() {
+        return style_length(style);
+    }
+
+    let text_styles = [
+        opts.weekday.as_deref(),
+        opts.era.as_deref(),
+        opts.month.as_deref(),
+    ];
+    if text_styles.contains(&Some("narrow")) {
+        return None;
+    }
+    if text_styles.contains(&Some("long")) {
+        Some(Length::Long)
+    } else if text_styles.contains(&Some("short")) {
+        Some(Length::Medium)
+    } else {
+        Some(Length::Short)
+    }
+}
+
+fn icu_datetime_field_set(
+    opts: &DtfOptions,
+) -> Option<icu::datetime::fieldsets::enums::CompositeFieldSet> {
+    use icu::datetime::fieldsets::builder::{DateFields, FieldSetBuilder, ZoneStyle};
+    use icu::datetime::options::{SubsecondDigits, TimePrecision, YearStyle};
+
+    if !matches!(opts.calendar.as_str(), "gregory" | "iso8601")
+        || opts.numbering_system == "hanidec"
+        || opts.day_period.is_some()
+        || (opts.date_style.is_some()
+            && matches!(
+                opts.temporal_type,
+                Some(TemporalType::PlainYearMonth) | Some(TemporalType::PlainMonthDay)
+            ))
+    {
+        return None;
+    }
+
+    let mut builder = FieldSetBuilder::new();
+    builder.length = Some(icu_datetime_length(opts)?);
+
+    let date_fields = if let Some(style) = opts.date_style.as_deref() {
+        match style {
+            "full" => Some(DateFields::YMDE),
+            "long" | "medium" | "short" => Some(DateFields::YMD),
+            _ => return None,
+        }
+    } else {
+        let year = opts.year.is_some();
+        let month = opts.month.is_some();
+        let day = opts.day.is_some();
+        let weekday = opts.weekday.is_some();
+        match (year, month, day, weekday) {
+            (false, false, false, false) => None,
+            (false, false, false, true) => Some(DateFields::E),
+            (false, false, true, false) => Some(DateFields::D),
+            (false, false, true, true) => Some(DateFields::DE),
+            (false, true, false, false) => Some(DateFields::M),
+            (false, true, true, false) => Some(DateFields::MD),
+            (false, true, true, true) => Some(DateFields::MDE),
+            (true, false, false, false) => Some(DateFields::Y),
+            (true, true, false, false) => Some(DateFields::YM),
+            (true, true, true, false) => Some(DateFields::YMD),
+            (true, true, true, true) => Some(DateFields::YMDE),
+            _ => return None,
+        }
+    };
+    builder.date_fields = date_fields;
+
+    if opts.era.is_some() && opts.year.is_none() && opts.date_style.is_none() {
+        return None;
+    }
+    if opts.era.is_some() {
+        builder.year_style = Some(YearStyle::WithEra);
+    } else if opts.year.as_deref() == Some("numeric")
+        || matches!(opts.date_style.as_deref(), Some("full" | "long" | "medium"))
+    {
+        builder.year_style = Some(YearStyle::Full);
+    }
+
+    let time_precision = if let Some(style) = opts.time_style.as_deref() {
+        match style {
+            "full" | "long" | "medium" => Some(TimePrecision::Second),
+            "short" => Some(TimePrecision::Minute),
+            _ => return None,
+        }
+    } else if opts.hour.is_some() {
+        if let Some(digits) = opts.fractional_second_digits {
+            let digits = match digits {
+                1 => SubsecondDigits::S1,
+                2 => SubsecondDigits::S2,
+                3 => SubsecondDigits::S3,
+                _ => return None,
+            };
+            Some(TimePrecision::Subsecond(digits))
+        } else if opts.second.is_some() {
+            Some(TimePrecision::Second)
+        } else if opts.minute.is_some() {
+            Some(TimePrecision::Minute)
+        } else {
+            Some(TimePrecision::Hour)
+        }
+    } else if opts.minute.is_some()
+        || opts.second.is_some()
+        || opts.fractional_second_digits.is_some()
+    {
+        return None;
+    } else {
+        None
+    };
+    builder.time_precision = time_precision;
+
+    let is_plain = matches!(
+        opts.temporal_type,
+        Some(TemporalType::PlainDate)
+            | Some(TemporalType::PlainTime)
+            | Some(TemporalType::PlainDateTime)
+            | Some(TemporalType::PlainYearMonth)
+            | Some(TemporalType::PlainMonthDay)
+    );
+    builder.zone_style = if let Some(style) = opts.time_zone_name.as_deref() {
+        Some(match style {
+            "short" => ZoneStyle::SpecificShort,
+            "long" => ZoneStyle::SpecificLong,
+            "shortOffset" => ZoneStyle::LocalizedOffsetShort,
+            "longOffset" => ZoneStyle::LocalizedOffsetLong,
+            "shortGeneric" => ZoneStyle::GenericShort,
+            "longGeneric" => ZoneStyle::GenericLong,
+            _ => return None,
+        })
+    } else if !is_plain {
+        match opts.time_style.as_deref() {
+            Some("full") => Some(ZoneStyle::SpecificLong),
+            Some("long") => Some(ZoneStyle::SpecificShort),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    builder.build_composite().ok()
+}
+
+fn set_icu_datetime_keyword(
+    locale: &mut icu::locale::Locale,
+    key: &str,
+    value: &str,
+) -> Option<()> {
+    use icu::locale::extensions::unicode::{Key, Value};
+
+    locale
+        .extensions
+        .unicode
+        .keywords
+        .set(key.parse::<Key>().ok()?, value.parse::<Value>().ok()?);
+    Some(())
+}
+
+fn icu_datetime_locale(opts: &DtfOptions) -> Option<icu::locale::Locale> {
+    let mut locale = opts.locale.parse::<icu::locale::Locale>().ok()?;
+    set_icu_datetime_keyword(&mut locale, "ca", &opts.calendar)?;
+    set_icu_datetime_keyword(&mut locale, "nu", &opts.numbering_system)?;
+
+    let hour_cycle = resolve_hour_cycle(opts);
+    if hour_cycle == "h24" {
+        return None;
+    }
+    set_icu_datetime_keyword(&mut locale, "hc", hour_cycle)?;
+    Some(locale)
+}
+
+fn collect_icu_datetime_parts(
+    formatted: &impl writeable::Writeable,
+) -> Option<Vec<(String, String)>> {
+    let mut writer = IcuDateTimePartsWriter::default();
+    formatted.write_to_parts(&mut writer).ok()?;
+    Some(writer.parts)
+}
+
+fn normalize_icu_datetime_parts(
+    parts: Vec<(String, String)>,
+    opts: &DtfOptions,
+) -> Vec<(String, String)> {
+    let mut normalized = Vec::with_capacity(parts.len() + 2);
+    for (part_type, mut value) in parts {
+        let requested_style = match part_type.as_str() {
+            "year" => opts.year.as_deref(),
+            "month" => opts.month.as_deref(),
+            "day" => opts.day.as_deref(),
+            "hour" => opts.hour.as_deref(),
+            "minute" => opts.minute.as_deref(),
+            "second" => opts.second.as_deref(),
+            _ => None,
+        };
+        if part_type == "year"
+            && (opts.date_style.as_deref() == Some("short") || requested_style == Some("2-digit"))
+            && value.chars().count() > 2
+            && value.chars().all(char::is_numeric)
+        {
+            let mut digits = value.chars().rev().take(2).collect::<Vec<_>>();
+            digits.reverse();
+            value = digits.into_iter().collect();
+        }
+        if requested_style == Some("2-digit")
+            && value.chars().count() == 1
+            && value.chars().all(char::is_numeric)
+        {
+            value.insert_str(0, &transliterate_digits("0", &opts.numbering_system));
+        }
+        if part_type == "timeZoneName" && parse_offset_timezone(&opts.time_zone) == Some((0, 0)) {
+            let zero_offset_suffix =
+                format!("+{}", transliterate_digits("0", &opts.numbering_system));
+            if let Some(prefix) = value.strip_suffix(&zero_offset_suffix) {
+                value = prefix.to_string();
+            }
+        }
+
+        if part_type == "second"
+            && opts.fractional_second_digits.is_some()
+            && let Some((seconds, fraction)) = value
+                .split_once('.')
+                .or_else(|| value.split_once('\u{66b}'))
+        {
+            normalized.push(("second".to_string(), seconds.to_string()));
+            let decimal = if matches!(opts.numbering_system.as_str(), "arab" | "arabext") {
+                "\u{66b}"
+            } else {
+                "."
+            };
+            normalized.push(("literal".to_string(), decimal.to_string()));
+            normalized.push(("fractionalSecond".to_string(), fraction.to_string()));
+            continue;
+        }
+
+        normalized.push((part_type, value));
+    }
+    normalized
+}
+
+fn format_with_icu(ms: f64, opts: &DtfOptions) -> Option<Vec<(String, String)>> {
+    use icu::datetime::DateTimeFormatter;
+    use icu::datetime::input::{Date, DateTime, Time, ZonedDateTime};
+    use icu::time::zone::{IanaParser, UtcOffset};
+
+    let field_set = icu_datetime_field_set(opts)?;
+    let locale = icu_datetime_locale(opts)?;
+    let formatter = DateTimeFormatter::try_new(locale.into(), field_set).ok()?;
+
+    let is_plain = matches!(
+        opts.temporal_type,
+        Some(TemporalType::PlainDate)
+            | Some(TemporalType::PlainTime)
+            | Some(TemporalType::PlainDateTime)
+            | Some(TemporalType::PlainYearMonth)
+            | Some(TemporalType::PlainMonthDay)
+    );
+    let adjusted_ms = if is_plain {
+        ms
+    } else {
+        ms + tz_offset_ms(&opts.time_zone, ms)
+    };
+    let components = timestamp_to_components(adjusted_ms);
+    let datetime = DateTime {
+        date: Date::try_new_iso(
+            components.year,
+            components.month as u8,
+            components.day as u8,
+        )
+        .ok()?,
+        time: Time::try_new(
+            components.hour as u8,
+            components.minute as u8,
+            components.second as u8,
+            components.millisecond * 1_000_000,
+        )
+        .ok()?,
+    };
+
+    let zone = if is_plain {
+        icu::datetime::input::TimeZoneInfo::utc().at_date_time_iso(datetime)
+    } else {
+        let offset_seconds = (tz_offset_ms(&opts.time_zone, ms) / 1000.0) as i32;
+        let offset = UtcOffset::try_from_seconds(offset_seconds).ok()?;
+        let time_zone = if parse_offset_timezone(&opts.time_zone).is_some() {
+            icu::datetime::input::TimeZone::UNKNOWN
+        } else {
+            IanaParser::new().parse(&opts.time_zone)
+        };
+        time_zone
+            .with_offset(Some(offset))
+            .at_date_time_iso(datetime)
+    };
+    let zoned = ZonedDateTime {
+        date: datetime.date,
+        time: datetime.time,
+        zone,
+    };
+    let parts = collect_icu_datetime_parts(&formatter.format(&zoned))?;
+    Some(normalize_icu_datetime_parts(parts, opts))
+}
+
 fn has_time_component(opts: &DtfOptions) -> bool {
     opts.hour.is_some()
         || opts.minute.is_some()
@@ -1722,6 +2078,9 @@ fn transliterate_digits(s: &str, ns: &str) -> String {
 }
 
 fn format_with_options(ms: f64, opts: &DtfOptions) -> String {
+    if let Some(parts) = format_with_icu(ms, opts) {
+        return parts.into_iter().map(|(_, value)| value).collect();
+    }
     let raw = format_with_options_raw(ms, opts);
     transliterate_digits(&raw, &opts.numbering_system)
 }
@@ -3770,6 +4129,9 @@ fn format_time_style_to_parts(
 }
 
 fn format_to_parts_with_options(ms: f64, opts: &DtfOptions) -> Vec<(String, String)> {
+    if let Some(parts) = format_with_icu(ms, opts) {
+        return parts;
+    }
     let raw = format_to_parts_with_options_raw(ms, opts);
     if opts.numbering_system == "latn" {
         return raw;
