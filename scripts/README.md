@@ -133,6 +133,65 @@ byte-exact `%s` guarantee covers primitives and objects with a user-defined
 byte-compared against Node. (Fully Node-accurate `%s` object dispatch is tracked
 separately.)
 
+## Shared test-runner harness (`node-test-harness.js`)
+
+Many suites don't ship a self-contained runner — they lean on a framework whose
+*assertion* library is pure JS but whose *runner* would otherwise need
+fs/workers/vm (mocha's/jest's CLI, QUnit's Node runner, `qunit-extras`'
+`setInterval` progress ticker, …). `node-test-harness.js` supplies the runner
+in-process so those suites execute on jsse. It provides two frontends over one
+shared core (which includes QUnit's own `equiv`, ported verbatim, for
+`deepEqual`):
+
+- a **QUnit adapter** installed as a global `QUnit` — suites that do
+  `root.QUnit || require('qunit-extras')` (e.g. lodash) pick it up, so the
+  bundled framework stays dormant; and
+- a **TAP-emitting `describe`/`it`/`test`/`before`/`after` runner**
+  (mocha/jest/tape shape) as the reusable spine for later library clusters.
+
+It also aliases Node's `global` to `globalThis`, which many bundles rely on for
+their root-object detection.
+
+Layer it into a library by setting `LIB_SHIM="node-test-harness.js"` (it is
+prepended after `node-shim.js` and `node-buffer-shim.js`). Like the other shims
+it is **inert on Node** — it activates only under jsse's `--node` host mode
+(keyed off the `__host_write` syscall floor, which real Node never has). That
+inertness is what makes the cross-check meaningful: on Node the suite's *own*
+framework runs, so the assertion count jsse reports through the adapter is
+checked against the count real QUnit/mocha report on Node, not against itself.
+
+The adapter's assertion counting mirrors qunitjs 2.x exactly (`config.stats.all
++= assertions.length` per test; an `expect(n)` mismatch or a zero-assertion test
+each push one failing assertion), so the `PASS: p  FAIL: f  TOTAL: t` summary it
+prints — the line the verdict parses — equals the one real `qunit-extras` prints
+on Node. `config.noglobals` is intentionally **not** enforced on the jsse side:
+the Node oracle enforces it and the suite passes it there, so enforcing on jsse
+could only add jsse-specific failures the oracle lacks and diverge the count.
+Async tests (`assert.async`) are bounded by a 30 s per-test timeout so a `done()`
+that never fires becomes a failure instead of stalling the run.
+
+### Harness self-test (`run-harness-selftest.sh`)
+
+Because the harness is jsse-only (inert on Node), it can't be cross-checked
+against Node the way the Buffer shim is. Instead `scripts/harness-fixtures/*.fixture.js`
+drive the QUnit adapter and the TAP runner through a deterministic mix of
+passing and failing tests, each declaring the exact summary line it must emit:
+
+```sh
+./scripts/run-harness-selftest.sh [--no-build]
+```
+
+The full end-to-end validation of the adapter's counting and `deepEqual` is the
+lodash cross-check below (jsse adapter vs. Node's real `qunit-extras`, 6,794
+assertions).
+
+> The **chai**, **jest-`expect`**, **tape**, and **uvu** adapters that the epic
+> anticipates are intentionally **deferred**. Unlike QUnit's global-probe
+> (`root.QUnit || …`), those are consumed via `require`/`import`, so injecting a
+> jsse implementation needs a different mechanism (esbuild `--alias` or bundling
+> the real library) that should be settled against a concrete consuming library
+> in the #233–236 clusters rather than guessed at here.
+
 ## Current status
 
 | Library | Ref | Result on jsse | Notes |
@@ -140,7 +199,35 @@ separately.)
 | `acorn` | 8.16.0 | ✅ 13,507 (cross-checked) | ~35 s. Pinned pre-8.17.0; see below. |
 | `decimal.js` | v10.6.0 | ✅ 22,624 (cross-checked) | seconds |
 | `big.js` | v6.2.2 | ✅ 47,456 (cross-checked) | ~7 min — heavy arbitrary-precision division/sqrt/pow on the tree-walker |
+| `lodash` | 4.17.21 | ✅ 6,794 (cross-checked) | QUnit via the shared harness; a few tests skipped on jsse — see below |
 | `bignumber.js` | v9.1.2 | ⚠️ blocked | see below; green on Node today |
+
+### lodash skip list (jsse only; each preserves the assertion count via `skipAssert`)
+
+lodash is green and cross-checked at 6,794 assertions, with a small set of tests
+routed through lodash's own `skipAssert(N)` on jsse (Node still runs them, so the
+count matches). `scripts/patch-lodash-jsse.js` applies these; each is a jsse
+characteristic surfaced by the suite, tracked as a follow-up:
+
+- **`lodash.random` / `lodash.shuffle`** — jsse's `Math.random` is a deterministic
+  `0.5` stub by design (`src/interpreter/builtins/mod.rs`), so tests asserting a
+  distribution of outputs can't pass.
+- **"should work with extremely large arrays"** (flatten, min/max) — 500k-element
+  operations run for minutes on the tree-walker (a performance limit, not a
+  correctness one).
+- **"should match lone surrogates"** — jsse's regex matches lone surrogates where
+  lodash's word pattern expects no match.
+- **createWrapper "should work when hot"** — throws `RangeError: Invalid array
+  length` deep in lodash's hot-path wrapper rebuild on jsse.
+- **bizarro reload + vm-`root`-of-`this`** (skipped on *both* engines) — both
+  reload the lodash *source file* via a dynamic `require`/`readFileSync`, which
+  doesn't exist relative to the esbuild bundle. These already fall back to
+  `skipAssert` in lodash's own browser path.
+
+Timer-heavy suites (`debounce`/`throttle`) pass because `node-test-harness.js`
+backs `setTimeout`/`clearTimeout`/`setInterval` with a single-pump userland queue:
+jsse's native `setTimeout` spawns a thread per call and offers no cancellation, so
+running those thousands of timers natively would otherwise exhaust OS threads.
 
 ### Engine bugs surfaced (tracked separately — out of scope for the no-`src` harness slice)
 
