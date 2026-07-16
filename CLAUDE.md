@@ -94,6 +94,7 @@ harness. See `scripts/README.md` for the full recipe and how to add a library.
 - **`Buffer`** is a pure-JS subclass of `Uint8Array` (`node-buffer-shim.js`), needing zero new engine object kinds; `instanceof Uint8Array` holds. Self-verifying fixtures live in `scripts/shim-fixtures/`; run them (jsse + Node cross-checked) with `./scripts/run-shim-fixtures.sh`.
 - **Currently green (cross-checked vs Node):** `decimal.js` (22,624), `big.js` (47,456; ~7 min — heavy arbitrary-precision arithmetic on the tree-walker), `acorn` (13,507), `prismjs` (2,563; 3 documented jsse-only skips tracked in #271).
 - **`bignumber.js`** is wired but blocked on a jsse bug it surfaced (strict-mode `return <call-returning-non-object>` in a constructor returns that value instead of `this`, jsse#238); it goes green once that engine bug is fixed.
+- **`luxon`** is wired at 3.7.2 with an exact 1,152-test Node cross-check. Node is green; jsse currently passes 1,045, with the remaining Intl/system-zone gaps tracked in jsse#262–#265.
 
 ### Acorn (`./scripts/run-acorn-tests.sh` — thin wrapper over the harness)
 - Pinned to **acorn 8.16.0** (13,507 tests, green on jsse and Node). 8.17.0+ added a parser stack-guard test (`"[".repeat(2000)`) that expects the engine to *throw* a "stack space" error; jsse's tree-walker aborts (SIGABRT) before acorn's guard fires — a jsse deep-recursion robustness gap tracked separately. Bump the pin once that lands.
