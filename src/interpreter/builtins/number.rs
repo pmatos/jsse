@@ -322,35 +322,17 @@ impl Interpreter {
         }
 
         // description getter
-        let desc_getter = self.create_function(JsFunction::Native(
-            "get description".to_string(),
-            0,
-            Rc::new(|interp, this, _args| {
-                let Some(sym) = this_symbol_value(interp, this) else {
-                    let err =
-                        interp.create_type_error("Symbol.prototype.description requires a Symbol");
-                    return Completion::Throw(err);
-                };
-                match sym.description {
-                    Some(d) => Completion::Normal(JsValue::String(d)),
-                    None => Completion::Normal(JsValue::Undefined),
-                }
-            }),
-            false,
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                "description".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(desc_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+        self.define_getter(proto_id, "description", |interp, this, _args| {
+            let Some(sym) = this_symbol_value(interp, this) else {
+                let err =
+                    interp.create_type_error("Symbol.prototype.description requires a Symbol");
+                return Completion::Throw(err);
+            };
+            match sym.description {
+                Some(d) => Completion::Normal(JsValue::String(d)),
+                None => Completion::Normal(JsValue::Undefined),
+            }
+        });
 
         // [Symbol.toPrimitive]
         let to_prim_fn = self.create_function(JsFunction::Native(

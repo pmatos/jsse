@@ -358,43 +358,26 @@ impl Interpreter {
         );
 
         // Map.prototype.size (getter)
-        let size_getter = self.create_function(JsFunction::native(
-            "get size".to_string(),
-            0,
-            |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let borrowed = obj.borrow();
-                    let is_map = borrowed.map_data().is_some() && borrowed.class_name == "Map";
-                    let map_data = if is_map {
-                        borrowed.map_data().cloned()
-                    } else {
-                        None
-                    };
-                    drop(borrowed);
-                    if let Some(entries) = map_data {
-                        let count = entries.iter().filter(|e| e.is_some()).count();
-                        return Completion::Normal(JsValue::Number(count as f64));
-                    }
+        self.define_getter(proto_id, "size", |interp, this, _args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let borrowed = obj.borrow();
+                let is_map = borrowed.map_data().is_some() && borrowed.class_name == "Map";
+                let map_data = if is_map {
+                    borrowed.map_data().cloned()
+                } else {
+                    None
+                };
+                drop(borrowed);
+                if let Some(entries) = map_data {
+                    let count = entries.iter().filter(|e| e.is_some()).count();
+                    return Completion::Normal(JsValue::Number(count as f64));
                 }
-                let err = interp.create_type_error("Map.prototype.size requires a Map");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                "size".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(size_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            }
+            let err = interp.create_type_error("Map.prototype.size requires a Map");
+            Completion::Throw(err)
+        });
 
         // Map.prototype.getOrInsert
         self.define_method(proto_id, "getOrInsert", 2, |interp, this, args| {
@@ -1108,42 +1091,25 @@ impl Interpreter {
         );
 
         // Set.prototype.size (getter)
-        let size_getter = self.create_function(JsFunction::native(
-            "get size".to_string(),
-            0,
-            |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let (has_set, set_data) = {
-                        let b = obj.borrow();
-                        (
-                            b.set_data().is_some() && b.class_name != "WeakSet",
-                            b.set_data().cloned(),
-                        )
-                    };
-                    if has_set && let Some(entries) = set_data {
-                        let count = entries.iter().filter(|e| e.is_some()).count();
-                        return Completion::Normal(JsValue::Number(count as f64));
-                    }
+        self.define_getter(proto_id, "size", |interp, this, _args| {
+            if let JsValue::Object(o) = this
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let (has_set, set_data) = {
+                    let b = obj.borrow();
+                    (
+                        b.set_data().is_some() && b.class_name != "WeakSet",
+                        b.set_data().cloned(),
+                    )
+                };
+                if has_set && let Some(entries) = set_data {
+                    let count = entries.iter().filter(|e| e.is_some()).count();
+                    return Completion::Normal(JsValue::Number(count as f64));
                 }
-                let err = interp.create_type_error("Set.prototype.size requires a Set");
-                Completion::Throw(err)
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                "size".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(size_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            }
+            let err = interp.create_type_error("Set.prototype.size requires a Set");
+            Completion::Throw(err)
+        });
 
         // ES2025 Set methods
 

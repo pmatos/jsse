@@ -149,6 +149,68 @@ fn define_method_installs_a_correctly_shaped_builtin() {
 }
 
 #[test]
+fn define_getter_installs_a_correctly_shaped_accessor() {
+    let mut interp = Interpreter::new();
+    let target_id = interp.create_object_id();
+
+    let getter = interp.define_getter(target_id, "answer", |_interp, _this, _args| {
+        Completion::Normal(JsValue::Number(42.0))
+    });
+
+    // Raw stored descriptor (get_own_property would complete an absent setter
+    // to `undefined`); this pins exactly what define_getter installs.
+    let desc = interp
+        .get_object_cell_expect(target_id)
+        .borrow()
+        .get_own_property_full("answer")
+        .expect("answer property installed");
+
+    // Read-only accessor: getter present, no setter, no data slots.
+    assert!(desc.get.is_some(), "accessor must carry a getter");
+    assert!(desc.set.is_none(), "read-only accessor has no setter");
+    assert!(desc.value.is_none(), "accessor has no data value");
+    assert_eq!(desc.writable, None, "accessor has no writable attribute");
+    assert_eq!(
+        desc.enumerable,
+        Some(false),
+        "builtin accessors must not be enumerable"
+    );
+    assert_eq!(
+        desc.configurable,
+        Some(true),
+        "builtin accessors must stay configurable"
+    );
+
+    // define_getter must return the same function it installed as the getter.
+    let installed_getter = desc.get.expect("getter value present");
+    assert!(
+        matches!((&installed_getter, &getter), (JsValue::Object(a), JsValue::Object(b)) if a.id == b.id),
+        "returned getter must be the one installed on the accessor"
+    );
+
+    // Getter bookkeeping: name is prefixed with "get ", length is 0 (per spec).
+    let JsValue::Object(fn_obj) = &getter else {
+        panic!("expected getter to be a function object")
+    };
+    let fn_cell = interp.get_object_cell_expect(fn_obj.id);
+    match fn_cell.borrow().get_own_property("name").unwrap().value {
+        Some(JsValue::String(ref s)) => assert_eq!(s.to_rust_string(), "get answer"),
+        ref other => panic!("expected name string, got {other:?}"),
+    }
+    match fn_cell.borrow().get_own_property("length").unwrap().value {
+        Some(JsValue::Number(n)) => assert_eq!(n, 0.0),
+        ref other => panic!("expected length number, got {other:?}"),
+    }
+
+    // The getter is callable and returns its computed value.
+    let target_val = JsValue::Object(crate::types::JsObject { id: target_id });
+    match interp.call_function(&getter, &target_val, &[]) {
+        Completion::Normal(JsValue::Number(n)) => assert_eq!(n, 42.0),
+        other => panic!("unexpected completion: {other:?}"),
+    }
+}
+
+#[test]
 fn microtask_queue_drains_before_run_returns() {
     let interp = run_script(
         r#"
