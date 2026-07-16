@@ -39,15 +39,19 @@ upstream vector files.
 ## Design
 
 Add a `scripts/libs/js-sha256.sh` configuration pinned to upstream `v0.11.1`.
-Its prepare hook installs only the pinned assertion and Mocha dependencies and
-copies a repository-owned bundle entry into the clone.
+Its prepare hook installs only the pinned Mocha dependency and copies a
+repository-owned bundle entry into the clone.
 
 The entry detects JSSE's `--node` host floor. On JSSE it uses the shared
 Mocha-shaped harness, adding Mocha's `context` alias locally. On Node it creates
 a real programmatic Mocha runner before loading the same upstream vector files.
-Both paths expose the module's SHA functions and `expect.js` in the global
-shape expected by those files, enable their Buffer cases, and load each vector
-file once.
+Both paths expose the module's SHA functions and the two assertion operations
+used by the upstream files in their expected global shapes, enable the Buffer
+cases, and load each vector file once. The focused assertion seam avoids
+bundling `expect.js` 0.3.1, whose sloppy-mode initialization writes to a
+function's read-only `length` property and throws after strict-mode bundling.
+Both paths also select upstream's browser/webpack mode so the vectors exercise
+the library's pure-JavaScript implementation instead of Node's native `crypto`.
 
 The existing PASS/FAIL/TOTAL summary is parsed by the library verdict. The
 exact observed count is locked in the config, so changes to bundling or
