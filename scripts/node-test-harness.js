@@ -49,16 +49,8 @@
 
   var toString = Object.prototype.toString;
 
-  // Capture the native timer at load time: some suites temporarily replace the
-  // global `setTimeout` (e.g. lodash swaps in a synchronous stub while testing
-  // debounce/throttle), and the runner's own scheduling must not be hijacked by
-  // that.
   var nativeSetTimeout =
     typeof setTimeout === "function" ? setTimeout : null;
-  function schedule(fn, ms) {
-    if (nativeSetTimeout) return nativeSetTimeout(fn, ms);
-    return Promise.resolve().then(fn);
-  }
 
   // jsse's setTimeout spawns a fresh OS thread per call and always returns a
   // timer id of 0 (see src/interpreter/builtins/mod.rs), and it provides no
@@ -68,48 +60,76 @@
   // which stalls the run. So back all four globals with a single userland timer
   // queue driven by ONE native timer at a time (the "pump"): library timers
   // become cheap queue entries with real ids, cancellation works, and the
-  // process never holds more than a couple of native timer threads. The
-  // runner's own scheduling keeps using the captured `nativeSetTimeout` above.
+  // process never holds more than one native timer thread.
+  //
+  // `queueAdd`/`queueRemove` are also what the runner's own scheduling
+  // (`schedule`/`unschedule` below) uses, so the async guard, the global
+  // watchdog and the inter-test yields are cancellable too. Leaving a native
+  // timer outstanding would keep jsse's pending-timer count nonzero and make its
+  // microtask drain wait (up to its ~120s deadline) before the process exits, so
+  // those runner timers MUST be cleared once they are no longer needed.
+  var queueAdd = null; // (fn, ms, args, interval) -> id
+  var queueRemove = null; // (id) -> void
+  var MAX_PUMP_DELAY_MS = 100;
   if (nativeSetTimeout) {
     var timerQueue = [];
     var timerIdCounter = 1;
-    var pumpArmed = false;
+    // Date.now()-scale target the earliest currently-armed pump will wake at
+    // (Infinity = no pump armed). Tracking it lets a later, sooner timer arm an
+    // additional pump instead of waiting behind an already-scheduled later one.
+    var pumpArmedFor = Infinity;
+    var firingTimer = null; // the timer whose callback is currently running
 
     function schedulePump() {
-      if (pumpArmed || timerQueue.length === 0) return;
-      pumpArmed = true;
       var soonest = Infinity;
       for (var i = 0; i < timerQueue.length; i++) {
-        if (timerQueue[i].fireAt < soonest) soonest = timerQueue[i].fireAt;
+        if (!timerQueue[i].cancelled && timerQueue[i].fireAt < soonest) {
+          soonest = timerQueue[i].fireAt;
+        }
       }
-      var delay = soonest - Date.now();
-      nativeSetTimeout(pump, delay > 0 ? delay : 0);
+      if (soonest === Infinity) return; // nothing pending → no native timer
+      // Cap the native delay: jsse spawns a thread per native timer and can't
+      // cancel one, so a far-future entry (e.g. the 600s watchdog) must NOT arm a
+      // long-lived native timer — that would keep the process's pending-timer
+      // count nonzero and delay exit. Instead poll at MAX_PUMP_DELAY_MS and let
+      // the queue empty naturally.
+      var target = Math.min(soonest, Date.now() + MAX_PUMP_DELAY_MS);
+      if (target >= pumpArmedFor) return; // an armed pump already wakes by then
+      pumpArmedFor = target;
+      nativeSetTimeout(pump, Math.max(0, target - Date.now()));
     }
 
     function pump() {
-      pumpArmed = false;
+      pumpArmedFor = Infinity;
       var now = Date.now();
       // Snapshot the due timers before running any callback: a callback may add
       // new timers (e.g. a recursive debounce), which belong to the next pump.
       var due = [];
       for (var i = 0; i < timerQueue.length; i++) {
-        if (timerQueue[i].fireAt <= now) due.push(timerQueue[i]);
+        if (timerQueue[i].fireAt <= now && !timerQueue[i].cancelled) {
+          due.push(timerQueue[i]);
+        }
       }
       due.sort(function (a, b) {
         return a.fireAt - b.fireAt || a.id - b.id;
       });
       for (var j = 0; j < due.length; j++) {
         var t = due[j];
+        if (t.cancelled) continue;
         var idx = timerQueue.indexOf(t);
-        if (idx === -1) continue; // cleared during this pump
-        timerQueue.splice(idx, 1);
+        if (idx !== -1) timerQueue.splice(idx, 1);
+        firingTimer = t;
         try {
           t.fn.apply(undefined, t.args);
         } catch (e) {
           // A host setTimeout callback that throws would crash the process; for
           // a test runner, keep pumping so one bad callback can't wedge the run.
         }
-        if (t.interval != null) {
+        firingTimer = null;
+        // Re-arm intervals unless the callback cleared this very timer. While it
+        // was firing it was out of the queue, so removeTimer couldn't splice it —
+        // it marked `cancelled` instead (see removeTimer's firingTimer branch).
+        if (t.interval != null && !t.cancelled) {
           t.fireAt = Date.now() + t.interval;
           timerQueue.push(t);
         }
@@ -127,6 +147,7 @@
         fn: fn,
         args: extraArgs,
         interval: interval,
+        cancelled: false,
       });
       schedulePump();
       return id;
@@ -134,14 +155,24 @@
 
     function removeTimer(id) {
       if (id == null) return;
+      // Cancelling the timer whose callback is running right now (e.g.
+      // clearInterval(id) from inside its own tick): it's already out of the
+      // queue, so mark it so pump() won't re-arm it.
+      if (firingTimer && firingTimer.id === id) {
+        firingTimer.cancelled = true;
+        return;
+      }
       for (var i = 0; i < timerQueue.length; i++) {
         if (timerQueue[i].id === id) {
+          timerQueue[i].cancelled = true;
           timerQueue.splice(i, 1);
           return;
         }
       }
     }
 
+    queueAdd = addTimer;
+    queueRemove = removeTimer;
     g.setTimeout = function (fn, ms) {
       return addTimer(fn, ms, Array.prototype.slice.call(arguments, 2), null);
     };
@@ -151,6 +182,18 @@
     };
     g.clearTimeout = removeTimer;
     g.clearInterval = removeTimer;
+  }
+
+  // Runner-internal scheduling, backed by the queue's own add/remove (never the
+  // globals, which a suite may swap out). Returns a cancellable id; unschedule
+  // is a no-op for the fallback path.
+  function schedule(fn, ms) {
+    if (queueAdd) return queueAdd(fn, ms, [], null);
+    Promise.resolve().then(fn);
+    return -1;
+  }
+  function unschedule(id) {
+    if (queueRemove && id != null && id !== -1) queueRemove(id);
   }
 
   // ==========================================================================
@@ -445,7 +488,9 @@
       var prev = currentModule;
       currentModule = mod;
       if (typeof nested === "function") {
-        nested.call(mod.hooks);
+        // Modern QUnit passes the hooks object as the callback argument (as well
+        // as `this`): QUnit.module('m', function (hooks) { hooks.beforeEach(…) }).
+        nested.call(mod.hooks, mod.hooks);
         currentModule = prev;
       }
     }
@@ -710,13 +755,13 @@
           // run. On timeout, record a failure and move on — mirrors QUnit's
           // config.testTimeout. jsse has no clearTimeout, so the guard timer
           // fires harmlessly later (it no-ops once _asyncResolve is cleared).
+          var guardId = -1;
           await new Promise(function (resolve) {
             testObj._asyncResolve = resolve;
-            // Use the captured native timer: a suite may have swapped the global
-            // setTimeout for a synchronous or broken stub by now, and the guard
-            // must still fire so a never-completing async test can't stall the
-            // whole run.
-            schedule(function () {
+            // Guard against a never-completing async test (done() that never
+            // fires). Scheduled through the runner queue (immune to a suite
+            // swapping the global setTimeout) so it reliably fires.
+            guardId = schedule(function () {
               if (testObj._asyncResolve) {
                 testObj._asyncResolve = null;
                 pushFailure(
@@ -727,6 +772,9 @@
               }
             }, ASYNC_TIMEOUT_MS);
           });
+          // Clear the guard whether the test finished via done() or via timeout,
+          // so it never lingers as a pending timer that would delay process exit.
+          unschedule(guardId);
         }
         await runHook(hooks.afterEach, testObj, assert);
       } catch (e) {
@@ -834,7 +882,7 @@
 
       var aborted = false;
       var abortedAt = 0;
-      schedule(function () {
+      var watchdogId = schedule(function () {
         aborted = true;
         // Unstick a test currently blocked on an async token that will never
         // resolve, so the run loop can observe `aborted` and finish.
@@ -867,6 +915,10 @@
         }
       }
       if (aborted) abortedAt = count;
+      // The run is done — cancel the watchdog so no pending host timer keeps the
+      // process alive (jsse's microtask drain waits while any native timer is
+      // outstanding).
+      unschedule(watchdogId);
 
       var details = {
         passed: stats.all - stats.bad,
