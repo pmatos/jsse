@@ -73,6 +73,8 @@ fi
 LIB_ESBUILD_PLATFORM="node"
 LIB_ESBUILD_EXTRA=()
 LIB_SHIM=""
+LIB_SHIMS=()
+LIB_ENV=()
 LIB_EXPECT_COUNT=""   # if set, both engines must report exactly this count
 LIB_TIMEOUT=""        # if set (seconds), wrap each engine run so a hang/slow
                       # suite reports cleanly instead of blocking the caller
@@ -182,6 +184,9 @@ SHIMS=("$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-buffer-shim.js")
 if [ -n "$LIB_SHIM" ]; then
     SHIMS+=("$SCRIPT_DIR/$LIB_SHIM")
 fi
+for shim in "${LIB_SHIMS[@]}"; do
+    SHIMS+=("$SCRIPT_DIR/$shim")
+done
 cat "${SHIMS[@]}" "$BUNDLE" > "$FINAL"
 echo "Final bundle: $FINAL ($(wc -c < "$FINAL") bytes)"
 
@@ -207,10 +212,11 @@ evaluate() {   # <engine> <label>  → sets VERDICT/COUNT, returns 0 on PASS
     echo "  Running $LIB test suite on $label"
     echo "========================================"
     if [ -n "$LIB_TIMEOUT" ]; then
-        timeout "$LIB_TIMEOUT" "$engine" "${engine_args[@]}" "$FINAL" > "$out" 2>&1 || rc=$?
+        timeout "$LIB_TIMEOUT" env "${LIB_ENV[@]}" \
+            "$engine" "${engine_args[@]}" "$FINAL" > "$out" 2>&1 || rc=$?
         [ "$rc" -eq 124 ] && echo "(timed out after ${LIB_TIMEOUT}s)" >> "$out"
     else
-        "$engine" "${engine_args[@]}" "$FINAL" > "$out" 2>&1 || rc=$?
+        env "${LIB_ENV[@]}" "$engine" "${engine_args[@]}" "$FINAL" > "$out" 2>&1 || rc=$?
     fi
     cat "$out"
     result="$(lib_verdict "$out" "$rc" || true)"

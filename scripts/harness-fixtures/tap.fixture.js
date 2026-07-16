@@ -4,9 +4,10 @@
 //
 // Covers: nested suites, definition-order execution, before/after (once per
 // suite) and beforeEach/afterEach (per test, parent chain), async it bodies,
-// the test() alias, and — via one deliberate throw — failure detection.
+// the test() alias, Jest-style test.each tables, and — via one deliberate
+// throw — failure detection.
 //
-// Expected summary: PASS: 4  FAIL: 1  TOTAL: 5
+// Expected summary: PASS: 6  FAIL: 1  TOTAL: 7
 
 var order = [];
 
@@ -44,4 +45,11 @@ test("top-level test() alias runs last (definition order)", function () {
   if (order.indexOf("before-outer") === -1) {
     throw new Error("outer suite did not run before root test");
   }
+});
+
+test.each([
+  [1, 2, 3],
+  [2, 3, 5],
+])("test.each row %# adds %i and %i", function (a, b, expected) {
+  if (a + b !== expected) throw new Error("table arguments were not forwarded");
 });
