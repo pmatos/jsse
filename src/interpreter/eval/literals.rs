@@ -166,34 +166,48 @@ impl Interpreter {
         elements: &[Option<Expression>],
         env: &EnvRef,
     ) -> Completion {
-        let mut items: Vec<Option<JsValue>> = Vec::new();
-        for elem in elements {
-            match elem {
-                Some(Expression::Spread(inner)) => {
-                    let val = match self.eval_expr(inner, env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    match self.iterate_to_vec(&val) {
-                        Ok(spread_items) => {
-                            for item in spread_items {
-                                items.push(Some(item));
-                            }
+        let gc_frame = self.gc_root_frame();
+        let result = (|| {
+            let mut items: Vec<Option<JsValue>> = Vec::new();
+            for elem in elements {
+                match elem {
+                    Some(Expression::Spread(inner)) => {
+                        let val = match self.eval_expr(inner, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if let JsValue::Object(o) = &val {
+                            self.gc_temp_roots.push(o.id);
                         }
-                        Err(e) => return Completion::Throw(e),
+                        match self.iterate_to_vec(&val) {
+                            Ok(spread_items) => {
+                                for item in spread_items {
+                                    if let JsValue::Object(o) = &item {
+                                        self.gc_temp_roots.push(o.id);
+                                    }
+                                    items.push(Some(item));
+                                }
+                            }
+                            Err(e) => return Completion::Throw(e),
+                        }
                     }
+                    Some(expr) => {
+                        let val = match self.eval_expr(expr, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if let JsValue::Object(o) = &val {
+                            self.gc_temp_roots.push(o.id);
+                        }
+                        items.push(Some(val));
+                    }
+                    None => items.push(None), // elision — no own property
                 }
-                Some(expr) => {
-                    let val = match self.eval_expr(expr, env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    items.push(Some(val));
-                }
-                None => items.push(None), // elision — no own property
             }
-        }
-        Completion::Normal(self.create_array_with_holes(items))
+            Completion::Normal(self.create_array_with_holes(items))
+        })();
+        self.gc_unroot_frame(gc_frame);
+        result
     }
 
     pub(crate) fn eval_class(
@@ -1217,180 +1231,198 @@ impl Interpreter {
     }
 
     pub(super) fn eval_object_literal(&mut self, props: &[Property], env: &EnvRef) -> Completion {
-        let mut obj_data = JsObjectData::new();
-        obj_data.prototype_id = self.realm().object_prototype;
-        let mut method_values: Vec<JsValue> = Vec::new();
-        for prop in props {
-            let (key, fn_name_for_key) = match &prop.key {
-                PropertyKey::Identifier(n) => (n.clone(), n.clone()),
-                PropertyKey::String(s) => (s.clone(), s.clone()),
-                PropertyKey::Number(n) => {
-                    let s = number_ops::to_string(*n);
-                    (s.clone(), s)
-                }
-                PropertyKey::Computed(expr) => {
-                    let v = match self.eval_expr(expr, env) {
+        let gc_frame = self.gc_root_frame();
+        let result =
+            (|| {
+                let mut obj_data = JsObjectData::new();
+                obj_data.prototype_id = self.realm().object_prototype;
+                let mut method_values: Vec<JsValue> = Vec::new();
+                for prop in props {
+                    let (key, fn_name_for_key) = match &prop.key {
+                        PropertyKey::Identifier(n) => (n.clone(), n.clone()),
+                        PropertyKey::String(s) => (s.clone(), s.clone()),
+                        PropertyKey::Number(n) => {
+                            let s = number_ops::to_string(*n);
+                            (s.clone(), s)
+                        }
+                        PropertyKey::Computed(expr) => {
+                            let v = match self.eval_expr(expr, env) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
+                            if let JsValue::Object(o) = &v {
+                                self.gc_temp_roots.push(o.id);
+                            }
+                            let is_symbol = matches!(&v, JsValue::Symbol(_));
+                            let fn_name = if let JsValue::Symbol(ref sym) = v {
+                                match &sym.description {
+                                    Some(desc) => format!("[{}]", desc),
+                                    None => String::new(),
+                                }
+                            } else {
+                                String::new()
+                            };
+                            let pk = match self.to_property_key(&v) {
+                                Ok(s) => s,
+                                Err(e) => return Completion::Throw(e),
+                            };
+                            let name = if is_symbol { fn_name } else { pk.clone() };
+                            (pk, name)
+                        }
+                        PropertyKey::Private(_) => {
+                            return Completion::Throw(self.create_type_error(
+                                "Private names are not valid in object literals",
+                            ));
+                        }
+                    };
+                    if prop.method {
+                        self.next_function_is_method = true;
+                    }
+                    let value = match self.eval_expr(&prop.value, env) {
                         Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    let is_symbol = matches!(&v, JsValue::Symbol(_));
-                    let fn_name = if let JsValue::Symbol(ref sym) = v {
-                        match &sym.description {
-                            Some(desc) => format!("[{}]", desc),
-                            None => String::new(),
+                        other => {
+                            self.next_function_is_method = false;
+                            return other;
                         }
-                    } else {
-                        String::new()
                     };
-                    let pk = match self.to_property_key(&v) {
-                        Ok(s) => s,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    let name = if is_symbol { fn_name } else { pk.clone() };
-                    (pk, name)
-                }
-                PropertyKey::Private(_) => {
-                    return Completion::Throw(
-                        self.create_type_error("Private names are not valid in object literals"),
-                    );
-                }
-            };
-            if prop.method {
-                self.next_function_is_method = true;
-            }
-            let value = match self.eval_expr(&prop.value, env) {
-                Completion::Normal(v) => v,
-                other => {
+                    if let JsValue::Object(o) = &value {
+                        self.gc_temp_roots.push(o.id);
+                    }
                     self.next_function_is_method = false;
-                    return other;
-                }
-            };
-            self.next_function_is_method = false;
-            // Handle spread — CopyDataProperties (§7.3.26)
-            if let Expression::Spread(inner) = &prop.value {
-                let spread_val = match self.eval_expr(inner, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                if let JsValue::Object(ref o) = spread_val {
-                    let src_id = o.id;
-                    match self.copy_data_properties(src_id, &spread_val, &[]) {
-                        Ok(pairs) => {
-                            for (k, v) in pairs {
-                                obj_data.insert_value(k, v);
+                    // Handle spread — CopyDataProperties (§7.3.26)
+                    if let Expression::Spread(inner) = &prop.value {
+                        let spread_val = match self.eval_expr(inner, env) {
+                            Completion::Normal(v) => v,
+                            other => return other,
+                        };
+                        if let JsValue::Object(o) = &spread_val {
+                            self.gc_temp_roots.push(o.id);
+                        }
+                        if let JsValue::Object(ref o) = spread_val {
+                            let src_id = o.id;
+                            match self.copy_data_properties(src_id, &spread_val, &[]) {
+                                Ok(pairs) => {
+                                    for (k, v) in pairs {
+                                        if let JsValue::Object(o) = &v {
+                                            self.gc_temp_roots.push(o.id);
+                                        }
+                                        obj_data.insert_value(k, v);
+                                    }
+                                }
+                                Err(e) => return Completion::Throw(e),
                             }
                         }
-                        Err(e) => return Completion::Throw(e),
+                        continue;
                     }
-                }
-                continue;
-            }
-            match prop.kind {
-                PropertyKind::Get => {
-                    self.set_function_name(&value, &format!("get {fn_name_for_key}"));
-                    method_values.push(value.clone());
-                    let mut desc =
-                        obj_data
-                            .properties
-                            .get(&key)
-                            .cloned()
-                            .unwrap_or(PropertyDescriptor {
-                                value: None,
-                                writable: None,
-                                get: None,
-                                set: None,
-                                enumerable: Some(true),
-                                configurable: Some(true),
-                            });
-                    desc.get = Some(value);
-                    desc.value = None;
-                    desc.writable = None;
-                    obj_data.insert_property(key, desc);
-                }
-                PropertyKind::Set => {
-                    self.set_function_name(&value, &format!("set {fn_name_for_key}"));
-                    method_values.push(value.clone());
-                    let mut desc =
-                        obj_data
-                            .properties
-                            .get(&key)
-                            .cloned()
-                            .unwrap_or(PropertyDescriptor {
-                                value: None,
-                                writable: None,
-                                get: None,
-                                set: None,
-                                enumerable: Some(true),
-                                configurable: Some(true),
-                            });
-                    desc.set = Some(value);
-                    desc.value = None;
-                    desc.writable = None;
-                    obj_data.insert_property(key, desc);
-                }
-                _ => {
-                    // __proto__: value sets [[Prototype]] per spec §13.2.5.5
-                    // Only plain property init, not methods, computed, or shorthand
-                    if key == "__proto__" && !prop.computed && !prop.shorthand && !prop.method {
-                        match &value {
-                            JsValue::Object(o) => {
-                                obj_data.prototype_id = Some(o.id);
-                            }
-                            JsValue::Null => {
-                                obj_data.prototype_id = None;
-                            }
-                            _ => {
-                                // Non-object, non-null values are ignored per spec
-                            }
-                        }
-                    } else {
-                        if prop.value.is_anonymous_function_definition() {
-                            self.set_function_name(&value, &fn_name_for_key);
-                        }
-                        if prop.method {
+                    match prop.kind {
+                        PropertyKind::Get => {
+                            self.set_function_name(&value, &format!("get {fn_name_for_key}"));
                             method_values.push(value.clone());
+                            let mut desc = obj_data.properties.get(&key).cloned().unwrap_or(
+                                PropertyDescriptor {
+                                    value: None,
+                                    writable: None,
+                                    get: None,
+                                    set: None,
+                                    enumerable: Some(true),
+                                    configurable: Some(true),
+                                },
+                            );
+                            desc.get = Some(value);
+                            desc.value = None;
+                            desc.writable = None;
+                            obj_data.insert_property(key, desc);
                         }
-                        obj_data.insert_value(key, value);
+                        PropertyKind::Set => {
+                            self.set_function_name(&value, &format!("set {fn_name_for_key}"));
+                            method_values.push(value.clone());
+                            let mut desc = obj_data.properties.get(&key).cloned().unwrap_or(
+                                PropertyDescriptor {
+                                    value: None,
+                                    writable: None,
+                                    get: None,
+                                    set: None,
+                                    enumerable: Some(true),
+                                    configurable: Some(true),
+                                },
+                            );
+                            desc.set = Some(value);
+                            desc.value = None;
+                            desc.writable = None;
+                            obj_data.insert_property(key, desc);
+                        }
+                        _ => {
+                            // __proto__: value sets [[Prototype]] per spec §13.2.5.5
+                            // Only plain property init, not methods, computed, or shorthand
+                            if key == "__proto__"
+                                && !prop.computed
+                                && !prop.shorthand
+                                && !prop.method
+                            {
+                                match &value {
+                                    JsValue::Object(o) => {
+                                        obj_data.prototype_id = Some(o.id);
+                                    }
+                                    JsValue::Null => {
+                                        obj_data.prototype_id = None;
+                                    }
+                                    _ => {
+                                        // Non-object, non-null values are ignored per spec
+                                    }
+                                }
+                            } else {
+                                if prop.value.is_anonymous_function_definition() {
+                                    self.set_function_name(&value, &fn_name_for_key);
+                                }
+                                if prop.method {
+                                    method_values.push(value.clone());
+                                }
+                                obj_data.insert_value(key, value);
+                            }
+                        }
                     }
                 }
-            }
-        }
-        let id = self.alloc_object(obj_data);
-        // Set __home_object__ for concise methods, getters, and setters
-        let obj_val = JsValue::Object(crate::types::JsObject { id });
-        {
-            for val in &method_values {
-                if let JsValue::Object(fo) = val
-                    && let Some(func_obj) = self.get_object_cell(fo.id)
+                let id = self.alloc_object(obj_data);
+                self.gc_temp_roots.push(id);
+                // Set __home_object__ for concise methods, getters, and setters
+                let obj_val = JsValue::Object(crate::types::JsObject { id });
                 {
-                    let old_closure = if let Some(JsFunction::User { ref closure, .. }) =
-                        func_obj.borrow().callable
-                    {
-                        Some(closure.clone())
-                    } else {
-                        None
-                    };
-                    if let Some(old_closure) = old_closure {
-                        let wrapper = Environment::new(Some(old_closure));
-                        wrapper
-                            .borrow_mut()
-                            .declare("__home_object__", BindingKind::Const);
-                        wrapper
-                            .borrow_mut()
-                            .initialize_binding("__home_object__", obj_val.clone());
-                        if let Some(JsFunction::User {
-                            ref mut closure, ..
-                        }) = func_obj.borrow_mut().callable
+                    for val in &method_values {
+                        if let JsValue::Object(fo) = val
+                            && let Some(func_obj) = self.get_object_cell(fo.id)
                         {
-                            *closure = wrapper;
+                            let old_closure =
+                                if let Some(JsFunction::User { ref closure, .. }) =
+                                    func_obj.borrow().callable
+                                {
+                                    Some(closure.clone())
+                                } else {
+                                    None
+                                };
+                            if let Some(old_closure) = old_closure {
+                                let wrapper = Environment::new(Some(old_closure));
+                                wrapper
+                                    .borrow_mut()
+                                    .declare("__home_object__", BindingKind::Const);
+                                wrapper
+                                    .borrow_mut()
+                                    .initialize_binding("__home_object__", obj_val.clone());
+                                if let Some(JsFunction::User {
+                                    ref mut closure, ..
+                                }) = func_obj.borrow_mut().callable
+                                {
+                                    *closure = wrapper;
+                                }
+                            }
+                            // Methods must not have own caller/arguments (spec §15.4)
+                            func_obj.borrow_mut().remove_property("caller");
+                            func_obj.borrow_mut().remove_property("arguments");
                         }
                     }
-                    // Methods must not have own caller/arguments (spec §15.4)
-                    func_obj.borrow_mut().remove_property("caller");
-                    func_obj.borrow_mut().remove_property("arguments");
                 }
-            }
-        }
-        Completion::Normal(obj_val)
+                Completion::Normal(obj_val)
+            })();
+        self.gc_unroot_frame(gc_frame);
+        result
     }
 }
