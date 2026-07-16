@@ -179,6 +179,10 @@ could only add jsse-specific failures the oracle lacks and diverge the count.
 Async tests (`assert.async`) are bounded by a 30 s per-test timeout so a `done()`
 that never fires becomes a failure instead of stalling the run.
 
+The assembled bundle uses a `.cjs` suffix so Node always evaluates the
+reference oracle as CommonJS. This is independent of any unrelated ancestor
+`package.json` that may declare `"type": "module"` above the `/tmp` cache.
+
 ### Harness self-test (`run-harness-selftest.sh`)
 
 Because the harness is jsse-only (inert on Node), it can't be cross-checked
@@ -208,6 +212,7 @@ assertions).
 | `decimal.js` | v10.6.0 | ✅ 22,624 (cross-checked) | seconds |
 | `big.js` | v6.2.2 | ✅ 47,456 (cross-checked) | ~7 min — heavy arbitrary-precision division/sqrt/pow on the tree-walker |
 | `lodash` | 4.17.21 | ✅ 6,794 (cross-checked) | QUnit via the shared harness; a few tests skipped on jsse — see below |
+| `js-sha256` | v0.11.1 | ✅ 916 (cross-checked) | Pure-JS SHA-224/SHA-256 and HMAC vectors; string, Buffer, TypedArray, and ArrayBuffer inputs |
 | `luxon` | 3.7.2 | ⚠️ 1,045 / 1,152 | exact count cross-checked; Node is 1,152 / 1,152; blocked on #262–#265 |
 | `bignumber.js` | v9.1.2 | ⚠️ blocked | see below; green on Node today |
 

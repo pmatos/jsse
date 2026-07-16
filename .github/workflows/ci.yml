@@ -32,6 +32,9 @@ jobs:
         with:
           components: clippy, rustfmt
 
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
       - uses: Swatinem/rust-cache@v2
 
       - name: Check formatting
@@ -44,7 +47,7 @@ jobs:
         run: cargo build --release
 
       - name: Run unit tests
-        run: cargo test
+        run: cargo nextest run --release
 
       - uses: astral-sh/setup-uv@v7
 
