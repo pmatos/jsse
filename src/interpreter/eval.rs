@@ -1308,24 +1308,41 @@ impl Interpreter {
                     }
                 };
 
+                // The tag, its receiver, and each substitution value are held
+                // in Rust locals until EvaluateCall invokes the tag. Later
+                // substitutions can run arbitrary JavaScript (and therefore a
+                // GC safepoint), so keep all previously evaluated values live.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&func_val);
+                self.gc_root_value(&this_val);
                 let template_obj = self.get_template_object(tmpl);
+                self.gc_root_value(&template_obj);
 
                 let mut call_args = vec![template_obj];
                 for sub_expr in &tmpl.expressions {
                     match self.eval_expr(sub_expr, env) {
-                        Completion::Normal(v) => call_args.push(v),
-                        other => return other,
+                        Completion::Normal(v) => {
+                            self.gc_root_value(&v);
+                            call_args.push(v);
+                        }
+                        other => {
+                            self.gc_unroot_frame(gc_frame);
+                            return other;
+                        }
                     }
                 }
 
                 if saved_tail {
+                    self.gc_unroot_frame(gc_frame);
                     return Completion::TailCall {
                         func: func_val,
                         this: this_val,
                         args: call_args,
                     };
                 }
-                self.call_function(&func_val, &this_val, &call_args)
+                let result = self.call_function(&func_val, &this_val, &call_args);
+                self.gc_unroot_frame(gc_frame);
+                result
             }
         }
     }
