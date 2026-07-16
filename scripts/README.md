@@ -88,7 +88,7 @@ and (optionally) overrides hook functions:
 | `LIB_ESBUILD_EXTRA` | bash array of extra esbuild flags (e.g. `(--main-fields=main,module)`) |
 | `LIB_SHIM` | extra per-lib shim file (relative to `scripts/`) layered after `node-shim.js` |
 | `LIB_SHIMS` | ordered array of additional shim files; use when a library needs more than `LIB_SHIM` |
-| `LIB_ENV` | environment assignments applied to both engine runs (e.g. `("TZ=America/New_York")`) |
+| `LIB_ENV` | host-process environment assignments applied to both engine runs (e.g. `("TZ=America/New_York")`). Reaches each engine's **native** layer only — jsse's Rust `Date`/`Intl` and Node's ICU read the OS `TZ`/`LANG`; **not** reflected in jsse's JS-visible `process.env`, which the `--node` shim leaves `{}`. Don't use it for values a library reads from `process.env` in JS. |
 | `LIB_EXPECT_COUNT` | if set, both engines must report exactly this count (belt-and-suspenders against silent bundling drift) |
 | `LIB_TIMEOUT` | seconds; wrap each engine run so a hang/slow suite reports cleanly |
 

@@ -74,6 +74,12 @@ LIB_ESBUILD_PLATFORM="node"
 LIB_ESBUILD_EXTRA=()
 LIB_SHIM=""
 LIB_SHIMS=()
+# Host-process environment assignments (e.g. TZ, LANG) applied to BOTH engine
+# runs. These reach each engine's NATIVE layer only: jsse's Rust Date/Intl and
+# Node's ICU read the OS TZ/LANG directly. They are NOT reflected in jsse's
+# JS-visible `process.env` — the `--node` shim leaves it `{}` (there is no host
+# getenv). Do not use LIB_ENV for values a library reads from `process.env` in
+# JS: those would be set on Node but `undefined` under jsse.
 LIB_ENV=()
 LIB_EXPECT_COUNT=""   # if set, both engines must report exactly this count
 LIB_TIMEOUT=""        # if set (seconds), wrap each engine run so a hang/slow
@@ -211,6 +217,9 @@ evaluate() {   # <engine> <label>  → sets VERDICT/COUNT, returns 0 on PASS
     echo "========================================"
     echo "  Running $LIB test suite on $label"
     echo "========================================"
+    # `env "${LIB_ENV[@]}"` sets the host OS environment for the engine child
+    # (native Date/Intl reads TZ/LANG here); it does not populate jsse's
+    # JS-visible process.env — see the LIB_ENV note above.
     if [ -n "$LIB_TIMEOUT" ]; then
         timeout "$LIB_TIMEOUT" env "${LIB_ENV[@]}" \
             "$engine" "${engine_args[@]}" "$FINAL" > "$out" 2>&1 || rc=$?
