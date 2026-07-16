@@ -209,9 +209,6 @@ routed through lodash's own `skipAssert(N)` on jsse (Node still runs them, so th
 count matches). `scripts/patch-lodash-jsse.js` applies these; each is a jsse
 characteristic surfaced by the suite, tracked as a follow-up:
 
-- **`lodash.random` / `lodash.shuffle`** — jsse's `Math.random` is a deterministic
-  `0.5` stub by design (`src/interpreter/builtins/mod.rs`), so tests asserting a
-  distribution of outputs can't pass.
 - **"should work with extremely large arrays"** (flatten, min/max) — 500k-element
   operations run for minutes on the tree-walker (a performance limit, not a
   correctness one).

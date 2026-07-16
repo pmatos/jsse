@@ -8,9 +8,8 @@ use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::RwLock;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, OnceLock, RwLock};
 
 /// Process-global monotonic counter for `JsObjectData.shape_id`. Starts at 1;
 /// `0` is reserved as an invalid sentinel. Mirrors the existing
@@ -28,6 +27,25 @@ static NEXT_SAB_ID: AtomicU64 = AtomicU64::new(1);
 
 pub fn next_sab_id() -> u64 {
     NEXT_SAB_ID.fetch_add(1, Ordering::Relaxed)
+}
+
+const SPLITMIX64_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
+const MATH_RANDOM_FALLBACK_SEED: u64 = 0xA076_1D64_78BD_642F;
+static MATH_RANDOM_PROCESS_SEED: OnceLock<u64> = OnceLock::new();
+static NEXT_MATH_RANDOM_REALM: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+fn splitmix64_mix(mut value: u64) -> u64 {
+    value = (value ^ (value >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    value = (value ^ (value >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    value ^ (value >> 31)
+}
+
+fn new_math_random_state() -> u64 {
+    let process_seed = *MATH_RANDOM_PROCESS_SEED
+        .get_or_init(|| getrandom::u64().unwrap_or(MATH_RANDOM_FALLBACK_SEED));
+    let realm_index = NEXT_MATH_RANDOM_REALM.fetch_add(1, Ordering::Relaxed);
+    process_seed ^ splitmix64_mix(realm_index)
 }
 
 pub struct SharedBufferInner {
@@ -317,6 +335,7 @@ pub type EnvRef = Rc<RefCell<Environment>>;
 #[allow(clippy::type_complexity)]
 pub struct Realm {
     pub(crate) global_env: EnvRef,
+    math_random_state: u64,
     pub(crate) global_object: Option<u64>,
     pub(crate) throw_type_error: Option<JsValue>,
     pub(crate) template_cache: FxHashMap<u64, u64>,
@@ -420,6 +439,7 @@ impl Realm {
     pub(crate) fn new(global_env: EnvRef) -> Self {
         Self {
             global_env,
+            math_random_state: new_math_random_state(),
             global_object: None,
             throw_type_error: None,
             template_cache: FxHashMap::default(),
@@ -513,6 +533,12 @@ impl Realm {
             sloppy_arguments_getter: None,
             iterator_helper_prototype: None,
         }
+    }
+
+    pub(crate) fn math_random(&mut self) -> f64 {
+        self.math_random_state = self.math_random_state.wrapping_add(SPLITMIX64_GAMMA);
+        let random_bits = splitmix64_mix(self.math_random_state) >> 11;
+        random_bits as f64 / 9_007_199_254_740_992.0
     }
 
     pub(crate) fn collect_roots(&self, worklist: &mut Vec<u64>) {

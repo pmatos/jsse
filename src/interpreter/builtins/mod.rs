@@ -2297,8 +2297,8 @@ impl Interpreter {
         let random_fn = self.create_function(JsFunction::native(
             "random".to_string(),
             0,
-            |_interp, _this, _args| {
-                Completion::Normal(JsValue::Number(0.5)) // deterministic for testing
+            |interp, _this, _args| {
+                Completion::Normal(JsValue::Number(interp.realm_mut().math_random()))
             },
         ));
         self.get_object_cell_expect(math_obj_id)
