@@ -455,10 +455,10 @@
       modules: [],
     };
 
-    var modules = [];
     var rootModule = { name: "", tests: [] };
-    modules.push(rootModule);
     var currentModule = rootModule;
+    var moduleStack = [];
+    var testsInOrder = [];
 
     var stats = { all: 0, bad: 0 };
     var doneCbs = [],
@@ -467,6 +467,7 @@
       moduleDoneCbs = [],
       logCbs = [];
     var started = false;
+    var autostartScheduled = false;
     var totalTests = 0;
 
     function normalizeHooks(hooks) {
@@ -486,9 +487,16 @@
         nested = hooks;
         hooks = undefined;
       }
-      var mod = { name: name, tests: [], hooks: normalizeHooks(hooks) };
-      modules.push(mod);
       var prev = currentModule;
+      var parent = moduleStack.length
+        ? moduleStack[moduleStack.length - 1]
+        : rootModule;
+      var mod = {
+        name: name,
+        parent: parent,
+        tests: [],
+        hooks: normalizeHooks(hooks),
+      };
       currentModule = mod;
       if (typeof nested === "function") {
         // Modern QUnit passes a registrar whose before/beforeEach/afterEach/after
@@ -510,27 +518,36 @@
             mod.hooks.after = fn;
           },
         };
-        nested.call(registrar, registrar);
-        currentModule = prev;
+        moduleStack.push(mod);
+        try {
+          nested.call(registrar, registrar);
+        } finally {
+          moduleStack.pop();
+          currentModule = prev;
+        }
       }
     }
 
     function testFn(name, callback) {
-      currentModule.tests.push({
+      var testObj = {
         testName: name,
         module: currentModule,
         callback: callback,
-      });
+      };
+      currentModule.tests.push(testObj);
+      testsInOrder.push(testObj);
       totalTests++;
     }
 
     function skipFn(name) {
-      currentModule.tests.push({
+      var testObj = {
         testName: name,
         module: currentModule,
         callback: null,
         skip: true,
-      });
+      };
+      currentModule.tests.push(testObj);
+      testsInOrder.push(testObj);
       totalTests++;
     }
 
@@ -748,6 +765,23 @@
       }
     }
 
+    function moduleChain(mod) {
+      var chain = [];
+      while (mod && mod !== rootModule) {
+        chain.unshift(mod);
+        mod = mod.parent;
+      }
+      return chain;
+    }
+
+    async function runTestHooks(testObj, kind, assert) {
+      var chain = moduleChain(testObj.module);
+      if (kind === "afterEach") chain.reverse();
+      for (var i = 0; i < chain.length; i++) {
+        await runHook(chain[i].hooks[kind], testObj, assert);
+      }
+    }
+
     async function runTest(testObj) {
       testObj.assertions = [];
       testObj.expected = null;
@@ -767,10 +801,9 @@
       }
 
       var assert = makeAssert(testObj);
-      var hooks = testObj.module.hooks || {};
 
       try {
-        await runHook(hooks.beforeEach, testObj, assert);
+        await runTestHooks(testObj, "beforeEach", assert);
         var ret = testObj.callback.call(testObj.testEnv, assert);
         await Promise.resolve(ret);
         if (testObj.pending > 0) {
@@ -815,7 +848,7 @@
       // suites reset fixtures/globals/timers here, so skipping it would leak
       // dirty state into later tests. A throw here is recorded as a failure.
       try {
-        await runHook(hooks.afterEach, testObj, assert);
+        await runTestHooks(testObj, "afterEach", assert);
       } catch (e) {
         pushFailure(
           testObj,
@@ -905,8 +938,10 @@
 
     // Module-level before/after run once per module (before its first test /
     // after its last), sharing `mod.sharedEnv`; each test gets a shallow copy of
-    // that env (see runTest). Assertions or throws in a hook fold into the stats
-    // like a test's would.
+    // that env (see runTest). For nested modules, `mod.sharedEnv` is seeded from
+    // the parent chain when the module is opened (see runAll), so a hook here
+    // also sees ancestor `before` state. Assertions or throws in a hook fold
+    // into the stats like a test's would.
     async function runModuleHook(mod, kind) {
       var hook = mod.hooks && mod.hooks[kind];
       if (typeof hook !== "function") return;
@@ -969,23 +1004,49 @@
       }, GLOBAL_WATCHDOG_MS);
 
       var count = 0;
-      for (var m = 0; m < modules.length && !aborted; m++) {
-        var mod = modules[m];
-        if (mod.tests.length === 0) continue;
-        await runModuleHook(mod, "before");
-        for (var t = 0; t < mod.tests.length && !aborted; t++) {
-          await runTest(mod.tests[t]);
-          count++;
-          if (count % 200 === 0) await yieldTick();
-          // Liveness on stderr (ignored by the verdict, which parses the final
-          // stdout summary) so a slow tree-walker run is visibly progressing.
-          if (count % 1000 === 0) {
-            process.stderr.write(
-              "… " + count + " tests run (" + stats.bad + " failing assertions)\n"
-            );
-          }
+      var activeModules = [];
+      for (var t = 0; t < testsInOrder.length && !aborted; t++) {
+        var testObj = testsInOrder[t];
+        var nextModules = moduleChain(testObj.module);
+        var common = 0;
+        while (
+          common < activeModules.length &&
+          common < nextModules.length &&
+          activeModules[common] === nextModules[common]
+        ) {
+          common++;
         }
-        await runModuleHook(mod, "after");
+        for (var close = activeModules.length - 1; close >= common; close--) {
+          await runModuleHook(activeModules[close], "after");
+        }
+        activeModules.length = common;
+        for (var open = common; open < nextModules.length; open++) {
+          var opening = nextModules[open];
+          // Inherit the ancestor chain's module env so a nested module's own
+          // before/after hooks and its tests see `this` state set by parent
+          // module hooks — QUnit's nested testEnvironment inheritance. The
+          // parent (nextModules[open - 1]) is already open with its before hook
+          // applied; layer this module's own env (if re-entered) on top of a
+          // shallow copy of it, matching QUnit's per-module testEnvironment copy.
+          var parentEnv = open > 0 ? nextModules[open - 1].sharedEnv : null;
+          opening.sharedEnv = Object.assign({}, parentEnv, opening.sharedEnv);
+          await runModuleHook(opening, "before");
+          activeModules.push(opening);
+        }
+
+        await runTest(testObj);
+        count++;
+        if (count % 200 === 0) await yieldTick();
+        // Liveness on stderr (ignored by the verdict, which parses the final
+        // stdout summary) so a slow tree-walker run is visibly progressing.
+        if (count % 1000 === 0) {
+          process.stderr.write(
+            "… " + count + " tests run (" + stats.bad + " failing assertions)\n"
+          );
+        }
+      }
+      for (var close = activeModules.length - 1; close >= 0; close--) {
+        await runModuleHook(activeModules[close], "after");
       }
       if (aborted) abortedAt = count;
       // The run is done — cancel the watchdog so no pending host timer keeps the
@@ -1049,6 +1110,15 @@
       });
     }
 
+    function scheduleAutostart() {
+      if (autostartScheduled) return;
+      autostartScheduled = true;
+      Promise.resolve().then(function () {
+        autostartScheduled = false;
+        if (config.autostart && totalTests > 0) start();
+      });
+    }
+
     var QUnit = {
       config: config,
       module: moduleFn,
@@ -1057,7 +1127,7 @@
       todo: testFn,
       only: testFn,
       start: start,
-      load: function () {},
+      load: scheduleAutostart,
       begin: function (cb) {
         beginCbs.push(cb);
       },
@@ -1090,6 +1160,7 @@
         return objectType(obj) === type;
       },
     };
+    scheduleAutostart();
     return QUnit;
   }
 
@@ -1215,10 +1286,52 @@
       return out;
     }
 
+    function invokeRunnable(fn, ctx) {
+      if (fn.length === 0) return Promise.resolve(fn.call(ctx));
+      return new Promise(function (resolve, reject) {
+        var settled = false;
+        var guardId = schedule(function () {
+          if (settled) return;
+          settled = true;
+          reject(
+            new Error(
+              "done callback timed out after " + ASYNC_TIMEOUT_MS + "ms"
+            )
+          );
+        }, ASYNC_TIMEOUT_MS);
+        function done(error) {
+          if (settled) return;
+          settled = true;
+          unschedule(guardId);
+          if (error) reject(error);
+          else resolve();
+        }
+        try {
+          fn.call(ctx, done);
+        } catch (e) {
+          done(e);
+        }
+      });
+    }
+
     async function runHooks(hooks, ctx) {
       for (var i = 0; i < hooks.length; i++) {
-        await Promise.resolve(hooks[i].call(ctx));
+        await invokeRunnable(hooks[i], ctx);
       }
+    }
+
+    // Emit a TAP `not ok` for the current counter value plus its YAML diagnostic
+    // block, and bump the failure count. Shared by failing tests and failing
+    // suite-level hooks so both report identically.
+    function reportFailure(name, errText) {
+      console.log("not ok " + counter + " - " + name);
+      console.log("  ---");
+      var lines = String(errText).split("\n");
+      for (var i = 0; i < lines.length; i++) {
+        console.log("  " + lines[i]);
+      }
+      console.log("  ...");
+      failed++;
     }
 
     async function runOneTest(t) {
@@ -1234,7 +1347,7 @@
         errText = "";
       try {
         await runHooks(eachHook(t.suite, "beforeEach"), testCtx);
-        await Promise.resolve(t.fn.call(testCtx));
+        await invokeRunnable(t.fn, testCtx);
       } catch (e) {
         ok = false;
         errText = e && e.stack ? e.stack : String(e);
@@ -1255,30 +1368,50 @@
         console.log("ok " + counter + " - " + name);
         passed++;
       } else {
-        console.log("not ok " + counter + " - " + name);
-        console.log("  ---");
-        var lines = String(errText).split("\n");
-        for (var e2 = 0; e2 < lines.length; e2++) {
-          console.log("  " + lines[e2]);
-        }
-        console.log("  ...");
-        failed++;
+        reportFailure(name, errText);
       }
     }
 
     async function runSuite(suite) {
       var ctx = {};
-      await runHooks(suite.before, ctx);
-      // Children run in definition order (tests interleaved with nested suites).
-      for (var i = 0; i < suite.children.length; i++) {
-        var child = suite.children[i];
-        if (child.kind === "test") {
-          await runOneTest(child.test);
-        } else {
-          await runSuite(child.suite);
+      // Suite-level before/after hooks are contained the same way per-test hooks
+      // are in runOneTest: a failing hook (thrown, done(error), or timed out) is
+      // recorded as a single `not ok` and the run continues, rather than the
+      // rejection propagating to the top-level harness catch and collapsing every
+      // count to PASS: 0  FAIL: 1  TOTAL: 1. A failed `before all` skips this
+      // suite's children (their fixture state is unreliable) but lets sibling
+      // suites still run; `after all` runs regardless, for cleanup.
+      var beforeFailed = false;
+      try {
+        await runHooks(suite.before, ctx);
+      } catch (e) {
+        counter++;
+        beforeFailed = true;
+        reportFailure(
+          fullName(suite, '"before all" hook'),
+          e && e.stack ? e.stack : String(e)
+        );
+      }
+      if (!beforeFailed) {
+        // Children run in definition order (tests interleaved with nested suites).
+        for (var i = 0; i < suite.children.length; i++) {
+          var child = suite.children[i];
+          if (child.kind === "test") {
+            await runOneTest(child.test);
+          } else {
+            await runSuite(child.suite);
+          }
         }
       }
-      await runHooks(suite.after, ctx);
+      try {
+        await runHooks(suite.after, ctx);
+      } catch (e) {
+        counter++;
+        reportFailure(
+          fullName(suite, '"after all" hook'),
+          e && e.stack ? e.stack : String(e)
+        );
+      }
     }
 
     async function runAll() {
