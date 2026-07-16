@@ -1404,6 +1404,29 @@ impl Interpreter {
         func
     }
 
+    /// Install a read-only builtin accessor: mints a native getter function
+    /// named `"get {name}"` with length 0 (per spec: getters have no formal
+    /// parameters) and defines it under `name` on `target_id` as
+    /// `{ get, enumerable: false, configurable: true }`. Companion to
+    /// `define_method`; concentrates the accessor-install "dance" that was
+    /// otherwise open-coded as a six-field `PropertyDescriptor` literal at
+    /// every builtin getter site. Returns the getter function value.
+    pub(crate) fn define_getter(
+        &mut self,
+        target_id: u64,
+        name: &str,
+        f: impl Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion + 'static,
+    ) -> JsValue {
+        let getter = self.create_function(JsFunction::native(format!("get {name}"), 0, f));
+        self.get_object_cell_expect(target_id)
+            .borrow_mut()
+            .insert_property(
+                name.to_string(),
+                PropertyDescriptor::accessor(Some(getter.clone()), None, false, true),
+            );
+        getter
+    }
+
     /// Get a fresh `Rc::clone` of the slot's `Rc<RefCell<…>>` if live.
     /// New callers should prefer `get_object_cell` / `get_object_cell_expect`
     /// (returns `&RefCell<…>`) to avoid the per-call `Rc::clone`; this

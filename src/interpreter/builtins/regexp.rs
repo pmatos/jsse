@@ -8787,61 +8787,43 @@ impl Interpreter {
         self.realm_mut().regexp_string_iterator_prototype = Some(rsi_proto_id);
 
         // RegExp.prototype.flags getter (§22.2.5.3)
-        let flags_getter = self.create_function(JsFunction::native(
-            "get flags".to_string(),
-            0,
-            |interp, this_val, _args| {
-                let obj_id = match this_val {
-                    JsValue::Object(o) => o.id,
-                    _ => {
-                        let err = interp.create_type_error(
-                            "RegExp.prototype.flags requires that 'this' be an Object",
-                        );
-                        return Completion::Throw(err);
-                    }
-                };
-                if interp.get_object_cell(obj_id).is_none() {
+        self.define_getter(regexp_proto_id, "flags", |interp, this_val, _args| {
+            let obj_id = match this_val {
+                JsValue::Object(o) => o.id,
+                _ => {
                     let err = interp.create_type_error(
                         "RegExp.prototype.flags requires that 'this' be an Object",
                     );
                     return Completion::Throw(err);
                 }
-                let mut result = String::new();
-                let flags_to_check: &[(&str, char)] = &[
-                    ("hasIndices", 'd'),
-                    ("global", 'g'),
-                    ("ignoreCase", 'i'),
-                    ("multiline", 'm'),
-                    ("dotAll", 's'),
-                    ("unicode", 'u'),
-                    ("unicodeSets", 'v'),
-                    ("sticky", 'y'),
-                ];
-                for (prop, ch) in flags_to_check {
-                    let val = match interp.get_object_property(obj_id, prop, this_val) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    if interp.to_boolean_val(&val) {
-                        result.push(*ch);
-                    }
+            };
+            if interp.get_object_cell(obj_id).is_none() {
+                let err = interp
+                    .create_type_error("RegExp.prototype.flags requires that 'this' be an Object");
+                return Completion::Throw(err);
+            }
+            let mut result = String::new();
+            let flags_to_check: &[(&str, char)] = &[
+                ("hasIndices", 'd'),
+                ("global", 'g'),
+                ("ignoreCase", 'i'),
+                ("multiline", 'm'),
+                ("dotAll", 's'),
+                ("unicode", 'u'),
+                ("unicodeSets", 'v'),
+                ("sticky", 'y'),
+            ];
+            for (prop, ch) in flags_to_check {
+                let val = match interp.get_object_property(obj_id, prop, this_val) {
+                    Completion::Normal(v) => v,
+                    other => return other,
+                };
+                if interp.to_boolean_val(&val) {
+                    result.push(*ch);
                 }
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
-            },
-        ));
-        self.get_object_cell_expect(regexp_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "flags".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(flags_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            }
+            Completion::Normal(JsValue::String(JsString::from_str(&result)))
+        });
 
         // Flag property getters on prototype (§22.2.5.x)
         let flag_props: &[(&str, char)] = &[
@@ -8915,56 +8897,39 @@ impl Interpreter {
         }
 
         // source getter (§22.2.5.10)
-        let source_getter = self.create_function(JsFunction::native(
-            "get source".to_string(),
-            0,
-            move |interp, this_val, _args| {
-                let obj_ref = match this_val {
-                    JsValue::Object(o) => o,
-                    _ => {
-                        return Completion::Throw(interp.create_error_in_realm(
-                            my_realm_id,
-                            "TypeError",
-                            "RegExp.prototype.source requires that 'this' be an Object",
-                        ));
-                    }
-                };
-                let obj = match interp.get_object_cell(obj_ref.id) {
-                    Some(o) => o,
-                    None => return Completion::Normal(JsValue::Undefined),
-                };
-                if obj.borrow().class_name != "RegExp" {
-                    if obj_ref.id == regexp_proto_id {
-                        return Completion::Normal(JsValue::String(JsString::from_str("(?:)")));
-                    }
+        self.define_getter(regexp_proto_id, "source", move |interp, this_val, _args| {
+            let obj_ref = match this_val {
+                JsValue::Object(o) => o,
+                _ => {
                     return Completion::Throw(interp.create_error_in_realm(
                         my_realm_id,
                         "TypeError",
-                        "RegExp.prototype.source requires that 'this' be a RegExp object",
+                        "RegExp.prototype.source requires that 'this' be an Object",
                     ));
                 }
-                let source_opt = obj.borrow().regexp().map(|r| r.source.clone());
-                if let Some(ref s) = source_opt {
-                    let escaped = escape_regexp_pattern_code_units(&s.code_units);
-                    Completion::Normal(JsValue::String(escaped))
-                } else {
-                    Completion::Normal(JsValue::String(JsString::from_str("(?:)")))
+            };
+            let obj = match interp.get_object_cell(obj_ref.id) {
+                Some(o) => o,
+                None => return Completion::Normal(JsValue::Undefined),
+            };
+            if obj.borrow().class_name != "RegExp" {
+                if obj_ref.id == regexp_proto_id {
+                    return Completion::Normal(JsValue::String(JsString::from_str("(?:)")));
                 }
-            },
-        ));
-        self.get_object_cell_expect(regexp_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "source".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(source_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+                return Completion::Throw(interp.create_error_in_realm(
+                    my_realm_id,
+                    "TypeError",
+                    "RegExp.prototype.source requires that 'this' be a RegExp object",
+                ));
+            }
+            let source_opt = obj.borrow().regexp().map(|r| r.source.clone());
+            if let Some(ref s) = source_opt {
+                let escaped = escape_regexp_pattern_code_units(&s.code_units);
+                Completion::Normal(JsValue::String(escaped))
+            } else {
+                Completion::Normal(JsValue::String(JsString::from_str("(?:)")))
+            }
+        });
 
         let regexp_proto_rc_id = regexp_proto_id;
 

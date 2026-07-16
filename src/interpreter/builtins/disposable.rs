@@ -42,38 +42,28 @@ impl Interpreter {
         }
 
         // get disposed
-        let disposed_getter = self.create_function(JsFunction::native(
-            "get disposed".to_string(),
-            0,
-            |interp, this, _args| {
-                let disposed = if let JsValue::Object(o) = this {
-                    interp.get_object_cell(o.id).and_then(|cell| {
-                        let b = cell.borrow();
-                        if b.class_name == "DisposableStack"
-                            && let Some(ds) = b.disposable_stack()
-                        {
-                            Some(ds.disposed)
-                        } else {
-                            None
-                        }
-                    })
-                } else {
-                    None
-                };
-                match disposed {
-                    Some(d) => Completion::Normal(JsValue::Boolean(d)),
-                    None => Completion::Throw(interp.create_type_error(
-                        "DisposableStack.prototype.disposed called on non-DisposableStack",
-                    )),
-                }
-            },
-        ));
-        self.get_object_cell_expect(ds_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "disposed".to_string(),
-                PropertyDescriptor::accessor(Some(disposed_getter), None, false, true),
-            );
+        self.define_getter(ds_proto_id, "disposed", |interp, this, _args| {
+            let disposed = if let JsValue::Object(o) = this {
+                interp.get_object_cell(o.id).and_then(|cell| {
+                    let b = cell.borrow();
+                    if b.class_name == "DisposableStack"
+                        && let Some(ds) = b.disposable_stack()
+                    {
+                        Some(ds.disposed)
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            };
+            match disposed {
+                Some(d) => Completion::Normal(JsValue::Boolean(d)),
+                None => Completion::Throw(interp.create_type_error(
+                    "DisposableStack.prototype.disposed called on non-DisposableStack",
+                )),
+            }
+        });
 
         // use(value)
         let use_fn = self.create_function(JsFunction::native(
@@ -583,38 +573,28 @@ impl Interpreter {
         }
 
         // get disposed
-        let disposed_getter = self.create_function(JsFunction::native(
-            "get disposed".to_string(),
-            0,
-            |interp, this, _args| {
-                let disposed = if let JsValue::Object(o) = this {
-                    interp.get_object_cell(o.id).and_then(|cell| {
-                        let b = cell.borrow();
-                        if b.class_name == "AsyncDisposableStack"
-                            && let Some(ds) = b.disposable_stack()
-                        {
-                            Some(ds.disposed)
-                        } else {
-                            None
-                        }
-                    })
-                } else {
-                    None
-                };
-                match disposed {
-                    Some(d) => Completion::Normal(JsValue::Boolean(d)),
-                    None => Completion::Throw(interp.create_type_error(
-                        "AsyncDisposableStack.prototype.disposed called on non-AsyncDisposableStack",
-                    )),
-                }
-            },
-        ));
-        self.get_object_cell_expect(ads_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "disposed".to_string(),
-                PropertyDescriptor::accessor(Some(disposed_getter), None, false, true),
-            );
+        self.define_getter(ads_proto_id, "disposed", |interp, this, _args| {
+            let disposed = if let JsValue::Object(o) = this {
+                interp.get_object_cell(o.id).and_then(|cell| {
+                    let b = cell.borrow();
+                    if b.class_name == "AsyncDisposableStack"
+                        && let Some(ds) = b.disposable_stack()
+                    {
+                        Some(ds.disposed)
+                    } else {
+                        None
+                    }
+                })
+            } else {
+                None
+            };
+            match disposed {
+                Some(d) => Completion::Normal(JsValue::Boolean(d)),
+                None => Completion::Throw(interp.create_type_error(
+                    "AsyncDisposableStack.prototype.disposed called on non-AsyncDisposableStack",
+                )),
+            }
+        });
 
         // use(value)
         let use_fn = self.create_function(JsFunction::native(

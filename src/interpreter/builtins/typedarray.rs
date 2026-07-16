@@ -39,275 +39,187 @@ impl Interpreter {
         self.realm_mut().arraybuffer_prototype = Some(ab_proto_id);
 
         // byteLength getter
-        let byte_length_getter = self.create_function(JsFunction::native(
-            "get byteLength".to_string(),
-            0,
-            |interp, this_val, _args| {
-                enum Probe {
-                    NotAB,
-                    Shared,
-                    Detached,
-                    Bytes(usize),
-                }
-                let probe = if let JsValue::Object(o) = this_val {
-                    interp
-                        .get_object_cell(o.id)
-                        .map(|cell| {
-                            let r = cell.borrow();
-                            if let Some(buf_data) = r.arraybuffer_data() {
-                                if r.arraybuffer_is_shared() {
-                                    Probe::Shared
-                                } else if r.arraybuffer_detached().as_ref().is_some_and(|d| d.get())
-                                {
-                                    Probe::Detached
-                                } else {
-                                    Probe::Bytes(buffer_len(buf_data))
-                                }
+        self.define_getter(ab_proto_id, "byteLength", |interp, this_val, _args| {
+            enum Probe {
+                NotAB,
+                Shared,
+                Detached,
+                Bytes(usize),
+            }
+            let probe = if let JsValue::Object(o) = this_val {
+                interp
+                    .get_object_cell(o.id)
+                    .map(|cell| {
+                        let r = cell.borrow();
+                        if let Some(buf_data) = r.arraybuffer_data() {
+                            if r.arraybuffer_is_shared() {
+                                Probe::Shared
+                            } else if r.arraybuffer_detached().as_ref().is_some_and(|d| d.get()) {
+                                Probe::Detached
                             } else {
-                                Probe::NotAB
+                                Probe::Bytes(buffer_len(buf_data))
                             }
-                        })
-                        .unwrap_or(Probe::NotAB)
-                } else {
-                    Probe::NotAB
-                };
-                match probe {
-                    Probe::Shared | Probe::NotAB => {
-                        Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
-                    }
-                    Probe::Detached => Completion::Normal(JsValue::Number(0.0)),
-                    Probe::Bytes(n) => Completion::Normal(JsValue::Number(n as f64)),
+                        } else {
+                            Probe::NotAB
+                        }
+                    })
+                    .unwrap_or(Probe::NotAB)
+            } else {
+                Probe::NotAB
+            };
+            match probe {
+                Probe::Shared | Probe::NotAB => {
+                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
                 }
-            },
-        ));
-        self.get_object_cell_expect(ab_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "byteLength".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(byte_length_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+                Probe::Detached => Completion::Normal(JsValue::Number(0.0)),
+                Probe::Bytes(n) => Completion::Normal(JsValue::Number(n as f64)),
+            }
+        });
 
         // detached getter
-        let detached_getter = self.create_function(JsFunction::native(
-            "get detached".to_string(),
-            0,
-            |interp, this_val, _args| {
-                enum Probe {
-                    NotAB,
-                    Shared,
-                    Detached(bool),
-                }
-                let probe = if let JsValue::Object(o) = this_val {
-                    interp
-                        .get_object_cell(o.id)
-                        .map(|cell| {
-                            let r = cell.borrow();
-                            if r.arraybuffer_data().is_some() {
-                                if r.arraybuffer_is_shared() {
-                                    Probe::Shared
-                                } else {
-                                    let det =
-                                        r.arraybuffer_detached().as_ref().is_some_and(|d| d.get());
-                                    Probe::Detached(det)
-                                }
+        self.define_getter(ab_proto_id, "detached", |interp, this_val, _args| {
+            enum Probe {
+                NotAB,
+                Shared,
+                Detached(bool),
+            }
+            let probe = if let JsValue::Object(o) = this_val {
+                interp
+                    .get_object_cell(o.id)
+                    .map(|cell| {
+                        let r = cell.borrow();
+                        if r.arraybuffer_data().is_some() {
+                            if r.arraybuffer_is_shared() {
+                                Probe::Shared
                             } else {
-                                Probe::NotAB
+                                let det =
+                                    r.arraybuffer_detached().as_ref().is_some_and(|d| d.get());
+                                Probe::Detached(det)
                             }
-                        })
-                        .unwrap_or(Probe::NotAB)
-                } else {
-                    Probe::NotAB
-                };
-                match probe {
-                    Probe::NotAB | Probe::Shared => {
-                        Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
-                    }
-                    Probe::Detached(b) => Completion::Normal(JsValue::Boolean(b)),
+                        } else {
+                            Probe::NotAB
+                        }
+                    })
+                    .unwrap_or(Probe::NotAB)
+            } else {
+                Probe::NotAB
+            };
+            match probe {
+                Probe::NotAB | Probe::Shared => {
+                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
                 }
-            },
-        ));
-        self.get_object_cell_expect(ab_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "detached".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(detached_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+                Probe::Detached(b) => Completion::Normal(JsValue::Boolean(b)),
+            }
+        });
 
         // resizable getter
-        let resizable_getter = self.create_function(JsFunction::native(
-            "get resizable".to_string(),
-            0,
-            |interp, this_val, _args| {
-                enum Probe {
-                    NotAB,
-                    Shared,
-                    Resizable(bool),
-                }
-                let probe = if let JsValue::Object(o) = this_val {
-                    interp
-                        .get_object_cell(o.id)
-                        .map(|cell| {
-                            let r = cell.borrow();
-                            if r.arraybuffer_data().is_some() {
-                                if r.arraybuffer_is_shared() {
-                                    Probe::Shared
-                                } else {
-                                    Probe::Resizable(r.arraybuffer_max_byte_length().is_some())
-                                }
+        self.define_getter(ab_proto_id, "resizable", |interp, this_val, _args| {
+            enum Probe {
+                NotAB,
+                Shared,
+                Resizable(bool),
+            }
+            let probe = if let JsValue::Object(o) = this_val {
+                interp
+                    .get_object_cell(o.id)
+                    .map(|cell| {
+                        let r = cell.borrow();
+                        if r.arraybuffer_data().is_some() {
+                            if r.arraybuffer_is_shared() {
+                                Probe::Shared
                             } else {
-                                Probe::NotAB
+                                Probe::Resizable(r.arraybuffer_max_byte_length().is_some())
                             }
-                        })
-                        .unwrap_or(Probe::NotAB)
-                } else {
-                    Probe::NotAB
-                };
-                match probe {
-                    Probe::NotAB | Probe::Shared => {
-                        Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
-                    }
-                    Probe::Resizable(b) => Completion::Normal(JsValue::Boolean(b)),
+                        } else {
+                            Probe::NotAB
+                        }
+                    })
+                    .unwrap_or(Probe::NotAB)
+            } else {
+                Probe::NotAB
+            };
+            match probe {
+                Probe::NotAB | Probe::Shared => {
+                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
                 }
-            },
-        ));
-        self.get_object_cell_expect(ab_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "resizable".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(resizable_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+                Probe::Resizable(b) => Completion::Normal(JsValue::Boolean(b)),
+            }
+        });
 
         // immutable getter
-        let immutable_getter = self.create_function(JsFunction::native(
-            "get immutable".to_string(),
-            0,
-            |interp, this_val, _args| {
-                enum Probe {
-                    NotAB,
-                    Shared,
-                    Immutable(bool),
-                }
-                let probe = if let JsValue::Object(o) = this_val {
-                    interp
-                        .get_object_cell(o.id)
-                        .map(|cell| {
-                            let r = cell.borrow();
-                            if r.arraybuffer_data().is_some() {
-                                if r.arraybuffer_is_shared() {
-                                    Probe::Shared
-                                } else {
-                                    Probe::Immutable(r.arraybuffer_is_immutable())
-                                }
+        self.define_getter(ab_proto_id, "immutable", |interp, this_val, _args| {
+            enum Probe {
+                NotAB,
+                Shared,
+                Immutable(bool),
+            }
+            let probe = if let JsValue::Object(o) = this_val {
+                interp
+                    .get_object_cell(o.id)
+                    .map(|cell| {
+                        let r = cell.borrow();
+                        if r.arraybuffer_data().is_some() {
+                            if r.arraybuffer_is_shared() {
+                                Probe::Shared
                             } else {
-                                Probe::NotAB
+                                Probe::Immutable(r.arraybuffer_is_immutable())
                             }
-                        })
-                        .unwrap_or(Probe::NotAB)
-                } else {
-                    Probe::NotAB
-                };
-                match probe {
-                    Probe::NotAB | Probe::Shared => {
-                        Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
-                    }
-                    Probe::Immutable(b) => Completion::Normal(JsValue::Boolean(b)),
+                        } else {
+                            Probe::NotAB
+                        }
+                    })
+                    .unwrap_or(Probe::NotAB)
+            } else {
+                Probe::NotAB
+            };
+            match probe {
+                Probe::NotAB | Probe::Shared => {
+                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
                 }
-            },
-        ));
-        self.get_object_cell_expect(ab_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "immutable".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(immutable_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+                Probe::Immutable(b) => Completion::Normal(JsValue::Boolean(b)),
+            }
+        });
 
         // maxByteLength getter
-        let max_byte_length_getter = self.create_function(JsFunction::native(
-            "get maxByteLength".to_string(),
-            0,
-            |interp, this_val, _args| {
-                enum Probe {
-                    NotAB,
-                    Shared,
-                    Detached,
-                    Max(usize),
-                }
-                let probe = if let JsValue::Object(o) = this_val {
-                    interp
-                        .get_object_cell(o.id)
-                        .map(|cell| {
-                            let r = cell.borrow();
-                            if r.arraybuffer_data().is_some() {
-                                if r.arraybuffer_is_shared() {
-                                    Probe::Shared
-                                } else if r.arraybuffer_detached().as_ref().is_some_and(|d| d.get())
-                                {
-                                    Probe::Detached
-                                } else {
-                                    let max =
-                                        r.arraybuffer_max_byte_length().unwrap_or_else(|| {
-                                            buffer_len(r.arraybuffer_data().unwrap())
-                                        });
-                                    Probe::Max(max)
-                                }
+        self.define_getter(ab_proto_id, "maxByteLength", |interp, this_val, _args| {
+            enum Probe {
+                NotAB,
+                Shared,
+                Detached,
+                Max(usize),
+            }
+            let probe = if let JsValue::Object(o) = this_val {
+                interp
+                    .get_object_cell(o.id)
+                    .map(|cell| {
+                        let r = cell.borrow();
+                        if r.arraybuffer_data().is_some() {
+                            if r.arraybuffer_is_shared() {
+                                Probe::Shared
+                            } else if r.arraybuffer_detached().as_ref().is_some_and(|d| d.get()) {
+                                Probe::Detached
                             } else {
-                                Probe::NotAB
+                                let max = r
+                                    .arraybuffer_max_byte_length()
+                                    .unwrap_or_else(|| buffer_len(r.arraybuffer_data().unwrap()));
+                                Probe::Max(max)
                             }
-                        })
-                        .unwrap_or(Probe::NotAB)
-                } else {
-                    Probe::NotAB
-                };
-                match probe {
-                    Probe::NotAB | Probe::Shared => {
-                        Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
-                    }
-                    Probe::Detached => Completion::Normal(JsValue::Number(0.0)),
-                    Probe::Max(n) => Completion::Normal(JsValue::Number(n as f64)),
+                        } else {
+                            Probe::NotAB
+                        }
+                    })
+                    .unwrap_or(Probe::NotAB)
+            } else {
+                Probe::NotAB
+            };
+            match probe {
+                Probe::NotAB | Probe::Shared => {
+                    Completion::Throw(interp.create_type_error("not an ArrayBuffer"))
                 }
-            },
-        ));
-        self.get_object_cell_expect(ab_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "maxByteLength".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(max_byte_length_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+                Probe::Detached => Completion::Normal(JsValue::Number(0.0)),
+                Probe::Max(n) => Completion::Normal(JsValue::Number(n as f64)),
+            }
+        });
 
         // slice
         let slice_fn =
@@ -1233,103 +1145,52 @@ impl Interpreter {
         self.realm_mut().shared_arraybuffer_prototype = Some(sab_proto_id);
 
         // byteLength getter
-        let byte_length_getter = self.create_function(JsFunction::native(
-            "get byteLength".to_string(),
-            0,
-            |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object_cell(o.id)
+        self.define_getter(sab_proto_id, "byteLength", |interp, this_val, _args| {
+            if let JsValue::Object(o) = this_val
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let obj_ref = obj.borrow();
+                if obj_ref.arraybuffer_is_shared()
+                    && let Some(buf) = obj_ref.arraybuffer_data()
                 {
-                    let obj_ref = obj.borrow();
-                    if obj_ref.arraybuffer_is_shared()
-                        && let Some(buf) = obj_ref.arraybuffer_data()
-                    {
-                        return Completion::Normal(JsValue::Number(buffer_len(buf) as f64));
-                    }
+                    return Completion::Normal(JsValue::Number(buffer_len(buf) as f64));
                 }
-                Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
-            },
-        ));
-        self.get_object_cell_expect(sab_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "byteLength".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(byte_length_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            }
+            Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
+        });
 
         // maxByteLength getter
-        let max_byte_length_getter = self.create_function(JsFunction::native(
-            "get maxByteLength".to_string(),
-            0,
-            |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object_cell(o.id)
+        self.define_getter(sab_proto_id, "maxByteLength", |interp, this_val, _args| {
+            if let JsValue::Object(o) = this_val
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let obj_ref = obj.borrow();
+                if obj_ref.arraybuffer_is_shared()
+                    && let Some(buf) = obj_ref.arraybuffer_data()
                 {
-                    let obj_ref = obj.borrow();
-                    if obj_ref.arraybuffer_is_shared()
-                        && let Some(buf) = obj_ref.arraybuffer_data()
-                    {
-                        let max = obj_ref
-                            .arraybuffer_max_byte_length()
-                            .unwrap_or_else(|| buffer_len(buf));
-                        return Completion::Normal(JsValue::Number(max as f64));
-                    }
+                    let max = obj_ref
+                        .arraybuffer_max_byte_length()
+                        .unwrap_or_else(|| buffer_len(buf));
+                    return Completion::Normal(JsValue::Number(max as f64));
                 }
-                Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
-            },
-        ));
-        self.get_object_cell_expect(sab_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "maxByteLength".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(max_byte_length_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            }
+            Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
+        });
 
         // growable getter
-        let growable_getter = self.create_function(JsFunction::native(
-            "get growable".to_string(),
-            0,
-            |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let obj_ref = obj.borrow();
-                    if obj_ref.arraybuffer_is_shared() {
-                        return Completion::Normal(JsValue::Boolean(
-                            obj_ref.arraybuffer_max_byte_length().is_some(),
-                        ));
-                    }
+        self.define_getter(sab_proto_id, "growable", |interp, this_val, _args| {
+            if let JsValue::Object(o) = this_val
+                && let Some(obj) = interp.get_object(o.id)
+            {
+                let obj_ref = obj.borrow();
+                if obj_ref.arraybuffer_is_shared() {
+                    return Completion::Normal(JsValue::Boolean(
+                        obj_ref.arraybuffer_max_byte_length().is_some(),
+                    ));
                 }
-                Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
-            },
-        ));
-        self.get_object_cell_expect(sab_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "growable".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(growable_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            }
+            Completion::Throw(interp.create_type_error("not a SharedArrayBuffer"))
+        });
 
         // grow(newLength)
         let grow_fn = self.create_function(JsFunction::native(
@@ -1690,135 +1551,65 @@ impl Interpreter {
         self.realm_mut().typed_array_prototype = Some(proto_id);
 
         // byteOffset getter
-        let byte_offset_getter = self.create_function(JsFunction::native(
-            "get byteOffset".to_string(),
-            0,
-            |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let obj_ref = obj.borrow();
-                    if let Some(ta) = obj_ref.typed_array_info() {
-                        if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                            return Completion::Normal(JsValue::Number(0.0));
-                        }
-                        return Completion::Normal(JsValue::Number(ta.byte_offset as f64));
+        self.define_getter(proto_id, "byteOffset", |interp, this_val, _args| {
+            if let JsValue::Object(o) = this_val
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let obj_ref = obj.borrow();
+                if let Some(ta) = obj_ref.typed_array_info() {
+                    if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
+                        return Completion::Normal(JsValue::Number(0.0));
                     }
+                    return Completion::Normal(JsValue::Number(ta.byte_offset as f64));
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                "byteOffset".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(byte_offset_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            }
+            Completion::Throw(interp.create_type_error("not a TypedArray"))
+        });
         // byteLength getter
-        let byte_length_getter = self.create_function(JsFunction::native(
-            "get byteLength".to_string(),
-            0,
-            |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let obj_ref = obj.borrow();
-                    if let Some(ta) = obj_ref.typed_array_info() {
-                        if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                            return Completion::Normal(JsValue::Number(0.0));
-                        }
-                        return Completion::Normal(JsValue::Number(
-                            typed_array_byte_length(ta) as f64
-                        ));
+        self.define_getter(proto_id, "byteLength", |interp, this_val, _args| {
+            if let JsValue::Object(o) = this_val
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let obj_ref = obj.borrow();
+                if let Some(ta) = obj_ref.typed_array_info() {
+                    if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
+                        return Completion::Normal(JsValue::Number(0.0));
                     }
+                    return Completion::Normal(JsValue::Number(typed_array_byte_length(ta) as f64));
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                "byteLength".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(byte_length_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            }
+            Completion::Throw(interp.create_type_error("not a TypedArray"))
+        });
         // length getter
-        let length_getter = self.create_function(JsFunction::native(
-            "get length".to_string(),
-            0,
-            |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object_cell(o.id)
-                {
-                    let obj_ref = obj.borrow();
-                    if let Some(ta) = obj_ref.typed_array_info() {
-                        if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-                            return Completion::Normal(JsValue::Number(0.0));
-                        }
-                        return Completion::Normal(JsValue::Number(typed_array_length(ta) as f64));
+        self.define_getter(proto_id, "length", |interp, this_val, _args| {
+            if let JsValue::Object(o) = this_val
+                && let Some(obj) = interp.get_object_cell(o.id)
+            {
+                let obj_ref = obj.borrow();
+                if let Some(ta) = obj_ref.typed_array_info() {
+                    if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
+                        return Completion::Normal(JsValue::Number(0.0));
                     }
+                    return Completion::Normal(JsValue::Number(typed_array_length(ta) as f64));
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                "length".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(length_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            }
+            Completion::Throw(interp.create_type_error("not a TypedArray"))
+        });
 
         // buffer getter (returns the ArrayBuffer object - we need to find it)
-        let buffer_getter = self.create_function(JsFunction::native(
-            "get buffer".to_string(),
-            0,
-            |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
+        self.define_getter(proto_id, "buffer", |interp, this_val, _args| {
+            if let JsValue::Object(o) = this_val
+                && let Some(obj) = interp.get_object(o.id)
+            {
+                let obj_ref = obj.borrow();
+                if obj_ref.typed_array_info().is_some()
+                    && let Some(buf_id) = obj_ref.view_buffer_object_id()
                 {
-                    let obj_ref = obj.borrow();
-                    if obj_ref.typed_array_info().is_some()
-                        && let Some(buf_id) = obj_ref.view_buffer_object_id()
-                    {
-                        return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
-                    }
+                    return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
                 }
-                Completion::Throw(interp.create_type_error("not a TypedArray"))
-            },
-        ));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                "buffer".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(buffer_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            }
+            Completion::Throw(interp.create_type_error("not a TypedArray"))
+        });
 
         // [Symbol.iterator] = values
         let proto_id_for_iter = proto_id;
@@ -5345,135 +5136,84 @@ impl Interpreter {
         self.realm_mut().dataview_prototype = Some(dv_proto_id);
 
         // Getters: buffer, byteOffset, byteLength
-        let buffer_getter = self.create_function(JsFunction::native(
-            "get buffer".to_string(),
-            0,
-            |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let obj_ref = obj.borrow();
-                    if obj_ref.data_view_info().is_some() {
-                        if let Some(buf_id) = obj_ref.view_buffer_object_id() {
-                            return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
-                        }
-                        return Completion::Normal(JsValue::Undefined);
+        self.define_getter(dv_proto_id, "buffer", |interp, this_val, _args| {
+            if let JsValue::Object(o) = this_val
+                && let Some(obj) = interp.get_object(o.id)
+            {
+                let obj_ref = obj.borrow();
+                if obj_ref.data_view_info().is_some() {
+                    if let Some(buf_id) = obj_ref.view_buffer_object_id() {
+                        return Completion::Normal(JsValue::Object(JsObject { id: buf_id }));
                     }
+                    return Completion::Normal(JsValue::Undefined);
                 }
-                Completion::Throw(interp.create_type_error("not a DataView"))
-            },
-        ));
-        self.get_object_cell_expect(dv_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "buffer".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(buffer_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            }
+            Completion::Throw(interp.create_type_error("not a DataView"))
+        });
 
         // byteOffset getter
-        let dv_byte_offset_getter = self.create_function(JsFunction::native(
-            "get byteOffset".to_string(),
-            0,
-            |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let obj_ref = obj.borrow();
-                    if let Some(dv) = obj_ref.data_view_info() {
-                        if dv.is_detached.get() {
-                            return Completion::Throw(
-                                interp.create_type_error("DataView buffer is detached"),
-                            );
-                        }
-                        let buf_len = buffer_len(&dv.buffer);
-                        if dv.is_length_tracking {
-                            if dv.byte_offset > buf_len {
-                                return Completion::Throw(
-                                    interp.create_type_error("DataView is out of bounds"),
-                                );
-                            }
-                        } else if dv.byte_offset + dv.byte_length > buf_len {
+        self.define_getter(dv_proto_id, "byteOffset", |interp, this_val, _args| {
+            if let JsValue::Object(o) = this_val
+                && let Some(obj) = interp.get_object(o.id)
+            {
+                let obj_ref = obj.borrow();
+                if let Some(dv) = obj_ref.data_view_info() {
+                    if dv.is_detached.get() {
+                        return Completion::Throw(
+                            interp.create_type_error("DataView buffer is detached"),
+                        );
+                    }
+                    let buf_len = buffer_len(&dv.buffer);
+                    if dv.is_length_tracking {
+                        if dv.byte_offset > buf_len {
                             return Completion::Throw(
                                 interp.create_type_error("DataView is out of bounds"),
                             );
                         }
-                        return Completion::Normal(JsValue::Number(dv.byte_offset as f64));
+                    } else if dv.byte_offset + dv.byte_length > buf_len {
+                        return Completion::Throw(
+                            interp.create_type_error("DataView is out of bounds"),
+                        );
                     }
+                    return Completion::Normal(JsValue::Number(dv.byte_offset as f64));
                 }
-                Completion::Throw(interp.create_type_error("not a DataView"))
-            },
-        ));
-        self.get_object_cell_expect(dv_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "byteOffset".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(dv_byte_offset_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            }
+            Completion::Throw(interp.create_type_error("not a DataView"))
+        });
         // byteLength getter
-        let dv_byte_length_getter = self.create_function(JsFunction::native(
-            "get byteLength".to_string(),
-            0,
-            |interp, this_val, _args| {
-                if let JsValue::Object(o) = this_val
-                    && let Some(obj) = interp.get_object(o.id)
-                {
-                    let obj_ref = obj.borrow();
-                    if let Some(dv) = obj_ref.data_view_info() {
-                        if dv.is_detached.get() {
+        self.define_getter(dv_proto_id, "byteLength", |interp, this_val, _args| {
+            if let JsValue::Object(o) = this_val
+                && let Some(obj) = interp.get_object(o.id)
+            {
+                let obj_ref = obj.borrow();
+                if let Some(dv) = obj_ref.data_view_info() {
+                    if dv.is_detached.get() {
+                        return Completion::Throw(
+                            interp.create_type_error("DataView buffer is detached"),
+                        );
+                    }
+                    let buf_len = buffer_len(&dv.buffer);
+                    if dv.is_length_tracking {
+                        if dv.byte_offset > buf_len {
                             return Completion::Throw(
-                                interp.create_type_error("DataView buffer is detached"),
+                                interp.create_type_error("DataView is out of bounds"),
                             );
                         }
-                        let buf_len = buffer_len(&dv.buffer);
-                        if dv.is_length_tracking {
-                            if dv.byte_offset > buf_len {
-                                return Completion::Throw(
-                                    interp.create_type_error("DataView is out of bounds"),
-                                );
-                            }
-                            return Completion::Normal(JsValue::Number(
-                                (buf_len - dv.byte_offset) as f64,
-                            ));
-                        } else {
-                            if dv.byte_offset + dv.byte_length > buf_len {
-                                return Completion::Throw(
-                                    interp.create_type_error("DataView is out of bounds"),
-                                );
-                            }
-                            return Completion::Normal(JsValue::Number(dv.byte_length as f64));
+                        return Completion::Normal(JsValue::Number(
+                            (buf_len - dv.byte_offset) as f64,
+                        ));
+                    } else {
+                        if dv.byte_offset + dv.byte_length > buf_len {
+                            return Completion::Throw(
+                                interp.create_type_error("DataView is out of bounds"),
+                            );
                         }
+                        return Completion::Normal(JsValue::Number(dv.byte_length as f64));
                     }
                 }
-                Completion::Throw(interp.create_type_error("not a DataView"))
-            },
-        ));
-        self.get_object_cell_expect(dv_proto_id)
-            .borrow_mut()
-            .insert_property(
-                "byteLength".to_string(),
-                PropertyDescriptor {
-                    value: None,
-                    writable: None,
-                    get: Some(dv_byte_length_getter),
-                    set: None,
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                },
-            );
+            }
+            Completion::Throw(interp.create_type_error("not a DataView"))
+        });
 
         // DataView get/set methods
         // Spec ordering for GetViewValue:
