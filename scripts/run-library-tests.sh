@@ -196,15 +196,21 @@ VERDICT=""; COUNT=""
 evaluate() {   # <engine> <label>  → sets VERDICT/COUNT, returns 0 on PASS
     local engine="$1" label="$2"
     local out="$LIB_CACHE/out-$label.txt" rc=0 result
+    # jsse needs --node to install the #229 __host_* syscall floor (byte I/O,
+    # monotonic clock, process exit) that node-shim.js builds process/console/
+    # util on. Node has no such flag, and the shim is guarded so it stays inert
+    # there — that is what keeps `--node` a valid same-bundle reference oracle.
+    local engine_args=()
+    [ "$label" = "jsse" ] && engine_args=(--node)
     echo ""
     echo "========================================"
     echo "  Running $LIB test suite on $label"
     echo "========================================"
     if [ -n "$LIB_TIMEOUT" ]; then
-        timeout "$LIB_TIMEOUT" "$engine" "$FINAL" > "$out" 2>&1 || rc=$?
+        timeout "$LIB_TIMEOUT" "$engine" "${engine_args[@]}" "$FINAL" > "$out" 2>&1 || rc=$?
         [ "$rc" -eq 124 ] && echo "(timed out after ${LIB_TIMEOUT}s)" >> "$out"
     else
-        "$engine" "$FINAL" > "$out" 2>&1 || rc=$?
+        "$engine" "${engine_args[@]}" "$FINAL" > "$out" 2>&1 || rc=$?
     fi
     cat "$out"
     result="$(lib_verdict "$out" "$rc" || true)"
