@@ -31,7 +31,7 @@ settings migration. For an existing `.rs` file:
 
 1. Format only the edited file with `cargo fmt`.
 2. Map the file to its Cargo target:
-   - `src/main.rs` and modules below `src/` use `--bin jsse`;
+   - `src/main.rs`, modules below `src/`, and `build.rs` use `--all-targets`;
    - a future `src/lib.rs` uses `--lib`;
    - `tests/<name>.rs`, `examples/<name>.rs`, and `benches/<name>.rs` use the
      corresponding named target.
@@ -40,9 +40,16 @@ settings migration. For an existing `.rs` file:
    Clippy fails, which returns actionable PostToolUse feedback to Claude.
 
 Cargo and Clippy compile crates rather than arbitrary source files, so the
-containing target is the narrowest reliable scope. Filtering full-crate JSON
-diagnostics to the edited file was considered, but could hide errors caused by
-the edit at another source location while retaining the same compile cost.
+containing target is the narrowest reliable scope. A bare `--bin jsse` was
+considered for `src/` modules but rejected: JSSE is a binary-only crate, so that
+compiles only the non-test build and silently skips `#[cfg(test)]` source
+(inline test modules and files such as `src/interpreter/tests.rs`), reporting
+success without ever linting the edit. `--all-targets` also compiles the
+cfg(test) build, and on this crate (no `benches/` or `examples/`) it resolves to
+just the binary plus its test build and the single integration test. Filtering
+full-crate JSON diagnostics to the edited file was considered, but could hide
+errors caused by the edit at another source location while retaining the same
+compile cost.
 
 Rust files outside known Cargo targets are formatted but do not trigger
 Clippy. Non-Rust files remain a no-op.

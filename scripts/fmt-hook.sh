@@ -38,7 +38,10 @@ case "$file_path" in
         target_args=(--bin "$target_name")
         ;;
     "$repo_root/src/"*.rs | "$repo_root/build.rs")
-        target_args=(--bin jsse)
+        # --all-targets so Clippy also compiles the cfg(test) build; a bare
+        # --bin jsse skips #[cfg(test)] source (e.g. src/interpreter/tests.rs)
+        # and would report success without ever linting the edit.
+        target_args=(--all-targets)
         ;;
     "$repo_root/tests/"*.rs)
         target_path=${file_path#"$repo_root/tests/"}

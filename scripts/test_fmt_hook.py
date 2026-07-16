@@ -68,7 +68,7 @@ class FmtHookTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertEqual(self.cargo_commands(), [])
 
-    def test_source_file_formats_and_clippies_binary_target(self):
+    def test_source_file_formats_and_clippies_all_targets(self):
         result = self.run_hook(REPO_ROOT / "src" / "interpreter" / "eval.rs")
 
         self.assertEqual(result.returncode, 0)
@@ -78,9 +78,20 @@ class FmtHookTests(unittest.TestCase):
                 f"fmt --manifest-path {REPO_ROOT}/Cargo.toml -- "
                 f"{REPO_ROOT}/src/interpreter/eval.rs",
                 f"clippy --manifest-path {REPO_ROOT}/Cargo.toml --quiet "
-                "--bin jsse -- -D warnings",
+                "--all-targets -- -D warnings",
             ],
         )
+
+    def test_cfg_test_source_is_clippied_with_all_targets(self):
+        # A #[cfg(test)]-gated module (e.g. src/interpreter/tests.rs) is not
+        # compiled by --bin jsse, so it must go through --all-targets or the
+        # hook would report success without ever linting the edit.
+        result = self.run_hook(
+            REPO_ROOT / "src" / "interpreter" / "tests.rs"
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("--all-targets -- -D warnings", self.cargo_commands()[1])
 
     def test_integration_test_uses_its_named_target(self):
         result = self.run_hook(REPO_ROOT / "tests" / "test262_smoke_oracle.rs")
