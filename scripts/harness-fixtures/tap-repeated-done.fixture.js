@@ -21,16 +21,21 @@ describe("repeated done callbacks", function () {
 
   it("continues with later tests", function () {});
 
-  // Keep this test last: final TAP emission must wait for its owned timer.
-  it("fails when a final nested timer repeats done", function (done) {
+  // Keep this test last: final TAP emission must wait for a timer created after
+  // the synchronous runnable has returned and its promise continuation runs.
+  it("fails when a final promise continuation repeats done", function (done) {
     done();
-    setTimeout(function () {
+    Promise.resolve().then(function () {
       setTimeout(done, 5);
-    }, 0);
+    });
   });
 
   after(function (done) {
     done();
-    setTimeout(done, 5);
+    setTimeout(function () {
+      Promise.resolve().then(function () {
+        setTimeout(done, 5);
+      });
+    }, 0);
   });
 });
