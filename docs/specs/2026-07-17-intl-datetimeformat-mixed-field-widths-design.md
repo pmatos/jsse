@@ -23,8 +23,10 @@ seam for explicit component sets whose requested textual widths differ:
   preserving each requested numeric and textual width.
 - Load the locale's classical skeleton and date/time glue data through the
   ICU4X 1.5 compiled-data surface, which still exposes component-based pattern
-  selection. Accept only an all-fields match; otherwise retain the existing
-  fallback behavior.
+  selection. Accept an all-fields match, plus ICU4X 1.5's fractional-second
+  result after the matcher has appended the requested fraction and the final
+  pattern is verified to contain exactly the requested fields (plus an implied
+  day period); otherwise retain the existing fallback behavior.
 - Serialize the selected UTS 35 pattern and parse it with ICU4X 2.x.
 - Use ICU4X 2.x `FixedCalendarDateTimeNames` to load the names required by that
   pattern and format the already time-zone-adjusted Gregorian input. Collect
@@ -56,8 +58,9 @@ correctness.
 The public seam is the JavaScript `Intl.DateTimeFormat` API. Repository-owned
 tests will compare literal `format()` results for mixed long/short/narrow
 weekday, era, and month widths in representative English, French, Japanese,
-and Russian locales. They will also assert that `formatToParts()` exposes each
-requested value and concatenates to `format()`.
+and German locales. They will also assert that `formatToParts()` exposes each
+requested value, concatenates to `format()`, and keeps mixed widths when
+fractional seconds are present.
 
 The targeted DateTimeFormat test262 directory and the full test262 suite remain
 regression gates. Since test262 does not assert locale-dependent byte output,
