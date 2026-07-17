@@ -1882,10 +1882,6 @@ pub(super) fn translate_js_pattern_ex(
     if flags.contains('i') {
         result.push_str("(?i)");
     }
-    if flags.contains('m') {
-        result.push_str("(?m)");
-    }
-
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
     let mut i = 0;
@@ -1908,6 +1904,11 @@ pub(super) fn translate_js_pattern_ex(
     // or None for regular groups.
     let mut dotall_stack: Vec<Option<bool>> = Vec::new();
     let mut dot_all = dot_all_base;
+    // Rust regex multiline anchors only recognize LF. ECMAScript recognizes
+    // LF, CR, LINE SEPARATOR, and PARAGRAPH SEPARATOR, so translate anchors
+    // explicitly and track modifier-group state ourselves.
+    let mut multiline_stack: Vec<Option<bool>> = Vec::new();
+    let mut multiline = flags.contains('m');
     let unicode = flags.contains('u') || flags.contains('v');
     let icase_base = flags.contains('i');
     let mut icase = icase_base;
@@ -2075,6 +2076,17 @@ pub(super) fn translate_js_pattern_ex(
         let c = chars[i];
 
         if c == '[' && !in_char_class {
+            // An empty JS character class matches nothing, but it is a
+            // *consuming* atom: under a zero-permitting quantifier (`[]*`,
+            // `[]?`, `[]{0,n}`) it still yields an empty match, while bare `[]`
+            // and `[]+` fail. fancy-regex rejects the literal `[]`, so translate
+            // to the negated-everything class `[^\s\S]`, which preserves both
+            // behaviours (a zero-width `(?!)` would fail even when quantified).
+            if i + 1 < len && chars[i + 1] == ']' {
+                result.push_str("[^\\s\\S]");
+                i += 2;
+                continue;
+            }
             // [^] in JS means "match any character" — translate to (?s:.)
             if i + 2 < len && chars[i + 1] == '^' && chars[i + 2] == ']' {
                 result.push_str("(?s:.)");
@@ -2695,6 +2707,7 @@ pub(super) fn translate_js_pattern_ex(
                 // Lookbehind - pass through
                 lookbehind_depth += 1;
                 dotall_stack.push(None);
+                multiline_stack.push(None);
                 icase_stack.push(None);
                 group_is_capturing.push(false);
                 is_lookbehind_group.push(true);
@@ -2717,6 +2730,7 @@ pub(super) fn translate_js_pattern_ex(
                     None
                 });
                 dotall_stack.push(None);
+                multiline_stack.push(None);
                 icase_stack.push(None);
                 // Extract the group name to check if it's duplicated
                 let name_start = i + 3;
@@ -2802,6 +2816,15 @@ pub(super) fn translate_js_pattern_ex(
                 }
                 dotall_stack.push(Some(prev_dot_all));
 
+                let prev_multiline = multiline;
+                if add_m {
+                    multiline = true;
+                }
+                if remove_m {
+                    multiline = false;
+                }
+                multiline_stack.push(Some(prev_multiline));
+
                 let prev_icase = icase;
                 if add_i {
                     icase = true;
@@ -2816,31 +2839,17 @@ pub(super) fn translate_js_pattern_ex(
                 group_result_start.push(None);
                 open_group_names.push(None);
 
-                // Emit the group with s stripped from flags
+                // Emit the group with s and m stripped from flags. Their
+                // semantics are handled by the translator.
                 result.push_str("(?");
                 if add_i {
                     result.push('i');
                 }
-                if add_m {
-                    result.push('m');
-                }
-                let has_add = add_i || add_m;
-                let has_remove = remove_i || remove_m;
-                if has_remove {
+                if remove_i {
                     result.push('-');
-                    if remove_i {
-                        result.push('i');
-                    }
-                    if remove_m {
-                        result.push('m');
-                    }
+                    result.push('i');
                 }
-                if !has_add && !has_remove {
-                    // All flags were s-only, emit as plain non-capturing group
-                    result.push(':');
-                } else {
-                    result.push(':');
-                }
+                result.push(':');
                 i = j + 1; // skip past ':'
                 continue;
             }
@@ -2850,6 +2859,9 @@ pub(super) fn translate_js_pattern_ex(
         if c == ')' && !in_char_class {
             if let Some(Some(prev)) = dotall_stack.pop() {
                 dot_all = prev;
+            }
+            if let Some(Some(prev)) = multiline_stack.pop() {
+                multiline = prev;
             }
             if let Some(Some(prev)) = icase_stack.pop() {
                 icase = prev;
@@ -2943,6 +2955,7 @@ pub(super) fn translate_js_pattern_ex(
         // Handle '(' for other group types (non-capturing (?:), lookahead (?=), (?!), plain)
         if c == '(' && !in_char_class {
             dotall_stack.push(None);
+            multiline_stack.push(None);
             icase_stack.push(None);
             if i + 1 >= len || chars[i + 1] != '?' {
                 groups_seen += 1;
@@ -2974,6 +2987,28 @@ pub(super) fn translate_js_pattern_ex(
                 group_result_start.push(None);
                 open_group_names.push(None);
             }
+        }
+
+        // CompileAssertion for ^ and $ uses all four ECMAScript line
+        // terminators in multiline mode. \A and \z keep the non-multiline
+        // alternatives absolute instead of inheriting the host regex rules.
+        if c == '^' && !in_char_class {
+            if multiline {
+                result.push_str("(?:\\A|(?<=[\\n\\r\\u{2028}\\u{2029}]))");
+            } else {
+                result.push_str("\\A");
+            }
+            i += 1;
+            continue;
+        }
+        if c == '$' && !in_char_class {
+            if multiline {
+                result.push_str("(?:\\z|(?=[\\n\\r\\u{2028}\\u{2029}]))");
+            } else {
+                result.push_str("\\z");
+            }
+            i += 1;
+            continue;
         }
 
         // Dot handling: expand based on dotAll state and unicode mode

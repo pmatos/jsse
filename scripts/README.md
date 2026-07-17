@@ -87,6 +87,8 @@ and (optionally) overrides hook functions:
 | `LIB_ESBUILD_PLATFORM` | esbuild `--platform` (default `node`; acorn uses `neutral`) |
 | `LIB_ESBUILD_EXTRA` | bash array of extra esbuild flags (e.g. `(--main-fields=main,module)`) |
 | `LIB_SHIM` | extra per-lib shim file (relative to `scripts/`) layered after `node-shim.js` |
+| `LIB_SHIMS` | ordered array of additional shim files; use when a library needs more than `LIB_SHIM` |
+| `LIB_ENV` | host-process environment assignments applied to both engine runs (e.g. `("TZ=America/New_York")`). Reaches each engine's **native** layer only — jsse's Rust `Date`/`Intl` and Node's ICU read the OS `TZ`/`LANG`; **not** reflected in jsse's JS-visible `process.env`, which the `--node` shim leaves `{}`. Don't use it for values a library reads from `process.env` in JS. |
 | `LIB_EXPECT_COUNT` | if set, both engines must report exactly this count (belt-and-suspenders against silent bundling drift) |
 | `LIB_TIMEOUT` | seconds; wrap each engine run so a hang/slow suite reports cleanly |
 
@@ -150,7 +152,8 @@ shared core (which includes QUnit's own `equiv`, ported verbatim, for
   (mocha/jest/tape shape) as the reusable spine for later library clusters.
 
 It also aliases Node's `global` to `globalThis`, which many bundles rely on for
-their root-object detection.
+their root-object detection. The TAP frontend supports Jest's array-table
+`test.each` form in addition to the basic globals.
 
 Layer it into a library by setting `LIB_SHIM="node-test-harness.js"` (it is
 prepended after `node-shim.js` and `node-buffer-shim.js`). Like the other shims
@@ -159,6 +162,12 @@ it is **inert on Node** — it activates only under jsse's `--node` host mode
 inertness is what makes the cross-check meaningful: on Node the suite's *own*
 framework runs, so the assertion count jsse reports through the adapter is
 checked against the count real QUnit/mocha report on Node, not against itself.
+Suites whose native CLI cannot run from a single bundle may prepend
+`node-test-harness-force.js` before the harness to opt into the same in-process
+runner on both engines. Luxon uses this path because Jest's CLI needs
+filesystem/workers; its generated entry bundles Jest's published matcher core,
+so assertions still use Jest semantics while Node checks the identical test
+bundle and exact count.
 
 The adapter's assertion counting mirrors qunitjs 2.x exactly (`config.stats.all
 += assertions.length` per test; an `expect(n)` mismatch or a zero-assertion test
@@ -193,12 +202,11 @@ The full end-to-end validation of the adapter's counting and `deepEqual` is the
 lodash cross-check below (jsse adapter vs. Node's real `qunit-extras`, 6,794
 assertions).
 
-> The **chai**, **jest-`expect`**, **tape**, and **uvu** adapters that the epic
-> anticipates are intentionally **deferred**. Unlike QUnit's global-probe
-> (`root.QUnit || …`), those are consumed via `require`/`import`, so injecting a
-> jsse implementation needs a different mechanism (esbuild `--alias` or bundling
-> the real library) that should be settled against a concrete consuming library
-> in the #233–236 clusters rather than guessed at here.
+> Full **chai**, **tape**, and **uvu** adapters remain deferred. Luxon settles
+> the Jest seam concretely: `gen-luxon-entry.js` bundles the published
+> `expect/build/matchers` core and supplies only the small invocation wrapper
+> and two matchers its suite needs outside that core (`toThrow` and one inline
+> snapshot).
 
 ## Current status
 
@@ -208,8 +216,46 @@ assertions).
 | `decimal.js` | v10.6.0 | ✅ 22,624 (cross-checked) | seconds |
 | `big.js` | v6.2.2 | ✅ 47,456 (cross-checked) | ~7 min — heavy arbitrary-precision division/sqrt/pow on the tree-walker |
 | `lodash` | 4.17.21 | ✅ 6,794 (cross-checked) | QUnit via the shared harness; a few tests skipped on jsse — see below |
+| `prismjs` | v1.30.0 | ✅ 2,563 (cross-checked) | token streams for ~290 grammars; 3 jsse-only skips — see below |
 | `js-sha256` | v0.11.1 | ✅ 916 (cross-checked) | Pure-JS SHA-224/SHA-256 and HMAC vectors; string, Buffer, TypedArray, and ArrayBuffer inputs |
+| `luxon` | 3.7.2 | ⚠️ 1,045 / 1,152 | exact count cross-checked; Node is 1,152 / 1,152; blocked on #262–#265 |
 | `bignumber.js` | v9.1.2 | ⚠️ blocked | see below; green on Node today |
+
+### PrismJS token-stream fixtures
+
+`scripts/gen-prism-entry.js` embeds Prism core, dependency-ordered grammar
+components, and all 2,563 non-HTML `.test` fixtures into a deterministic,
+filesystem-free entry. Each fixture gets a fresh Prism instance and its
+simplified token stream is compared byte-for-byte with the upstream expected
+JSON. The 11 `.html.test` fixtures are excluded because they test Prism's DOM
+markup rendering instead of tokenization.
+
+Node executes all 2,563 fixtures. JSSE currently counts three documented skips
+while preserving the cross-check count: `bison/c_feature.test`,
+`parser/expression_feature.test`, and `parser/keyword_feature.test`. They expose
+the nested-alternation greedy-match bug tracked in
+[issue #271](https://github.com/pmatos/jsse/issues/271); remove the skip map from
+the generated entry when that issue is fixed.
+
+### Luxon
+
+Luxon's 58 Jest files are statically bundled by `gen-luxon-entry.js`; the
+generated entry uses Jest's pinned `expect@29.7.0` matcher core and the shared
+TAP runner. Both engines run under `TZ=America/New_York` and must report exactly
+1,152 tests. Node is green; jsse currently executes every test and passes 1,045.
+
+`patch-luxon-icu.js` contains four oracle-portability adjustments for literals
+that changed in CLDR 47 / ICU 78. They do not alter the count: two old locale
+fixtures are gated only on Node's advertised CLDR version, and two Coptic-era
+assertions accept the old and current ICU spellings.
+
+The jsse failures are left visible rather than converted to skip assertions.
+They are concentrated in four follow-ups surfaced by the suite:
+
+- #262 — `Intl.DateTimeFormat` locale names/patterns are partially hard-coded.
+- #263 — Node host mode does not honor `TZ` for the system time zone.
+- #264 — unknown IANA-shaped identifiers are accepted as valid time zones.
+- #265 — `Intl.Locale#getWeekInfo()` omits `minimalDays`.
 
 ### lodash skip list (jsse only; each preserves the assertion count via `skipAssert`)
 
@@ -250,3 +296,7 @@ running those thousands of timers natively would otherwise exhaust OS threads.
   `'use strict'; function u(x){x.z=1} function F(){this.a=1;return u(this)} typeof new F()`
   → `undefined` on jsse, `object` on Node (sloppy mode is correct). The config is
   correct and green on Node; it goes green on jsse once the bug is fixed.
+- **Luxon Intl/system-zone gaps (jsse#262–#265).** The pinned suite and bundle
+  are green on Node (1,152 tests). jsse runs the same 1,152 cases and passes
+  1,045; the remaining failures stay visible until the four root Intl and host
+  time-zone gaps above land.

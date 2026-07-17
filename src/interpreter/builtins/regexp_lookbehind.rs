@@ -64,6 +64,10 @@ pub struct LbFlags {
     pub dot_all: bool,
 }
 
+fn is_line_terminator(c: char) -> bool {
+    matches!(c, '\n' | '\r' | '\u{2028}' | '\u{2029}')
+}
+
 // ============================================================================
 // Pattern parser
 // ============================================================================
@@ -571,7 +575,9 @@ pub fn match_rtl(
             match kind {
                 AnchorKind::Start => {
                     if flags.multiline {
-                        if abs_pos != 0 && !(abs_pos > 0 && full_input[abs_pos - 1] == '\n') {
+                        if abs_pos != 0
+                            && !(abs_pos > 0 && is_line_terminator(full_input[abs_pos - 1]))
+                        {
                             return None;
                         }
                     } else if abs_pos != 0 {
@@ -580,7 +586,7 @@ pub fn match_rtl(
                 }
                 AnchorKind::End => {
                     if flags.multiline {
-                        if abs_pos != full_input.len() && full_input[abs_pos] != '\n' {
+                        if abs_pos != full_input.len() && !is_line_terminator(full_input[abs_pos]) {
                             return None;
                         }
                     } else if abs_pos != full_input.len() {
@@ -1072,7 +1078,9 @@ fn match_ltr(
             match kind {
                 AnchorKind::Start => {
                     if flags.multiline {
-                        if start_pos != 0 && !(start_pos > 0 && input[start_pos - 1] == '\n') {
+                        if start_pos != 0
+                            && !(start_pos > 0 && is_line_terminator(input[start_pos - 1]))
+                        {
                             return None;
                         }
                     } else if start_pos != 0 {
@@ -1081,7 +1089,7 @@ fn match_ltr(
                 }
                 AnchorKind::End => {
                     if flags.multiline {
-                        if start_pos != input.len() && input[start_pos] != '\n' {
+                        if start_pos != input.len() && !is_line_terminator(input[start_pos]) {
                             return None;
                         }
                     } else if start_pos != input.len() {

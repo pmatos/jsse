@@ -237,57 +237,9 @@ fn is_valid_timezone(tz: &str) -> bool {
     if parse_offset_timezone(tz).is_some() {
         return true;
     }
-    // Use canonicalize_timezone to check if it matches a known TZ
-    let canonical = canonicalize_timezone(tz);
-    if canonical.eq_ignore_ascii_case(tz) && canonical != tz {
-        return true;
-    }
-    if canonical == tz {
-        let lower_canonical = canonicalize_timezone(&tz.to_ascii_lowercase());
-        if lower_canonical != tz.to_ascii_lowercase() {
-            return true;
-        }
-        let upper_canonical = canonicalize_timezone(&tz.to_ascii_uppercase());
-        if upper_canonical != tz.to_ascii_uppercase() {
-            return true;
-        }
-    }
-    // Accept valid IANA-style patterns we might not have in our list
-    if !tz.is_ascii() {
-        return false;
-    }
-    let valid_chars = tz
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == '/' || c == '_' || c == '-' || c == '+');
-    if !valid_chars {
-        return false;
-    }
-    if tz.contains('/') {
-        let parts: Vec<&str> = tz.split('/').collect();
-        if parts.len() >= 2 && parts.len() <= 4 {
-            let region_upper = parts[0].to_uppercase();
-            return matches!(
-                region_upper.as_str(),
-                "AFRICA"
-                    | "AMERICA"
-                    | "ANTARCTICA"
-                    | "ARCTIC"
-                    | "ASIA"
-                    | "ATLANTIC"
-                    | "AUSTRALIA"
-                    | "BRAZIL"
-                    | "CANADA"
-                    | "CHILE"
-                    | "ETC"
-                    | "EUROPE"
-                    | "INDIAN"
-                    | "MEXICO"
-                    | "PACIFIC"
-                    | "US"
-            );
-        }
-    }
-    false
+    chrono_tz::TZ_VARIANTS
+        .iter()
+        .any(|known| known.name().eq_ignore_ascii_case(tz))
 }
 
 fn canonicalize_timezone(tz: &str) -> String {
@@ -896,7 +848,10 @@ fn canonicalize_timezone(tz: &str) -> String {
         }
     }
 
-    tz.to_string()
+    chrono_tz::TZ_VARIANTS
+        .iter()
+        .find(|known| known.name().eq_ignore_ascii_case(tz))
+        .map_or_else(|| tz.to_string(), |known| known.name().to_string())
 }
 
 fn default_numbering_system_for_locale(locale: &str) -> &'static str {
