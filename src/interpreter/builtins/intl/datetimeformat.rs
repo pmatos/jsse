@@ -1652,6 +1652,21 @@ fn normalize_icu_datetime_parts(
             digits.reverse();
             value = digits.into_iter().collect();
         }
+        if part_type == "hour"
+            && requested_style == Some("numeric")
+            && opts.locale.split("-u-").next() == Some("es-ES")
+            && value.chars().count() == 2
+            && value.chars().all(char::is_numeric)
+        {
+            // ICU4X 2.1's processed es-ES time data uses HH, while the
+            // locale's ECMA-402/CLDR format record uses the unpadded H form.
+            // Correct that data divergence without changing locales whose
+            // matched numeric-hour format legitimately has two digits.
+            let zero = transliterate_digits("0", &opts.numbering_system);
+            if let Some(unpadded) = value.strip_prefix(&zero) {
+                value = unpadded.to_string();
+            }
+        }
         if requested_style == Some("2-digit")
             && value.chars().count() == 1
             && value.chars().all(char::is_numeric)

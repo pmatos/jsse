@@ -145,9 +145,6 @@ assertSame(
   '02/01/20',
   'explicit year:2-digit still truncates to two digits');
 
-// fractionalSecond must be split out of the "second" part using the locale's
-// own decimal separator. Many locales (fr-FR, de-DE) use a comma, not a dot,
-// and the "arab" numbering system uses the Arabic decimal separator.
 function partValue(parts, type) {
   for (var i = 0; i < parts.length; i++) {
     if (parts[i].type === type) {
@@ -157,6 +154,81 @@ function partValue(parts, type) {
   return undefined;
 }
 
+// An hour selected as "numeric" follows the effective locale's matched
+// DateTime Format Record. Spanish (Spain) uses the unpadded H pattern even
+// when minute and second fields are also present.
+var numericHourTimestamp = Date.UTC(2020, 0, 2, 3, 4, 5);
+var esNumericHour = new Intl.DateTimeFormat('es-ES', {
+  hour: 'numeric',
+  minute: 'numeric',
+  second: 'numeric',
+  hourCycle: 'h23',
+  timeZone: 'UTC'
+});
+
+assertSame(
+  esNumericHour.format(numericHourTimestamp),
+  '3:04:05',
+  'Spanish numeric hour follows the unpadded H pattern');
+
+assertSame(
+  partValue(esNumericHour.formatToParts(numericHourTimestamp), 'hour'),
+  '3',
+  'Spanish formatToParts exposes an unpadded numeric hour');
+
+assertSame(
+  new Intl.DateTimeFormat('es-ES', {
+    hour: 'numeric',
+    hourCycle: 'h23',
+    timeZone: 'UTC'
+  }).format(numericHourTimestamp),
+  '3',
+  'standalone Spanish numeric hour follows the unpadded H pattern');
+
+assertSame(
+  new Intl.DateTimeFormat('es-ES', {
+    hour: '2-digit',
+    hourCycle: 'h23',
+    timeZone: 'UTC'
+  }).format(numericHourTimestamp),
+  '03',
+  'explicit Spanish 2-digit hour remains padded');
+
+assertSame(
+  new Intl.DateTimeFormat('es-ES-u-nu-arab', {
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hourCycle: 'h23',
+    timeZone: 'UTC'
+  }).format(numericHourTimestamp),
+  '٣:٠٤:٠٥',
+  'Spanish numeric hour removes the locale zero digit');
+
+function numericHms(locale) {
+  return new Intl.DateTimeFormat(locale, {
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hourCycle: 'h23',
+    timeZone: 'UTC'
+  }).format(numericHourTimestamp);
+}
+
+assertSame(numericHms('ca-ES'), '3:04:05',
+  'Catalan numeric hour remains unpadded');
+assertSame(numericHms('es-MX'), '03:04:05',
+  'Mexican Spanish numeric hour remains padded');
+assertSame(numericHms('en-US'), '03:04:05',
+  'English numeric hour remains padded');
+assertSame(numericHms('fr-FR'), '03:04:05',
+  'French numeric hour remains padded');
+assertSame(numericHms('it-IT'), '03:04:05',
+  'Italian numeric hour remains padded in an h:m:s pattern');
+
+// fractionalSecond must be split out of the "second" part using the locale's
+// own decimal separator. Many locales (fr-FR, de-DE) use a comma, not a dot,
+// and the "arab" numbering system uses the Arabic decimal separator.
 function separatorAfterSecond(parts) {
   for (var i = 0; i < parts.length - 1; i++) {
     if (parts[i].type === 'second' && parts[i + 1].type === 'literal') {
