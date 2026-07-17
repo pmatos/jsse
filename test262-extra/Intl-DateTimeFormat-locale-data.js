@@ -144,3 +144,60 @@ assertSame(
   }).format(recentShort),
   '02/01/20',
   'explicit year:2-digit still truncates to two digits');
+
+// fractionalSecond must be split out of the "second" part using the locale's
+// own decimal separator. Many locales (fr-FR, de-DE) use a comma, not a dot,
+// and the "arab" numbering system uses the Arabic decimal separator.
+function partValue(parts, type) {
+  for (var i = 0; i < parts.length; i++) {
+    if (parts[i].type === type) {
+      return parts[i].value;
+    }
+  }
+  return undefined;
+}
+
+function separatorAfterSecond(parts) {
+  for (var i = 0; i < parts.length - 1; i++) {
+    if (parts[i].type === 'second' && parts[i + 1].type === 'literal') {
+      return parts[i + 1].value;
+    }
+  }
+  return undefined;
+}
+
+var fracTimestamp = Date.UTC(2020, 0, 2, 3, 4, 5, 6);
+
+function fractionalFormat(locale) {
+  return new Intl.DateTimeFormat(locale, {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    fractionalSecondDigits: 3,
+    hourCycle: 'h23',
+    timeZone: 'UTC'
+  });
+}
+
+var frFractional = fractionalFormat('fr-FR');
+assertSame(frFractional.format(fracTimestamp), '03:04:05,006',
+  'French fractional second uses a comma decimal separator');
+var frParts = frFractional.formatToParts(fracTimestamp);
+assertSame(partValue(frParts, 'second'), '05',
+  'French formatToParts second part excludes the fraction');
+assertSame(partValue(frParts, 'fractionalSecond'), '006',
+  'French formatToParts exposes a fractionalSecond part');
+assertSame(separatorAfterSecond(frParts), ',',
+  'French fractionalSecond literal is a comma');
+
+var enFractional = fractionalFormat('en-US');
+assertSame(enFractional.format(fracTimestamp), '03:04:05.006',
+  'English fractional second keeps the dot decimal separator');
+assertSame(separatorAfterSecond(enFractional.formatToParts(fracTimestamp)), '.',
+  'English fractionalSecond literal is a dot');
+
+var arabFractional = fractionalFormat('en-US-u-nu-arab');
+assertSame(arabFractional.format(fracTimestamp), '٠٣:٠٤:٠٥٫٠٠٦',
+  'Arabic-numbered fractional second uses the Arabic decimal separator');
+assertSame(separatorAfterSecond(arabFractional.formatToParts(fracTimestamp)), '٫',
+  'Arabic-numbered fractionalSecond literal is the Arabic decimal separator');

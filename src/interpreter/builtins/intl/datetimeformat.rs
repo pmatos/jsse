@@ -1713,16 +1713,27 @@ fn normalize_icu_datetime_parts(
 
         if part_type == "second"
             && opts.fractional_second_digits.is_some()
-            && let Some((seconds, fraction)) = value
-                .split_once('.')
-                .or_else(|| value.split_once('\u{66b}'))
+            && let Some(sep_idx) = value.find(|c: char| !c.is_numeric())
         {
-            normalized.push(("second".to_string(), seconds.to_string()));
+            // ICU merges the fractional second into the "second" part using the
+            // locale's decimal separator (a comma in fr-FR/de-DE, a dot
+            // elsewhere). Split on the actual separator ICU emitted rather than
+            // a fixed set. All numbering systems reaching this ICU path use
+            // decimal digits (hanidec takes the non-ICU fallback), so the first
+            // non-numeric character is the separator. ICU4X keeps the base
+            // locale's separator even under the "arab" numbering system, but
+            // ECMA-402/CLDR use the Arabic decimal separator there, so keep that
+            // one correction.
+            let (seconds, rest) = value.split_at(sep_idx);
+            let mut rest_chars = rest.chars();
+            let separator = rest_chars.next().unwrap();
+            let fraction = rest_chars.as_str();
             let decimal = if matches!(opts.numbering_system.as_str(), "arab" | "arabext") {
-                "\u{66b}"
+                '\u{66b}'
             } else {
-                "."
+                separator
             };
+            normalized.push(("second".to_string(), seconds.to_string()));
             normalized.push(("literal".to_string(), decimal.to_string()));
             normalized.push(("fractionalSecond".to_string(), fraction.to_string()));
             continue;
