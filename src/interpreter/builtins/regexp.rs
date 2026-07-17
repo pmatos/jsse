@@ -2124,6 +2124,27 @@ pub(super) fn translate_js_pattern_ex(
             continue;
         }
 
+        // Non-Unicode matching represents each surrogate code unit as a PUA
+        // scalar. Expand simple character-class ranges that cross the
+        // surrogate interval so those mapped values remain members of the JS
+        // range (for example, [\u007f-\uffff] must match both halves of an
+        // astral character).
+        if in_char_class
+            && !unicode
+            && let Some((lo, lo_end)) = parse_simple_class_atom(&chars, i)
+            && lo_end < len
+            && chars[lo_end] == '-'
+            && let Some((hi, hi_end)) = parse_simple_class_atom(&chars, lo_end + 1)
+            && lo <= hi
+            && lo <= SURROGATE_END
+            && hi >= SURROGATE_START
+        {
+            append_non_unicode_class_range(&mut result, lo, hi);
+            cc_prev_was_class_escape = false;
+            i = hi_end;
+            continue;
+        }
+
         // Annex B: inside character classes in non-unicode mode, when '-' is between
         // a class escape (\d,\D,\w,\W,\s,\S) and another atom (or vice versa),
         // treat '-' as literal rather than forming a range.
@@ -3064,6 +3085,53 @@ fn append_unicode_range(result: &mut String, lo: u32, hi: u32) {
         result.push_str(&format!("\\u{{{:X}}}", lo));
     } else {
         result.push_str(&format!("\\u{{{:X}}}-\\u{{{:X}}}", lo, hi));
+    }
+}
+
+fn parse_simple_class_atom(chars: &[char], start: usize) -> Option<(u32, usize)> {
+    let ch = *chars.get(start)?;
+    if ch == '\\' {
+        match *chars.get(start + 1)? {
+            'u' if chars.get(start + 2) != Some(&'{') => {
+                let digits: String = chars.get(start + 2..start + 6)?.iter().collect();
+                u32::from_str_radix(&digits, 16)
+                    .ok()
+                    .map(|code| (code, start + 6))
+            }
+            'x' => {
+                let digits: String = chars.get(start + 2..start + 4)?.iter().collect();
+                u32::from_str_radix(&digits, 16)
+                    .ok()
+                    .map(|code| (code, start + 4))
+            }
+            // Escaped syntax characters denote that literal code point.
+            escaped if is_syntax_character(escaped) || escaped == '/' || escaped == '-' => {
+                Some((escaped as u32, start + 2))
+            }
+            _ => None,
+        }
+    } else if ch != ']' && ch != '-' {
+        Some((ch as u32, start + 1))
+    } else {
+        None
+    }
+}
+
+fn append_non_unicode_class_range(result: &mut String, lo: u32, hi: u32) {
+    if lo < SURROGATE_START {
+        append_unicode_range(result, lo, hi.min(SURROGATE_START - 1));
+    }
+
+    let surrogate_lo = lo.max(SURROGATE_START);
+    let surrogate_hi = hi.min(SURROGATE_END);
+    append_unicode_range(
+        result,
+        SURROGATE_PUA_BASE + surrogate_lo - SURROGATE_START,
+        SURROGATE_PUA_BASE + surrogate_hi - SURROGATE_START,
+    );
+
+    if hi > SURROGATE_END {
+        append_unicode_range(result, lo.max(SURROGATE_END + 1), hi);
     }
 }
 
@@ -7971,18 +8039,16 @@ impl Interpreter {
                             return other;
                         }
                     };
-                    let matched = match interp.to_string_value(&matched_val) {
+                    let matched_js = match interp.to_js_string(&matched_val) {
                         Ok(s) => s,
                         Err(e) => {
                             interp.gc_temp_roots.truncate(gc_root_start);
                             return Completion::Throw(e);
                         }
                     };
-                    // Compute matchLength in UTF-16 code units for tail_pos calculation
-                    let match_length_utf16 = match &matched_val {
-                        JsValue::String(js) => js.code_units.len(),
-                        _ => matched.encode_utf16().count(),
-                    };
+                    let matched = js_string_to_regex_input_non_unicode(&matched_js.code_units);
+                    // Compute matchLength in UTF-16 code units for tail_pos calculation.
+                    let match_length_utf16 = matched_js.code_units.len();
 
                     // e. Let position be ? ToIntegerOrInfinity(? Get(result, "index")).
                     let index_val = match interp.get_object_property(result_id, "index", result_val)
@@ -8024,14 +8090,14 @@ impl Interpreter {
                                 }
                             };
                         if !cap_n.is_undefined() {
-                            let cap_str = match interp.to_string_value(&cap_n) {
+                            let cap_str = match interp.to_js_string(&cap_n) {
                                 Ok(s) => s,
                                 Err(e) => {
                                     interp.gc_temp_roots.truncate(gc_root_start);
                                     return Completion::Throw(e);
                                 }
                             };
-                            captures.push(JsValue::String(JsString::from_str(&cap_str)));
+                            captures.push(JsValue::String(cap_str));
                         } else {
                             captures.push(JsValue::Undefined);
                         }
@@ -8050,7 +8116,7 @@ impl Interpreter {
                     let replacement = if functional_replace {
                         // k. If functionalReplace is true, then
                         let mut replacer_args: Vec<JsValue> = Vec::new();
-                        replacer_args.push(JsValue::String(JsString::from_str(&matched)));
+                        replacer_args.push(JsValue::String(matched_js));
                         for cap in &captures {
                             replacer_args.push(cap.clone());
                         }
@@ -8066,8 +8132,8 @@ impl Interpreter {
                             &replacer_args,
                         );
                         match repl_val {
-                            Completion::Normal(v) => match interp.to_string_value(&v) {
-                                Ok(s) => s,
+                            Completion::Normal(v) => match interp.to_js_string(&v) {
+                                Ok(s) => js_string_to_regex_input_non_unicode(&s.code_units),
                                 Err(e) => {
                                     interp.gc_temp_roots.truncate(gc_root_start);
                                     return Completion::Throw(e);
