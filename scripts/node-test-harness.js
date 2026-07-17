@@ -13,11 +13,10 @@
 //   * a TAP-emitting describe/it/test/before/after runner (mocha/jest/tape
 //     shape) as the reusable spine for later library clusters.
 //
-// Like node-shim.js and node-buffer-shim.js, the whole prelude is INERT on real
-// Node: there the suite's own framework (real qunit-extras, mocha, …) runs
-// instead, which is exactly what lets run-library-tests.sh use Node as a
-// same-bundle reference oracle — the count jsse reports through this adapter is
-// cross-checked against the count the real framework reports on Node.
+// Like node-shim.js and node-buffer-shim.js, the prelude is normally INERT on
+// real Node: there the suite's own framework (real qunit-extras, mocha, …) runs
+// instead. A library whose native CLI cannot execute from one bundle may opt in
+// on both engines by setting `__JSSE_FORCE_TEST_HARNESS__` in an earlier shim.
 //
 // No jsse src/ changes and nothing here touches jsse's default globals outside a
 // library run, so test262 is unaffected.
@@ -31,10 +30,14 @@
   // would be wrong here because node-shim.js (which loads before this prelude)
   // installs a *fake* process with `versions.node` set — so this prelude must
   // key off something node-shim.js does not fake. Staying inert on real Node is
-  // essential: there the suite's own framework (real qunit-extras, mocha, …)
-  // must run so run-library-tests.sh can use Node as a same-bundle reference
-  // oracle for the cross-checked test count.
-  if (typeof __host_write === "undefined") return;
+  // essential by default: there the suite's own framework (real qunit-extras,
+  // mocha, …) must run so run-library-tests.sh can use Node as a same-bundle
+  // reference oracle for the cross-checked test count. Suites such as Luxon,
+  // whose Jest CLI requires unavailable filesystem/worker host surfaces, can
+  // explicitly force this in-process runner on both engines.
+  var forceHarness = globalThis.__JSSE_FORCE_TEST_HARNESS__ === true;
+  if (typeof __host_write === "undefined" && !forceHarness) return;
+  if (forceHarness) delete globalThis.__JSSE_FORCE_TEST_HARNESS__;
 
   var g = globalThis;
 
@@ -1236,6 +1239,42 @@
     function it(name, fn) {
       return addTest(name, fn, false);
     }
+
+    function formatEachName(template, row, index) {
+      var arg = 0;
+      return String(template).replace(/%([%#sdijp])/g, function (_, token) {
+        if (token === "%") return "%";
+        if (token === "#") return String(index);
+        var value = row[arg++];
+        if (token === "d") return String(Number(value));
+        if (token === "i") return String(parseInt(value, 10));
+        if (token === "j" || token === "p") {
+          try {
+            var json = JSON.stringify(value);
+            return json === undefined ? String(value) : json;
+          } catch (e) {
+            return String(value);
+          }
+        }
+        return String(value);
+      });
+    }
+
+    // Jest's array-table form: test.each([[a, b], [c, d]])(name, callback).
+    // The callback receives each row as positional arguments and every row is
+    // registered as a distinct test, preserving the oracle-visible count.
+    it.each = function (table) {
+      return function (name, fn) {
+        for (var i = 0; i < table.length; i++) {
+          (function (row, index) {
+            var args = Array.isArray(row) ? row : [row];
+            it(formatEachName(name, args, index), function () {
+              return fn.apply(this, args);
+            });
+          })(table[i], i);
+        }
+      };
+    };
 
     function xit(name) {
       return addTest(name, null, true);

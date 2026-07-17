@@ -5,10 +5,10 @@
 // Covers: nested suites, definition-order execution, before/after (once per
 // suite) and beforeEach/afterEach (per test, parent chain), async it bodies,
 // done callbacks, Mocha's suite context and skip helpers (describe.skip,
-// it.skip, and xdescribe), the test() alias, and — via deliberate
-// throw/done(error) failures — failure detection.
+// it.skip, and xdescribe), the test() alias, Jest-style test.each tables,
+// and — via deliberate throw/done(error) failures — failure detection.
 //
-// Expected summary: PASS: 10  FAIL: 2  TOTAL: 12
+// Expected summary: PASS: 12  FAIL: 2  TOTAL: 14
 
 var order = [];
 
@@ -134,4 +134,11 @@ test("top-level test() alias runs last (definition order)", function () {
   if (order.indexOf("done-test-complete") === -1) {
     throw new Error("done-style test did not complete");
   }
+});
+
+test.each([
+  [1, 2, 3],
+  [2, 3, 5],
+])("test.each row %# adds %i and %i", function (a, b, expected) {
+  if (a + b !== expected) throw new Error("table arguments were not forwarded");
 });

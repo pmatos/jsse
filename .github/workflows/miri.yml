@@ -15,11 +15,11 @@ jobs:
     env:
       MIRIFLAGS: -Zmiri-disable-isolation -Zmiri-ignore-leaks
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88 # master
+      - uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: nightly
           components: miri
