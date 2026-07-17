@@ -4,14 +4,16 @@
 //
 // Covers: nested suites, definition-order execution, before/after (once per
 // suite) and beforeEach/afterEach (per test, parent chain), async it bodies,
-// the test() alias, Jest-style test.each tables, skipped suites (xdescribe),
+// done callbacks, Mocha's suite context and skip helpers (describe.skip,
+// it.skip, and xdescribe), the test() alias, Jest-style test.each tables,
 // and — via deliberate throw/done(error) failures — failure detection.
 //
-// Expected summary: PASS: 9  FAIL: 2  TOTAL: 11
+// Expected summary: PASS: 12  FAIL: 2  TOTAL: 14
 
 var order = [];
 
 describe("outer", function () {
+  this.timeout(1000).slow(100).retries(0);
   before(function () { order.push("before-outer"); });
   before(function (done) {
     setTimeout(function () {
@@ -82,7 +84,23 @@ describe("outer", function () {
   });
 });
 
-// xdescribe is Mocha's alias for describe.skip: its callback still runs so
+describe.skip("skipped suite", function () {
+  before(function () { throw new Error("skipped suite hook ran"); });
+  it("registers its tests without running them", function () {
+    throw new Error("skipped suite test ran");
+  });
+  describe("nested skipped suite", function () {
+    it("inherits the skipped state", function () {
+      throw new Error("nested skipped suite test ran");
+    });
+  });
+});
+
+it.skip("skipped test registers without running", function () {
+  throw new Error("skipped test ran");
+}).timeout(1000);
+
+// xdescribe is Mocha's alias for describe.skip: its callback must still run so
 // nested tests register (and count in the total) as skipped, but no hook or
 // body executes.
 xdescribe("xdescribe suite", function () {

@@ -1244,9 +1244,7 @@ impl Interpreter {
                                 Completion::Normal(v) => v,
                                 other => return other,
                             };
-                            if let JsValue::Object(o) = &v {
-                                self.gc_temp_roots.push(o.id);
-                            }
+                            self.gc_root_value(&v);
                             let is_symbol = matches!(&v, JsValue::Symbol(_));
                             let fn_name = if let JsValue::Symbol(ref sym) = v {
                                 match &sym.description {
@@ -1279,9 +1277,7 @@ impl Interpreter {
                             return other;
                         }
                     };
-                    if let JsValue::Object(o) = &value {
-                        self.gc_temp_roots.push(o.id);
-                    }
+                    self.gc_root_value(&value);
                     self.next_function_is_method = false;
                     // Handle spread — CopyDataProperties (§7.3.26)
                     if let Expression::Spread(inner) = &prop.value {
@@ -1289,17 +1285,13 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        if let JsValue::Object(o) = &spread_val {
-                            self.gc_temp_roots.push(o.id);
-                        }
+                        self.gc_root_value(&spread_val);
                         if let JsValue::Object(ref o) = spread_val {
                             let src_id = o.id;
                             match self.copy_data_properties(src_id, &spread_val, &[]) {
                                 Ok(pairs) => {
                                     for (k, v) in pairs {
-                                        if let JsValue::Object(o) = &v {
-                                            self.gc_temp_roots.push(o.id);
-                                        }
+                                        self.gc_root_value(&v);
                                         obj_data.insert_value(k, v);
                                     }
                                 }
@@ -1377,9 +1369,9 @@ impl Interpreter {
                     }
                 }
                 let id = self.alloc_object(obj_data);
-                self.gc_temp_roots.push(id);
                 // Set __home_object__ for concise methods, getters, and setters
                 let obj_val = JsValue::Object(crate::types::JsObject { id });
+                self.gc_root_value(&obj_val);
                 {
                     for val in &method_values {
                         if let JsValue::Object(fo) = val

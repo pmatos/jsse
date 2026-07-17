@@ -1173,13 +1173,10 @@
   // ==========================================================================
   function installTap() {
     function makeSuite(name, parent, skipped) {
-      return {
+      var suite = {
         name: name,
         parent: parent,
-        // A skipped suite (xdescribe) still registers and reports every nested
-        // test, but none of its hooks or bodies run. Inherited so nested
-        // describe/it blocks are skipped too.
-        skipped: !!skipped || (parent ? parent.skipped : false),
+        skipped: !!skipped,
         // A single ordered list of children (tests and nested suites) so
         // execution follows definition order, the way mocha/jest run them.
         children: [],
@@ -1188,9 +1185,16 @@
         beforeEach: [],
         afterEach: [],
       };
+      // Mocha exposes timeout configuration through the suite callback's
+      // `this`. The shared harness owns one global watchdog instead of
+      // per-suite timers, so accept these calls as chainable no-ops.
+      suite.timeout = suite.slow = suite.retries = function () {
+        return suite;
+      };
+      return suite;
     }
 
-    var rootSuite = makeSuite("", null);
+    var rootSuite = makeSuite("", null, false);
     var currentSuite = rootSuite;
     var started = false;
     var counter = 0;
@@ -1198,7 +1202,11 @@
       failed = 0;
 
     function addSuite(name, fn, skipped) {
-      var suite = makeSuite(name, currentSuite, skipped);
+      var suite = makeSuite(
+        name,
+        currentSuite,
+        skipped || currentSuite.skipped
+      );
       currentSuite.children.push({ kind: "suite", suite: suite });
       var prev = currentSuite;
       currentSuite = suite;
@@ -1211,11 +1219,25 @@
       return addSuite(name, fn, false);
     }
 
-    function it(name, fn) {
+    function addTest(name, fn, skipped) {
+      var test = {
+        name: name,
+        fn: fn,
+        suite: currentSuite,
+        skip: !!skipped || currentSuite.skipped,
+      };
       currentSuite.children.push({
         kind: "test",
-        test: { name: name, fn: fn, suite: currentSuite, skip: currentSuite.skipped },
+        test: test,
       });
+      test.timeout = test.slow = test.retries = function () {
+        return test;
+      };
+      return test;
+    }
+
+    function it(name, fn) {
+      return addTest(name, fn, false);
     }
 
     function formatEachName(template, row, index) {
@@ -1255,11 +1277,18 @@
     };
 
     function xit(name) {
-      currentSuite.children.push({
-        kind: "test",
-        test: { name: name, fn: null, suite: currentSuite, skip: true },
-      });
+      return addTest(name, null, true);
     }
+
+    // Mocha's skip helpers still execute suite definition callbacks so nested
+    // tests are registered and included in the total, but their bodies/hooks
+    // do not run. AJV's JSON-Schema-Test-Suite uses both forms extensively.
+    describe.skip = function (name, fn) {
+      return addSuite(name, fn, true);
+    };
+    describe.only = describe;
+    it.skip = xit;
+    it.only = it;
 
     function hookRegister(kind) {
       return function (fn) {
@@ -1383,11 +1412,11 @@
 
     async function runSuite(suite) {
       var ctx = {};
-      // A skipped suite (xdescribe) still registers and reports every nested
-      // test, but none of its hooks or test bodies run.
+      // A skipped suite still registers and reports every nested test, but
+      // none of its hooks or test bodies run.
       if (suite.skipped) {
-        for (var s = 0; s < suite.children.length; s++) {
-          var skippedChild = suite.children[s];
+        for (var skippedIndex = 0; skippedIndex < suite.children.length; skippedIndex++) {
+          var skippedChild = suite.children[skippedIndex];
           if (skippedChild.kind === "test") {
             await runOneTest(skippedChild.test);
           } else {

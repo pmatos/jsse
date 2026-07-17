@@ -216,6 +216,7 @@ assertions).
 | `decimal.js` | v10.6.0 | ✅ 22,624 (cross-checked) | seconds |
 | `big.js` | v6.2.2 | ✅ 47,456 (cross-checked) | ~7 min — heavy arbitrary-precision division/sqrt/pow on the tree-walker |
 | `lodash` | 4.17.21 | ✅ 6,794 (cross-checked) | QUnit via the shared harness; a few tests skipped on jsse — see below |
+| `ajv` | v8.17.1 | ⚠️ 5,466 / 5,480 (Node: 5,480) | ~4 min; four codegen option variants across drafts 6, 7, 2019-09, and 2020-12; residuals tracked in #274 and #275 |
 | `prismjs` | v1.30.0 | ✅ 2,563 (cross-checked) | token streams for ~290 grammars; 3 jsse-only skips — see below |
 | `js-sha256` | v0.11.1 | ✅ 916 (cross-checked) | Pure-JS SHA-224/SHA-256 and HMAC vectors; string, Buffer, TypedArray, and ArrayBuffer inputs |
 | `luxon` | 3.7.2 | ⚠️ 1,045 / 1,152 | exact count cross-checked; Node is 1,152 / 1,152; blocked on #262–#265 |
@@ -281,7 +282,15 @@ backs `setTimeout`/`clearTimeout`/`setInterval` with a single-pump userland queu
 jsse's native `setTimeout` spawns a thread per call and offers no cancellation, so
 running those thousands of timers natively would otherwise exhaust OS threads.
 
-### Engine bugs surfaced (tracked separately — out of scope for the no-`src` harness slice)
+### Engine bugs surfaced
+
+- **AJV schema compilation and sustained codegen.** AJV's upstream
+  JSON-Schema-Test-Suite is inlined into a 5,480-case bundle, then each schema
+  runs through four normal AJV option variants (roughly 22,000 generated
+  validator executions). Node passes all 5,480 registered cases; jsse passes
+  5,466 deterministically. Meta-schema validation is disabled symmetrically
+  while #266 is open. The remaining generated-validator result mismatches are
+  tracked in #274 and the two catchable call-depth failures in #275.
 
 - **acorn 8.17.0+ deep-recursion abort.** 8.17.0 added a parser stack-guard test
   (`"[".repeat(2000)`) expecting the engine to *throw* a stack-space error. jsse's
