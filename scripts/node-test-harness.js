@@ -1198,6 +1198,7 @@
     var currentSuite = rootSuite;
     var started = false;
     var counter = 0;
+    var results = [];
     var passed = 0,
       failed = 0;
 
@@ -1324,11 +1325,12 @@
       return out;
     }
 
-    function invokeRunnable(fn, ctx) {
+    function invokeRunnable(fn, ctx, onLateError) {
       if (fn.length === 0) return Promise.resolve(fn.call(ctx));
       return new Promise(function (resolve, reject) {
         var settled = false;
         var doneCalled = false;
+        var duplicateReported = false;
         var settleId = null;
         var guardId = schedule(function () {
           if (settled || doneCalled) return;
@@ -1340,13 +1342,20 @@
           );
         }, ASYNC_TIMEOUT_MS);
         function done(error) {
-          if (settled) return;
           if (doneCalled) {
-            settled = true;
-            unschedule(settleId);
-            reject(new Error("done() called multiple times"));
+            if (duplicateReported) return;
+            duplicateReported = true;
+            var duplicateError = new Error("done() called multiple times");
+            if (settled) {
+              if (onLateError) onLateError(duplicateError);
+            } else {
+              settled = true;
+              unschedule(settleId);
+              reject(duplicateError);
+            }
             return;
           }
+          if (settled) return;
           doneCalled = true;
           unschedule(guardId);
           // Settle on the next runner tick so a synchronous second completion
@@ -1366,61 +1375,99 @@
       });
     }
 
-    async function runHooks(hooks, ctx) {
+    async function runHooks(hooks, ctx, onLateError) {
       for (var i = 0; i < hooks.length; i++) {
-        await invokeRunnable(hooks[i], ctx);
+        await invokeRunnable(hooks[i], ctx, onLateError);
       }
     }
 
-    // Emit a TAP `not ok` for the current counter value plus its YAML diagnostic
-    // block, and bump the failure count. Shared by failing tests and failing
-    // suite-level hooks so both report identically.
-    function reportFailure(name, errText) {
-      console.log("not ok " + counter + " - " + name);
-      console.log("  ---");
-      var lines = String(errText).split("\n");
-      for (var i = 0; i < lines.length; i++) {
-        console.log("  " + lines[i]);
+    // Buffer results until suite execution finishes so a duplicate done()
+    // callback from an earlier runnable can still turn its pass into a failure.
+    function recordResult(name, skipped) {
+      var result = {
+        number: ++counter,
+        name: name,
+        skipped: !!skipped,
+        ok: true,
+        errText: "",
+      };
+      results.push(result);
+      return result;
+    }
+
+    function failResult(result, err) {
+      if (!result.ok) return;
+      result.ok = false;
+      result.errText = err && err.stack ? err.stack : String(err);
+    }
+
+    function recordFailure(name, err) {
+      var result = recordResult(name, false);
+      failResult(result, err);
+    }
+
+    function emitResults() {
+      for (var i = 0; i < results.length; i++) {
+        var result = results[i];
+        if (result.ok) {
+          console.log(
+            "ok " +
+              result.number +
+              " - " +
+              result.name +
+              (result.skipped ? " # SKIP" : "")
+          );
+          passed++;
+          continue;
+        }
+        console.log("not ok " + result.number + " - " + result.name);
+        console.log("  ---");
+        var lines = result.errText.split("\n");
+        for (var j = 0; j < lines.length; j++) {
+          console.log("  " + lines[j]);
+        }
+        console.log("  ...");
+        failed++;
       }
-      console.log("  ...");
-      failed++;
     }
 
     async function runOneTest(t) {
-      counter++;
       var name = fullName(t.suite, t.name);
+      var result = recordResult(name, t.skip);
       if (t.skip) {
-        console.log("ok " + counter + " - " + name + " # SKIP");
-        passed++;
         return;
       }
+      function recordLateFailure(error) {
+        failResult(result, error);
+      }
       var testCtx = {};
-      var ok = true,
-        errText = "";
       try {
-        await runHooks(eachHook(t.suite, "beforeEach"), testCtx);
-        await invokeRunnable(t.fn, testCtx);
+        await runHooks(
+          eachHook(t.suite, "beforeEach"),
+          testCtx,
+          recordLateFailure
+        );
+        await invokeRunnable(t.fn, testCtx, recordLateFailure);
       } catch (e) {
-        ok = false;
-        errText = e && e.stack ? e.stack : String(e);
+        failResult(result, e);
       }
       // afterEach must run even when beforeEach or the test body threw (mocha/
       // jest do this) so suites that reset globals/timers/shared state there
       // don't leak dirty state into later tests. A throw here fails the test if
       // it was otherwise passing.
       try {
-        await runHooks(eachHook(t.suite, "afterEach"), testCtx);
+        await runHooks(
+          eachHook(t.suite, "afterEach"),
+          testCtx,
+          recordLateFailure
+        );
       } catch (e) {
-        if (ok) {
-          ok = false;
-          errText = "afterEach hook: " + (e && e.stack ? e.stack : String(e));
+        if (result.ok) {
+          failResult(
+            result,
+            "afterEach hook: " + (e && e.stack ? e.stack : String(e))
+          );
         }
-      }
-      if (ok) {
-        console.log("ok " + counter + " - " + name);
-        passed++;
-      } else {
-        reportFailure(name, errText);
       }
     }
 
@@ -1447,15 +1494,14 @@
       // suite's children (their fixture state is unreliable) but lets sibling
       // suites still run; `after all` runs regardless, for cleanup.
       var beforeFailed = false;
+      var beforeName = fullName(suite, '"before all" hook');
       try {
-        await runHooks(suite.before, ctx);
+        await runHooks(suite.before, ctx, function (error) {
+          recordFailure(beforeName, error);
+        });
       } catch (e) {
-        counter++;
         beforeFailed = true;
-        reportFailure(
-          fullName(suite, '"before all" hook'),
-          e && e.stack ? e.stack : String(e)
-        );
+        recordFailure(beforeName, e);
       }
       if (!beforeFailed) {
         // Children run in definition order (tests interleaved with nested suites).
@@ -1468,20 +1514,20 @@
           }
         }
       }
+      var afterName = fullName(suite, '"after all" hook');
       try {
-        await runHooks(suite.after, ctx);
+        await runHooks(suite.after, ctx, function (error) {
+          recordFailure(afterName, error);
+        });
       } catch (e) {
-        counter++;
-        reportFailure(
-          fullName(suite, '"after all" hook'),
-          e && e.stack ? e.stack : String(e)
-        );
+        recordFailure(afterName, e);
       }
     }
 
     async function runAll() {
       console.log("TAP version 13");
       await runSuite(rootSuite);
+      emitResults();
       console.log("1.." + counter);
       console.log("# tests " + counter);
       console.log("# pass " + passed);
