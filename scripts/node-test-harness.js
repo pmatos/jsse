@@ -1328,8 +1328,10 @@
       if (fn.length === 0) return Promise.resolve(fn.call(ctx));
       return new Promise(function (resolve, reject) {
         var settled = false;
+        var doneCalled = false;
+        var settleId = null;
         var guardId = schedule(function () {
-          if (settled) return;
+          if (settled || doneCalled) return;
           settled = true;
           reject(
             new Error(
@@ -1339,10 +1341,22 @@
         }, ASYNC_TIMEOUT_MS);
         function done(error) {
           if (settled) return;
-          settled = true;
+          if (doneCalled) {
+            settled = true;
+            unschedule(settleId);
+            reject(new Error("done() called multiple times"));
+            return;
+          }
+          doneCalled = true;
           unschedule(guardId);
-          if (error) reject(error);
-          else resolve();
+          // Settle on the next runner tick so a synchronous second completion
+          // can replace the first result with a duplicate-done failure.
+          settleId = schedule(function () {
+            if (settled) return;
+            settled = true;
+            if (error) reject(error);
+            else resolve();
+          }, 0);
         }
         try {
           fn.call(ctx, done);
