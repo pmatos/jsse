@@ -1172,10 +1172,14 @@
   // suites use and is self-verified by scripts/shim-fixtures. Emits TAP 13.
   // ==========================================================================
   function installTap() {
-    function makeSuite(name, parent) {
+    function makeSuite(name, parent, skipped) {
       return {
         name: name,
         parent: parent,
+        // A skipped suite (xdescribe) still registers and reports every nested
+        // test, but none of its hooks or bodies run. Inherited so nested
+        // describe/it blocks are skipped too.
+        skipped: !!skipped || (parent ? parent.skipped : false),
         // A single ordered list of children (tests and nested suites) so
         // execution follows definition order, the way mocha/jest run them.
         children: [],
@@ -1193,19 +1197,24 @@
     var passed = 0,
       failed = 0;
 
-    function describe(name, fn) {
-      var suite = makeSuite(name, currentSuite);
+    function addSuite(name, fn, skipped) {
+      var suite = makeSuite(name, currentSuite, skipped);
       currentSuite.children.push({ kind: "suite", suite: suite });
       var prev = currentSuite;
       currentSuite = suite;
       if (typeof fn === "function") fn.call(suite);
       currentSuite = prev;
+      return suite;
+    }
+
+    function describe(name, fn) {
+      return addSuite(name, fn, false);
     }
 
     function it(name, fn) {
       currentSuite.children.push({
         kind: "test",
-        test: { name: name, fn: fn, suite: currentSuite },
+        test: { name: name, fn: fn, suite: currentSuite, skip: currentSuite.skipped },
       });
     }
 
@@ -1374,6 +1383,19 @@
 
     async function runSuite(suite) {
       var ctx = {};
+      // A skipped suite (xdescribe) still registers and reports every nested
+      // test, but none of its hooks or test bodies run.
+      if (suite.skipped) {
+        for (var s = 0; s < suite.children.length; s++) {
+          var skippedChild = suite.children[s];
+          if (skippedChild.kind === "test") {
+            await runOneTest(skippedChild.test);
+          } else {
+            await runSuite(skippedChild.suite);
+          }
+        }
+        return;
+      }
       // Suite-level before/after hooks are contained the same way per-test hooks
       // are in runOneTest: a failing hook (thrown, done(error), or timed out) is
       // recorded as a single `not ok` and the run continues, rather than the
@@ -1448,8 +1470,8 @@
       describe: describe,
       it: it,
       xit: xit,
-      xdescribe: function (name) {
-        describe(name, function () {});
+      xdescribe: function (name, fn) {
+        return addSuite(name, fn, true);
       },
       before: hookRegister("before"),
       after: hookRegister("after"),
