@@ -867,8 +867,9 @@ impl VClassSet {
         let has_strings = !s.strings.is_empty();
 
         if !has_ranges && !has_strings {
-            // Empty set: match nothing
-            return "(?!)".to_string();
+            // Empty sets are always-failing consuming atoms, so zero-count
+            // quantifiers over them can still match the empty string.
+            return "[^\\s\\S]".to_string();
         }
 
         let mut char_class = String::new();
