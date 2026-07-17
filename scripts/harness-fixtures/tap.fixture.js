@@ -4,10 +4,11 @@
 //
 // Covers: nested suites, definition-order execution, before/after (once per
 // suite) and beforeEach/afterEach (per test, parent chain), async it bodies,
-// done callbacks, Mocha's suite context and skip helpers, the test() alias,
-// and — via deliberate throw/done(error) failures — failure detection.
+// done callbacks, Mocha's suite context and skip helpers (describe.skip,
+// it.skip, and xdescribe), the test() alias, and — via deliberate
+// throw/done(error) failures — failure detection.
 //
-// Expected summary: PASS: 8  FAIL: 2  TOTAL: 10
+// Expected summary: PASS: 10  FAIL: 2  TOTAL: 12
 
 var order = [];
 
@@ -98,6 +99,21 @@ describe.skip("skipped suite", function () {
 it.skip("skipped test registers without running", function () {
   throw new Error("skipped test ran");
 }).timeout(1000);
+
+// xdescribe is Mocha's alias for describe.skip: its callback must still run so
+// nested tests register (and count in the total) as skipped, but no hook or
+// body executes.
+xdescribe("xdescribe suite", function () {
+  before(function () { throw new Error("xdescribe suite hook ran"); });
+  it("registers its tests without running them", function () {
+    throw new Error("xdescribe suite test ran");
+  });
+  describe("nested inside xdescribe", function () {
+    it("inherits the skipped state", function () {
+      throw new Error("nested xdescribe test ran");
+    });
+  });
+});
 
 test("top-level test() alias runs last (definition order)", function () {
   if (order.indexOf("before-outer") === -1) {

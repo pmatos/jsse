@@ -1460,8 +1460,8 @@
       describe: describe,
       it: it,
       xit: xit,
-      xdescribe: function (name) {
-        return addSuite(name, function () {}, true);
+      xdescribe: function (name, fn) {
+        return addSuite(name, fn, true);
       },
       before: hookRegister("before"),
       after: hookRegister("after"),
