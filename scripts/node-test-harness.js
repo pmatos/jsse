@@ -126,6 +126,7 @@
         if (idx !== -1) timerQueue.splice(idx, 1);
         firingTimer = t;
         try {
+          t.fires++;
           t.fn.apply(undefined, t.args);
         } catch (e) {
           // A host setTimeout callback that throws would crash the process; for
@@ -154,6 +155,7 @@
         args: extraArgs,
         interval: interval,
         internal: internal,
+        fires: 0,
         cancelled: false,
       });
       schedulePump();
@@ -204,14 +206,17 @@
     g.clearTimeout = removeTimer;
     g.clearInterval = removeTimer;
 
-    // Give user one-shot timers a bounded chance to expose a late duplicate
-    // done() before TAP output is frozen. A quiet turn lets promise continuations
-    // from the last timer enqueue follow-up work. Intervals and runner-internal
-    // timers are excluded; an unrelated user timeout can delay output only until
-    // it fires or this existing async timeout expires.
+    // Give user timers a bounded chance to expose a late duplicate done() before
+    // TAP output is frozen. One-shot timers drain normally; each user interval
+    // waits for at most its next tick, so a persistent interval cannot block
+    // output for its whole lifetime. A quiet turn lets promise continuations
+    // from the last timer enqueue follow-up work. Runner-internal timers are
+    // excluded; unrelated user work can delay output only until its next event
+    // or this existing async timeout expires.
     waitForUserTimers = function (timeoutMs) {
       var deadline = Date.now() + timeoutMs;
       return new Promise(function (resolve) {
+        var intervalTargets = [];
         var quietTurn = false;
         function poll() {
           var now = Date.now();
@@ -219,9 +224,16 @@
           for (var i = 0; i < timerQueue.length; i++) {
             var timer = timerQueue[i];
             if (
+              timer.interval != null &&
+              intervalTargets[timer.id] === undefined
+            ) {
+              intervalTargets[timer.id] = timer.fires + 1;
+            }
+            if (
               !timer.cancelled &&
-              timer.interval == null &&
               !timer.internal &&
+              (timer.interval == null ||
+                timer.fires < intervalTargets[timer.id]) &&
               timer.fireAt < next
             ) {
               next = timer.fireAt;
@@ -1465,6 +1477,27 @@
     function recordFailure(name, err) {
       var result = recordResult(name, false);
       failResult(result, err);
+      return result;
+    }
+
+    function makeHookFailureRecorder(name) {
+      var result = null;
+      return function (error) {
+        if (result === null) result = recordFailure(name, error);
+      };
+    }
+
+    async function runSuiteHooks(hooks, ctx, name) {
+      for (var i = 0; i < hooks.length; i++) {
+        var recordHookFailure = makeHookFailureRecorder(name);
+        try {
+          await invokeRunnable(hooks[i], ctx, recordHookFailure);
+        } catch (e) {
+          recordHookFailure(e);
+          return false;
+        }
+      }
+      return true;
     }
 
     function emitResults() {
@@ -1554,16 +1587,8 @@
       // count to PASS: 0  FAIL: 1  TOTAL: 1. A failed `before all` skips this
       // suite's children (their fixture state is unreliable) but lets sibling
       // suites still run; `after all` runs regardless, for cleanup.
-      var beforeFailed = false;
       var beforeName = fullName(suite, '"before all" hook');
-      try {
-        await runHooks(suite.before, ctx, function (error) {
-          recordFailure(beforeName, error);
-        });
-      } catch (e) {
-        beforeFailed = true;
-        recordFailure(beforeName, e);
-      }
+      var beforeFailed = !(await runSuiteHooks(suite.before, ctx, beforeName));
       if (!beforeFailed) {
         // Children run in definition order (tests interleaved with nested suites).
         for (var i = 0; i < suite.children.length; i++) {
@@ -1576,13 +1601,7 @@
         }
       }
       var afterName = fullName(suite, '"after all" hook');
-      try {
-        await runHooks(suite.after, ctx, function (error) {
-          recordFailure(afterName, error);
-        });
-      } catch (e) {
-        recordFailure(afterName, e);
-      }
+      await runSuiteHooks(suite.after, ctx, afterName);
     }
 
     async function runAll() {
