@@ -219,6 +219,7 @@ assertions).
 | `ajv` | v8.17.1 | ⚠️ 5,466 / 5,480 (Node: 5,480) | ~4 min; four codegen option variants across drafts 6, 7, 2019-09, and 2020-12; residuals tracked in #274 and #275 |
 | `prismjs` | v1.30.0 | ✅ 2,563 (cross-checked) | token streams for ~290 grammars; 3 jsse-only skips — see below |
 | `js-sha256` | v0.11.1 | ✅ 916 (cross-checked) | Pure-JS SHA-224/SHA-256 and HMAC vectors; string, Buffer, TypedArray, and ArrayBuffer inputs |
+| `js-md5` | v0.8.3 | ✅ 550 (cross-checked) | Pure-JS MD5 and HMAC-MD5 vectors; UTF-8 strings, Buffer, TypedArray, and ArrayBuffer inputs |
 | `luxon` | 3.7.2 | ⚠️ 1,045 / 1,152 | exact count cross-checked; Node is 1,152 / 1,152; blocked on #262–#265 |
 | `bignumber.js` | v9.1.2 | ⚠️ blocked | see below; green on Node today |
 
