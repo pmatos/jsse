@@ -95,6 +95,7 @@ harness. See `scripts/README.md` for the full recipe and how to add a library.
 - **Currently green (cross-checked vs Node):** `decimal.js` (22,624), `big.js` (47,456; ~7 min — heavy arbitrary-precision arithmetic on the tree-walker), `acorn` (13,507), `prismjs` (2,563; 3 documented jsse-only skips tracked in #271).
 - **`bignumber.js`** is wired but blocked on a jsse bug it surfaced (strict-mode `return <call-returning-non-object>` in a constructor returns that value instead of `this`, jsse#238); it goes green once that engine bug is fixed.
 - **`luxon`** is wired at 3.7.2 with an exact 1,152-test Node cross-check. Node is green; jsse currently passes 1,045, with the remaining Intl/system-zone gaps tracked in jsse#262–#265.
+- **`zod`** is wired at v4.4.3 in separate normal and jitless processes with an exact 2,184-case Node cross-check. Node is green; jsse currently reports 2,176 passing (including one visible jitless-only skip), with residuals tracked in jsse#309–#310 and jsse#313–#315.
 
 ### Acorn (`./scripts/run-acorn-tests.sh` — thin wrapper over the harness)
 - Pinned to **acorn 8.16.0** (13,507 tests, green on jsse and Node). 8.17.0+ added a parser stack-guard test (`"[".repeat(2000)`) that expects the engine to *throw* a "stack space" error; jsse's tree-walker aborts (SIGABRT) before acorn's guard fires — a jsse deep-recursion robustness gap tracked separately. Bump the pin once that lands.

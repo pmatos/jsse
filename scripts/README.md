@@ -88,6 +88,8 @@ and (optionally) overrides hook functions:
 | `LIB_ESBUILD_EXTRA` | bash array of extra esbuild flags (e.g. `(--main-fields=main,module)`) |
 | `LIB_SHIM` | extra per-lib shim file (relative to `scripts/`) layered after `node-shim.js` |
 | `LIB_SHIMS` | ordered array of additional shim files; use when a library needs more than `LIB_SHIM` |
+| `LIB_BUNDLE_PREFIXES` | ordered prefix files; when set, build one isolated copy of the bundle after each prefix (for the same corpus in multiple modes) |
+| `LIB_SEPARATE_BUNDLES` | with bundle prefixes, run each prefixed copy in a separate engine process and concatenate their output before verdict evaluation (default `0`) |
 | `LIB_ENV` | host-process environment assignments applied to both engine runs (e.g. `("TZ=America/New_York")`). Reaches each engine's **native** layer only — jsse's Rust `Date`/`Intl` and Node's ICU read the OS `TZ`/`LANG`; **not** reflected in jsse's JS-visible `process.env`, which the `--node` shim leaves `{}`. Don't use it for values a library reads from `process.env` in JS. |
 | `LIB_EXPECT_COUNT` | if set, both engines must report exactly this count (belt-and-suspenders against silent bundling drift) |
 | `LIB_TIMEOUT` | seconds; wrap each engine run so a hang/slow suite reports cleanly |
@@ -220,7 +222,29 @@ assertions).
 | `prismjs` | v1.30.0 | ✅ 2,563 (cross-checked) | token streams for ~290 grammars; 3 jsse-only skips — see below |
 | `js-sha256` | v0.11.1 | ✅ 916 (cross-checked) | Pure-JS SHA-224/SHA-256 and HMAC vectors; string, Buffer, TypedArray, and ArrayBuffer inputs |
 | `luxon` | 3.7.2 | ⚠️ 1,045 / 1,152 | exact count cross-checked; Node is 1,152 / 1,152; blocked on #262–#265 |
+| `zod` | v4.4.3 | ⚠️ 2,176 / 2,184 | normal + jitless, exact count cross-checked; Node is 2,184 / 2,184; residuals tracked in #313–#315 |
 | `bignumber.js` | v9.1.2 | ⚠️ blocked | see below; green on Node today |
+
+### Zod normal and jitless corpus
+
+`gen-zod-entry.js` statically imports all 79 v4 classic runtime test files.
+Native Vitest at v4.4.3 reports 1,092 tests; the harness runs the identical IIFE
+once normally and once with Zod's global `jitless` option, locking the combined
+count at 2,184. The two modes use separate engine processes so module caches,
+GC state, and pending host jobs cannot leak across the boundary. Node runs the
+same two generated files and is green at 2,184 / 2,184.
+
+The adapter uses Jest's published matcher core plus Vitest's pretty-printer;
+type-only `expectTypeOf` calls remain runtime no-ops. Node-only test imports are
+replaced by symmetric, bundle-local portability modules. The upstream 10 MiB
+base64 throughput input is bounded to 64 KiB, and one artificial 500 ms async
+delay is changed to a zero-delay timer (#310). One jitless-only async function
+refinement is visibly skipped under #309; all other registered bodies run.
+
+JSSE currently reports 2,176 passing and eight failures: Date parsing (#313),
+array outputs that fail `Object.isFrozen` after Zod freezes them (#314), and the
+Node-specific text of a `JSON.parse` error snapshot (#315), each repeated in
+normal and jitless mode. These remain failing assertions rather than skips.
 
 ### PrismJS token-stream fixtures
 

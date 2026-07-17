@@ -5,7 +5,7 @@
 Add Zod's runtime-focused v4 classic suite as one reproducible real-world
 library corpus under issue #279. Pin the latest stable release available when
 the issue was assigned, v4.4.3. Its native Vitest run contains 1,092 runtime
-tests across 104 files; the library harness runs every registered test in both
+tests across 79 files; the library harness runs every registered test in both
 normal and global `jitless` modes for an exact 2,184-case lock.
 
 Typecheck-only Vitest projects are outside the JavaScript-engine corpus: they
@@ -18,12 +18,13 @@ the v4 classic validator.
 1. Add separate `zod` and `zod-jitless` library configurations. This reuses the
    runner unchanged, but permits the two configurations to drift and makes the
    issue's one-command expected-count lock awkward.
-2. Generalize the library runner with arbitrary build/run variants. This gives
-   the cleanest process isolation, but expands shared infrastructure for a
-   requirement currently unique to Zod.
-3. Generate one static entry whose Vitest adapter registers each upstream test
-   in normal and jitless modes. This keeps one pinned source corpus, one bundle,
-   one command, and one doubled count lock. This is the selected approach.
+2. Extend the runner with prefixed bundle variants and optional process
+   isolation. This keeps one source corpus and count lock while isolating the
+   heap and event loop as well as module state. This is the selected approach.
+3. Concatenate two independently scoped IIFE copies into one process. This was
+   prototyped first, but sustained async work in the normal copy polluted the
+   jitless copy and exposed continuation-liveness failures before the corpus
+   could finish.
 
 ## Design
 
@@ -38,10 +39,13 @@ The compatibility module maps `describe`, `test`/`it`, `beforeEach`, and
 `afterEach` onto the shared in-process TAP runner. It reuses a pinned published
 expect matcher core, adds Vitest-compatible inline snapshot serialization, and
 treats `expectTypeOf` as a runtime no-op because its assertions are enforced by
-the separately excluded TypeScript project. Every upstream `test` registration
-becomes two TAP tests. Each wrapper sets Zod's documented
-`globalThis.__zod_globalConfig.jitless` value immediately before invoking the
-original body, after upstream `beforeEach` hooks and before upstream cleanup.
+the separately excluded TypeScript project. The runner builds two files from
+the same IIFE, one under each mode prefix, and launches them in independent
+engine processes. Each copy registers the full upstream suite with a mode
+suffix. Each wrapper sets Zod's documented config `jitless` value immediately
+before invoking the original body, after upstream `beforeEach` hooks and before
+upstream cleanup. Normal and jitless therefore share source bytes and assertion
+logic without sharing mutable schemas, probe caches, GC state, or host jobs.
 
 The force-test-harness prelude is used on both JSSE and Node. Node therefore
 executes the identical bundle and matcher adapter, while the expected count is
@@ -54,6 +58,14 @@ replacements must run identically on Node, remain in `scripts/`, and preserve
 the tested validator behavior. Host-only cases that cannot be represented
 without materially implementing a new platform API will be excluded
 explicitly and documented rather than hidden as passing tests.
+
+The static-corpus portability patches are guarded against upstream drift. The
+10 MiB base64 throughput fixture is scaled symmetrically to 64 KiB, still a
+large-input validation without dominating a tree-walker run. Its artificial
+500 ms async-refinement delay becomes a zero-delay timer on both engines while
+retaining the asynchronous boundary (#310). Vitest's per-file cache and
+prototype cleanup are reproduced explicitly. One jitless-only async function
+refinement remains a visible `# SKIP` for the continuation bug in #309.
 
 ## Failure handling
 
@@ -73,3 +85,11 @@ spec-backed defects, with focused tests and relevant test262 coverage.
   Reflect, and Symbol test262 areas for any engine changes, then full test262.
 - Update the library harness documentation with the pin, exact count, result,
   and any explicitly tracked residual failures.
+
+## Result
+
+Both JSSE and Node register exactly 2,184 cases. Node is green. JSSE reports
+2,176 passing and eight failing cases: the same four failures in normal and
+jitless mode, reduced to Date parsing (#313), array integrity levels (#314),
+and Node-compatible JSON parse diagnostics (#315). The optional-chain parser
+gap surfaced during bundle startup is fixed with focused test262 coverage.

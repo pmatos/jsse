@@ -767,6 +767,11 @@ impl<'a> Parser<'a> {
                     } else {
                         let name = match &self.current {
                             Token::Identifier(n) | Token::IdentifierWithEscape(n) => n.clone(),
+                            Token::Keyword(kw) => kw.to_string(),
+                            Token::BooleanLiteral(value) => {
+                                if *value { "true" } else { "false" }.to_string()
+                            }
+                            Token::NullLiteral => "null".to_string(),
                             _ => return Err(self.error("Expected property after '?.'")),
                         };
                         self.advance()?;
