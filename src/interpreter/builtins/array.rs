@@ -1332,22 +1332,37 @@ impl Interpreter {
             } else {
                 ",".to_string()
             };
-            let mut parts = Vec::with_capacity(len);
-            for i in 0..len {
-                let elem = match obj_get(interp, &o, &i.to_string()) {
-                    Ok(v) => v,
-                    Err(c) => return c,
-                };
-                if elem.is_undefined() || elem.is_null() {
-                    parts.push(String::new());
-                } else {
-                    match interp.to_string_value(&elem) {
-                        Ok(s) => parts.push(s),
-                        Err(e) => return Completion::Throw(e),
+
+            let receiver_id = match &o {
+                JsValue::Object(obj) => obj.id,
+                _ => unreachable!("ToObject must return an object"),
+            };
+            if interp.active_array_joins.contains(&receiver_id) {
+                return Completion::Normal(JsValue::String(JsString::from_str("")));
+            }
+
+            interp.active_array_joins.push(receiver_id);
+            let result = (|| {
+                let mut parts = Vec::with_capacity(len);
+                for i in 0..len {
+                    let elem = match obj_get(interp, &o, &i.to_string()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
+                    };
+                    if elem.is_undefined() || elem.is_null() {
+                        parts.push(String::new());
+                    } else {
+                        match interp.to_string_value(&elem) {
+                            Ok(s) => parts.push(s),
+                            Err(e) => return Completion::Throw(e),
+                        }
                     }
                 }
-            }
-            Completion::Normal(JsValue::String(JsString::from_str(&parts.join(&sep))))
+                Completion::Normal(JsValue::String(JsString::from_str(&parts.join(&sep))))
+            })();
+            let popped_receiver = interp.active_array_joins.pop();
+            debug_assert_eq!(popped_receiver, Some(receiver_id));
+            result
         });
 
         // Array.prototype.toString
