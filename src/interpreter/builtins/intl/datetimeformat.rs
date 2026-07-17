@@ -1675,6 +1675,7 @@ fn collect_icu_datetime_parts(
 fn normalize_icu_datetime_parts(
     parts: Vec<(String, String)>,
     opts: &DtfOptions,
+    short_year_two_digit: bool,
 ) -> Vec<(String, String)> {
     let mut normalized = Vec::with_capacity(parts.len() + 2);
     for (part_type, mut value) in parts {
@@ -1688,7 +1689,7 @@ fn normalize_icu_datetime_parts(
             _ => None,
         };
         if part_type == "year"
-            && (opts.date_style.as_deref() == Some("short") || requested_style == Some("2-digit"))
+            && (short_year_two_digit || requested_style == Some("2-digit"))
             && value.chars().count() > 2
             && value.chars().all(char::is_numeric)
         {
@@ -1791,7 +1792,52 @@ fn format_with_icu(ms: f64, opts: &DtfOptions) -> Option<Vec<(String, String)>> 
         zone,
     };
     let parts = collect_icu_datetime_parts(&formatter.format(&zoned))?;
-    Some(normalize_icu_datetime_parts(parts, opts))
+    // For dateStyle:"short", ICU4X may expand the year to a full year outside its
+    // 2-digit-year window even for locales whose short pattern uses two digits
+    // (e.g. en-US in 1886). Node/ICU always follow the pattern width, so probe
+    // the locale's short-year width (only when the year actually came out full)
+    // and let normalization truncate it back to two digits when appropriate.
+    let short_year_two_digit = opts.date_style.as_deref() == Some("short")
+        && parts.iter().any(|(part_type, value)| {
+            part_type == "year" && value.chars().count() > 2 && value.chars().all(char::is_numeric)
+        })
+        && icu_short_year_is_two_digit(&formatter);
+    Some(normalize_icu_datetime_parts(
+        parts,
+        opts,
+        short_year_two_digit,
+    ))
+}
+
+/// Whether the effective locale's short-date pattern uses a two-digit year.
+///
+/// ICU4X's `YearStyle::Auto` yields a two-digit year only inside its
+/// 2-digit-year window (1950..=2049) and expands to a full year outside it,
+/// whereas ECMA-402/Node follow the locale's short-date pattern width for every
+/// year (`yy` -> two digits, `y` -> full). Formatting a reference instant inside
+/// the window exposes the pattern width without the disambiguation expansion.
+fn icu_short_year_is_two_digit(
+    formatter: &icu::datetime::DateTimeFormatter<
+        icu::datetime::fieldsets::enums::CompositeFieldSet,
+    >,
+) -> bool {
+    use icu::datetime::input::{Date, DateTime, Time, ZonedDateTime};
+
+    let (Ok(date), Ok(time)) = (Date::try_new_iso(2000, 6, 15), Time::try_new(12, 0, 0, 0)) else {
+        return false;
+    };
+    let datetime = DateTime { date, time };
+    let zone = icu::datetime::input::TimeZoneInfo::utc().at_date_time_iso(datetime);
+    let zoned = ZonedDateTime { date, time, zone };
+    match collect_icu_datetime_parts(&formatter.format(&zoned)) {
+        Some(parts) => parts.iter().any(|(part_type, value)| {
+            part_type == "year"
+                && !value.is_empty()
+                && value.chars().count() <= 2
+                && value.chars().all(char::is_numeric)
+        }),
+        None => false,
+    }
 }
 
 fn has_time_component(opts: &DtfOptions) -> bool {

@@ -97,3 +97,50 @@ assertSame(
   }).format(timestamp),
   '25 mai 1982 à 09:23 UTC',
   'French date/time pattern and glue');
+
+// dateStyle:"short" year width follows the locale's own short-date pattern
+// (en-US uses two digits, fr-FR/ja-JP use the full year) for every year, not
+// just years inside ICU's 2-digit window. Only an explicit year:"2-digit"
+// forces the two-digit form everywhere.
+var recentShort = Date.UTC(2020, 0, 2);
+var historicalShort = Date.UTC(1886, 4, 1);
+
+assertSame(
+  new Intl.DateTimeFormat('fr-FR', { dateStyle: 'short', timeZone: 'UTC' })
+    .format(recentShort),
+  '02/01/2020',
+  'French dateStyle:short keeps the locale full year (recent)');
+
+assertSame(
+  new Intl.DateTimeFormat('fr-FR', { dateStyle: 'short', timeZone: 'UTC' })
+    .format(historicalShort),
+  '01/05/1886',
+  'French dateStyle:short keeps the locale full year (historical)');
+
+assertSame(
+  new Intl.DateTimeFormat('ja-JP', { dateStyle: 'short', timeZone: 'UTC' })
+    .format(recentShort),
+  '2020/01/02',
+  'Japanese dateStyle:short keeps the locale full year');
+
+assertSame(
+  new Intl.DateTimeFormat('en-US', { dateStyle: 'short', timeZone: 'UTC' })
+    .format(recentShort),
+  '1/2/20',
+  'English dateStyle:short uses a two-digit year (recent, in ICU window)');
+
+assertSame(
+  new Intl.DateTimeFormat('en-US', { dateStyle: 'short', timeZone: 'UTC' })
+    .format(historicalShort),
+  '5/1/86',
+  'English dateStyle:short uses a two-digit year (historical, out of window)');
+
+assertSame(
+  new Intl.DateTimeFormat('fr-FR', {
+    year: '2-digit',
+    month: '2-digit',
+    day: '2-digit',
+    timeZone: 'UTC'
+  }).format(recentShort),
+  '02/01/20',
+  'explicit year:2-digit still truncates to two digits');
