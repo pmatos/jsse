@@ -306,6 +306,14 @@ impl Interpreter {
         Ok(())
     }
 
+    fn with_tail_position_suppressed<T>(&mut self, evaluate: impl FnOnce(&mut Self) -> T) -> T {
+        let saved_tail = self.in_tail_position;
+        self.in_tail_position = false;
+        let result = evaluate(self);
+        self.in_tail_position = saved_tail;
+        result
+    }
+
     pub(crate) fn eval_expr(&mut self, expr: &Expression, env: &EnvRef) -> Completion {
         // Catchable stack-depth guard for expression evaluation. Every
         // expression node — and each recursive descent into an operand —
@@ -365,10 +373,17 @@ impl Interpreter {
                 self.create_type_error("Private identifier can only be used with 'in' operator"),
             ),
             Expression::Unary(op, operand) => {
-                let val = match self.eval_expr(operand, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
+                // §15.10.2 HasCallInTailPosition: a call nested in a unary
+                // expression is not in tail position. This matters when the
+                // unary expression is reached through a conditional/logical
+                // branch that is otherwise evaluated in tail position: the
+                // call result still has to be transformed by the unary
+                // operator before the surrounding function can return.
+                let val =
+                    match self.with_tail_position_suppressed(|this| this.eval_expr(operand, env)) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
                 self.eval_unary(*op, &val)
             }
             Expression::Binary(op, left, right) => {
@@ -580,17 +595,18 @@ impl Interpreter {
                         }
                     }
                 }
-                let val = match self.eval_expr(operand, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
+                let val =
+                    match self.with_tail_position_suppressed(|this| this.eval_expr(operand, env)) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
                 Completion::Normal(JsValue::String(JsString::from_str(typeof_val(
                     &val,
                     &self.objects,
                 ))))
             }
             Expression::Void(operand) => {
-                match self.eval_expr(operand, env) {
+                match self.with_tail_position_suppressed(|this| this.eval_expr(operand, env)) {
                     Completion::Normal(_) => {}
                     other => return other,
                 }
@@ -608,7 +624,9 @@ impl Interpreter {
                             ));
                         }
                         if let MemberProperty::Computed(expr) = prop {
-                            match self.eval_expr(expr, env) {
+                            match self
+                                .with_tail_position_suppressed(|this| this.eval_expr(expr, env))
+                            {
                                 Completion::Normal(_) => {}
                                 other => return other,
                             }
@@ -617,19 +635,25 @@ impl Interpreter {
                             self.create_reference_error("Unsupported reference to 'super'"),
                         );
                     }
-                    let obj_val = match self.eval_expr(obj_expr, env) {
+                    let obj_val = match self
+                        .with_tail_position_suppressed(|this| this.eval_expr(obj_expr, env))
+                    {
                         Completion::Normal(v) => v,
                         other => return other,
                     };
                     let key = match prop {
                         MemberProperty::Dot(name) => name.clone(),
-                        MemberProperty::Computed(expr) => match self.eval_expr(expr, env) {
-                            Completion::Normal(v) => match self.to_property_key(&v) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            },
-                            other => return other,
-                        },
+                        MemberProperty::Computed(expr) => {
+                            match self
+                                .with_tail_position_suppressed(|this| this.eval_expr(expr, env))
+                            {
+                                Completion::Normal(v) => match self.to_property_key(&v) {
+                                    Ok(s) => s,
+                                    Err(e) => return Completion::Throw(e),
+                                },
+                                other => return other,
+                            }
+                        }
                         MemberProperty::Private(_) => {
                             return Completion::Throw(
                                 self.create_type_error("Private fields cannot be deleted"),
@@ -834,11 +858,13 @@ impl Interpreter {
                     Completion::Normal(JsValue::Boolean(true))
                 }
                 Expression::OptionalChain(base, chain) => {
-                    self.eval_delete_optional_chain(base, chain, env)
+                    self.with_tail_position_suppressed(|this| {
+                        this.eval_delete_optional_chain(base, chain, env)
+                    })
                 }
                 _ => {
                     // Evaluate the expression for side effects, then return true
-                    match self.eval_expr(expr, env) {
+                    match self.with_tail_position_suppressed(|this| this.eval_expr(expr, env)) {
                         Completion::Normal(_) => Completion::Normal(JsValue::Boolean(true)),
                         other => other,
                     }
