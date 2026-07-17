@@ -25,12 +25,12 @@ lib_prepare() {
 }
 
 lib_verdict() {
-    local out="$1" line P F T
+    local out="$1" rc="$2" line P F T
     line="$(grep -oE 'PASS: [0-9]+[[:space:]]+FAIL: [0-9]+[[:space:]]+TOTAL: [0-9]+' "$out" | tail -1 || true)"
     if [ -z "$line" ]; then echo "FAIL 0"; return 1; fi
     if [[ "$line" =~ PASS:\ ([0-9]+)[[:space:]]+FAIL:\ ([0-9]+)[[:space:]]+TOTAL:\ ([0-9]+) ]]; then
         P="${BASH_REMATCH[1]}"; F="${BASH_REMATCH[2]}"; T="${BASH_REMATCH[3]}"
-        if [ "$F" -eq 0 ] && [ "$T" -gt 0 ]; then echo "PASS $T"; return 0; fi
+        if [ "$rc" -eq 0 ] && [ "$F" -eq 0 ] && [ "$T" -gt 0 ]; then echo "PASS $T"; return 0; fi
         echo "FAIL $T"; return 1
     fi
     echo "FAIL 0"; return 1
