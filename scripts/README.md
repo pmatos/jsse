@@ -183,6 +183,15 @@ tests/hooks (`function (done) { ... }`) are bounded by a 10 s timeout so a
 completion callback that never fires becomes a failure instead of stalling the
 run.
 
+QUnit suites whose tests and hooks are entirely synchronous may set
+`QUnit.config.sync = true` before `QUnit.start()`. This opt-in executes the
+suite in the main script instead of scheduling one Promise continuation per
+test, which keeps large synchronous corpora out of jsse's bounded host-async
+drain window. Async behavior remains the default; the synchronous mode rejects
+Promise-returning tests/hooks and incomplete `assert.async()` tokens. Moment
+uses this mode because its 3,871 synchronous tests take roughly 35 minutes on
+the tree-walker.
+
 The assembled bundle uses a `.cjs` suffix so Node always evaluates the
 reference oracle as CommonJS. This is independent of any unrelated ancestor
 `package.json` that may declare `"type": "module"` above the `/tmp` cache.
@@ -220,6 +229,7 @@ assertions).
 | `prismjs` | v1.30.0 | ✅ 2,563 (cross-checked) | token streams for ~290 grammars; 3 jsse-only skips — see below |
 | `js-sha256` | v0.11.1 | ✅ 916 (cross-checked) | Pure-JS SHA-224/SHA-256 and HMAC vectors; string, Buffer, TypedArray, and ArrayBuffer inputs |
 | `luxon` | 3.7.2 | ⚠️ 1,045 / 1,152 | exact count cross-checked; Node is 1,152 / 1,152; blocked on #262–#265 |
+| `moment` | 2.30.1 | ⚠️ 198 failing assertions across 3,871 tests | exact registered-test count cross-checked; Node is green with 162,868 assertions; residual tracked in #311 |
 | `bignumber.js` | v9.1.2 | ⚠️ blocked | see below; green on Node today |
 
 ### PrismJS token-stream fixtures
@@ -257,6 +267,26 @@ They are concentrated in four follow-ups surfaced by the suite:
 - #263 — Node host mode does not honor `TZ` for the system time zone.
 - #264 — unknown IANA-shaped identifiers are accepted as valid time zones.
 - #265 — `Intl.Locale#getWeekInfo()` omits `minimalDays`.
+
+### Moment
+
+Moment's 137 locale definitions, 52 core QUnit files, and 138 locale QUnit
+files are statically imported by `gen-moment-entry.js`. This replaces only
+upstream's filesystem discovery and dynamic locale `require()` path; the test
+bodies remain upstream code. `patch-moment-bundle.js` makes one deprecation
+expectation explicit because esbuild deduplicates a hooks module that upstream
+transpiles separately. It strengthens the check symmetrically on both engines
+and does not change the registered-test count.
+
+Both engines run the same generated bundle and shared synchronous QUnit
+adapter under `TZ=America/New_York`, `LANG=en_US.utf8`, and
+`LC_ALL=en_US.utf8`. Node passes all 3,871 registered tests and 162,868
+assertions. jsse also executes all 3,871 tests, recording 153,088 passing and
+198 failing assertions out of 153,286 reached assertions; callbacks that throw
+early account for the lower assertion total. The failures remain visible and
+are tracked in #311. The first 100 diagnostics all report
+`TypeError: Cannot convert object to primitive value`, concentrated in week/year
+and locale parser/formatting cases.
 
 ### lodash skip list (jsse only; each preserves the assertion count via `skipAssert`)
 
@@ -309,3 +339,9 @@ running those thousands of timers natively would otherwise exhaust OS threads.
   are green on Node (1,152 tests). jsse runs the same 1,152 cases and passes
   1,045; the remaining failures stay visible until the four root Intl and host
   time-zone gaps above land.
+
+- **Moment sustained object-to-primitive failures (jsse#311).** The pinned
+  bundle is green on Node (3,871 tests, 162,868 assertions). jsse executes every
+  registered test but 198 callbacks fail with `TypeError: Cannot convert object
+  to primitive value`; representative operations pass in a fresh bundle, so
+  the follow-up tracks the sustained-execution/state interaction.
