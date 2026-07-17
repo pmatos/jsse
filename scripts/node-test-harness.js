@@ -73,6 +73,10 @@
   // those runner timers MUST be cleared once they are no longer needed.
   var queueAdd = null; // (fn, ms, args, interval) -> id
   var queueRemove = null; // (id) -> void
+  var activeTimerOwner = null;
+  var waitForOwnedTimers = function () {
+    return Promise.resolve();
+  };
   var MAX_PUMP_DELAY_MS = 100;
   if (nativeSetTimeout) {
     var timerQueue = [];
@@ -122,12 +126,15 @@
         var idx = timerQueue.indexOf(t);
         if (idx !== -1) timerQueue.splice(idx, 1);
         firingTimer = t;
+        var previousTimerOwner = activeTimerOwner;
+        activeTimerOwner = t.owner;
         try {
           t.fn.apply(undefined, t.args);
         } catch (e) {
           // A host setTimeout callback that throws would crash the process; for
           // a test runner, keep pumping so one bad callback can't wedge the run.
         }
+        activeTimerOwner = previousTimerOwner;
         firingTimer = null;
         // Re-arm intervals unless the callback cleared this very timer. While it
         // was firing it was out of the queue, so removeTimer couldn't splice it —
@@ -140,7 +147,7 @@
       schedulePump();
     }
 
-    function addTimer(fn, ms, extraArgs, interval) {
+    function addTimer(fn, ms, extraArgs, interval, owner) {
       if (typeof fn !== "function") return 0;
       var id = timerIdCounter++;
       var delay = typeof ms === "number" && ms > 0 ? ms : 0;
@@ -150,6 +157,7 @@
         fn: fn,
         args: extraArgs,
         interval: interval,
+        owner: owner,
         cancelled: false,
       });
       schedulePump();
@@ -174,17 +182,62 @@
       }
     }
 
-    queueAdd = addTimer;
+    queueAdd = function (fn, ms, extraArgs, interval) {
+      return addTimer(fn, ms, extraArgs, interval, null);
+    };
     queueRemove = removeTimer;
     g.setTimeout = function (fn, ms) {
-      return addTimer(fn, ms, Array.prototype.slice.call(arguments, 2), null);
+      return addTimer(
+        fn,
+        ms,
+        Array.prototype.slice.call(arguments, 2),
+        null,
+        activeTimerOwner
+      );
     };
     g.setInterval = function (fn, ms) {
       var iv = typeof ms === "number" && ms > 0 ? ms : 0;
-      return addTimer(fn, ms, Array.prototype.slice.call(arguments, 2), iv);
+      return addTimer(
+        fn,
+        ms,
+        Array.prototype.slice.call(arguments, 2),
+        iv,
+        activeTimerOwner
+      );
     };
     g.clearTimeout = removeTimer;
     g.clearInterval = removeTimer;
+
+    // Wait for one-shot timers spawned by completed callback-style TAP
+    // runnables. This lets a final test or hook's duplicate done() fire before
+    // TAP output is frozen, without waiting on unrelated timers or intervals.
+    waitForOwnedTimers = function (timeoutMs) {
+      var deadline = Date.now() + timeoutMs;
+      return new Promise(function (resolve) {
+        function poll() {
+          var now = Date.now();
+          var next = Infinity;
+          for (var i = 0; i < timerQueue.length; i++) {
+            var timer = timerQueue[i];
+            if (
+              !timer.cancelled &&
+              timer.interval == null &&
+              timer.owner &&
+              timer.owner.waitForTimers &&
+              timer.fireAt < next
+            ) {
+              next = timer.fireAt;
+            }
+          }
+          if (next === Infinity || now >= deadline) {
+            resolve();
+            return;
+          }
+          queueAdd(poll, Math.min(next, deadline) - now, [], null);
+        }
+        poll();
+      });
+    };
   }
 
   // Runner-internal scheduling, backed by the queue's own add/remove (never the
@@ -1331,10 +1384,12 @@
         var settled = false;
         var doneCalled = false;
         var duplicateReported = false;
+        var timerOwner = { waitForTimers: true };
         var settleId = null;
         var guardId = schedule(function () {
           if (settled || doneCalled) return;
           settled = true;
+          timerOwner.waitForTimers = false;
           reject(
             new Error(
               "done callback timed out after " + ASYNC_TIMEOUT_MS + "ms"
@@ -1345,6 +1400,7 @@
           if (doneCalled) {
             if (duplicateReported) return;
             duplicateReported = true;
+            timerOwner.waitForTimers = false;
             var duplicateError = new Error("done() called multiple times");
             if (settled) {
               if (onLateError) onLateError(duplicateError);
@@ -1367,10 +1423,14 @@
             else resolve();
           }, 0);
         }
+        var previousTimerOwner = activeTimerOwner;
+        activeTimerOwner = timerOwner;
         try {
           fn.call(ctx, done);
         } catch (e) {
           done(e);
+        } finally {
+          activeTimerOwner = previousTimerOwner;
         }
       });
     }
@@ -1527,6 +1587,7 @@
     async function runAll() {
       console.log("TAP version 13");
       await runSuite(rootSuite);
+      await waitForOwnedTimers(ASYNC_TIMEOUT_MS);
       emitResults();
       console.log("1.." + counter);
       console.log("# tests " + counter);
