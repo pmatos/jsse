@@ -176,15 +176,11 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        if let JsValue::Object(o) = &val {
-                            self.gc_temp_roots.push(o.id);
-                        }
+                        self.gc_root_value(&val);
                         match self.iterate_to_vec(&val) {
                             Ok(spread_items) => {
                                 for item in spread_items {
-                                    if let JsValue::Object(o) = &item {
-                                        self.gc_temp_roots.push(o.id);
-                                    }
+                                    self.gc_root_value(&item);
                                     items.push(Some(item));
                                 }
                             }
@@ -196,9 +192,7 @@ impl Interpreter {
                             Completion::Normal(v) => v,
                             other => return other,
                         };
-                        if let JsValue::Object(o) = &val {
-                            self.gc_temp_roots.push(o.id);
-                        }
+                        self.gc_root_value(&val);
                         items.push(Some(val));
                     }
                     None => items.push(None), // elision — no own property

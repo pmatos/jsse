@@ -4817,12 +4817,27 @@ impl Interpreter {
     }
 
     pub(crate) fn iterate_to_vec(&mut self, iterable: &JsValue) -> Result<Vec<JsValue>, JsValue> {
-        let iterator = self.get_iterator(iterable)?;
-        let mut values = Vec::new();
-        while let Some(result) = self.iterator_step(&iterator)? {
-            values.push(self.iterator_value(&result)?);
-        }
-        Ok(values)
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(iterable);
+        let result = (|| {
+            let iterator = self.get_iterator(iterable)?;
+            self.gc_root_value(&iterator);
+            let mut values = Vec::new();
+            loop {
+                let iterator_result = self.iterator_next(&iterator)?;
+                self.gc_root_value(&iterator_result);
+                if self.iterator_complete(&iterator_result)? {
+                    break;
+                }
+                let value = self.iterator_value(&iterator_result)?;
+                self.gc_unroot_value(&iterator_result);
+                self.gc_root_value(&value);
+                values.push(value);
+            }
+            Ok(values)
+        })();
+        self.gc_unroot_frame(gc_frame);
+        result
     }
 
     // CreateListFromArrayLike (§7.3.18)

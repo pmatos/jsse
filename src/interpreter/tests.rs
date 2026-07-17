@@ -705,6 +705,22 @@ fn gc_keeps_module_exports_alive_until_registry_entry_is_removed() {
 }
 
 #[test]
+fn array_literal_releases_temp_roots_after_abrupt_completion() {
+    let interp = run_script(
+        r#"
+        try {
+            [{ marker: "ordinary" }, ...[{ marker: "spread" }], ...null];
+        } catch (e) {}
+        "#,
+    );
+
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "array literal temporary roots must be released after a throw"
+    );
+}
+
+#[test]
 fn shared_array_buffer_atomics_smoke() {
     let interp = run_script(
         r#"
