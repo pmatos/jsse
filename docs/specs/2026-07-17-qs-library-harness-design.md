@@ -17,7 +17,7 @@ small syscall floor.
 ## Requirements
 
 - Pin an immutable upstream qs release and run its test files without copying
-  or weakening their assertions.
+  its cases or weakening their semantic assertions.
 - Use a reusable tape adapter on JSSE and real tape on Node.
 - Match tape's assertion count, including skipped subtests, rather than merely
   checking that the bundle exits successfully.
@@ -52,7 +52,10 @@ temporary prototype interception.
 Add a small CommonJS selector module. Under JSSE's `--node` host mode it exports
 the shared adapter; on Node it exports bundled upstream tape. The qs config
 aliases `require('tape')` to that selector, so upstream test sources remain
-unchanged. Its generated entry loads the parse, stringify, and utility test
+unchanged apart from one environment-selected diagnostic regular expression:
+Node retains qs's receiver-aware message check, while JSSE accepts its exact
+shorter message pending #318. The assertion still requires the spec-mandated
+`TypeError`. Its generated entry loads the parse, stringify, and utility test
 files. Pin qs to v6.15.3, tape to 5.10.2 through the upstream lock-compatible
 dependency, and lock the observed oracle count at 1,013 assertions.
 

@@ -141,7 +141,7 @@ Many suites don't ship a self-contained runner — they lean on a framework whos
 *assertion* library is pure JS but whose *runner* would otherwise need
 fs/workers/vm (mocha's/jest's CLI, QUnit's Node runner, `qunit-extras`'
 `setInterval` progress ticker, …). `node-test-harness.js` supplies the runner
-in-process so those suites execute on jsse. It provides two frontends over one
+in-process so those suites execute on jsse. It provides three frontends over one
 shared core (which includes QUnit's own `equiv`, ported verbatim, for
 `deepEqual`):
 
@@ -149,7 +149,9 @@ shared core (which includes QUnit's own `equiv`, ported verbatim, for
   `root.QUnit || require('qunit-extras')` (e.g. lodash) pick it up, so the
   bundled framework stays dormant; and
 - a **TAP-emitting `describe`/`it`/`test`/`before`/`after` runner**
-  (mocha/jest/tape shape) as the reusable spine for later library clusters.
+  (mocha/jest shape) as the reusable spine for later library clusters; and
+- a **tape assertion-object adapter**, selected only on JSSE so Node still uses
+  real tape as the framework oracle.
 
 It also aliases Node's `global` to `globalThis`, which many bundles rely on for
 their root-object detection. The TAP frontend supports Jest's array-table
@@ -169,7 +171,7 @@ filesystem/workers; its generated entry bundles Jest's published matcher core,
 so assertions still use Jest semantics while Node checks the identical test
 bundle and exact count.
 
-The adapter's assertion counting mirrors qunitjs 2.x exactly (`config.stats.all
+The QUnit adapter's assertion counting mirrors qunitjs 2.x exactly (`config.stats.all
 += assertions.length` per test; an `expect(n)` mismatch or a zero-assertion test
 each push one failing assertion), so the `PASS: p  FAIL: f  TOTAL: t` summary it
 prints — the line the verdict parses — equals the one real `qunit-extras` prints
@@ -198,15 +200,28 @@ passing and failing tests, each declaring the exact summary line it must emit:
 ./scripts/run-harness-selftest.sh [--no-build]
 ```
 
-The full end-to-end validation of the adapter's counting and `deepEqual` is the
-lodash cross-check below (jsse adapter vs. Node's real `qunit-extras`, 6,794
-assertions).
+The full end-to-end validation of the QUnit adapter's counting and `deepEqual`
+is the lodash cross-check below (jsse adapter vs. Node's real `qunit-extras`,
+6,794 assertions). The tape fixture covers its lifecycle and assertion surface;
+qs provides the Node-cross-checked end-to-end proof.
 
-> Full **chai**, **tape**, and **uvu** adapters remain deferred. Luxon settles
-> the Jest seam concretely: `gen-luxon-entry.js` bundles the published
-> `expect/build/matchers` core and supplies only the small invocation wrapper
-> and two matchers its suite needs outside that core (`toThrow` and one inline
-> snapshot).
+Tape-based suites alias `require('tape')` to `node-tape-module.js`. On JSSE the
+module selects the in-process adapter; on Node it selects bundled real tape.
+The adapter counts individual assertions (including skipped subtests) and
+supports nested tests, plans, teardown/interception, and tape's common
+equality/throw/match assertions.
+
+Dependencies that import Node's `buffer` module instead of reading the global
+can similarly alias it to `node-buffer-module.js`. The selector exports the
+shared JS-only Buffer shim on JSSE and Node's native `node:buffer` module on the
+reference path. `node-util-module.js` provides the equivalent selector for the
+shared `util.format`/`util.inspect` implementation, while
+`node-string-decoder-module.js` supplies iconv-lite's buffered decoder seam.
+
+Full **chai** and **uvu** adapters remain deferred. Luxon settles the Jest seam
+concretely: `gen-luxon-entry.js` bundles the published `expect/build/matchers`
+core and supplies only the small invocation wrapper and two matchers its suite
+needs outside that core (`toThrow` and one inline snapshot).
 
 ## Current status
 
@@ -219,8 +234,17 @@ assertions).
 | `ajv` | v8.17.1 | ⚠️ 5,466 / 5,480 (Node: 5,480) | ~4 min; four codegen option variants across drafts 6, 7, 2019-09, and 2020-12; residuals tracked in #274 and #275 |
 | `prismjs` | v1.30.0 | ✅ 2,563 (cross-checked) | token streams for ~290 grammars; 3 jsse-only skips — see below |
 | `js-sha256` | v0.11.1 | ✅ 916 (cross-checked) | Pure-JS SHA-224/SHA-256 and HMAC vectors; string, Buffer, TypedArray, and ArrayBuffer inputs |
+| `qs` | v6.15.3 | ✅ 1,013 (cross-checked) | tape corpus: nested parse/stringify, limits, charsets, Buffer, pollution guards, Map/WeakMap side channels |
 | `luxon` | 3.7.2 | ⚠️ 1,045 / 1,152 | exact count cross-checked; Node is 1,152 / 1,152; blocked on #262–#265 |
 | `bignumber.js` | v9.1.2 | ⚠️ blocked | see below; green on Node today |
+
+qs uses only iconv-lite's core `encode`/`decode` surface. Its JSSE-only shim
+therefore hides the fake `process.versions.node` marker so iconv-lite does not
+activate optional Node stream and Buffer-prototype extensions; real Node keeps
+the marker and exercises its normal path. One strict-assignment assertion also
+selects JSSE's exact, shorter `TypeError` message while Node retains qs's
+upstream receiver-aware regular expression; the diagnostic parity gap is
+tracked in [#318](https://github.com/pmatos/jsse/issues/318).
 
 ### PrismJS token-stream fixtures
 
