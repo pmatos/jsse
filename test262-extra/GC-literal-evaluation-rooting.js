@@ -18,20 +18,22 @@ class Box {
   }
 }
 
-var firstArrayValue = new Box("array");
+// The Box values must be reachable ONLY through the in-flight literal
+// accumulator while allocate() applies GC pressure. Do not hoist them into
+// top-level bindings: the global environment is always traced as a GC root, so
+// a `var box = new Box(...)` would keep the object alive regardless of the
+// accumulator rooting under test, making this a no-op that passes even if that
+// rooting is removed.
 var spreadResult = [
-  ...[firstArrayValue],
+  ...[new Box("array")],
   ...[allocate(), new Box("later")],
 ];
 
-assert.sameValue(spreadResult[0], firstArrayValue);
 assert.sameValue(spreadResult[0].value, "array");
 
-var firstObjectValue = new Box("object");
 var objectResult = {
-  first: firstObjectValue,
+  first: new Box("object"),
   pressure: allocate(),
 };
 
-assert.sameValue(objectResult.first, firstObjectValue);
 assert.sameValue(objectResult.first.value, "object");
