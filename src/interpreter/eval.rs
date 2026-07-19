@@ -414,36 +414,50 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
+                // EvaluateStringOrNumericBinaryExpression retains lVal while
+                // evaluating rVal, then retains both values while applying the
+                // operator. Either phase can run user code and reach a GC
+                // safepoint, so keep object operands rooted until the operation
+                // has completed.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&lval);
                 let rval = match self.eval_expr(right, env) {
                     Completion::Normal(v) => v,
-                    other => return other,
+                    other => {
+                        self.gc_unroot_frame(gc_frame);
+                        return other;
+                    }
                 };
-                if *op == BinaryOp::Instanceof {
-                    return self.eval_instanceof(&lval, &rval);
-                }
+                self.gc_root_value(&rval);
+                let result = if *op == BinaryOp::Instanceof {
+                    self.eval_instanceof(&lval, &rval)
                 // Fast path for string + on owned primitive values:
                 // skip eval_binary → to_primitive → js_value_to_code_units clone chain.
-                if *op == BinaryOp::Add
+                } else if *op == BinaryOp::Add
                     && !matches!(&lval, JsValue::Object(_))
                     && !matches!(&rval, JsValue::Object(_))
                     && (matches!(&lval, JsValue::String(_)) || matches!(&rval, JsValue::String(_)))
                 {
                     if matches!(&lval, JsValue::Symbol(_)) || matches!(&rval, JsValue::Symbol(_)) {
-                        return Completion::Throw(
+                        Completion::Throw(
                             self.create_type_error("Cannot convert a Symbol value to a string"),
-                        );
+                        )
+                    } else {
+                        let mut code_units = match lval {
+                            JsValue::String(s) => s.into_vec(),
+                            ref other => js_value_to_code_units(other),
+                        };
+                        match rval {
+                            JsValue::String(s) => code_units.extend_from_slice(&s.code_units),
+                            ref other => code_units.extend(js_value_to_code_units(other)),
+                        };
+                        Completion::Normal(JsValue::String(JsString::from_vec(code_units)))
                     }
-                    let mut code_units = match lval {
-                        JsValue::String(s) => s.into_vec(),
-                        ref other => js_value_to_code_units(other),
-                    };
-                    match rval {
-                        JsValue::String(s) => code_units.extend_from_slice(&s.code_units),
-                        ref other => code_units.extend(js_value_to_code_units(other)),
-                    };
-                    return Completion::Normal(JsValue::String(JsString::from_vec(code_units)));
-                }
-                self.eval_binary(*op, &lval, &rval)
+                } else {
+                    self.eval_binary(*op, &lval, &rval)
+                };
+                self.gc_unroot_frame(gc_frame);
+                result
             }
             Expression::Logical(op, left, right) => self.eval_logical(*op, left, right, env),
             Expression::Update(op, prefix, arg) => self.eval_update(*op, *prefix, arg, env),
