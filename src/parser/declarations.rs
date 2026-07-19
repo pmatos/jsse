@@ -196,7 +196,7 @@ impl<'a> Parser<'a> {
                 Ok(PropertyKey::Identifier(name))
             }
             Token::StringLiteral(s) => {
-                let s = String::from_utf16_lossy(s);
+                let s = s.clone();
                 self.advance()?;
                 Ok(PropertyKey::String(s))
             }
@@ -237,7 +237,7 @@ impl<'a> Parser<'a> {
             Token::BigIntLiteral(s) => {
                 let name = bigint_literal_to_decimal(s);
                 self.advance()?;
-                Ok(PropertyKey::String(name))
+                Ok(PropertyKey::String(name.encode_utf16().collect()))
             }
             _ => Err(self.error("Expected property name in object pattern")),
         }
@@ -538,11 +538,11 @@ impl<'a> Parser<'a> {
     }
 
     fn key_is_constructor(key: &PropertyKey) -> bool {
-        matches!(key, PropertyKey::Identifier(n) | PropertyKey::String(n) if n == "constructor")
+        key.matches_name("constructor")
     }
 
     fn key_is_prototype(key: &PropertyKey) -> bool {
-        matches!(key, PropertyKey::Identifier(n) | PropertyKey::String(n) if n == "prototype")
+        key.matches_name("prototype")
     }
 
     pub(super) fn check_no_direct_super_in_constructor(
@@ -1121,7 +1121,7 @@ impl<'a> Parser<'a> {
             self.advance()?;
             Ok((PropertyKey::Identifier(name), false))
         } else if let Token::StringLiteral(s) = &self.current {
-            let s = String::from_utf16_lossy(s);
+            let s = s.clone();
             self.advance()?;
             Ok((PropertyKey::String(s), false))
         } else if let Token::NumericLiteral(n)
@@ -1141,7 +1141,7 @@ impl<'a> Parser<'a> {
         } else if let Token::BigIntLiteral(ref s) = self.current {
             let name = bigint_literal_to_decimal(s);
             self.advance()?;
-            Ok((PropertyKey::String(name), false))
+            Ok((PropertyKey::String(name.encode_utf16().collect()), false))
         } else if let Token::Keyword(kw) = &self.current {
             // Keywords can be property names
             let name = kw.to_string();

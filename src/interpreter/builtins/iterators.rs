@@ -135,7 +135,7 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
 
 type ZipKeyedState = Rc<
     RefCell<(
-        Vec<String>,
+        Vec<JsPropertyKey>,
         Vec<(JsValue, JsValue)>,
         Vec<bool>,
         String,
@@ -164,7 +164,7 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
         return Completion::Normal(interp.create_iter_result_object(JsValue::Undefined, true));
     }
 
-    let mut values: Vec<(String, JsValue)> = Vec::with_capacity(iters.len());
+    let mut values: Vec<(JsPropertyKey, JsValue)> = Vec::with_capacity(iters.len());
     let mut new_exhausted = exhausted.clone();
 
     for (i, (it, nm)) in iters.iter().enumerate() {
@@ -3420,7 +3420,7 @@ impl Interpreter {
 
                 // Step 11-12: For each key, [[GetOwnProperty]], check enumerable, Get value
                 // Temp-root each inner iterator as it's collected (subsequent iterations can trigger GC)
-                let mut key_names: Vec<String> = Vec::new();
+                let mut key_names: Vec<JsPropertyKey> = Vec::new();
                 let mut iters: Vec<(JsValue, JsValue)> = Vec::new();
                 let mut collection_temp_ids: Vec<u64> = Vec::new();
 

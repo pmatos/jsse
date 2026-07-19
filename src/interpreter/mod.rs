@@ -1,6 +1,8 @@
 use crate::ast::*;
 use crate::parser;
-use crate::types::{JsBigInt, JsString, JsValue, bigint_ops, number_ops};
+use crate::types::{
+    JsBigInt, JsPropertyKey, JsString, JsValue, PropertyKeyLike, bigint_ops, number_ops,
+};
 use rustc_hash::FxHashMap;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -1517,7 +1519,7 @@ impl Interpreter {
         self.objects.get_cell_expect(id)
     }
 
-    pub(crate) fn set_function_name(&self, val: &JsValue, name: &str) {
+    pub(crate) fn set_function_name<K: PropertyKeyLike + ?Sized>(&self, val: &JsValue, name: &K) {
         if let JsValue::Object(o) = val
             && let Some(obj) = self.get_object_cell(o.id)
         {
@@ -1529,7 +1531,7 @@ impl Interpreter {
                 && let Some(ref v) = prop.value
             {
                 if let JsValue::String(s) = v {
-                    if !s.to_string().is_empty() {
+                    if !s.code_units.is_empty() {
                         return;
                     }
                 } else {
@@ -1540,7 +1542,7 @@ impl Interpreter {
             obj.borrow_mut().insert_property(
                 "name".to_string(),
                 PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str(name)),
+                    JsValue::String(name.to_js_property_key().to_js_string()),
                     false,
                     false,
                     true,
@@ -1672,7 +1674,14 @@ impl Interpreter {
 
     /// Convert a symbol property key string (e.g. "Symbol(Symbol.toStringTag)" or "Symbol(desc)#42")
     /// back to a JsValue::Symbol.
-    pub(crate) fn symbol_key_to_jsvalue(&mut self, key: &str) -> JsValue {
+    pub(crate) fn symbol_key_to_jsvalue<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        property_key: &K,
+    ) -> JsValue {
+        let exact_key = property_key.to_js_property_key();
+        let Some(key) = exact_key.as_str() else {
+            return JsValue::String(exact_key.to_js_string());
+        };
         // Well-known symbols: "Symbol(Symbol.xyz)" — look up from Symbol constructor
         if key.starts_with("Symbol(Symbol.") && key.ends_with(')') && !key.contains('#') {
             // Extract the well-known name (e.g. "toStringTag" from "Symbol(Symbol.toStringTag)")
@@ -1714,7 +1723,7 @@ impl Interpreter {
             });
         }
         // Fallback: return as string
-        JsValue::String(JsString::from_str(key))
+        JsValue::String(exact_key.to_js_string())
     }
 
     pub fn run(&mut self, program: &Program) -> Completion {

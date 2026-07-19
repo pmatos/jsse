@@ -2,8 +2,8 @@ use crate::ast::*;
 use crate::interpreter::PropertyMap;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
 use crate::interpreter::helpers::same_value;
-use crate::interpreter::key_intern::intern_key;
-use crate::types::{JsString, JsValue, number_ops};
+use crate::interpreter::key_intern::intern_js_key;
+use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, number_ops};
 use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -1214,7 +1214,7 @@ pub enum PrivateFieldDef {
 #[derive(Debug, Clone)]
 pub enum InstanceFieldDef {
     Private(PrivateFieldDef),
-    Public(String, Option<Expression>),
+    Public(JsPropertyKey, Option<Expression>),
     /// Auto accessor backing storage initialization: (storage_slot_name, initializer)
     AutoAccessorStorage(String, Option<Expression>),
 }
@@ -1596,7 +1596,7 @@ pub struct JsObjectData {
     /// `Interpreter::alloc_object` at allocation time and never reassigned.
     pub id: Option<u64>,
     pub properties: PropertyMap,
-    pub property_order: Vec<Rc<str>>,
+    pub property_order: Vec<JsPropertyKey>,
     pub prototype_id: Option<u64>,
     pub callable: Option<JsFunction>,
     pub class_name: String,
@@ -2034,7 +2034,8 @@ impl JsObjectData {
             .or_else(|| self.data_view_info().and_then(|dv| dv.buffer_object_id))
     }
 
-    fn string_exotic_value(&self, key: &str) -> Option<JsValue> {
+    fn string_exotic_value<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<JsValue> {
+        let key = key.as_property_key_str()?;
         if let Some(JsValue::String(ref s)) = self.primitive_value
             && self.class_name == "String"
         {
@@ -2060,19 +2061,24 @@ impl JsObjectData {
 
     // Like get_property_descriptor but without prototype chain walk.
     // Includes parameter_map and array_elements handling.
-    pub fn get_own_property_full(&self, key: &str) -> Option<PropertyDescriptor> {
+    pub fn get_own_property_full<K: PropertyKeyLike + ?Sized>(
+        &self,
+        key: &K,
+    ) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
-            if let Some(map) = self.parameter_map()
-                && let Some((env_ref, param_name)) = map.get(key)
+            if let Some(key_str) = key.as_property_key_str()
+                && let Some(map) = self.parameter_map()
+                && let Some((env_ref, param_name)) = map.get(key_str)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
                 d.value = Some(val);
             }
             return Some(d);
         }
-        if let Some(elems) = self.array_elements()
-            && let Ok(idx) = key.parse::<usize>()
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(elems) = self.array_elements()
+            && let Ok(idx) = key_str.parse::<usize>()
             && idx < elems.len()
             && !matches!(elems[idx], JsValue::Undefined)
         {
@@ -2104,7 +2110,7 @@ impl JsObjectData {
             && self.class_name == "String"
         {
             let units = &s.code_units;
-            if key == "length" {
+            if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor {
                     value: Some(JsValue::Number(units.len() as f64)),
                     writable: Some(false),
@@ -2114,7 +2120,8 @@ impl JsObjectData {
                     set: None,
                 });
             }
-            if let Ok(idx) = key.parse::<usize>()
+            if let Some(key_str) = key.as_property_key_str()
+                && let Ok(idx) = key_str.parse::<usize>()
                 && idx < units.len()
             {
                 return Some(PropertyDescriptor {
@@ -2132,13 +2139,17 @@ impl JsObjectData {
         None
     }
 
-    pub fn get_own_property(&self, key: &str) -> Option<PropertyDescriptor> {
+    pub fn get_own_property<K: PropertyKeyLike + ?Sized>(
+        &self,
+        key: &K,
+    ) -> Option<PropertyDescriptor> {
         // Module namespace exotic: §10.4.6.4 [[GetOwnProperty]]
-        if let Some(ns_data) = self.module_namespace()
-            && !key.starts_with("Symbol(")
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(ns_data) = self.module_namespace()
+            && !key_str.starts_with("Symbol(")
         {
-            if ns_data.export_names.contains(&key.to_string()) {
-                let val = if let Some(binding_name) = ns_data.export_to_binding.get(key) {
+            if ns_data.export_names.contains(&key_str.to_string()) {
+                let val = if let Some(binding_name) = ns_data.export_to_binding.get(key_str) {
                     ns_data
                         .env
                         .borrow()
@@ -2163,8 +2174,9 @@ impl JsObjectData {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
             // Mapped arguments: update value from the live binding (§10.4.4.1)
-            if let Some(map) = self.parameter_map()
-                && let Some((env_ref, param_name)) = map.get(key)
+            if let Some(key_str) = key.as_property_key_str()
+                && let Some(map) = self.parameter_map()
+                && let Some((env_ref, param_name)) = map.get(key_str)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
                 d.value = Some(val);
@@ -2214,7 +2226,7 @@ impl JsObjectData {
         if let Some(JsValue::String(ref s)) = self.primitive_value
             && self.class_name == "String"
         {
-            if key == "length" {
+            if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor::data(
                     JsValue::Number(s.code_units.len() as f64),
                     false,
@@ -2222,7 +2234,8 @@ impl JsObjectData {
                     false,
                 ));
             }
-            if let Ok(idx) = key.parse::<usize>()
+            if let Some(key_str) = key.as_property_key_str()
+                && let Ok(idx) = key_str.parse::<usize>()
                 && idx < s.code_units.len()
             {
                 return Some(PropertyDescriptor::data(
@@ -2236,12 +2249,13 @@ impl JsObjectData {
         None
     }
 
-    pub fn has_own_property(&self, key: &str) -> bool {
+    pub fn has_own_property<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> bool {
         // Module namespace exotic: [[HasProperty]] checks export list
-        if let Some(ns_data) = self.module_namespace()
-            && !key.starts_with("Symbol(")
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(ns_data) = self.module_namespace()
+            && !key_str.starts_with("Symbol(")
         {
-            return ns_data.export_names.contains(&key.to_string());
+            return ns_data.export_names.contains(&key_str.to_string());
         }
         if self.properties.contains_key(key) {
             return true;
@@ -2262,10 +2276,12 @@ impl JsObjectData {
         if let Some(JsValue::String(ref s)) = self.primitive_value
             && self.class_name == "String"
         {
-            if key == "length" {
+            if key.as_property_key_str() == Some("length") {
                 return true;
             }
-            if let Ok(idx) = key.parse::<usize>() {
+            if let Some(key_str) = key.as_property_key_str()
+                && let Ok(idx) = key_str.parse::<usize>()
+            {
                 return idx < s.code_units.len();
             }
         }
@@ -2277,7 +2293,12 @@ impl JsObjectData {
     // `Interpreter::has_property_on_id`. Own-only variants live as
     // `own_enumerable_keys_with_shadow` / `own_has_property` on this impl.
 
-    pub fn define_own_property(&mut self, key: String, mut desc: PropertyDescriptor) -> bool {
+    pub fn define_own_property<K: Into<JsPropertyKey>>(
+        &mut self,
+        key: K,
+        mut desc: PropertyDescriptor,
+    ) -> bool {
+        let key = intern_js_key(key.into());
         // String exotic §10.4.3.3 [[DefineOwnProperty]]: reject changes to character index properties
         if self.class_name == "String"
             && let Some(JsValue::String(ref s)) = self.primitive_value
@@ -2477,8 +2498,9 @@ impl JsObjectData {
                 && !desc_is_accessor
                 && desc_writable == Some(false)
                 && !desc_has_value
+                && let Some(key_str) = key.as_str()
                 && let Some(map) = self.parameter_map()
-                && let Some((env_ref, param_name)) = map.get(&key)
+                && let Some((env_ref, param_name)) = map.get(key_str)
                 && let Some(live_val) = env_ref.borrow().get(param_name)
             {
                 desc.value = Some(live_val);
@@ -2550,24 +2572,20 @@ impl JsObjectData {
                 }
             };
 
-            // Intern once; the same Rc<str> is shared between property_order and
+            // Intern once; the same backing bytes are shared between property_order and
             // the property map so the two stored copies share one allocation.
             // Compare by value (not pointer): integer-index keys are not interned
-            // and get a fresh Rc each time, so ptr_eq would miss existing entries.
-            let ikey = intern_key(&key);
-            if !self
-                .property_order
-                .iter()
-                .any(|k| k.as_ref() == ikey.as_ref())
-            {
-                self.property_order.push(Rc::clone(&ikey));
+            // and get fresh storage each time, so pointer equality would miss existing entries.
+            let ikey = key.clone();
+            if !self.property_order.iter().any(|k| k == &ikey) {
+                self.property_order.push(ikey.clone());
             }
             // NOTE: Array length shrinking semantics (ArraySetLength §10.4.2.4) are
             // handled by array_set_length() in mod.rs, which calls this function.
             // Do NOT duplicate that logic here.
             // Save key before it's moved into insert
             let key_for_step7 = if self.parameter_map().is_some() {
-                Some(key)
+                key.as_str().map(str::to_string)
             } else {
                 None
             };
@@ -2601,17 +2619,18 @@ impl JsObjectData {
                 return false;
             }
             // Handle parameter map for new properties
-            if let Some(map) = self.parameter_map_mut()
-                && map.contains_key(&key)
+            if let Some(key_str) = key.as_str()
+                && let Some(map) = self.parameter_map_mut()
+                && map.contains_key(key_str)
                 && let Some(ref val) = desc.value
-                && let Some((env_ref, param_name)) = map.get(&key)
+                && let Some((env_ref, param_name)) = map.get(key_str)
             {
                 let _ = env_ref.borrow_mut().set(param_name, val.clone());
             }
-            // New property: intern once and share the Rc<str> between
+            // New property: intern once and share the backing bytes between
             // property_order and the property map (one allocation, not two).
-            let ikey = intern_key(&key);
-            self.property_order.push(Rc::clone(&ikey));
+            let ikey = key;
+            self.property_order.push(ikey.clone());
             // For new property, fill in defaults per spec
             let is_accessor = desc.is_accessor_descriptor();
             let new_desc = PropertyDescriptor {
@@ -2640,7 +2659,11 @@ impl JsObjectData {
         true
     }
 
-    pub fn set_property_value(&mut self, key: &str, value: JsValue) -> bool {
+    pub fn set_property_value<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        key: &K,
+        value: JsValue,
+    ) -> bool {
         if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
@@ -2651,7 +2674,7 @@ impl JsObjectData {
             return false;
         }
         // ArraySetLength (spec §10.4.2.1): reducing length deletes configurable properties
-        if self.class_name == "Array" && key == "length" {
+        if self.class_name == "Array" && key.as_property_key_str() == Some("length") {
             // Check if length is writable before allowing set
             let len_writable = self
                 .properties
@@ -2688,7 +2711,7 @@ impl JsObjectData {
                         .filter_map(|k| {
                             k.parse::<u64>()
                                 .ok()
-                                .filter(|&idx| idx <= 0xFFFF_FFFE && idx.to_string() == **k)
+                                .filter(|&idx| idx <= 0xFFFF_FFFE && k.eq_str(&idx.to_string()))
                                 .map(|idx| idx as u32)
                                 .filter(|&idx| idx >= new_len_u32)
                                 .map(|idx| (idx, k.to_string()))
@@ -2729,8 +2752,9 @@ impl JsObjectData {
                 }
             }
         }
-        if let Some(map) = self.parameter_map()
-            && let Some((env_ref, param_name)) = map.get(key)
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(map) = self.parameter_map()
+            && let Some((env_ref, param_name)) = map.get(key_str)
         {
             let _ = env_ref.borrow_mut().set(param_name, value.clone());
         }
@@ -2788,8 +2812,9 @@ impl JsObjectData {
             }
         }
         // Keep array_elements in sync with properties for numeric indices
-        if let Some(elements) = self.array_elements_mut()
-            && let Ok(idx) = key.parse::<usize>()
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(elements) = self.array_elements_mut()
+            && let Ok(idx) = key_str.parse::<usize>()
         {
             // Valid array indices are 0 to 2^32-2 (spec §6.1.7)
             if idx < elements.len() {
@@ -2832,15 +2857,19 @@ impl JsObjectData {
             // String exotic: length and index properties are non-writable (§10.4.3.2)
             if let Some(JsValue::String(ref s)) = self.primitive_value
                 && self.class_name == "String"
-                && (key == "length" || (key.parse::<usize>().is_ok_and(|i| i < s.code_units.len())))
+                && (key.as_property_key_str() == Some("length")
+                    || key
+                        .as_property_key_str()
+                        .and_then(|k| k.parse::<usize>().ok())
+                        .is_some_and(|i| i < s.code_units.len()))
             {
                 return false;
             }
             if !self.extensible {
                 return false;
             }
-            let ikey = intern_key(key);
-            self.property_order.push(Rc::clone(&ikey));
+            let ikey = intern_js_key(key.to_js_property_key());
+            self.property_order.push(ikey.clone());
             self.properties
                 .insert(ikey, PropertyDescriptor::data_default(value));
             // Issue #71 (Step 5): new own property added — structural mutation.
@@ -2851,28 +2880,28 @@ impl JsObjectData {
         }
     }
 
-    pub fn insert_value(&mut self, key: String, value: JsValue) {
-        let key = intern_key(&key);
+    pub fn insert_value<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {
+        let key = intern_js_key(key.into());
         if !self.properties.contains_key(&key) {
-            self.property_order.push(Rc::clone(&key));
+            self.property_order.push(key.clone());
         }
         self.properties
             .insert(key, PropertyDescriptor::data_default(value));
     }
 
-    pub fn insert_builtin(&mut self, key: String, value: JsValue) {
-        let key = intern_key(&key);
+    pub fn insert_builtin<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {
+        let key = intern_js_key(key.into());
         if !self.properties.contains_key(&key) {
-            self.property_order.push(Rc::clone(&key));
+            self.property_order.push(key.clone());
         }
         self.properties
             .insert(key, PropertyDescriptor::data(value, true, false, true));
     }
 
-    pub fn insert_property(&mut self, key: String, desc: PropertyDescriptor) {
-        let key = intern_key(&key);
+    pub fn insert_property<K: Into<JsPropertyKey>>(&mut self, key: K, desc: PropertyDescriptor) {
+        let key = intern_js_key(key.into());
         if !self.properties.contains_key(&key) {
-            self.property_order.push(Rc::clone(&key));
+            self.property_order.push(key.clone());
         }
         self.properties.insert(key, desc);
     }
@@ -2882,15 +2911,19 @@ impl JsObjectData {
     /// together, and this is the single place that guarantees it. Returns the
     /// removed descriptor, or `None` if the key was absent (in which case the
     /// order list is left untouched).
-    pub fn remove_property(&mut self, key: &str) -> Option<PropertyDescriptor> {
+    pub fn remove_property<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        key: &K,
+    ) -> Option<PropertyDescriptor> {
         let removed = self.properties.remove(key);
         if removed.is_some() {
-            self.property_order.retain(|k| &**k != key);
+            self.property_order
+                .retain(|k| k.as_bytes() != key.as_property_key_bytes());
         }
         removed
     }
 
-    pub fn get_property_value(&self, key: &str) -> Option<JsValue> {
+    pub fn get_property_value<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<JsValue> {
         self.properties.get(key).and_then(|d| d.value.clone())
     }
 
@@ -2899,9 +2932,10 @@ impl JsObjectData {
     /// module-namespace live bindings, parameter_map, array_elements, typed_array
     /// canonical numeric indices, and string exotic indices). Returns `None` if
     /// the caller should continue walking the prototype chain.
-    pub fn own_property_lookup(&self, key: &str) -> Option<JsValue> {
-        if let Some(ns_data) = self.module_namespace()
-            && let Some(binding_name) = ns_data.export_to_binding.get(key)
+    pub fn own_property_lookup<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<JsValue> {
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(ns_data) = self.module_namespace()
+            && let Some(binding_name) = ns_data.export_to_binding.get(key_str)
         {
             return Some(
                 ns_data
@@ -2911,8 +2945,9 @@ impl JsObjectData {
                     .unwrap_or(JsValue::Undefined),
             );
         }
-        if let Some(map) = self.parameter_map()
-            && let Some((env_ref, param_name)) = map.get(key)
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(map) = self.parameter_map()
+            && let Some((env_ref, param_name)) = map.get(key_str)
             && let Some(val) = env_ref.borrow().get(param_name)
         {
             return Some(val);
@@ -2923,8 +2958,9 @@ impl JsObjectData {
             }
             return Some(JsValue::Undefined);
         }
-        if let Some(elems) = self.array_elements()
-            && let Ok(idx) = key.parse::<usize>()
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(elems) = self.array_elements()
+            && let Ok(idx) = key_str.parse::<usize>()
             && idx < elems.len()
             && !matches!(elems[idx], JsValue::Undefined)
         {
@@ -2948,11 +2984,15 @@ impl JsObjectData {
     /// Mirrors the pre-chain-walk branches of that method exactly (including
     /// OrdinaryGetOwnProperty accessor completion and TypedArray canonical index
     /// with `configurable: false` per §10.4.5.2).
-    pub fn own_property_descriptor_lookup(&self, key: &str) -> Option<PropertyDescriptor> {
+    pub fn own_property_descriptor_lookup<K: PropertyKeyLike + ?Sized>(
+        &self,
+        key: &K,
+    ) -> Option<PropertyDescriptor> {
         if let Some(desc) = self.properties.get(key) {
             let mut d = desc.clone();
-            if let Some(map) = self.parameter_map()
-                && let Some((env_ref, param_name)) = map.get(key)
+            if let Some(key_str) = key.as_property_key_str()
+                && let Some(map) = self.parameter_map()
+                && let Some((env_ref, param_name)) = map.get(key_str)
                 && let Some(val) = env_ref.borrow().get(param_name)
             {
                 d.value = Some(val);
@@ -2967,8 +3007,9 @@ impl JsObjectData {
             }
             return Some(d);
         }
-        if let Some(elems) = self.array_elements()
-            && let Ok(idx) = key.parse::<usize>()
+        if let Some(key_str) = key.as_property_key_str()
+            && let Some(elems) = self.array_elements()
+            && let Ok(idx) = key_str.parse::<usize>()
             && idx < elems.len()
             && !matches!(elems[idx], JsValue::Undefined)
         {
@@ -3000,7 +3041,7 @@ impl JsObjectData {
             && self.class_name == "String"
         {
             let units = &s.code_units;
-            if key == "length" {
+            if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor {
                     value: Some(JsValue::Number(units.len() as f64)),
                     writable: Some(false),
@@ -3010,7 +3051,8 @@ impl JsObjectData {
                     set: None,
                 });
             }
-            if let Ok(idx) = key.parse::<usize>()
+            if let Some(key_str) = key.as_property_key_str()
+                && let Ok(idx) = key_str.parse::<usize>()
                 && idx < units.len()
             {
                 return Some(PropertyDescriptor {
@@ -3033,7 +3075,7 @@ impl JsObjectData {
     /// canonical-numeric-index on a typed array that's out of range (per
     /// §10.4.5.2, typed arrays never consult the prototype for these),
     /// and `None` to continue walking the chain.
-    pub fn own_has_property(&self, key: &str) -> Option<bool> {
+    pub fn own_has_property<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<bool> {
         if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
@@ -3050,17 +3092,17 @@ impl JsObjectData {
     /// keys in insertion order) and the full shadow set of all own keys
     /// (enumerable + non-enumerable) so the caller can suppress inherited
     /// properties with matching names.
-    pub fn own_enumerable_keys_with_shadow(&self) -> (Vec<String>, HashSet<String>) {
+    pub fn own_enumerable_keys_with_shadow(&self) -> (Vec<JsPropertyKey>, HashSet<JsPropertyKey>) {
         let mut seen = HashSet::default();
-        let mut index_keys: Vec<(u32, String)> = Vec::new();
-        let mut string_keys: Vec<String> = Vec::new();
+        let mut index_keys: Vec<(u32, JsPropertyKey)> = Vec::new();
+        let mut string_keys: Vec<JsPropertyKey> = Vec::new();
 
         if let Some(JsValue::String(ref s)) = self.primitive_value
             && self.class_name == "String"
         {
             let utf16_len = s.code_units.len();
             for i in 0..utf16_len {
-                let k = i.to_string();
+                let k = JsPropertyKey::from(i.to_string());
                 if seen.insert(k.clone()) {
                     index_keys.push((i as u32, k));
                 }
@@ -3070,7 +3112,7 @@ impl JsObjectData {
         if let Some(ta) = self.typed_array_info() {
             let len = ta.array_length;
             for i in 0..len {
-                let k = i.to_string();
+                let k = JsPropertyKey::from(i.to_string());
                 if seen.insert(k.clone()) {
                     index_keys.push((i as u32, k));
                 }
@@ -3082,7 +3124,7 @@ impl JsObjectData {
                 if matches!(value, JsValue::Undefined) || i > 0xFFFF_FFFE {
                     continue;
                 }
-                let k = i.to_string();
+                let k = JsPropertyKey::from(i.to_string());
                 if self.properties.contains_key(&k) {
                     continue;
                 }
@@ -3098,18 +3140,18 @@ impl JsObjectData {
             }
             if let Some(desc) = self.properties.get(k) {
                 let is_enumerable = desc.enumerable != Some(false);
-                if seen.insert(k.to_string()) && is_enumerable {
+                if seen.insert(k.clone()) && is_enumerable {
                     if let Some(idx) = parse_array_index(k) {
-                        index_keys.push((idx, k.to_string()));
+                        index_keys.push((idx, k.clone()));
                     } else {
-                        string_keys.push(k.to_string());
+                        string_keys.push(k.clone());
                     }
                 }
             }
         }
 
         index_keys.sort_by_key(|(idx, _)| *idx);
-        let mut keys: Vec<String> = index_keys.into_iter().map(|(_, k)| k).collect();
+        let mut keys: Vec<JsPropertyKey> = index_keys.into_iter().map(|(_, k)| k).collect();
         keys.extend(string_keys);
 
         (keys, seen)
@@ -3118,7 +3160,8 @@ impl JsObjectData {
 
 // §7.1.4.1 CanonicalNumericIndexString
 /// Check if a string is an array index (non-negative integer < 2^32-1).
-pub(crate) fn parse_array_index(key: &str) -> Option<u32> {
+pub(crate) fn parse_array_index<K: crate::types::PropertyKeyLike + ?Sized>(key: &K) -> Option<u32> {
+    let key = key.as_property_key_str()?;
     if key.is_empty() {
         return None;
     }
@@ -3134,7 +3177,10 @@ pub(crate) fn parse_array_index(key: &str) -> Option<u32> {
     Some(n)
 }
 
-pub(crate) fn canonical_numeric_index_string(key: &str) -> Option<f64> {
+pub(crate) fn canonical_numeric_index_string<K: crate::types::PropertyKeyLike + ?Sized>(
+    key: &K,
+) -> Option<f64> {
+    let key = key.as_property_key_str()?;
     if key == "-0" {
         return Some(-0.0_f64);
     }
@@ -3916,14 +3962,8 @@ mod property_bag_tests {
     #[test]
     fn remove_property_clears_both_map_and_order() {
         let mut obj = JsObjectData::new();
-        obj.insert_property(
-            "a".into(),
-            PropertyDescriptor::data_default(JsValue::Number(1.0)),
-        );
-        obj.insert_property(
-            "b".into(),
-            PropertyDescriptor::data_default(JsValue::Number(2.0)),
-        );
+        obj.insert_property("a", PropertyDescriptor::data_default(JsValue::Number(1.0)));
+        obj.insert_property("b", PropertyDescriptor::data_default(JsValue::Number(2.0)));
 
         let removed = obj.remove_property("a");
 
@@ -3936,10 +3976,7 @@ mod property_bag_tests {
     fn remove_property_preserves_order_of_survivors() {
         let mut obj = JsObjectData::new();
         for k in ["a", "b", "c", "d"] {
-            obj.insert_property(
-                k.into(),
-                PropertyDescriptor::data_default(JsValue::Undefined),
-            );
+            obj.insert_property(k, PropertyDescriptor::data_default(JsValue::Undefined));
         }
 
         obj.remove_property("b");
@@ -3953,7 +3990,7 @@ mod property_bag_tests {
     fn remove_property_returns_the_stored_descriptor() {
         let mut obj = JsObjectData::new();
         obj.insert_property(
-            "x".into(),
+            "x",
             PropertyDescriptor::data(JsValue::Number(42.0), false, true, false),
         );
 
@@ -3968,10 +4005,7 @@ mod property_bag_tests {
     #[test]
     fn remove_absent_key_is_a_noop() {
         let mut obj = JsObjectData::new();
-        obj.insert_property(
-            "a".into(),
-            PropertyDescriptor::data_default(JsValue::Undefined),
-        );
+        obj.insert_property("a", PropertyDescriptor::data_default(JsValue::Undefined));
 
         assert!(obj.remove_property("missing").is_none());
         assert_eq!(keys(&obj), vec!["a"], "order untouched");
@@ -3981,10 +4015,7 @@ mod property_bag_tests {
     #[test]
     fn second_remove_returns_none() {
         let mut obj = JsObjectData::new();
-        obj.insert_property(
-            "a".into(),
-            PropertyDescriptor::data_default(JsValue::Undefined),
-        );
+        obj.insert_property("a", PropertyDescriptor::data_default(JsValue::Undefined));
 
         assert!(obj.remove_property("a").is_some());
         assert!(obj.remove_property("a").is_none());

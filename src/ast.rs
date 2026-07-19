@@ -476,10 +476,20 @@ pub struct Property {
 #[derive(Clone, Debug)]
 pub enum PropertyKey {
     Identifier(String),
-    String(String),
+    String(Vec<u16>),
     Number(f64),
     Computed(Box<Expression>),
     Private(String),
+}
+
+impl PropertyKey {
+    pub fn matches_name(&self, name: &str) -> bool {
+        match self {
+            Self::Identifier(identifier) => identifier == name,
+            Self::String(units) => units.iter().copied().eq(name.encode_utf16()),
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

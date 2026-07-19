@@ -126,10 +126,11 @@ pub(crate) fn js_value_to_code_units(val: &JsValue) -> Vec<u16> {
 
 /// Convert a JsValue to a property key string. For symbols, uses the id-based
 /// format to ensure uniqueness. For other types, same as to_js_string.
-pub(crate) fn to_property_key_string(val: &JsValue) -> String {
+pub(crate) fn to_property_key_string(val: &JsValue) -> JsPropertyKey {
     match val {
-        JsValue::Symbol(s) => s.to_property_key(),
-        _ => format!("{val}"),
+        JsValue::String(s) => JsPropertyKey::from_js_string(s),
+        JsValue::Symbol(s) => JsPropertyKey::from(s.to_property_key()),
+        _ => JsPropertyKey::from(format!("{val}")),
     }
 }
 
@@ -204,10 +205,6 @@ pub(crate) fn typeof_val<'a>(val: &JsValue, objects: &super::object_arena::Objec
 }
 
 use std::collections::HashMap;
-
-fn json_quote(s: &str) -> String {
-    json_quote_units(&s.encode_utf16().collect::<Vec<u16>>())
-}
 
 fn json_quote_units(units: &[u16]) -> String {
     let mut result = String::with_capacity(units.len() + 2);
@@ -292,12 +289,12 @@ pub(crate) fn is_array_value(interp: &mut Interpreter, obj_id: u64) -> Result<bo
     Ok(false)
 }
 
-pub(crate) fn sort_own_keys(keys: Vec<String>) -> Vec<String> {
+pub(crate) fn sort_own_keys(keys: Vec<JsPropertyKey>) -> Vec<JsPropertyKey> {
     let mut indices: Vec<(u64, usize)> = Vec::new();
-    let mut strings: Vec<(String, usize)> = Vec::new();
+    let mut strings: Vec<(JsPropertyKey, usize)> = Vec::new();
     for (pos, k) in keys.iter().enumerate() {
         if let Ok(n) = k.parse::<u64>()
-            && n.to_string() == *k
+            && k.eq_str(&n.to_string())
         {
             indices.push((n, pos));
             continue;
@@ -305,9 +302,9 @@ pub(crate) fn sort_own_keys(keys: Vec<String>) -> Vec<String> {
         strings.push((k.clone(), pos));
     }
     indices.sort_by_key(|&(n, _)| n);
-    let mut result: Vec<String> = Vec::with_capacity(keys.len());
+    let mut result: Vec<JsPropertyKey> = Vec::with_capacity(keys.len());
     for (n, _) in indices {
-        result.push(n.to_string());
+        result.push(JsPropertyKey::from(n.to_string()));
     }
     for (s, _) in strings {
         result.push(s);
@@ -318,7 +315,7 @@ pub(crate) fn sort_own_keys(keys: Vec<String>) -> Vec<String> {
 pub(crate) fn enumerable_own_keys(
     interp: &mut Interpreter,
     obj_id: u64,
-) -> Result<Vec<String>, JsValue> {
+) -> Result<Vec<JsPropertyKey>, JsValue> {
     if let Some(obj) = interp.get_object_cell(obj_id) {
         if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
             let target_val = interp.get_proxy_target_val(obj_id);
@@ -343,7 +340,7 @@ pub(crate) fn enumerable_own_keys(
                         for i in 0..len {
                             let k = interp.get_property_on_id(arr.id, &i.to_string());
                             if let JsValue::String(s) = k {
-                                let key_str = s.to_rust_string();
+                                let key = JsPropertyKey::from_js_string(&s);
                                 let key_val = JsValue::String(s);
                                 match interp.invoke_proxy_trap(
                                     obj_id,
@@ -355,17 +352,17 @@ pub(crate) fn enumerable_own_keys(
                                             let enum_val =
                                                 interp.get_property_on_id(dobj.id, "enumerable");
                                             if interp.to_boolean_val(&enum_val) {
-                                                keys.push(key_str);
+                                                keys.push(key.clone());
                                             }
                                         }
                                     }
                                     Ok(None) => {
                                         if let JsValue::Object(ref t) = target_val
                                             && let Some(tobj) = interp.get_object_cell(t.id)
-                                            && let Some(d) = tobj.borrow().properties.get(&key_str)
+                                            && let Some(d) = tobj.borrow().properties.get(&key)
                                             && d.enumerable != Some(false)
                                         {
-                                            keys.push(key_str);
+                                            keys.push(key);
                                         }
                                     }
                                     Err(e) => return Err(e),
@@ -387,37 +384,36 @@ pub(crate) fn enumerable_own_keys(
         }
         let b = obj.borrow();
         // String exotic object: character indices come first
-        let mut result: Vec<String> = Vec::new();
+        let mut result: Vec<JsPropertyKey> = Vec::new();
         if let Some(JsValue::String(ref s)) = b.primitive_value {
             let len = s.len();
             for i in 0..len {
-                result.push(i.to_string());
+                result.push(JsPropertyKey::from(i.to_string()));
             }
         }
         // TypedArray [[OwnPropertyKeys]]: virtual indexed properties are enumerable
         if let Some(ta) = b.typed_array_info() {
             for i in 0..ta.array_length {
-                result.push(i.to_string());
+                result.push(JsPropertyKey::from(i.to_string()));
             }
         }
         let is_string_wrapper = matches!(b.primitive_value, Some(JsValue::String(_)));
-        let keys: Vec<String> = b
+        let keys: Vec<JsPropertyKey> = b
             .property_order
             .iter()
             .filter(|k| {
-                let ks: &str = k;
-                if result.iter().any(|r| r.as_str() == ks) {
+                if result.contains(k) {
                     return false;
                 }
-                if is_string_wrapper && ks == "length" {
+                if is_string_wrapper && k.eq_str("length") {
                     return false;
                 }
-                !ks.starts_with("Symbol(")
+                !k.starts_with("Symbol(")
                     && b.properties
-                        .get(ks)
+                        .get(k)
                         .is_some_and(|d| d.enumerable != Some(false))
             })
-            .map(|k| k.to_string())
+            .cloned()
             .collect();
         if !result.is_empty() {
             result.extend(sort_own_keys(keys));
@@ -435,7 +431,7 @@ pub(crate) fn json_stringify_full(
     space: &str,
 ) -> Result<Option<String>, JsValue> {
     let mut stack = Vec::new();
-    let mut property_list: Option<Vec<String>> = None;
+    let mut property_list: Option<Vec<JsPropertyKey>> = None;
     let mut replacer_fn: Option<JsValue> = None;
 
     if let Some(rep) = replacer
@@ -463,15 +459,15 @@ pub(crate) fn json_stringify_full(
                     _ => JsValue::Undefined,
                 };
                 let key_str = match &item {
-                    JsValue::String(s) => Some(s.to_rust_string()),
-                    JsValue::Number(n) => Some(number_ops::to_string(*n)),
+                    JsValue::String(s) => Some(JsPropertyKey::from_js_string(s)),
+                    JsValue::Number(n) => Some(JsPropertyKey::from(number_ops::to_string(*n))),
                     JsValue::Object(oo) => {
                         if let Some(inner) = interp.get_object_cell(oo.id) {
                             let cn = inner.borrow().class_name.clone();
                             if cn == "String" || cn == "Number" {
                                 {
                                     let s = interp.to_string_value(&item)?;
-                                    Some(s)
+                                    Some(JsPropertyKey::from(s))
                                 }
                             } else {
                                 None
@@ -499,10 +495,11 @@ pub(crate) fn json_stringify_full(
         .insert_value("".to_string(), val.clone());
     let holder_id = wrapper_id;
 
+    let root_key = JsPropertyKey::from_str("");
     json_stringify_internal(
         interp,
         holder_id,
-        "",
+        &root_key,
         val,
         &mut stack,
         &replacer_fn,
@@ -516,11 +513,11 @@ pub(crate) fn json_stringify_full(
 fn json_stringify_internal(
     interp: &mut Interpreter,
     holder_id: u64,
-    key: &str,
+    key: &JsPropertyKey,
     val: &JsValue,
     stack: &mut Vec<u64>,
     replacer_fn: &Option<JsValue>,
-    property_list: &Option<Vec<String>>,
+    property_list: &Option<Vec<JsPropertyKey>>,
     gap: &str,
     indent: &str,
 ) -> Result<Option<String>, JsValue> {
@@ -557,7 +554,7 @@ fn json_stringify_internal(
             && let Some(fdata) = interp.get_object_cell(fobj.id)
             && fdata.borrow().callable.is_some()
         {
-            let key_val = JsValue::String(JsString::from_str(key));
+            let key_val = JsValue::String(key.to_js_string());
             match interp.call_function(&to_json, &value, &[key_val]) {
                 Completion::Normal(v) => value = v,
                 Completion::Throw(e) => return Err(e),
@@ -569,7 +566,7 @@ fn json_stringify_internal(
     // Step 3: Apply replacer function
     if let Some(rep) = replacer_fn {
         let holder_val = JsValue::Object(crate::types::JsObject { id: holder_id });
-        let key_val = JsValue::String(JsString::from_str(key));
+        let key_val = JsValue::String(key.to_js_string());
         match interp.call_function(rep, &holder_val, &[key_val, value.clone()]) {
             Completion::Normal(v) => value = v,
             Completion::Throw(e) => return Err(e),
@@ -665,7 +662,7 @@ fn json_stringify_internal(
                     };
                     let mut items = Vec::new();
                     for i in 0..len {
-                        let ikey = i.to_string();
+                        let ikey = JsPropertyKey::from(i.to_string());
                         let v = match interp.get_object_property(obj_id, &ikey, &obj_val) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => {
@@ -703,7 +700,7 @@ fn json_stringify_internal(
                         )))
                     }
                 } else {
-                    let keys: Vec<String> = if let Some(pl) = property_list {
+                    let keys: Vec<JsPropertyKey> = if let Some(pl) = property_list {
                         pl.clone()
                     } else {
                         match enumerable_own_keys(interp, obj_id) {
@@ -735,7 +732,7 @@ fn json_stringify_internal(
                             gap,
                             &new_indent,
                         )? {
-                            let quoted_key = json_quote(k);
+                            let quoted_key = json_quote_js_string(&k.to_js_string());
                             if gap.is_empty() {
                                 entries.push(format!("{}:{}", quoted_key, sv));
                             } else {
@@ -786,7 +783,7 @@ pub(crate) fn json_trim(s: &str) -> &str {
     &s[start..end]
 }
 
-pub(crate) type SourceTextMap = HashMap<(u64, String), String>;
+pub(crate) type SourceTextMap = HashMap<(u64, JsPropertyKey), String>;
 
 pub(crate) fn json_parse_value(interp: &mut Interpreter, s: &str) -> Completion {
     json_parse_value_inner(interp, s, None)
@@ -822,8 +819,7 @@ fn json_parse_value_inner(
             let err = interp.create_error("SyntaxError", &msg);
             return Completion::Throw(err);
         }
-        let unescaped = json_unescape_string(inner);
-        return Completion::Normal(JsValue::String(JsString::from_str(&unescaped)));
+        return Completion::Normal(JsValue::String(json_unescape_js_string(inner)));
     }
     if json_is_valid_number(s)
         && let Ok(n) = s.parse::<f64>()
@@ -853,7 +849,7 @@ fn json_parse_value_inner(
             let arr_id = arr_obj.id;
             for (i, (v, src)) in parsed_items.iter().enumerate() {
                 if is_json_primitive(v) {
-                    smap.insert((arr_id, i.to_string()), src.clone());
+                    smap.insert((arr_id, JsPropertyKey::from(i.to_string())), src.clone());
                 }
             }
         }
@@ -887,7 +883,7 @@ fn json_parse_value_inner(
                     let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
                     return Completion::Throw(err);
                 }
-                json_unescape_string(inner)
+                JsPropertyKey::from_js_string(&json_unescape_js_string(inner))
             } else {
                 let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
                 return Completion::Throw(err);
@@ -945,45 +941,43 @@ fn json_validate_string(s: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn json_unescape_string(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
+fn json_unescape_js_string(s: &str) -> JsString {
+    let mut result = Vec::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(ch) = chars.next() {
         if ch == '\\' {
             match chars.next() {
-                Some('"') => result.push('"'),
-                Some('\\') => result.push('\\'),
-                Some('/') => result.push('/'),
-                Some('b') => result.push('\u{0008}'),
-                Some('f') => result.push('\u{000C}'),
-                Some('n') => result.push('\n'),
-                Some('r') => result.push('\r'),
-                Some('t') => result.push('\t'),
+                Some('"') => result.push(b'"' as u16),
+                Some('\\') => result.push(b'\\' as u16),
+                Some('/') => result.push(b'/' as u16),
+                Some('b') => result.push(0x0008),
+                Some('f') => result.push(0x000C),
+                Some('n') => result.push(b'\n' as u16),
+                Some('r') => result.push(b'\r' as u16),
+                Some('t') => result.push(b'\t' as u16),
                 Some('u') => {
                     let hex: String = chars.by_ref().take(4).collect();
-                    if let Ok(code) = u32::from_str_radix(&hex, 16)
-                        && let Some(c) = char::from_u32(code)
-                    {
-                        result.push(c);
+                    if let Ok(code) = u16::from_str_radix(&hex, 16) {
+                        result.push(code);
                     }
                 }
                 Some(c) => {
-                    result.push('\\');
-                    result.push(c);
+                    result.push(b'\\' as u16);
+                    result.extend(c.encode_utf16(&mut [0; 2]).iter().copied());
                 }
-                None => result.push('\\'),
+                None => result.push(b'\\' as u16),
             }
         } else {
-            result.push(ch);
+            result.extend(ch.encode_utf16(&mut [0; 2]).iter().copied());
         }
     }
-    result
+    JsString::from_vec(result)
 }
 
-fn json_internalize_apply(
+fn json_internalize_apply<K: PropertyKeyLike + ?Sized>(
     interp: &mut Interpreter,
     obj_id: u64,
-    key: &str,
+    key: &K,
     new_val: JsValue,
 ) -> Result<(), JsValue> {
     let is_proxy = interp
@@ -995,7 +989,7 @@ fn json_internalize_apply(
         let target_val = interp.get_proxy_target_val(obj_id);
         if let JsValue::Undefined = &new_val {
             // Delete via proxy deleteProperty trap
-            let key_val = JsValue::String(JsString::from_str(key));
+            let key_val = JsValue::String(key.to_js_property_key().to_js_string());
             match interp.invoke_proxy_trap(obj_id, "deleteProperty", vec![target_val, key_val]) {
                 Ok(Some(v)) => {
                     if !interp.to_boolean_val(&v) {
@@ -1016,7 +1010,7 @@ fn json_internalize_apply(
             }
         } else {
             // CreateDataProperty via proxy defineProperty trap
-            let key_val = JsValue::String(JsString::from_str(key));
+            let key_val = JsValue::String(key.to_js_property_key().to_js_string());
             let desc_obj_id = interp.create_object_id();
             interp
                 .get_object_cell_expect(desc_obj_id)
@@ -1052,7 +1046,8 @@ fn json_internalize_apply(
                     if let JsValue::Object(t) = &interp.get_proxy_target_val(obj_id)
                         && let Some(tobj) = interp.get_object_cell(t.id)
                     {
-                        tobj.borrow_mut().insert_value(key.to_string(), new_val);
+                        tobj.borrow_mut()
+                            .insert_value(key.to_js_property_key(), new_val);
                     }
                 }
                 Err(e) => return Err(e),
@@ -1075,7 +1070,9 @@ fn json_internalize_apply(
         if let JsValue::Undefined = &new_val {
             cell.borrow_mut().remove_property(key);
             // Also clear dense array storage so get_property doesn't find stale values
-            if let Ok(idx) = key.parse::<usize>() {
+            if let Some(key_str) = key.as_property_key_str()
+                && let Ok(idx) = key_str.parse::<usize>()
+            {
                 let mut b = cell.borrow_mut();
                 if let Some(elems) = b.array_elements_mut()
                     && idx < elems.len()
@@ -1084,16 +1081,17 @@ fn json_internalize_apply(
                 }
             }
         } else {
-            cell.borrow_mut().insert_value(key.to_string(), new_val);
+            cell.borrow_mut()
+                .insert_value(key.to_js_property_key(), new_val);
         }
     }
     Ok(())
 }
 
-pub(crate) fn json_internalize(
+pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
     interp: &mut Interpreter,
     holder: &JsValue,
-    name: &str,
+    name: &K,
     reviver: &JsValue,
     source_map: &Option<SourceTextMap>,
 ) -> Completion {
@@ -1163,7 +1161,7 @@ pub(crate) fn json_internalize(
         if is_json_primitive(&walked)
             && let Some(smap) = source_map
             && let JsValue::Object(o) = holder
-            && let Some(src) = smap.get(&(o.id, name.to_string()))
+            && let Some(src) = smap.get(&(o.id, name.to_js_property_key()))
         {
             // Verify the source text matches the actual value
             // (forward modifications make source invalid)
@@ -1178,7 +1176,7 @@ pub(crate) fn json_internalize(
                     // Source includes quotes, parse it to compare
                     if src.starts_with('"') && src.ends_with('"') => {
                         let inner = &src[1..src.len() - 1];
-                        json_unescape_string(inner) == s.to_rust_string()
+                        json_unescape_js_string(inner) == *s
                     }
                 _ => false,
             };
@@ -1195,7 +1193,7 @@ pub(crate) fn json_internalize(
         let id = ctx_id;
         JsValue::Object(crate::types::JsObject { id })
     };
-    let key_val = JsValue::String(JsString::from_str(name));
+    let key_val = JsValue::String(name.to_js_property_key().to_js_string());
     interp.call_function(reviver, holder, &[key_val, walked, context])
 }
 
@@ -2113,7 +2111,7 @@ fn parse_utcstring_format(s: &str) -> Option<f64> {
 pub(crate) fn find_json_colon(s: &str) -> Option<usize> {
     let mut in_string = false;
     let mut escape = false;
-    for (i, ch) in s.chars().enumerate() {
+    for (i, ch) in s.char_indices() {
         if escape {
             escape = false;
             continue;

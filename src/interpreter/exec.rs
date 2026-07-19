@@ -1409,7 +1409,7 @@ impl Interpreter {
                 for prop in props {
                     match prop {
                         ObjectPatternProperty::Shorthand(name) => {
-                            excluded_keys.push(name.clone());
+                            excluded_keys.push(JsPropertyKey::from(name.clone()));
                             let v = if let JsValue::Object(o) = &obj_val {
                                 match self.get_object_property(o.id, name, &obj_val) {
                                     Completion::Normal(v) => v,
@@ -1432,14 +1432,17 @@ impl Interpreter {
                         }
                         ObjectPatternProperty::KeyValue(key, pat) => {
                             let key_str = match key {
-                                PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
-                                PropertyKey::Number(n) => {
-                                    crate::interpreter::to_js_string(&JsValue::Number(*n))
+                                PropertyKey::Identifier(s) => JsPropertyKey::from(s.clone()),
+                                PropertyKey::String(s) => {
+                                    JsPropertyKey::from_js_string(&JsString::from_vec(s.clone()))
                                 }
+                                PropertyKey::Number(n) => JsPropertyKey::from(
+                                    crate::interpreter::to_js_string(&JsValue::Number(*n)),
+                                ),
                                 PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
                                     Completion::Normal(v) => self.to_property_key(&v)?,
                                     Completion::Throw(e) => return Err(e),
-                                    _ => String::new(),
+                                    _ => JsPropertyKey::from_str(""),
                                 },
                                 PropertyKey::Private(_) => {
                                     return Err(self.create_type_error(
@@ -1933,7 +1936,7 @@ impl Interpreter {
                     if !still_exists {
                         continue;
                     }
-                    let key_val = JsValue::String(JsString::from_str(&key));
+                    let key_val = JsValue::String(key.to_js_string());
                     let for_env = Environment::new(Some(env.clone()));
                     match &fi.left {
                         ForInOfLeft::Variable(decl) => {

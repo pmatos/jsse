@@ -2229,15 +2229,9 @@ impl Interpreter {
                         }
                         // Copy properties from user options if present
                         if let JsValue::Object(ref o) = options_arg {
-                            let keys: Vec<String> = interp
+                            let keys: Vec<JsPropertyKey> = interp
                                 .get_object_cell(o.id)
-                                .map(|rc| {
-                                    rc.borrow()
-                                        .properties
-                                        .keys()
-                                        .map(|k| k.to_string())
-                                        .collect()
-                                })
+                                .map(|rc| rc.borrow().properties.keys().cloned().collect())
                                 .unwrap_or_default();
                             for key in keys {
                                 let val = match interp.get_object_property(o.id, &key, &options_arg)

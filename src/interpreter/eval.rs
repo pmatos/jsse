@@ -60,8 +60,8 @@ enum DestructLRef {
     Member(JsValue, JsValue),
     /// Private field: base object + private name
     Private(JsValue, String),
-    /// Super property: super_base_id + key string + this_val + strict
-    Super(u64, String, JsValue, bool),
+    /// Super property: super_base_id + property key + this_val + strict
+    Super(u64, JsPropertyKey, JsValue, bool),
 }
 
 impl Interpreter {
@@ -642,7 +642,7 @@ impl Interpreter {
                         other => return other,
                     };
                     let key = match prop {
-                        MemberProperty::Dot(name) => name.clone(),
+                        MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                         MemberProperty::Computed(expr) => {
                             match self
                                 .with_tail_position_suppressed(|this| this.eval_expr(expr, env))
@@ -714,7 +714,10 @@ impl Interpreter {
                                 {
                                     return Completion::Throw(e);
                                 }
-                                if export_names.contains(&key) {
+                                if key
+                                    .as_str()
+                                    .is_some_and(|key| export_names.iter().any(|name| name == key))
+                                {
                                     if env.borrow().strict {
                                         return Completion::Throw(self.create_type_error(
                                             &format!(
@@ -755,7 +758,7 @@ impl Interpreter {
                             if let Some(JsValue::String(ref s)) = obj_b.primitive_value
                                 && obj_b.class_name == "String"
                             {
-                                let is_exotic = key == "length"
+                                let is_exotic = key.eq_str("length")
                                     || key.parse::<usize>().is_ok_and(|i| i < s.code_units.len());
                                 if is_exotic {
                                     drop(obj_b);
@@ -781,8 +784,10 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(false));
                         }
                         obj_mut.remove_property(&key);
-                        if let Some(map) = obj_mut.parameter_map_mut() {
-                            map.remove(&key);
+                        if let Some(map) = obj_mut.parameter_map_mut()
+                            && let Some(key) = key.as_str()
+                        {
+                            map.remove(key);
                         }
                         if let Ok(idx) = key.parse::<usize>()
                             && let Some(elems) = obj_mut.array_elements_mut()
@@ -1124,7 +1129,7 @@ impl Interpreter {
                                                     other => return other,
                                                 };
                                                 if let JsValue::String(ref sv) = v {
-                                                    if k == "type" {
+                                                    if k.eq_str("type") {
                                                         let s = sv.to_string();
                                                         if s == "text" {
                                                             dynamic_import_type =
@@ -1298,7 +1303,7 @@ impl Interpreter {
                             other => return other,
                         };
                         let key = match prop {
-                            MemberProperty::Dot(name) => name.clone(),
+                            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                             MemberProperty::Computed(expr) => {
                                 let v = match self.eval_expr(expr, env) {
                                     Completion::Normal(v) => v,
@@ -1373,11 +1378,16 @@ impl Interpreter {
         }
     }
 
-    fn access_property_on_value(&mut self, base_val: &JsValue, name: &str) -> Completion {
+    fn access_property_on_value<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        base_val: &JsValue,
+        name: &K,
+    ) -> Completion {
+        let name = name.to_js_property_key();
         match base_val {
-            JsValue::Object(o) => self.get_object_property(o.id, name, base_val),
+            JsValue::Object(o) => self.get_object_property(o.id, &name, base_val),
             JsValue::String(s) => {
-                if name == "length" {
+                if name.eq_str("length") {
                     Completion::Normal(JsValue::Number(s.len() as f64))
                 } else if let Ok(idx) = name.parse::<usize>() {
                     if idx < s.code_units.len() {
@@ -1388,35 +1398,35 @@ impl Interpreter {
                         Completion::Normal(JsValue::Undefined)
                     }
                 } else if let Some(sp_id) = self.realm().string_prototype {
-                    Completion::Normal(self.get_property_on_id(sp_id, name))
+                    Completion::Normal(self.get_property_on_id(sp_id, &name))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Number(_) => {
                 if let Some(np_id) = self.realm().number_prototype {
-                    Completion::Normal(self.get_property_on_id(np_id, name))
+                    Completion::Normal(self.get_property_on_id(np_id, &name))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Boolean(_) => {
                 if let Some(bp_id) = self.realm().boolean_prototype {
-                    Completion::Normal(self.get_property_on_id(bp_id, name))
+                    Completion::Normal(self.get_property_on_id(bp_id, &name))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Symbol(_) => {
                 if let Some(sp_id) = self.realm().symbol_prototype {
-                    Completion::Normal(self.get_property_on_id(sp_id, name))
+                    Completion::Normal(self.get_property_on_id(sp_id, &name))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::BigInt(_) => {
                 if let Some(bp_id) = self.realm().bigint_prototype {
-                    Completion::Normal(self.get_property_on_id(bp_id, name))
+                    Completion::Normal(self.get_property_on_id(bp_id, &name))
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
@@ -2643,7 +2653,7 @@ impl Interpreter {
                 };
             }
             let key = match prop {
-                MemberProperty::Dot(name) => name.clone(),
+                MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                 MemberProperty::Computed(expr) => {
                     let v = match self.eval_expr(expr, env) {
                         Completion::Normal(v) => v,
@@ -2713,7 +2723,7 @@ impl Interpreter {
                 // Handle super.prop / super[expr] assignment
                 if matches!(obj_expr.as_ref(), Expression::Super) {
                     let key = match prop {
-                        MemberProperty::Dot(name) => name.clone(),
+                        MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                         MemberProperty::Computed(cexpr) => {
                             let v = match self.eval_expr(cexpr, env) {
                                 Completion::Normal(v) => v,
@@ -2797,7 +2807,7 @@ impl Interpreter {
                     };
                 }
                 let key = match prop {
-                    MemberProperty::Dot(name) => name.clone(),
+                    MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                     MemberProperty::Computed(cexpr) => {
                         let v = match self.eval_expr(cexpr, env) {
                             Completion::Normal(v) => v,
@@ -3264,7 +3274,7 @@ impl Interpreter {
                             )));
                         }
                         let key = match prop {
-                            MemberProperty::Dot(name) => name.clone(),
+                            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                             MemberProperty::Computed(_) => {
                                 match self.to_property_key(key_val.as_ref().unwrap()) {
                                     Ok(s) => s,
@@ -3296,7 +3306,7 @@ impl Interpreter {
                         };
                         (key, Some(lval))
                     } else {
-                        (String::new(), None) // key computed after RHS for simple assign
+                        (JsPropertyKey::from_str(""), None) // key computed after RHS for simple assign
                     };
                     // Now evaluate RHS
                     let rval = match self.eval_expr(right, env) {
@@ -3306,7 +3316,7 @@ impl Interpreter {
                     // For simple assign, compute key now
                     let key = if op == AssignOp::Assign {
                         match prop {
-                            MemberProperty::Dot(name) => name.clone(),
+                            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                             MemberProperty::Computed(_) => {
                                 match self.to_property_key(key_val.as_ref().unwrap()) {
                                     Ok(s) => s,
@@ -3619,7 +3629,7 @@ impl Interpreter {
                             }
                         }
                         // ArraySetLength §10.4.2.4 via [[Set]]
-                        if key == "length" && obj.borrow().class_name == "Array" {
+                        if key.eq_str("length") && obj.borrow().class_name == "Array" {
                             let desc = PropertyDescriptor {
                                 value: Some(final_val.clone()),
                                 writable: None,
@@ -3653,8 +3663,8 @@ impl Interpreter {
                                 "Cannot assign to read only property '{key}'"
                             )));
                         }
-                        if success {
-                            self.sync_global_object_binding(o.id, &key, &final_val);
+                        if success && let Some(key) = key.as_str() {
+                            self.sync_global_object_binding(o.id, key, &final_val);
                         }
                         return Completion::Normal(final_val);
                     }
@@ -4021,7 +4031,7 @@ impl Interpreter {
                 // GetValue: ToObject(base) first, then ToPropertyKey
                 let (boxed_obj, key) = if let JsValue::Object(ref _o) = obj_val {
                     let key = match prop {
-                        MemberProperty::Dot(name) => name.clone(),
+                        MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                         MemberProperty::Computed(_) => {
                             match self.to_property_key(key_expr_val.as_ref().unwrap()) {
                                 Ok(s) => s,
@@ -4038,7 +4048,7 @@ impl Interpreter {
                         _ => return Completion::Normal(JsValue::Undefined),
                     };
                     let key = match prop {
-                        MemberProperty::Dot(name) => name.clone(),
+                        MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                         MemberProperty::Computed(_) => {
                             match self.to_property_key(key_expr_val.as_ref().unwrap()) {
                                 Ok(s) => s,
@@ -4136,7 +4146,7 @@ impl Interpreter {
                         }
                     }
                     // ArraySetLength §10.4.2.4 via [[Set]]
-                    if key == "length" && obj.borrow().class_name == "Array" {
+                    if key.eq_str("length") && obj.borrow().class_name == "Array" {
                         let desc = PropertyDescriptor {
                             value: Some(rval.clone()),
                             writable: None,
@@ -4296,13 +4306,14 @@ impl Interpreter {
     }
 
     /// Set a property on an already-evaluated object+key pair (strict controls TypeError on failure).
-    fn set_object_with_key(
+    fn set_object_with_key<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_val: JsValue,
-        key: &str,
+        key: &K,
         val: JsValue,
         strict: bool,
     ) -> Result<(), JsValue> {
+        let key = key.to_js_property_key();
         // Auto-box primitives for property access
         let obj_val = if !matches!(obj_val, JsValue::Object(_)) {
             match self.to_object(&obj_val) {
@@ -4321,7 +4332,7 @@ impl Interpreter {
             if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
                 let receiver = obj_val.clone();
                 {
-                    let success = self.proxy_set(o.id, key, val, &receiver)?;
+                    let success = self.proxy_set(o.id, &key, val, &receiver)?;
                     if !success && strict {
                         return Err(self.create_type_error(&format!(
                             "Cannot assign to read only property '{key}'"
@@ -4340,7 +4351,7 @@ impl Interpreter {
                 return Ok(());
             }
             // Check for setter
-            let desc = self.get_property_descriptor_on_id(o.id, key);
+            let desc = self.get_property_descriptor_on_id(o.id, &key);
             if let Some(ref d) = desc
                 && let Some(ref setter) = d.set
                 && !matches!(setter, JsValue::Undefined)
@@ -4367,7 +4378,7 @@ impl Interpreter {
             }
             // TypedArray [[Set]]
             let is_ta = obj.borrow().typed_array_info().is_some();
-            if is_ta && let Some(index) = canonical_numeric_index_string(key) {
+            if is_ta && let Some(index) = canonical_numeric_index_string(&key) {
                 let is_bigint = obj
                     .borrow()
                     .typed_array_info()
@@ -4388,7 +4399,7 @@ impl Interpreter {
                 return Ok(());
             }
             // OrdinarySet (§10.1.9.2): if no own property, walk prototype chain
-            if !obj.borrow().has_own_property(key) {
+            if !obj.borrow().has_own_property(&key) {
                 let mut proto_opt = obj.borrow().prototype_id;
                 while let Some(proto_rc) = proto_opt {
                     let proto_id = proto_rc;
@@ -4396,7 +4407,7 @@ impl Interpreter {
                     {
                         let proto_borrow = self.get_object_cell_expect(proto_rc).borrow();
                         if let Some(ta) = proto_borrow.typed_array_info()
-                            && let Some(index) = canonical_numeric_index_string(key)
+                            && let Some(index) = canonical_numeric_index_string(&key)
                             && !is_valid_integer_index(ta, index)
                         {
                             // Not a valid integer index: TypedArray [[Set]] returns true silently
@@ -4407,7 +4418,7 @@ impl Interpreter {
                     if self.get_proxy_info(proto_id).is_some() {
                         let receiver = obj_val.clone();
                         {
-                            let success = self.proxy_set(proto_id, key, val, &receiver)?;
+                            let success = self.proxy_set(proto_id, &key, val, &receiver)?;
                             if !success && strict {
                                 return Err(self.create_type_error(&format!(
                                     "Cannot assign to read only property '{key}'"
@@ -4417,7 +4428,7 @@ impl Interpreter {
                         }
                     }
                     let proto_id = proto_rc;
-                    let inherited = self.get_property_descriptor_on_id(proto_id, key);
+                    let inherited = self.get_property_descriptor_on_id(proto_id, &key);
                     if let Some(ref inherited_desc) = inherited {
                         if inherited_desc.is_data_descriptor() {
                             if inherited_desc.writable == Some(false) {
@@ -4454,7 +4465,7 @@ impl Interpreter {
                     proto_opt = self.get_object_cell_expect(proto_rc).borrow().prototype_id;
                 }
             }
-            let success = obj.borrow_mut().set_property_value(key, val);
+            let success = obj.borrow_mut().set_property_value(&key, val);
             if !success && strict {
                 return Err(
                     self.create_type_error(&format!("Cannot assign to read only property '{key}'"))
@@ -4474,7 +4485,7 @@ impl Interpreter {
         // Handle super.prop / super[expr]
         if matches!(obj_expr, Expression::Super) {
             let key = match prop {
-                MemberProperty::Dot(name) => name.clone(),
+                MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                 MemberProperty::Computed(cexpr) => {
                     let v = match self.eval_expr(cexpr, env) {
                         Completion::Normal(v) => v,
@@ -4572,7 +4583,7 @@ impl Interpreter {
         }
 
         let key = match prop {
-            MemberProperty::Dot(name) => name.clone(),
+            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
             MemberProperty::Computed(expr) => {
                 let v = match self.eval_expr(expr, env) {
                     Completion::Normal(v) => v,
@@ -4732,7 +4743,7 @@ impl Interpreter {
         // Handle super.prop / super[expr]
         if matches!(obj_expr.as_ref(), Expression::Super) {
             let key = match prop {
-                MemberProperty::Dot(name) => name.clone(),
+                MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                 MemberProperty::Computed(key_expr) => {
                     let raw_key = match self.eval_expr(key_expr, env) {
                         Completion::Normal(v) => v,
@@ -5087,7 +5098,7 @@ impl Interpreter {
             _ => unreachable!(),
         };
 
-        let mut excluded_keys: Vec<String> = Vec::new();
+        let mut excluded_keys: Vec<JsPropertyKey> = Vec::new();
 
         for prop in props {
             // Handle rest: {...rest} = obj
@@ -5116,8 +5127,13 @@ impl Interpreter {
             match &prop.kind {
                 PropertyKind::Init => {
                     let key = match &prop.key {
-                        PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
-                        PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
+                        PropertyKey::Identifier(s) => JsPropertyKey::from(s.clone()),
+                        PropertyKey::String(s) => {
+                            JsPropertyKey::from_js_string(&JsString::from_vec(s.clone()))
+                        }
+                        PropertyKey::Number(n) => {
+                            JsPropertyKey::from(to_js_string(&JsValue::Number(*n)))
+                        }
                         PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
                             Completion::Normal(v) => match self.to_property_key(&v) {
                                 Ok(k) => k,
@@ -5315,7 +5331,7 @@ impl Interpreter {
                     other => return other,
                 };
                 let key = match prop {
-                    MemberProperty::Dot(name) => name.clone(),
+                    MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                     MemberProperty::Computed(expr) => {
                         let v = match self.eval_expr(expr, env) {
                             Completion::Normal(v) => v,
@@ -13274,7 +13290,7 @@ impl Interpreter {
                 if let Some(obj) = self.get_object_cell(o.id) {
                     let class = obj.borrow().class_name.clone();
                     let has_callable = obj.borrow().callable.is_some();
-                    let keys: Vec<Rc<str>> = obj
+                    let keys: Vec<JsPropertyKey> = obj
                         .borrow()
                         .property_order
                         .iter()
@@ -14976,7 +14992,7 @@ impl Interpreter {
     ) -> Result<(), JsValue> {
         const MAX_PROXY_OWNKEYS_RESULT_LEN: usize = 1_000_000;
 
-        let trap_keys: Vec<String> = if let JsValue::Object(arr) = trap_result {
+        let trap_keys: Vec<JsPropertyKey> = if let JsValue::Object(arr) = trap_result {
             let len = match self.get_property_on_id(arr.id, "length") {
                 JsValue::Number(n) if n.is_finite() && n > 0.0 => {
                     let len = n.floor() as usize;
@@ -14993,7 +15009,7 @@ impl Interpreter {
             (0..len)
                 .map(|i| {
                     let v = self.get_property_on_id(arr_id, &i.to_string());
-                    to_js_string(&v)
+                    to_property_key_string(&v)
                 })
                 .collect()
         } else {
@@ -15004,9 +15020,9 @@ impl Interpreter {
             && let Some(tobj) = self.get_object_cell(t.id)
         {
             let target_extensible = tobj.borrow().extensible;
-            let (target_nonconfig, target_config): (Vec<String>, Vec<String>) = {
+            let (target_nonconfig, target_config): (Vec<JsPropertyKey>, Vec<JsPropertyKey>) = {
                 let b = tobj.borrow();
-                let nc: Vec<String> = b
+                let nc: Vec<JsPropertyKey> = b
                     .property_order
                     .iter()
                     .filter(|k| {
@@ -15014,9 +15030,9 @@ impl Interpreter {
                             .get(k)
                             .is_some_and(|d| d.configurable == Some(false))
                     })
-                    .map(|k| k.to_string())
+                    .cloned()
                     .collect();
-                let c: Vec<String> = b
+                let c: Vec<JsPropertyKey> = b
                     .property_order
                     .iter()
                     .filter(|k| {
@@ -15024,14 +15040,14 @@ impl Interpreter {
                             .get(k)
                             .is_some_and(|d| d.configurable != Some(false))
                     })
-                    .map(|k| k.to_string())
+                    .cloned()
                     .collect();
                 (nc, c)
             };
-            let trap_set: HashSet<&str> = trap_keys.iter().map(|s| s.as_str()).collect();
+            let trap_set: HashSet<&[u8]> = trap_keys.iter().map(|s| s.as_bytes()).collect();
 
             for key in &target_nonconfig {
-                if !trap_set.contains(key.as_str()) {
+                if !trap_set.contains(key.as_bytes()) {
                     return Err(self.create_type_error(
                         "'ownKeys' on proxy: trap result did not include all non-configurable own keys of the proxy target",
                     ));
@@ -15039,13 +15055,13 @@ impl Interpreter {
             }
 
             if !target_extensible {
-                let target_keys: HashSet<&str> = target_nonconfig
+                let target_keys: HashSet<&[u8]> = target_nonconfig
                     .iter()
                     .chain(target_config.iter())
-                    .map(|s| s.as_str())
+                    .map(|s| s.as_bytes())
                     .collect();
                 for key in &trap_keys {
-                    if !target_keys.contains(key.as_str()) {
+                    if !target_keys.contains(key.as_bytes()) {
                         return Err(self.create_type_error(
                             "'ownKeys' on proxy: trap returned extra keys for non-extensible proxy target",
                         ));
@@ -15514,21 +15530,22 @@ impl Interpreter {
 
     /// OrdinarySet (§10.1.9) starting at `base_id` with a separate `receiver`.
     /// Used for super property assignment: `super[key] = val`.
-    fn super_set_property(
+    fn super_set_property<K: PropertyKeyLike + ?Sized>(
         &mut self,
         base_id: u64,
-        key: &str,
+        key: &K,
         val: JsValue,
         receiver: &JsValue,
         strict: bool,
     ) -> Completion {
+        let key = key.to_js_property_key();
         // Find the property descriptor starting from base_id, walking prototype chain.
         // If we encounter a Proxy, delegate to proxy_set.
         let mut current_id = Some(base_id);
         let mut desc: Option<PropertyDescriptor> = None;
         while let Some(id) = current_id {
             if self.get_proxy_info(id).is_some() {
-                match self.proxy_set(id, key, val.clone(), receiver) {
+                match self.proxy_set(id, &key, val.clone(), receiver) {
                     Ok(success) => {
                         if !success && strict {
                             return Completion::Throw(self.create_type_error(&format!(
@@ -15541,7 +15558,7 @@ impl Interpreter {
                 }
             }
             if let Some(obj) = self.get_object_cell(id) {
-                desc = obj.borrow().get_own_property_full(key);
+                desc = obj.borrow().get_own_property_full(&key);
                 if desc.is_some() {
                     break;
                 }
@@ -15592,7 +15609,7 @@ impl Interpreter {
                     // returns false (TypeError in strict).
                     let is_ns = obj.borrow().module_namespace().is_some();
                     if is_ns {
-                        if let Err(e) = self.check_namespace_tdz(o.id, key) {
+                        if let Err(e) = self.check_namespace_tdz(o.id, &key) {
                             return Completion::Throw(e);
                         }
                         if strict {
@@ -15602,7 +15619,7 @@ impl Interpreter {
                         }
                         return Completion::Normal(val);
                     }
-                    let existing = obj.borrow().get_own_property_full(key);
+                    let existing = obj.borrow().get_own_property_full(&key);
                     match &existing {
                         Some(ed) if ed.is_accessor_descriptor() => {
                             if strict {
@@ -15621,7 +15638,7 @@ impl Interpreter {
                             return Completion::Normal(val);
                         }
                         Some(_) => {
-                            let _ = obj.borrow_mut().set_property_value(key, val.clone());
+                            let _ = obj.borrow_mut().set_property_value(&key, val.clone());
                         }
                         None => {
                             // CreateDataProperty: checks extensibility
@@ -15633,7 +15650,7 @@ impl Interpreter {
                                 }
                                 return Completion::Normal(val);
                             }
-                            let _ = obj.borrow_mut().set_property_value(key, val.clone());
+                            let _ = obj.borrow_mut().set_property_value(&key, val.clone());
                         }
                     }
                 }
