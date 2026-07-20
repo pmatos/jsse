@@ -2497,6 +2497,102 @@ impl Interpreter {
         }
     }
 
+    pub(super) fn get_identifier_value_by_ref(
+        &mut self,
+        name: &str,
+        id_ref: &IdentifierRef,
+        env: &EnvRef,
+    ) -> Completion {
+        let strict = env.borrow().strict;
+        match id_ref {
+            IdentifierRef::WithObject(obj_id) => self.with_get_binding_value(*obj_id, name, strict),
+            IdentifierRef::Unresolvable => {
+                Completion::Throw(self.create_reference_error(&format!("{name} is not defined")))
+            }
+            IdentifierRef::SpecificEnv(specific_env) => {
+                let (indirect, has_binding) = {
+                    let specific = specific_env.borrow();
+                    (
+                        specific.resolve_indirect_binding(name),
+                        specific.bindings.contains_key(name),
+                    )
+                };
+                if let Some(resolved) = indirect {
+                    match resolved {
+                        Some(value) => Completion::Normal(value),
+                        None => Completion::Throw(self.create_reference_error(&format!(
+                            "Cannot access '{name}' before initialization"
+                        ))),
+                    }
+                } else if has_binding {
+                    match self.env_get(specific_env, name) {
+                        Some(value) => Completion::Normal(value),
+                        None => Completion::Throw(self.create_reference_error(&format!(
+                            "Cannot access '{name}' before initialization"
+                        ))),
+                    }
+                } else if let Some(result) = self.resolve_global_getter(name, specific_env) {
+                    result
+                } else {
+                    Completion::Throw(
+                        self.create_reference_error(&format!("{name} is not defined")),
+                    )
+                }
+            }
+        }
+    }
+
+    pub(super) fn eval_identifier_update(
+        &mut self,
+        op: UpdateOp,
+        prefix: bool,
+        name: &str,
+        env: &EnvRef,
+    ) -> Completion {
+        // Fast path: identifier is a Number in the local scope chain (no with/module)
+        {
+            let env_borrow = env.borrow();
+            if env_borrow.with_object.is_none()
+                && let Some(binding) = env_borrow.bindings.get(name)
+                && binding.initialized
+                && binding.kind != BindingKind::Const
+                && binding.kind != BindingKind::FunctionName
+                && binding.kind != BindingKind::ImmutableValue
+                && let JsValue::Number(n) = &binding.value
+            {
+                let old_num = *n;
+                let new_num = match op {
+                    UpdateOp::Increment => old_num + 1.0,
+                    UpdateOp::Decrement => old_num - 1.0,
+                };
+                let new_val = JsValue::Number(new_num);
+                drop(env_borrow);
+                if let Err(e) = self.env_set(env, name, new_val) {
+                    return Completion::Throw(e);
+                }
+                return Completion::Normal(JsValue::Number(if prefix { new_num } else { old_num }));
+            }
+        }
+
+        let id_ref = match self.resolve_identifier_ref(name, env) {
+            Ok(r) => r,
+            Err(e) => return Completion::Throw(e),
+        };
+        let raw_val = match self.get_identifier_value_by_ref(name, &id_ref, env) {
+            Completion::Normal(v) => v,
+            other => return other,
+        };
+        let (old_val, new_val) = match self.apply_update_numeric(&raw_val, op) {
+            Ok(pair) => pair,
+            Err(e) => return Completion::Throw(e),
+        };
+        match self.put_value_by_ref(name, new_val.clone(), &id_ref, env) {
+            Completion::Normal(_) => {}
+            other => return other,
+        }
+        Completion::Normal(if prefix { new_val } else { old_val })
+    }
+
     fn eval_update(
         &mut self,
         op: UpdateOp,
@@ -2505,79 +2601,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         if let Expression::Identifier(name) = arg {
-            // Fast path: identifier is a Number in the local scope chain (no with/module)
-            {
-                let env_borrow = env.borrow();
-                if env_borrow.with_object.is_none()
-                    && let Some(binding) = env_borrow.bindings.get(name)
-                    && binding.initialized
-                    && binding.kind != BindingKind::Const
-                    && binding.kind != BindingKind::FunctionName
-                    && binding.kind != BindingKind::ImmutableValue
-                    && let JsValue::Number(n) = &binding.value
-                {
-                    let old_num = *n;
-                    let new_num = match op {
-                        UpdateOp::Increment => old_num + 1.0,
-                        UpdateOp::Decrement => old_num - 1.0,
-                    };
-                    let new_val = JsValue::Number(new_num);
-                    drop(env_borrow);
-                    if let Err(e) = self.env_set(env, name, new_val) {
-                        return Completion::Throw(e);
-                    }
-                    return Completion::Normal(JsValue::Number(if prefix {
-                        new_num
-                    } else {
-                        old_num
-                    }));
-                }
-            }
-
-            let strict = env.borrow().strict;
-            let id_ref = match self.resolve_identifier_ref(name, env) {
-                Ok(r) => r,
-                Err(e) => return Completion::Throw(e),
-            };
-            let raw_val = match &id_ref {
-                IdentifierRef::WithObject(obj_id) => {
-                    match self.with_get_binding_value(*obj_id, name, strict) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    }
-                }
-                IdentifierRef::Unresolvable => {
-                    return Completion::Throw(
-                        self.create_reference_error(&format!("{name} is not defined")),
-                    );
-                }
-                IdentifierRef::SpecificEnv(_) => {
-                    if let Some(result) = self.resolve_global_getter(name, env) {
-                        match result {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        }
-                    } else {
-                        match self.env_get(env, name) {
-                            Some(v) => v,
-                            None => {
-                                let err =
-                                    self.create_reference_error(&format!("{name} is not defined"));
-                                return Completion::Throw(err);
-                            }
-                        }
-                    }
-                }
-            };
-            let (old_val, new_val) = match self.apply_update_numeric(&raw_val, op) {
-                Ok(pair) => pair,
-                Err(e) => return Completion::Throw(e),
-            };
-            match self.put_value_by_ref(name, new_val.clone(), &id_ref, env) {
-                Completion::Normal(_) => {}
-                other => return other,
-            }
-            Completion::Normal(if prefix { new_val } else { old_val })
+            self.eval_identifier_update(op, prefix, name, env)
         } else if let Expression::Member(obj_expr, prop, _) = arg {
             // §13.3.7.1: super[expr]++ — special evaluation order
             if matches!(obj_expr.as_ref(), Expression::Super)

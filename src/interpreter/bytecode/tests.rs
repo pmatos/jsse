@@ -62,11 +62,10 @@ fn end_to_end_addition_return_takes_bytecode_path() {
 }
 
 #[test]
-fn end_to_end_ineligible_function_falls_back_to_ast() {
-    // var declarations + identifier reads aren't compilable yet → must bail to AST
+fn end_to_end_var_declaration_takes_bytecode_path() {
     let source = "var __r = (function(){ var x = 7; return x; })();";
     let (v, count) = eval_with_mode(source, true);
-    assert_eq!(count, 0, "ineligible function must NOT use bytecode path");
+    assert!(count >= 1, "bytecode mode must execute the var body");
     assert!(matches!(v, JsValue::Number(n) if n == 7.0));
 }
 
@@ -99,7 +98,9 @@ fn load_const_and_return_yields_number_completion() {
         code: vec![Op::LoadConst as u8, 0, 0, Op::Return as u8],
         constants: vec![Constant::Number(42.0)],
         names: vec![],
+        var_names: vec![],
         max_stack: 1,
+        max_refs: 0,
     };
     match run(chunk) {
         Completion::Return(JsValue::Number(n)) => assert_eq!(n, 42.0),
@@ -113,7 +114,9 @@ fn return_undefined_completes_with_undefined() {
         code: vec![Op::ReturnUndefined as u8],
         constants: vec![],
         names: vec![],
+        var_names: vec![],
         max_stack: 0,
+        max_refs: 0,
     };
     match run(chunk) {
         Completion::Return(JsValue::Undefined) => {}
@@ -137,7 +140,9 @@ fn add_two_numbers_via_eval_binary() {
         ],
         constants: vec![Constant::Number(2.0), Constant::Number(3.0)],
         names: vec![],
+        var_names: vec![],
         max_stack: 2,
+        max_refs: 0,
     };
     match run(chunk) {
         Completion::Return(JsValue::Number(n)) => assert_eq!(n, 5.0),
@@ -442,7 +447,9 @@ fn add_string_and_number_falls_through_to_string_concat() {
         ],
         constants: vec![Constant::String("x".into()), Constant::Number(1.0)],
         names: vec![],
+        var_names: vec![],
         max_stack: 2,
+        max_refs: 0,
     };
     match run(chunk) {
         Completion::Return(JsValue::String(s)) => assert_eq!(s.to_string(), "x1"),
@@ -468,10 +475,8 @@ fn assert_parity_number(source: &str, expected: f64) {
     }
 }
 
-// NOTE: `var`/`let` declarations are not yet compilable, so a body that
-// contains one bails the WHOLE body to the tree-walker. To exercise the
-// bytecode path these tests use a parameter for input plus `return` in the
-// branches — both of which the compiler supports.
+// NOTE: lexical declarations are not yet compilable, so a body containing one
+// still bails the WHOLE body to the tree-walker.
 
 #[test]
 fn if_true_takes_consequent_branch() {
@@ -674,10 +679,129 @@ fn load_undefined_then_return_completes_with_undefined() {
         code: vec![Op::LoadUndefined as u8, Op::Return as u8],
         constants: vec![],
         names: vec![],
+        var_names: vec![],
         max_stack: 1,
+        max_refs: 0,
     };
     match run(chunk) {
         Completion::Return(JsValue::Undefined) => {}
         other => panic!("expected Return(Undefined), got {other:?}"),
     }
+}
+
+// ----- var declarations, updates, compound assignment, and loops -----
+
+#[test]
+fn var_bindings_are_hoisted_before_initializers() {
+    let source = "var __r = (function(){ var before = x; var x = 7; return before; })();";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "bytecode path must run");
+    assert!(matches!(ast, JsValue::Undefined));
+    assert!(matches!(bytecode, JsValue::Undefined));
+}
+
+#[test]
+fn multiple_var_initializers_run_in_source_order() {
+    assert_parity_number(
+        "var __r = (function(){ var a = 1, b = a + 2; return b; })();",
+        3.0,
+    );
+}
+
+#[test]
+fn prefix_and_postfix_updates_preserve_result_value() {
+    assert_parity_number(
+        "var __r = (function(){ var x = 1; var old = x++; var now = ++x; return old * 100 + now * 10 + x; })();",
+        133.0,
+    );
+    assert_parity_number(
+        "var __r = (function(){ var x = 3; return x-- * 10 + --x; })();",
+        31.0,
+    );
+}
+
+#[test]
+fn identifier_update_preserves_bigint_semantics() {
+    let source = "var __r = (function(x){ x++; return x; })(1n);";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "bytecode path must run");
+    match (ast, bytecode) {
+        (JsValue::BigInt(a), JsValue::BigInt(b)) => {
+            assert_eq!(a.value.to_string(), "2");
+            assert_eq!(b.value.to_string(), "2");
+        }
+        other => panic!("expected matching BigInt results, got {other:?}"),
+    }
+}
+
+#[test]
+fn compound_assignment_preserves_captured_identifier_reference() {
+    let source = "\
+        var obj = { get x(){ delete this.x; return 2; } }; \
+        var f; \
+        with (obj) { f = function(){ x += 3; return 0; }; } \
+        f(); \
+        var __r = Object.prototype.hasOwnProperty.call(obj, 'x') ? obj.x : -1;";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "nested function must use bytecode");
+    assert!(matches!(ast, JsValue::Number(n) if n == 5.0));
+    assert!(matches!(bytecode, JsValue::Number(n) if n == 5.0));
+}
+
+#[test]
+fn numeric_for_loop_takes_bytecode_path() {
+    assert_parity_number(
+        "var __r = (function(n){ var sum = 0; for (var i = 0; i < n; i++) { sum += i; } return sum; })(10);",
+        45.0,
+    );
+}
+
+#[test]
+fn while_loop_takes_bytecode_path() {
+    assert_parity_number(
+        "var __r = (function(n){ var sum = 0; while (n > 0) { sum += n; n--; } return sum; })(10);",
+        55.0,
+    );
+}
+
+#[test]
+fn for_loop_optional_clauses_preserve_order() {
+    assert_parity_number(
+        "var __r = (function(i){ for (; i < 3; i++) {} return i; })(0);",
+        3.0,
+    );
+    assert_parity_number(
+        "var __r = (function(){ for (var i = 0; i < 3;) { i++; } return i; })();",
+        3.0,
+    );
+}
+
+#[test]
+fn nested_for_and_while_loops_take_bytecode_path() {
+    assert_parity_number(
+        "var __r = (function(){ var n = 0; for (var i = 0; i < 3; i++) { var j = 0; while (j < 2) { n += i; j++; } } return n; })();",
+        6.0,
+    );
+}
+
+#[test]
+fn lexical_for_loop_falls_back_to_tree_walker() {
+    let source = "var __r = (function(){ var sum = 0; for (let i = 0; i < 3; i++) sum += i; return sum; })();";
+    let (value, count) = eval_with_mode(source, true);
+    assert_eq!(count, 0, "lexical loop must remain ineligible");
+    assert!(matches!(value, JsValue::Number(n) if n == 3.0));
+}
+
+#[test]
+fn loop_with_break_falls_back_to_tree_walker() {
+    let source = "var __r = (function(){ var i = 0; while (true) { i++; break; } return i; })();";
+    let (value, count) = eval_with_mode(source, true);
+    assert_eq!(count, 0, "break lowering is not part of this slice");
+    assert!(matches!(value, JsValue::Number(n) if n == 1.0));
 }
