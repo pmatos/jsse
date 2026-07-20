@@ -1364,6 +1364,28 @@
       return "<Buffer " + body + ">";
     };
 
+    // Native Buffer's public static methods are enumerable own properties.
+    // Class syntax defines statics as non-enumerable, so normalize the methods
+    // implemented above. Packages such as safer-buffer intentionally discover
+    // and copy this surface with `for (key in Buffer)`.
+    [
+      "from",
+      "alloc",
+      "allocUnsafe",
+      "allocUnsafeSlow",
+      "isBuffer",
+      "isEncoding",
+      "byteLength",
+      "concat",
+      "compare",
+    ].forEach(function (name) {
+      var descriptor = Object.getOwnPropertyDescriptor(Buffer, name);
+      if (descriptor && !descriptor.enumerable) {
+        descriptor.enumerable = true;
+        Object.defineProperty(Buffer, name, descriptor);
+      }
+    });
+
     // Note: the legacy `SlowBuffer` global is intentionally NOT defined — it was
     // removed from Node (undefined in the `buffer` module of current releases),
     // so adding it would diverge from the reference engine. Buffer.allocUnsafeSlow

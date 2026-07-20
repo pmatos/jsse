@@ -1411,6 +1411,348 @@
   g.QUnit = installQUnit();
 
   // ==========================================================================
+  // tape adapter — exported as `__tape` for a tiny CommonJS selector module.
+  //
+  // tape's assertion library is browser-friendly, but its default runner pulls
+  // in Node streams/events/path/fs. Library bundles can alias `require("tape")`
+  // to scripts/node-tape-module.js: that module selects this adapter on jsse
+  // and real tape on Node, preserving an independent Node framework oracle.
+  // The counter below tracks assertions (including one assertion per skipped
+  // test), matching tape's final `# tests` count rather than counting callbacks.
+  // ==========================================================================
+  function installTape() {
+    var roots = [];
+    var started = false;
+    var counter = 0;
+    var passed = 0;
+    var failed = 0;
+
+    function testArgs(name, opts, cb) {
+      if (typeof opts === "function") {
+        cb = opts;
+        opts = {};
+      }
+      return {
+        name: String(name),
+        opts: opts || {},
+        cb: cb,
+        children: [],
+        teardowns: [],
+        assertions: 0,
+        plan: null,
+      };
+    }
+
+    function addTest(list, name, opts, cb) {
+      var test = testArgs(name, opts, cb);
+      list.push(test);
+      return test;
+    }
+
+    function tape(name, opts, cb) {
+      return addTest(roots, name, opts, cb);
+    }
+    tape.skip = function (name, opts, cb) {
+      if (typeof opts === "function") {
+        cb = opts;
+        opts = {};
+      }
+      opts = opts || {};
+      opts.skip = opts.skip || true;
+      return addTest(roots, name, opts, cb);
+    };
+    tape.only = tape;
+
+    function report(ok, name, actual, expected, skipReason) {
+      counter++;
+      var message = name || "(unnamed assert)";
+      if (ok) {
+        var suffix = skipReason
+          ? " # SKIP" + (skipReason === true ? "" : " " + skipReason)
+          : "";
+        console.log("ok " + counter + " " + message + suffix);
+        passed++;
+        return;
+      }
+
+      console.log("not ok " + counter + " " + message);
+      console.log("  ---");
+      if (arguments.length >= 3) console.log("  actual: " + dump(actual));
+      if (arguments.length >= 4) console.log("  expected: " + dump(expected));
+      console.log("  ...");
+      failed++;
+    }
+
+    function sameValue(a, b) {
+      if (Object.is) return Object.is(a, b);
+      return a === b ? a !== 0 || 1 / a === 1 / b : a !== a && b !== b;
+    }
+
+    function matchesThrown(error, expected) {
+      if (expected === undefined) return true;
+      if (typeof expected === "function") {
+        if (error instanceof expected) return true;
+        var prototype = expected.prototype;
+        var looksLikeError =
+          prototype &&
+          (prototype === Error.prototype || prototype instanceof Error);
+        return looksLikeError ? false : expected.call({}, error) === true;
+      }
+      if (expected instanceof RegExp) {
+        expected.lastIndex = 0;
+        return expected.test(String(error));
+      }
+      if (expected && typeof expected === "object") {
+        if (!error || typeof error !== "object") return false;
+        if (expected instanceof Error) {
+          return error.name === expected.name && error.message === expected.message;
+        }
+        for (var key in expected) {
+          if (!equiv(error[key], expected[key])) return false;
+        }
+        return true;
+      }
+      return false;
+    }
+
+    function makeAssert(test) {
+      function assert(ok, message, actual, expected, extra) {
+        var skipReason = extra && extra.skip;
+        test.assertions++;
+        report(ok || !!skipReason, message, actual, expected, skipReason);
+      }
+
+      var t = {
+        test: function (name, opts, cb) {
+          return addTest(test.children, name, opts, cb);
+        },
+        plan: function (count) {
+          test.plan = count;
+        },
+        end: function (error) {
+          if (error) t.error(error);
+        },
+        teardown: function (fn) {
+          if (typeof fn === "function") test.teardowns.push(fn);
+          else assert(false, "teardown is not a function", fn, "function");
+        },
+        timeoutAfter: function () {
+          return t;
+        },
+        comment: function (message) {
+          console.log("# " + message);
+        },
+        pass: function (message) {
+          assert(true, message || "pass");
+        },
+        fail: function (message) {
+          assert(false, message || "fail");
+        },
+        skip: function (message) {
+          test.assertions++;
+          report(true, message || "skip", undefined, undefined, true);
+        },
+        ok: function (value, message) {
+          assert(!!value, message || "should be truthy", value, true);
+        },
+        notOk: function (value, message) {
+          assert(!value, message || "should be falsy", value, false);
+        },
+        equal: function (actual, expected, message, extra) {
+          assert(
+            sameValue(actual, expected),
+            message || "should be strictly equal",
+            actual,
+            expected,
+            extra
+          );
+        },
+        notEqual: function (actual, expected, message, extra) {
+          assert(
+            !sameValue(actual, expected),
+            message || "should not be strictly equal",
+            actual,
+            expected,
+            extra
+          );
+        },
+        deepEqual: function (actual, expected, message, extra) {
+          assert(
+            equiv(actual, expected),
+            message || "should be deeply equivalent",
+            actual,
+            expected,
+            extra
+          );
+        },
+        notDeepEqual: function (actual, expected, message, extra) {
+          assert(
+            !equiv(actual, expected),
+            message || "should not be deeply equivalent",
+            actual,
+            expected,
+            extra
+          );
+        },
+        error: function (error, message) {
+          assert(!error, message || String(error), error, null);
+        },
+        doesNotThrow: function (fn, expected, message) {
+          if (typeof expected === "string") {
+            message = expected;
+            expected = undefined;
+          }
+          var error;
+          try {
+            fn();
+          } catch (e) {
+            error = e;
+          }
+          assert(!error, message || "should not throw", error, expected);
+        },
+        throws: function (fn, expected, message) {
+          if (typeof expected === "string") {
+            message = expected;
+            expected = undefined;
+          }
+          var caught = false;
+          var error;
+          try {
+            fn();
+          } catch (e) {
+            caught = true;
+            error = e;
+          }
+          assert(
+            caught && matchesThrown(error, expected),
+            message || "should throw",
+            error,
+            expected
+          );
+        },
+        match: function (value, pattern, message) {
+          var ok = typeof value === "string" && pattern instanceof RegExp;
+          if (ok) {
+            pattern.lastIndex = 0;
+            ok = pattern.test(value);
+          }
+          assert(ok, message || "should match pattern", value, pattern);
+        },
+        intercept: function (object, property, descriptor) {
+          descriptor = descriptor || {};
+          var previous = Object.getOwnPropertyDescriptor(object, property);
+          var value = descriptor.value;
+          Object.defineProperty(object, property, {
+            configurable: true,
+            enumerable: descriptor.enumerable !== false,
+            get: function () {
+              return descriptor.get ? descriptor.get.call(this) : value;
+            },
+            set: function (next) {
+              if (descriptor.set) return descriptor.set.call(this, next);
+              if (descriptor.writable) value = next;
+              return value;
+            },
+          });
+          var restore = function () {
+            if (previous) Object.defineProperty(object, property, previous);
+            else delete object[property];
+          };
+          test.teardowns.push(restore);
+          var calls = function () {
+            return [];
+          };
+          calls.restore = restore;
+          return calls;
+        },
+      };
+
+      t["true"] = t.assert = t.ok;
+      t["false"] = t.notok = t.notOk;
+      t.equals = t.strictEqual = t.equal;
+      t.notEquals = t.notStrictEqual = t.notEqual;
+      t.deepEquals = t.same = t.deepEqual;
+      t.notDeepEquals = t.notSame = t.notDeepEqual;
+      t.ifError = t.ifErr = t.error;
+      t["throws"] = t.throws;
+      t.test.skip = function (name, opts, cb) {
+        if (typeof opts === "function") {
+          cb = opts;
+          opts = {};
+        }
+        opts = opts || {};
+        opts.skip = opts.skip || true;
+        return addTest(test.children, name, opts, cb);
+      };
+      t.test.only = t.test;
+      return t;
+    }
+
+    async function runTest(test) {
+      console.log("# " + test.name);
+      if (test.opts.skip) {
+        report(true, test.name, undefined, undefined, test.opts.skip);
+        return;
+      }
+
+      var t = makeAssert(test);
+      try {
+        var result = typeof test.cb === "function" ? test.cb(t) : undefined;
+        if (result && typeof result.then === "function") await result;
+      } catch (e) {
+        t.fail(e && e.stack ? e.stack : String(e));
+      }
+
+      for (var i = 0; i < test.children.length; i++) {
+        await runTest(test.children[i]);
+      }
+
+      if (test.plan !== null && test.plan !== test.assertions) {
+        report(false, "plan != count", test.assertions, test.plan);
+      }
+
+      while (test.teardowns.length) {
+        try {
+          test.teardowns.shift()();
+        } catch (e) {
+          report(false, "teardown failed", e, "no error");
+        }
+      }
+    }
+
+    async function runAll() {
+      console.log("TAP version 13");
+      for (var i = 0; i < roots.length; i++) await runTest(roots[i]);
+      console.log("1.." + counter);
+      console.log("# tests " + counter);
+      console.log("# pass  " + passed);
+      if (failed) console.log("# fail  " + failed);
+      console.log(failed ? "# failed" : "# ok");
+      console.log(
+        "    PASS: " + passed + "  FAIL: " + failed + "  TOTAL: " + counter
+      );
+    }
+
+    function run() {
+      if (started) return;
+      started = true;
+      runAll().catch(function (e) {
+        console.log("Tape harness error: " + (e && e.stack ? e.stack : e));
+        console.log("    PASS: 0  FAIL: 1  TOTAL: 1");
+      });
+    }
+
+    Promise.resolve().then(function () {
+      if (roots.length) run();
+    });
+
+    tape.run = run;
+    return tape;
+  }
+
+  g.__tape = installTape();
+
+  // ==========================================================================
   // TAP describe/it/test/before/after runner — the reusable spine.
   // Not exercised by lodash (which is QUnit); it is the shape mocha/jest/tape
   // suites use and is self-verified by scripts/shim-fixtures. Emits TAP 13.
