@@ -45,27 +45,45 @@
     }
   }
 
-  // TextDecoder follows the Encoding Standard's label table rather than
-  // Buffer's encoding vocabulary. Keep this separate so accepting utf-16be
-  // here does not make Buffer.isEncoding("utf-16be") incorrectly return true.
+  // TextDecoder uses Encoding Standard labels for the decoder families below;
+  // Buffer has a different vocabulary. Keep normalization separate so
+  // accepting utf-16be does not make Buffer.isEncoding("utf-16be") return true.
   function normalizeTextDecoderEncoding(label) {
     switch (String(label).trim().toLowerCase()) {
-      case "utf8":
+      case "unicode-1-1-utf-8":
+      case "unicode11utf8":
+      case "unicode20utf8":
       case "utf-8":
+      case "utf8":
+      case "x-unicode20utf8":
         return "utf8";
+      case "ansi_x3.4-1968":
       case "ascii":
-      case "binary":
+      case "cp1252":
+      case "cp819":
+      case "csisolatin1":
+      case "ibm819":
       case "iso-8859-1":
+      case "iso-ir-100":
+      case "iso8859-1":
+      case "iso88591":
+      case "iso_8859-1":
+      case "iso_8859-1:1987":
+      case "l1":
       case "latin1":
       case "us-ascii":
       case "windows-1252":
+      case "x-cp1252":
         return "windows1252";
-      case "ucs2":
+      case "csunicode":
+      case "iso-10646-ucs-2":
       case "ucs-2":
-      case "utf16le":
+      case "unicode":
+      case "unicodefeff":
+      case "utf-16":
       case "utf-16le":
         return "utf16le";
-      case "utf16be":
+      case "unicodefffe":
       case "utf-16be":
         return "utf16be";
       default:
