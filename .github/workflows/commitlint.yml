@@ -1,0 +1,26 @@
+# Lints commit messages against Conventional Commits on pushes to the default branch.
+# Direct pushes are what the PR-title check can't see; PRs are covered by lint-pr-title.yml.
+name: Lint commits
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  commitlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: lts/*
+      - name: Install commitlint
+        run: npm install --no-save @commitlint/cli@21 @commitlint/config-conventional@21
+      - name: Lint pushed commits
+        if: github.event.before != '0000000000000000000000000000000000000000'
+        run: npx commitlint --from ${{ github.event.before }} --to ${{ github.sha }} --verbose
