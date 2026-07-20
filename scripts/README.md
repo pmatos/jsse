@@ -230,6 +230,7 @@ assertions).
 | `lodash` | 4.17.21 | ✅ 6,794 (cross-checked) | QUnit via the shared harness; a few tests skipped on jsse — see below |
 | `ajv` | v8.17.1 | ⚠️ 5,466 / 5,480 (Node: 5,480) | ~4 min; four codegen option variants across drafts 6, 7, 2019-09, and 2020-12; residuals tracked in #274 and #275 |
 | `prismjs` | v1.30.0 | ✅ 2,563 (cross-checked) | token streams for ~290 grammars |
+| `uglify-js` | v3.19.3 | ✅ 4,233 (cross-checked) | ~15 min; complete compress DSL parse/transform/mangle/codegen corpus |
 | `highlight.js` | 11.11.2 | ✅ 731 (cross-checked) | 536 markup + 195 auto-detection fixtures across 192 grammars; ~30 min |
 | `js-sha256` | v0.11.1 | ✅ 916 (cross-checked) | Pure-JS SHA-224/SHA-256 and HMAC vectors; string, Buffer, TypedArray, and ArrayBuffer inputs |
 | `luxon` | 3.7.2 | ⚠️ 1,045 / 1,152 | exact count cross-checked; Node is 1,152 / 1,152; blocked on #262–#265 |
@@ -248,6 +249,21 @@ markup rendering instead of tokenization.
 JSSE and Node execute all 2,563 fixtures. The cross-check requires both engines
 to report the same fixture count, so engine-specific skips cannot masquerade as
 a successful run.
+
+### UglifyJS compress fixtures
+
+`scripts/gen-uglify-js-entry.js` embeds UglifyJS's implementation sources and
+all 126 `test/compress/*.js` DSL files into a deterministic, filesystem-free
+entry. All 4,233 cases run UglifyJS's parser, compressor and tree transforms,
+scope analysis, optional identifier/property mangling, exact code-generation
+comparison, AST validation, and output reparse. The native runner's
+`expect_stdout` stage is excluded because it executes generated programs through
+Node's `vm` or child processes rather than testing the transformation pipeline.
+
+The suite exposed a non-Unicode RegExp range gap: character classes spanning
+UTF-16 surrogates did not include jsse's internal PUA-mapped code units, and the
+functional `@@replace` path converted matched/replacement strings lossily. The
+engine now preserves those code units and the UglifyJS suite is skip-free.
 
 ### highlight.js markup and auto-detection fixtures
 
