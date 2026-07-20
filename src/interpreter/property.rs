@@ -5,7 +5,6 @@ impl Interpreter {
     /// accessor setter invocation, prototype-chain walk, and receiver logic.
     /// Returns `Ok(true)` on success, `Ok(false)` if the set was rejected
     /// (e.g. read-only property), `Err(e)` if an exception was thrown.
-    #[allow(dead_code)]
     pub(crate) fn set_object_property(
         &mut self,
         obj_id: u64,
@@ -13,6 +12,14 @@ impl Interpreter {
         value: JsValue,
         receiver: &JsValue,
     ) -> Result<bool, JsValue> {
+        // Module namespace exotic [[Set]] (§10.4.6.9) always rejects the set,
+        // even though exported bindings have writable own data descriptors.
+        if self
+            .get_object_cell(obj_id)
+            .is_some_and(|obj| obj.borrow().module_namespace().is_some())
+        {
+            return Ok(false);
+        }
         self.proxy_set(obj_id, key, value, receiver)
     }
 

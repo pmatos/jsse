@@ -3156,9 +3156,7 @@ impl Interpreter {
                 // `obj_val` otherwise exists only as a Rust local, invisible to
                 // the tracing collector.
                 let gc_frame = self.gc_root_frame();
-                if let JsValue::Object(o) = &obj_val {
-                    self.gc_temp_roots.push(o.id);
-                }
+                self.gc_root_value(&obj_val);
                 let result = (|| {
                     if let MemberProperty::Private(name) = prop {
                         let branded = self.resolve_private_name(name, env);
@@ -3578,7 +3576,7 @@ impl Interpreter {
                                             if env.borrow().strict {
                                                 return Completion::Throw(self.create_type_error(
                                                 &format!(
-                                                    "Cannot assign to read only property '{key}'"
+                                                    "Cannot assign to read only property '{key}' of object '#<Object>'"
                                                 ),
                                             ));
                                             }
