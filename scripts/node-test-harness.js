@@ -525,6 +525,10 @@
       requireExpects: false,
       asyncRetries: 0,
       testTimeout: undefined,
+      // Large suites whose tests and hooks are all synchronous can opt out of
+      // Promise-per-test execution. This keeps the run in the main script
+      // instead of JSSE's bounded host-async drain window.
+      sync: false,
       modules: [],
     };
 
@@ -855,6 +859,26 @@
       }
     }
 
+    function requireSynchronous(result, label) {
+      if (result && typeof result.then === "function") {
+        throw new Error(label + " returned a Promise in QUnit.config.sync mode");
+      }
+    }
+
+    function runTestHooksSync(testObj, kind, assert) {
+      var chain = moduleChain(testObj.module);
+      if (kind === "afterEach") chain.reverse();
+      for (var i = 0; i < chain.length; i++) {
+        var hook = chain[i].hooks[kind];
+        if (typeof hook === "function") {
+          requireSynchronous(
+            hook.call(testObj.testEnv, assert),
+            kind + " hook"
+          );
+        }
+      }
+    }
+
     async function runTest(testObj) {
       testObj.assertions = [];
       testObj.expected = null;
@@ -926,6 +950,56 @@
         pushFailure(
           testObj,
           "afterEach hook threw: " + (e && e.stack ? e.stack : e)
+        );
+      }
+
+      finalize(testObj);
+    }
+
+    function runTestSync(testObj) {
+      testObj.assertions = [];
+      testObj.expected = null;
+      testObj.pending = 0;
+      testObj.testEnv = Object.assign(
+        {},
+        testObj.module && testObj.module.sharedEnv
+      );
+      config.current = testObj;
+
+      if (testObj.skip) {
+        finalize(testObj);
+        return;
+      }
+
+      var assert = makeAssert(testObj);
+      try {
+        runTestHooksSync(testObj, "beforeEach", assert);
+        requireSynchronous(
+          testObj.callback.call(testObj.testEnv, assert),
+          "test #" + testObj.testName
+        );
+      } catch (e) {
+        pushFailure(
+          testObj,
+          "Died on test #" +
+            testObj.testName +
+            ": " +
+            (e && e.stack ? e.stack : e)
+        );
+      }
+
+      try {
+        runTestHooksSync(testObj, "afterEach", assert);
+      } catch (e) {
+        pushFailure(
+          testObj,
+          "afterEach hook threw: " + (e && e.stack ? e.stack : e)
+        );
+      }
+      if (testObj.pending > 0) {
+        pushFailure(
+          testObj,
+          "assert.async() did not complete synchronously in QUnit.config.sync mode"
         );
       }
 
@@ -1045,6 +1119,137 @@
       if (bad) recordFailure(pseudo);
     }
 
+    function runModuleHookSync(mod, kind) {
+      var hook = mod.hooks && mod.hooks[kind];
+      if (typeof hook !== "function") return;
+      mod.sharedEnv = mod.sharedEnv || {};
+      var pseudo = {
+        testName: mod.name + " [module " + kind + "]",
+        module: mod,
+        assertions: [],
+        expected: null,
+        pending: 0,
+        testEnv: mod.sharedEnv,
+      };
+      var assert = makeAssert(pseudo);
+      try {
+        requireSynchronous(
+          hook.call(mod.sharedEnv, assert),
+          "module " + kind + " hook"
+        );
+      } catch (e) {
+        pushFailure(
+          pseudo,
+          "module " + kind + " hook threw: " + (e && e.stack ? e.stack : e)
+        );
+      }
+      if (pseudo.pending > 0) {
+        pushFailure(
+          pseudo,
+          "module " +
+            kind +
+            " hook left assert.async() incomplete in QUnit.config.sync mode"
+        );
+      }
+      var bad = 0;
+      stats.all += pseudo.assertions.length;
+      for (var i = 0; i < pseudo.assertions.length; i++) {
+        if (!pseudo.assertions[i].result) bad++;
+      }
+      stats.bad += bad;
+      if (bad) recordFailure(pseudo);
+    }
+
+    function reportRun(aborted, abortedAt) {
+      var details = {
+        passed: stats.all - stats.bad,
+        failed: stats.bad,
+        total: stats.all,
+        runtime: 0,
+      };
+
+      if (aborted) {
+        console.log("");
+        console.log(
+          "WATCHDOG: run aborted after " +
+            abortedAt +
+            " tests (engine timer/timing limit reached); remaining tests not run."
+        );
+      }
+
+      if (failedTests.length) {
+        console.log("");
+        console.log(
+          "Failures (" + failedTests.length + " test(s) with failing assertions):"
+        );
+        var shown = failedTests.length > 100 ? 100 : failedTests.length;
+        for (var f = 0; f < shown; f++) console.log(failedTests[f]);
+        if (failedTests.length > shown) {
+          console.log(
+            "… " + (failedTests.length - shown) + " more failing test(s) omitted"
+          );
+        }
+        console.log("");
+      }
+
+      for (var d = 0; d < doneCbs.length; d++) doneCbs[d](details);
+
+      // The line run-library-tests.sh's verdict parses — byte-identical to
+      // qunit-extras' summary (qunit-extras.js line 506), which real Node prints.
+      console.log(
+        "    PASS: " +
+          details.passed +
+          "  FAIL: " +
+          details.failed +
+          "  TOTAL: " +
+          details.total
+      );
+    }
+
+    function runAllSync() {
+      for (var b = 0; b < beginCbs.length; b++) {
+        beginCbs[b]({ totalTests: totalTests });
+      }
+
+      var count = 0;
+      var activeModules = [];
+      for (var t = 0; t < testsInOrder.length; t++) {
+        var testObj = testsInOrder[t];
+        var nextModules = moduleChain(testObj.module);
+        var common = 0;
+        while (
+          common < activeModules.length &&
+          common < nextModules.length &&
+          activeModules[common] === nextModules[common]
+        ) {
+          common++;
+        }
+        for (var close = activeModules.length - 1; close >= common; close--) {
+          runModuleHookSync(activeModules[close], "after");
+        }
+        activeModules.length = common;
+        for (var open = common; open < nextModules.length; open++) {
+          var opening = nextModules[open];
+          var parentEnv = open > 0 ? nextModules[open - 1].sharedEnv : null;
+          opening.sharedEnv = Object.assign({}, parentEnv, opening.sharedEnv);
+          runModuleHookSync(opening, "before");
+          activeModules.push(opening);
+        }
+
+        runTestSync(testObj);
+        count++;
+        if (count % 1000 === 0) {
+          process.stderr.write(
+            "… " + count + " tests run (" + stats.bad + " failing assertions)\n"
+          );
+        }
+      }
+      for (var close = activeModules.length - 1; close >= 0; close--) {
+        runModuleHookSync(activeModules[close], "after");
+      }
+      reportRun(false, 0);
+    }
+
     async function runAll() {
       for (var b = 0; b < beginCbs.length; b++) {
         beginCbs[b]({ totalTests: totalTests });
@@ -1126,55 +1331,21 @@
       // process alive (jsse's microtask drain waits while any native timer is
       // outstanding).
       unschedule(watchdogId);
-
-      var details = {
-        passed: stats.all - stats.bad,
-        failed: stats.bad,
-        total: stats.all,
-        runtime: 0,
-      };
-
-      if (aborted) {
-        console.log("");
-        console.log(
-          "WATCHDOG: run aborted after " +
-            abortedAt +
-            " tests (engine timer/timing limit reached); remaining tests not run."
-        );
-      }
-
-      if (failedTests.length) {
-        console.log("");
-        console.log(
-          "Failures (" + failedTests.length + " test(s) with failing assertions):"
-        );
-        var shown = failedTests.length > 100 ? 100 : failedTests.length;
-        for (var f = 0; f < shown; f++) console.log(failedTests[f]);
-        if (failedTests.length > shown) {
-          console.log(
-            "… " + (failedTests.length - shown) + " more failing test(s) omitted"
-          );
-        }
-        console.log("");
-      }
-
-      for (var d = 0; d < doneCbs.length; d++) doneCbs[d](details);
-
-      // The line run-library-tests.sh's verdict parses — byte-identical to
-      // qunit-extras' summary (qunit-extras.js line 506), which real Node prints.
-      console.log(
-        "    PASS: " +
-          details.passed +
-          "  FAIL: " +
-          details.failed +
-          "  TOTAL: " +
-          details.total
-      );
+      reportRun(aborted, abortedAt);
     }
 
     function start() {
       if (started) return;
       started = true;
+      if (config.sync) {
+        try {
+          runAllSync();
+        } catch (e) {
+          console.log("Harness error: " + (e && e.stack ? e.stack : e));
+          console.log("    PASS: 0  FAIL: 1  TOTAL: 1");
+        }
+        return;
+      }
       // Fire-and-forget: the returned promise chain continues on the microtask/
       // timer queue, which jsse drains after the main script returns.
       runAll().catch(function (e) {
