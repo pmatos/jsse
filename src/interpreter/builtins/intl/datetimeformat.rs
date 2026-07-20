@@ -1653,7 +1653,7 @@ fn normalize_icu_datetime_parts(
             value = digits.into_iter().collect();
         }
         if part_type == "hour"
-            && requested_style == Some("numeric")
+            && requested_style != Some("2-digit")
             && matches!(opts.locale.split("-u-").next(), Some("es") | Some("es-ES"))
             && value.chars().count() == 2
             && value.chars().all(char::is_numeric)
@@ -1663,7 +1663,11 @@ fn normalize_icu_datetime_parts(
             // This covers both the language-only `es` (its base data is Spain's)
             // and `es-ES`, but not region-carrying Latin-American tags such as
             // `es-MX`/`es-419`, whose matched numeric-hour format legitimately
-            // has two digits.
+            // has two digits. The `hour` option domain is {numeric, 2-digit,
+            // undefined}, so `!= 2-digit` un-pads both `hour: "numeric"` and the
+            // timeStyle presets (whose hour option is undefined but which use the
+            // same unpadded H record); only an explicit `hour: "2-digit"` keeps
+            // the leading zero.
             let zero = transliterate_digits("0", &opts.numbering_system);
             if let Some(unpadded) = value.strip_prefix(&zero) {
                 value = unpadded.to_string();
