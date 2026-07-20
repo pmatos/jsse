@@ -252,12 +252,27 @@ needs outside that core (`toThrow` and one inline snapshot).
 | `js-sha256` | v0.11.1 | ✅ 916 (cross-checked) | Pure-JS SHA-224/SHA-256 and HMAC vectors; string, Buffer, TypedArray, and ArrayBuffer inputs |
 | `qs` | v6.15.3 | ✅ 1,013 (cross-checked) | tape corpus: nested parse/stringify, limits, charsets, Buffer, pollution guards, Map/WeakMap side channels |
 | `js-md5` | v0.8.3 | ✅ 550 (cross-checked) | Pure-JS MD5 and HMAC-MD5 vectors; UTF-8 strings, Buffer, TypedArray, and ArrayBuffer inputs |
-| `luxon` | 3.7.2 | ⚠️ 1,045 / 1,152 | exact count cross-checked; Node is 1,152 / 1,152; blocked on #262–#265 |
-| `zod` | v4.4.3 | ⚠️ 2,176 / 2,184 | normal + jitless, exact count cross-checked; Node is 2,184 / 2,184; residuals tracked in #313–#315 |
-| `moment` | 2.30.1 | ⚠️ 198 failing assertions across 3,871 tests | exact registered-test count cross-checked; Node is green with 162,868 assertions; residual tracked in #311 |
-| `bignumber.js` | v9.1.2 | ⚠️ blocked | see below; green on Node today |
+| `luxon` | 3.7.2 | ⚠️ 1,045 / 1,152 | exact count cross-checked; blocked on #262–#265. Node itself now fails 13/1,152 too (ICU/CLDR drift on the reference host, not a jsse bug — see below) |
+| `zod` | v4.4.3 | ❌ hangs (jsse#340) | normal + jitless; jsse livelocks indefinitely (spinning thread, never prints a result) instead of completing — see below. Last known result before the regression: 2,176 / 2,184, residuals tracked in #313–#315 |
+| `moment` | 2.30.1 | ✅ 162,868 assertions (cross-checked) | 3,871 tests, 0 failures — fixed by #311/PR #326 |
+| `bignumber.js` | v9.1.2 | ✅ 65,143 (cross-checked) | unblocked by #238 |
 
 ### Zod normal and jitless corpus
+
+**Currently hangs jsse indefinitely (jsse#340), a regression discovered
+2026-07-20.** `./scripts/run-library-tests.sh zod` (and running either
+generated bundle directly, e.g. `jsse --node final-0.cjs`) prints only the TAP
+version header and then never produces another line — confirmed
+reproducible in isolation, not a parallel-run/resource-contention artifact.
+`/proc` inspection shows the main thread parked on a futex while a second
+thread spins, burning close to 100% CPU forever: a livelock, not merely a slow
+run. This is distinct from #310 below (#310 is jsse exiting early after
+losing one delayed callback; #340 is jsse never printing anything and never
+exiting). Timing/code-area suspicion, not a confirmed root cause: same-day
+commit `03df6fe` (PR #326) reworked GC temp-root handling around binary
+operators, and zod's validation codegen is unusually binary-op-heavy at scale.
+The description below reflects the suite's last known-good state, before this
+regression, and is what running it again should reproduce once #340 is fixed.
 
 `gen-zod-entry.js` statically imports all 79 v4 classic runtime test files.
 Native Vitest at v4.4.3 reports 1,092 tests; the harness runs the identical IIFE
@@ -273,10 +288,11 @@ base64 throughput input is bounded to 64 KiB, and one artificial 500 ms async
 delay is changed to a zero-delay timer (#310). One jitless-only async function
 refinement is visibly skipped under #309; all other registered bodies run.
 
-JSSE currently reports 2,176 passing and eight failures: Date parsing (#313),
-array outputs that fail `Object.isFrozen` after Zod freezes them (#314), and the
-Node-specific text of a `JSON.parse` error snapshot (#315), each repeated in
-normal and jitless mode. These remain failing assertions rather than skips.
+Before the #340 regression, jsse reported 2,176 passing and eight failures:
+Date parsing (#313), array outputs that fail `Object.isFrozen` after Zod
+freezes them (#314), and the Node-specific text of a `JSON.parse` error
+snapshot (#315), each repeated in normal and jitless mode. These remain
+failing assertions rather than skips.
 
 ### qs iconv-lite shim
 
@@ -343,7 +359,14 @@ against the same fixed Node oracle and still report the exact 731-case count.
 Luxon's 58 Jest files are statically bundled by `gen-luxon-entry.js`; the
 generated entry uses Jest's pinned `expect@29.7.0` matcher core and the shared
 TAP runner. Both engines run under `TZ=America/New_York` and must report exactly
-1,152 tests. Node is green; jsse currently executes every test and passes 1,045.
+1,152 tests. jsse currently executes every test and passes 1,045.
+
+As of 2026-07-20, real Node itself also fails 13/1,152 on this host — all ICU
+week-numbering/locale-formatting tests (`getMinimumDaysInFirstWeek`,
+`weeksInLocalWeekYear`, `Interval#toLocaleString`). This looks like Node/ICU
+version drift on the reference machine since the harness was last validated
+(Node's bundled ICU/CLDR updates over time and this harness has no Node-version
+pin), not a jsse regression — no new jsse-side issue was filed for it.
 
 `patch-luxon-icu.js` contains four oracle-portability adjustments for literals
 that changed in CLDR 47 / ICU 78. They do not alter the count: two old locale
@@ -370,13 +393,13 @@ and does not change the registered-test count.
 
 Both engines run the same generated bundle and shared synchronous QUnit
 adapter under `TZ=America/New_York`, `LANG=en_US.utf8`, and
-`LC_ALL=en_US.utf8`. Node passes all 3,871 registered tests and 162,868
-assertions. jsse also executes all 3,871 tests, recording 153,088 passing and
-198 failing assertions out of 153,286 reached assertions; callbacks that throw
-early account for the lower assertion total. The failures remain visible and
-are tracked in #311. The first 100 diagnostics all report
-`TypeError: Cannot convert object to primitive value`, concentrated in week/year
-and locale parser/formatting cases.
+`LC_ALL=en_US.utf8`. Both jsse and Node pass all 3,871 registered tests and
+all 162,868 assertions, cross-checked. jsse previously failed 198 of those
+assertions with `TypeError: Cannot convert object to primitive value`,
+concentrated in week/year and locale parser/formatting cases (#311); fixed by
+PR #326 (`03df6fe`), which corrected GC temp-root handling around binary
+operators so a persistent root captured during sustained execution was no
+longer dropped.
 
 ### lodash skip list (jsse only; each preserves the assertion count via `skipAssert`)
 
@@ -417,21 +440,31 @@ running those thousands of timers natively would otherwise exhaust OS threads.
   tree-walker amplifies acorn's recursive-descent frames and its Rust stack aborts
   (SIGABRT) before acorn's guard fires. Pinned to 8.16.0 until jsse raises a
   catchable `RangeError` on deep recursion; then bump the pin.
-- **bignumber.js strict-mode constructor return (jsse#238).** In a strict-mode
-  constructor, `return <call>` whose call returns a non-object makes jsse's `new`
-  return that value instead of `this`. bignumber's constructor does
+- **bignumber.js strict-mode constructor return (jsse#238, fixed).** In a
+  strict-mode constructor, `return <call>` whose call returns a non-object made
+  jsse's `new` return that value instead of `this`. bignumber's constructor does
   `return parseNumeric(...)` (which returns `undefined`), so
-  `new BigNumber("Infinity"|"NaN")` yields `undefined` on jsse. Minimal repro:
+  `new BigNumber("Infinity"|"NaN")` yielded `undefined` on jsse. Minimal repro:
   `'use strict'; function u(x){x.z=1} function F(){this.a=1;return u(this)} typeof new F()`
-  → `undefined` on jsse, `object` on Node (sloppy mode is correct). The config is
-  correct and green on Node; it goes green on jsse once the bug is fixed.
+  → was `undefined` on jsse, `object` on Node (sloppy mode is correct). Now
+  fixed; the suite is green on jsse (65,143, cross-checked).
 - **Luxon Intl/system-zone gaps (jsse#262–#265).** The pinned suite and bundle
-  are green on Node (1,152 tests). jsse runs the same 1,152 cases and passes
-  1,045; the remaining failures stay visible until the four root Intl and host
-  time-zone gaps above land.
+  are green on Node (1,152 tests) as of when these issues were filed — see the
+  Luxon section above for a newer, unrelated 13-test Node-side ICU-drift
+  finding. jsse runs the same 1,152 cases and passes 1,045; the remaining
+  failures stay visible until the four root Intl and host time-zone gaps above
+  land.
 
-- **Moment sustained object-to-primitive failures (jsse#311).** The pinned
-  bundle is green on Node (3,871 tests, 162,868 assertions). jsse executes every
-  registered test but 198 callbacks fail with `TypeError: Cannot convert object
-  to primitive value`; representative operations pass in a fresh bundle, so
-  the follow-up tracks the sustained-execution/state interaction.
+- **Moment sustained object-to-primitive failures (jsse#311, fixed).** The
+  pinned bundle is green on Node (3,871 tests, 162,868 assertions). jsse used
+  to fail 198 callbacks with `TypeError: Cannot convert object to primitive
+  value` during sustained execution; fixed by PR #326 (`03df6fe`), which
+  stopped a persistent GC root from being dropped around binary-operator
+  evaluation. jsse is now green too (162,868/162,868, cross-checked).
+
+- **Zod livelock (jsse#340, open).** See the Zod section above. jsse hangs
+  indefinitely running the zod normal/jitless corpus instead of completing —
+  a spinning thread burns ~100% CPU while the main thread waits on a futex
+  that's never signaled. Discovered 2026-07-20, same day as the moment fix
+  above; suspected (unconfirmed) to be an edge case in the same GC temp-root
+  rework, since zod's validation codegen is unusually binary-operator-heavy.
