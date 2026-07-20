@@ -118,3 +118,23 @@ uv run python scripts/run-jetstream.py --test OfflineAssembler --iterations 1 --
 ```
 
 The runner covers pure-JS JetStream 3 workloads and skips Wasm/Worker-dependent tests.
+
+## Running the Node-compat library tests
+
+Beyond test262, real-world npm libraries are run as engine stress tests: each
+library's own upstream test suite is bundled with esbuild and executed on
+`target/release/jsse`, cross-checked against Node as a reference oracle.
+
+```bash
+cargo build --release
+./scripts/run-library-tests.sh <lib>          # e.g. decimal.js, acorn, zod, moment
+./scripts/run-library-tests.sh <lib> --clean  # force a fresh clone/rebuild
+./scripts/run-library-tests.sh <lib> --node   # run on Node only (reference)
+```
+
+`<lib>` is any config name under `scripts/libs/`: `acorn`, `ajv`, `big.js`,
+`bignumber.js`, `decimal.js`, `highlight.js`, `js-md5`, `js-sha256`, `lodash`,
+`luxon`, `moment`, `prismjs`, `qs`, `uglify-js`, `zod`. None of this is baked
+into jsse's globals or run in CI — it's a manual, additive-only harness that
+never affects test262. See [`scripts/README.md`](scripts/README.md) for the
+full recipe, the current per-library status table, and how to add a library.
