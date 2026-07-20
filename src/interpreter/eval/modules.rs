@@ -109,8 +109,15 @@ impl Interpreter {
     /// Check if accessing `key` on a module namespace object would hit TDZ.
     /// Returns Err(ReferenceError) if the binding is uninitialized.
     /// Returns Ok(()) if the key is safe to access or the object is not a namespace.
-    pub(crate) fn check_namespace_tdz(&mut self, obj_id: u64, key: &str) -> Result<(), JsValue> {
-        if key.starts_with("Symbol(") {
+    pub(crate) fn check_namespace_tdz<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        obj_id: u64,
+        key: &K,
+    ) -> Result<(), JsValue> {
+        if key
+            .as_property_key_str()
+            .is_some_and(|key| key.starts_with("Symbol("))
+        {
             return Ok(());
         }
         let ns_data = if let Some(obj) = self.get_object_cell(obj_id) {
@@ -123,7 +130,9 @@ impl Interpreter {
             if ns_data.deferred && !Self::is_symbol_like_namespace_key(key, true) {
                 self.ensure_deferred_namespace_evaluation(obj_id)?;
             }
-            if let Some(binding_name) = ns_data.export_to_binding.get(key) {
+            if let Some(key_str) = key.as_property_key_str()
+                && let Some(binding_name) = ns_data.export_to_binding.get(key_str)
+            {
                 if binding_name.starts_with("*ns:") {
                     return Ok(());
                 }
@@ -141,12 +150,12 @@ impl Interpreter {
                             if let Some(binding) = source_ref.export_bindings.get(export_name) {
                                 if source_ref.env.borrow().is_in_tdz(binding) {
                                     return Err(self.create_reference_error(&format!(
-                                        "Cannot access '{key}' before initialization"
+                                        "Cannot access '{key_str}' before initialization"
                                     )));
                                 }
                             } else if source_ref.env.borrow().is_in_tdz(export_name) {
                                 return Err(self.create_reference_error(&format!(
-                                    "Cannot access '{key}' before initialization"
+                                    "Cannot access '{key_str}' before initialization"
                                 )));
                             }
                         }
@@ -155,7 +164,7 @@ impl Interpreter {
                 }
                 if ns_data.env.borrow().is_in_tdz(binding_name) {
                     return Err(self.create_reference_error(&format!(
-                        "Cannot access '{key}' before initialization"
+                        "Cannot access '{key_str}' before initialization"
                     )));
                 }
             }
@@ -164,8 +173,12 @@ impl Interpreter {
     }
 
     /// IsSymbolLikeNamespaceKey(P, O): true if P is a Symbol, or deferred + "then"
-    pub fn is_symbol_like_namespace_key(key: &str, deferred: bool) -> bool {
-        key.starts_with("Symbol(") || (deferred && key == "then")
+    pub fn is_symbol_like_namespace_key<K: PropertyKeyLike + ?Sized>(
+        key: &K,
+        deferred: bool,
+    ) -> bool {
+        key.as_property_key_str()
+            .is_some_and(|key| key.starts_with("Symbol(") || (deferred && key == "then"))
     }
 
     /// Trigger evaluation of a deferred module namespace when a non-symbol-like key is accessed.

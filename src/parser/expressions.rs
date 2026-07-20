@@ -1599,11 +1599,7 @@ impl<'a> Parser<'a> {
             if prop.computed || prop.shorthand || prop.kind != PropertyKind::Init {
                 continue;
             }
-            let is_proto = match &prop.key {
-                PropertyKey::Identifier(n) => n == "__proto__",
-                PropertyKey::String(s) => s == "__proto__",
-                _ => false,
-            };
+            let is_proto = prop.key.matches_name("__proto__");
             if is_proto {
                 if matches!(&prop.value, Expression::Function(_)) {
                     continue;

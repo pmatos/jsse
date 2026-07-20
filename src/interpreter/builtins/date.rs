@@ -44,11 +44,11 @@ fn date_to_locale_string(
             Completion::Normal(v) => {
                 if let JsValue::Object(o) = &v {
                     if let Some(src) = interp.get_object_cell(o.id) {
-                        let pds: Vec<(String, PropertyDescriptor)> = src
+                        let pds: Vec<(JsPropertyKey, PropertyDescriptor)> = src
                             .borrow()
                             .properties
                             .iter()
-                            .map(|(k, pd)| (k.to_string(), pd.clone()))
+                            .map(|(k, pd)| (k.clone(), pd.clone()))
                             .collect();
                         let new_obj_id = interp.create_object_id();
                         for (k, pd) in pds {

@@ -3749,7 +3749,10 @@ impl Interpreter {
                             // Store source text for top-level primitive
                             let source_map = if is_json_primitive(&parsed) {
                                 let mut sm = smap;
-                                sm.insert((wrapper_id, "".to_string()), s.trim().to_string());
+                                sm.insert(
+                                    (wrapper_id, JsPropertyKey::from_str("")),
+                                    s.trim().to_string(),
+                                );
                                 Some(sm)
                             } else {
                                 Some(smap)
@@ -3823,7 +3826,7 @@ impl Interpreter {
                         false,
                     );
                     let key = crate::interpreter::key_intern::intern_key("rawJSON");
-                    o.property_order.push(std::rc::Rc::clone(&key));
+                    o.property_order.push(key.clone());
                     o.properties.insert(key, desc);
                 }
                 interp
@@ -5015,7 +5018,9 @@ impl Interpreter {
                                 .and_then(|obj| {
                                     let b = obj.borrow();
                                     let ns = b.module_namespace()?;
-                                    Some(ns.export_names.contains(&key))
+                                    Some(key.as_str().is_some_and(|key| {
+                                        ns.export_names.iter().any(|name| name == key)
+                                    }))
                                 })
                                 .unwrap_or(false);
                             if is_export {
@@ -5074,7 +5079,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
                         // For non-proxy, also include string wrapper char indices
-                        let mut extra_str_keys: Vec<String> = Vec::new();
+                        let mut extra_str_keys: Vec<JsPropertyKey> = Vec::new();
                         if interp
                             .get_object_cell(obj_id)
                             .map(|ob| !ob.borrow().is_proxy())
@@ -5084,70 +5089,34 @@ impl Interpreter {
                             let b = obj.borrow();
                             if let Some(JsValue::String(ref s)) = b.primitive_value {
                                 for i in 0..s.len() {
-                                    extra_str_keys.push(i.to_string());
+                                    extra_str_keys.push(JsPropertyKey::from(i.to_string()));
                                 }
                             }
                         }
                         let mut result = Vec::new();
                         // Add extra char index keys first (string wrapper exotic)
                         for k in &extra_str_keys {
-                            result.push(JsValue::String(JsString::from_str(k)));
+                            result.push(JsValue::String(k.to_js_string()));
                         }
-                        let is_proxy = interp
-                            .get_object(obj_id)
-                            .is_some_and(|ob| ob.borrow().is_proxy());
-                        if is_proxy {
-                            // Proxy: preserve ownKeys trap order (spec §10.5.11)
-                            for kv in &all_keys {
-                                if let JsValue::String(s) = kv {
-                                    let k = s.to_rust_string();
-                                    if !k.starts_with("Symbol(") && !extra_str_keys.contains(&k) {
-                                        result.push(JsValue::String(JsString::from_str(&k)));
-                                    }
+                        // [[OwnPropertyKeys]] already supplies the required order for ordinary
+                        // objects and preserves the trap order for proxies.
+                        for kv in &all_keys {
+                            if let JsValue::String(s) = kv {
+                                let key = JsPropertyKey::from_js_string(s);
+                                if !extra_str_keys.contains(&key) {
+                                    result.push(JsValue::String(s.clone()));
                                 }
                             }
-                        } else {
-                            let mut int_keys: Vec<(u64, String)> = Vec::new();
-                            let mut str_keys: Vec<String> = Vec::new();
-                            for kv in &all_keys {
-                                if let JsValue::String(s) = kv {
-                                    let k = s.to_rust_string();
-                                    if extra_str_keys.contains(&k) {
-                                        continue;
-                                    }
-                                    if k.starts_with("Symbol(") {
-                                        continue;
-                                    }
-                                    if let Ok(n) = k.parse::<u64>() {
-                                        if n.to_string() == k {
-                                            int_keys.push((n, k));
-                                        } else {
-                                            str_keys.push(k);
-                                        }
-                                    } else {
-                                        str_keys.push(k);
-                                    }
-                                }
-                            }
-                            int_keys.sort_by_key(|(n, _)| *n);
-                            for (_, k) in int_keys {
-                                result.push(JsValue::String(JsString::from_str(&k)));
-                            }
-                            result.extend(
-                                str_keys
-                                    .iter()
-                                    .map(|k| JsValue::String(JsString::from_str(k))),
-                            );
                         }
                         // For each string key call [[GetOwnProperty]] and filter enumerable
                         let mut enum_keys: Vec<JsValue> = Vec::new();
                         // Extra char index keys are always enumerable (string exotic)
                         for k in &extra_str_keys {
-                            enum_keys.push(JsValue::String(JsString::from_str(k)));
+                            enum_keys.push(JsValue::String(k.to_js_string()));
                         }
                         for kv in result.iter().skip(extra_str_keys.len()) {
                             if let JsValue::String(s) = kv {
-                                let k = s.to_rust_string();
+                                let k = JsPropertyKey::from_js_string(s);
                                 let desc_val =
                                     match interp.proxy_get_own_property_descriptor(obj_id, &k) {
                                         Ok(v) => v,
@@ -5204,11 +5173,7 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             };
                             for key_val in keys {
-                                let key = match &key_val {
-                                    JsValue::String(s) => s.to_rust_string(),
-                                    JsValue::Symbol(s) => s.to_property_key(),
-                                    _ => continue,
-                                };
+                                let key = to_property_key_string(&key_val);
                                 // GetOwnProperty to determine accessor vs data
                                 let desc_val =
                                     match interp.proxy_get_own_property_descriptor(obj_id, &key) {
@@ -5279,11 +5244,11 @@ impl Interpreter {
                                     }
                                 }
                             }
-                            let keys_and_descs: Vec<(String, PropertyDescriptor)> = {
+                            let keys_and_descs: Vec<(JsPropertyKey, PropertyDescriptor)> = {
                                 let b = obj.borrow();
                                 b.properties
                                     .iter()
-                                    .map(|(k, d)| (k.to_string(), d.clone()))
+                                    .map(|(k, d)| (k.clone(), d.clone()))
                                     .collect()
                             };
                             for (key, desc) in keys_and_descs {
@@ -5408,11 +5373,7 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             };
                             for key_val in all_keys {
-                                let key = match &key_val {
-                                    JsValue::String(s) => s.to_rust_string(),
-                                    JsValue::Symbol(s) => s.to_property_key(),
-                                    _ => continue,
-                                };
+                                let key = to_property_key_string(&key_val);
                                 // Check enumerability via [[GetOwnProperty]]
                                 let desc_check =
                                     match interp.proxy_get_own_property_descriptor(d_id, &key) {
@@ -5464,107 +5425,55 @@ impl Interpreter {
                 .insert_builtin("create".to_string(), create_fn);
 
             // Object.entries
-            let entries_fn =
-                self.create_function(JsFunction::native(
-                    "entries".to_string(),
-                    1,
-                    |interp, _this, args| {
-                        let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let obj_val = match interp.to_object(&target) {
-                            Completion::Normal(v) => v,
-                            other => return other,
+            let entries_fn = self.create_function(JsFunction::native(
+                "entries".to_string(),
+                1,
+                |interp, _this, args| {
+                    let target = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let obj_val = match interp.to_object(&target) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    if let JsValue::Object(o) = &obj_val {
+                        let obj_id = o.id;
+                        // EnumerableOwnProperties: call [[OwnPropertyKeys]], then [[GetOwnProperty]] once per string key
+                        let all_keys = match interp.proxy_own_keys(obj_id) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
                         };
-                        if let JsValue::Object(o) = &obj_val {
-                            let obj_id = o.id;
-                            // EnumerableOwnProperties: call [[OwnPropertyKeys]], then [[GetOwnProperty]] once per string key
-                            let all_keys = match interp.proxy_own_keys(obj_id) {
-                                Ok(k) => k,
-                                Err(e) => return Completion::Throw(e),
+                        let mut pairs = Vec::new();
+                        for key_val in all_keys {
+                            let JsValue::String(key_string) = key_val else {
+                                continue;
                             };
-                            // String exotic: prepend char indices as enumerable
-                            let mut extra_str_keys: Vec<String> = Vec::new();
-                            if interp
-                                .get_object_cell(obj_id)
-                                .map(|ob| !ob.borrow().is_proxy())
-                                .unwrap_or(false)
-                                && let Some(obj) = interp.get_object_cell(obj_id)
-                            {
-                                let b = obj.borrow();
-                                if let Some(JsValue::String(ref s)) = b.primitive_value {
-                                    for i in 0..s.len() {
-                                        extra_str_keys.push(i.to_string());
-                                    }
-                                }
-                            }
-                            let mut pairs = Vec::new();
-                            // Extra char index keys from string exotic
-                            for k in &extra_str_keys {
-                                let val = match interp.get_object_property(obj_id, k, &obj_val) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
+                            let k = JsPropertyKey::from_js_string(&key_string);
+                            let desc_val =
+                                match interp.proxy_get_own_property_descriptor(obj_id, &k) {
+                                    Ok(v) => v,
+                                    Err(e) => return Completion::Throw(e),
                                 };
-                                pairs.push(interp.create_array(vec![
-                                    JsValue::String(JsString::from_str(k)),
-                                    val,
-                                ]));
+                            if matches!(desc_val, JsValue::Undefined) {
+                                continue;
                             }
-                            // Sort string keys: integer indices first, then the rest
-                            let mut int_keys: Vec<(u64, String)> = Vec::new();
-                            let mut str_keys: Vec<String> = Vec::new();
-                            for kv in &all_keys {
-                                if let JsValue::String(s) = kv {
-                                    let k = s.to_rust_string();
-                                    if extra_str_keys.contains(&k) || k.starts_with("Symbol(") {
-                                        continue;
-                                    }
-                                    if let Ok(n) = k.parse::<u64>() {
-                                        if n.to_string() == k {
-                                            int_keys.push((n, k));
-                                        } else {
-                                            str_keys.push(k);
-                                        }
-                                    } else {
-                                        str_keys.push(k);
-                                    }
-                                }
-                            }
-                            int_keys.sort_by_key(|(n, _)| *n);
-                            let ordered: Vec<String> = int_keys
-                                .into_iter()
-                                .map(|(_, k)| k)
-                                .chain(str_keys)
-                                .collect();
-                            for k in ordered {
-                                let desc_val =
-                                    match interp.proxy_get_own_property_descriptor(obj_id, &k) {
-                                        Ok(v) => v,
-                                        Err(e) => return Completion::Throw(e),
-                                    };
-                                if matches!(desc_val, JsValue::Undefined) {
+                            if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
+                                if desc.enumerable == Some(false) {
                                     continue;
                                 }
-                                if let Ok(desc) = interp.to_property_descriptor(&desc_val) {
-                                    if desc.enumerable == Some(false) {
-                                        continue;
-                                    }
-                                } else {
-                                    continue;
-                                }
-                                let val = match interp.get_object_property(obj_id, &k, &obj_val) {
-                                    Completion::Normal(v) => v,
-                                    other => return other,
-                                };
-                                pairs.push(interp.create_array(vec![
-                                    JsValue::String(JsString::from_str(&k)),
-                                    val,
-                                ]));
+                            } else {
+                                continue;
                             }
-                            let arr = interp.create_array(pairs);
-                            return Completion::Normal(arr);
+                            let val = match interp.get_object_property(obj_id, &k, &obj_val) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
+                            pairs.push(interp.create_array(vec![JsValue::String(key_string), val]));
                         }
-                        Completion::Normal(interp.create_array(Vec::new()))
-                    },
-                ));
+                        let arr = interp.create_array(pairs);
+                        return Completion::Normal(arr);
+                    }
+                    Completion::Normal(interp.create_array(Vec::new()))
+                },
+            ));
             obj_func
                 .borrow_mut()
                 .insert_builtin("entries".to_string(), entries_fn);
@@ -5586,57 +5495,12 @@ impl Interpreter {
                             Ok(k) => k,
                             Err(e) => return Completion::Throw(e),
                         };
-                        // String exotic: prepend char indices as enumerable
-                        let mut extra_str_keys: Vec<String> = Vec::new();
-                        if interp
-                            .get_object_cell(obj_id)
-                            .map(|ob| !ob.borrow().is_proxy())
-                            .unwrap_or(false)
-                            && let Some(obj) = interp.get_object(obj_id)
-                        {
-                            let b = obj.borrow();
-                            if let Some(JsValue::String(ref s)) = b.primitive_value {
-                                for i in 0..s.len() {
-                                    extra_str_keys.push(i.to_string());
-                                }
-                            }
-                        }
                         let mut values = Vec::new();
-                        // Extra char index keys from string exotic
-                        for k in &extra_str_keys {
-                            let val = match interp.get_object_property(obj_id, k, &obj_val) {
-                                Completion::Normal(v) => v,
-                                other => return other,
+                        for key_val in all_keys {
+                            let JsValue::String(key_string) = key_val else {
+                                continue;
                             };
-                            values.push(val);
-                        }
-                        // Sort string keys: integer indices first, then the rest
-                        let mut int_keys: Vec<(u64, String)> = Vec::new();
-                        let mut str_keys: Vec<String> = Vec::new();
-                        for kv in &all_keys {
-                            if let JsValue::String(s) = kv {
-                                let k = s.to_rust_string();
-                                if extra_str_keys.contains(&k) || k.starts_with("Symbol(") {
-                                    continue;
-                                }
-                                if let Ok(n) = k.parse::<u64>() {
-                                    if n.to_string() == k {
-                                        int_keys.push((n, k));
-                                    } else {
-                                        str_keys.push(k);
-                                    }
-                                } else {
-                                    str_keys.push(k);
-                                }
-                            }
-                        }
-                        int_keys.sort_by_key(|(n, _)| *n);
-                        let ordered: Vec<String> = int_keys
-                            .into_iter()
-                            .map(|(_, k)| k)
-                            .chain(str_keys)
-                            .collect();
-                        for k in ordered {
+                            let k = JsPropertyKey::from_js_string(&key_string);
                             let desc_val =
                                 match interp.proxy_get_own_property_descriptor(obj_id, &k) {
                                     Ok(v) => v,
@@ -5698,90 +5562,9 @@ impl Interpreter {
                         } else {
                             continue;
                         };
-                        // [[OwnPropertyKeys]](): use proxy_own_keys for proxy sources;
-                        // for non-proxy, build OrdinaryOwnPropertyKeys manually
-                        // (integer indices, then string keys, then symbol keys).
-                        let is_proxy_src = interp
-                            .get_object_cell(s_id)
-                            .map(|o| o.borrow().is_proxy())
-                            .unwrap_or(false);
-                        let raw_keys: Vec<JsValue> = if is_proxy_src {
-                            match interp.proxy_own_keys(s_id) {
-                                Ok(k) => k,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else if let Some(src) = interp.get_object(s_id) {
-                            let b = src.borrow();
-                            // String exotic: prepend character indices
-                            let mut result: Vec<JsValue> = Vec::new();
-                            if let Some(JsValue::String(ref s)) = b.primitive_value {
-                                for i in 0..s.len() {
-                                    result
-                                        .push(JsValue::String(JsString::from_str(&i.to_string())));
-                                }
-                            }
-                            let is_string_wrapper =
-                                matches!(b.primitive_value, Some(JsValue::String(_)));
-                            // Collect string keys (non-symbol, non-integer-index) and symbol keys separately
-                            let mut int_keys: Vec<(u64, String)> = Vec::new();
-                            let mut str_keys: Vec<String> = Vec::new();
-                            let mut sym_keys: Vec<String> = Vec::new();
-                            if let Some(elems) = b.array_elements() {
-                                for (i, value) in elems.iter().enumerate() {
-                                    if matches!(value, JsValue::Undefined) || i > 0xFFFF_FFFE {
-                                        continue;
-                                    }
-                                    let k = i.to_string();
-                                    if !b.properties.contains_key(&k) {
-                                        int_keys.push((i as u64, k));
-                                    }
-                                }
-                            }
-                            for k in &b.property_order {
-                                if is_string_wrapper && &**k == "length" {
-                                    continue;
-                                }
-                                if k.starts_with("Symbol(") {
-                                    sym_keys.push(k.to_string());
-                                } else if let Ok(n) = k.parse::<u64>() {
-                                    if n.to_string() == **k {
-                                        int_keys.push((n, k.to_string()));
-                                    } else {
-                                        str_keys.push(k.to_string());
-                                    }
-                                } else {
-                                    str_keys.push(k.to_string());
-                                }
-                            }
-                            // Also pick up symbol keys that may not be in property_order
-                            for k in b.properties.keys() {
-                                if k.starts_with("Symbol(") && !b.property_order.contains(k) {
-                                    sym_keys.push(k.to_string());
-                                }
-                            }
-                            int_keys.sort_by_key(|(n, _)| *n);
-                            // Already accounted for char indices above; add int keys
-                            for (_, k) in &int_keys {
-                                let already = result.iter().any(|v| {
-                                    if let JsValue::String(s) = v {
-                                        s.to_rust_string() == *k
-                                    } else {
-                                        false
-                                    }
-                                });
-                                if !already {
-                                    result.push(JsValue::String(JsString::from_str(k)));
-                                }
-                            }
-                            for k in str_keys {
-                                result.push(JsValue::String(JsString::from_str(&k)));
-                            }
-                            for k in sym_keys {
-                                result.push(interp.symbol_key_to_jsvalue(&k));
-                            }
-                            result
-                        } else {
-                            continue;
+                        let raw_keys = match interp.proxy_own_keys(s_id) {
+                            Ok(k) => k,
+                            Err(e) => return Completion::Throw(e),
                         };
                         for key_val in raw_keys {
                             let key_str = to_property_key_string(&key_val);
@@ -5994,11 +5777,11 @@ impl Interpreter {
                                     }
                                     if let Ok(n) = k.parse::<u64>()
                                         && n < 0xFFFFFFFF
-                                        && n.to_string() == **k
+                                        && k.eq_str(&n.to_string())
                                     {
                                         continue; // skip numeric indices
                                     }
-                                    names.push(JsValue::String(JsString::from_str(k)));
+                                    names.push(JsValue::String(k.to_js_string()));
                                 }
                                 let arr = interp.create_array(names);
                                 return Completion::Normal(arr);
@@ -6016,20 +5799,20 @@ impl Interpreter {
                             }
                         }
                         // Collect and sort non-symbol keys from property_order
-                        let prop_keys: Vec<String> = b
+                        let prop_keys: Vec<JsPropertyKey> = b
                             .property_order
                             .iter()
                             .filter(|k| !k.starts_with("Symbol("))
-                            .map(|k| k.to_string())
+                            .cloned()
                             .collect();
                         drop(b);
                         // Sort: integer indices first (already added char indices), then string keys
-                        let mut int_keys: Vec<(u64, String)> = Vec::new();
-                        let mut str_keys2: Vec<String> = Vec::new();
+                        let mut int_keys: Vec<(u64, JsPropertyKey)> = Vec::new();
+                        let mut str_keys2: Vec<JsPropertyKey> = Vec::new();
                         for k in prop_keys {
                             let already_added = names.iter().any(|v| {
                                 if let JsValue::String(s) = v {
-                                    s.to_rust_string() == k
+                                    JsPropertyKey::from_js_string(s) == k
                                 } else {
                                     false
                                 }
@@ -6038,11 +5821,11 @@ impl Interpreter {
                                 continue;
                             }
                             // For string wrappers, "length" is added at the end
-                            if is_string_wrapper && k == "length" {
+                            if is_string_wrapper && k.eq_str("length") {
                                 continue;
                             }
                             if let Ok(n) = k.parse::<u64>() {
-                                if n.to_string() == k {
+                                if k.eq_str(&n.to_string()) {
                                     int_keys.push((n, k));
                                 } else {
                                     str_keys2.push(k);
@@ -6053,10 +5836,10 @@ impl Interpreter {
                         }
                         int_keys.sort_by_key(|(n, _)| *n);
                         for (_, k) in int_keys {
-                            names.push(JsValue::String(JsString::from_str(&k)));
+                            names.push(JsValue::String(k.to_js_string()));
                         }
                         for k in str_keys2 {
-                            names.push(JsValue::String(JsString::from_str(&k)));
+                            names.push(JsValue::String(k.to_js_string()));
                         }
                         // String exotic: "length" is always an own property
                         if is_string_wrapper {
@@ -6114,17 +5897,15 @@ impl Interpreter {
                             } else {
                                 // Return symbol keys in property_order first, then any not in order
                                 let b = obj.borrow();
-                                let mut sym_keys: Vec<String> = b
+                                let mut sym_keys: Vec<JsPropertyKey> = b
                                     .property_order
                                     .iter()
                                     .filter(|k| k.starts_with("Symbol("))
-                                    .map(|k| k.to_string())
+                                    .cloned()
                                     .collect();
                                 for k in b.properties.keys() {
-                                    if k.starts_with("Symbol(")
-                                        && !sym_keys.iter().any(|s| s.as_str() == &**k)
-                                    {
-                                        sym_keys.push(k.to_string());
+                                    if k.starts_with("Symbol(") && !sym_keys.contains(k) {
+                                        sym_keys.push(k.clone());
                                     }
                                 }
                                 sym_keys
@@ -6260,11 +6041,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
                         for key_val in all_keys {
-                            let key = match &key_val {
-                                JsValue::String(s) => s.to_rust_string(),
-                                JsValue::Symbol(s) => s.to_property_key(),
-                                _ => continue,
-                            };
+                            let key = to_property_key_string(&key_val);
                             let desc_val =
                                 match interp.proxy_get_own_property_descriptor(obj_id, &key) {
                                     Ok(v) => v,
@@ -6319,11 +6096,7 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
                         for key_val in all_keys {
-                            let key = match &key_val {
-                                JsValue::String(s) => s.to_rust_string(),
-                                JsValue::Symbol(s) => s.to_property_key(),
-                                _ => continue,
-                            };
+                            let key = to_property_key_string(&key_val);
                             let desc_val =
                                 match interp.proxy_get_own_property_descriptor(obj_id, &key) {
                                     Ok(v) => v,
@@ -6374,11 +6147,7 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             };
                             for key_val in keys {
-                                let key = match &key_val {
-                                    JsValue::String(s) => s.to_rust_string(),
-                                    JsValue::Symbol(s) => s.to_property_key(),
-                                    _ => continue,
-                                };
+                                let key = to_property_key_string(&key_val);
                                 let desc_val =
                                     match interp.proxy_get_own_property_descriptor(obj_id, &key) {
                                         Ok(v) => v,
@@ -6434,11 +6203,11 @@ impl Interpreter {
                                     }
                                 }
                             }
-                            let keys: Vec<String> = obj
+                            let keys: Vec<JsPropertyKey> = obj
                                 .borrow()
                                 .properties
                                 .keys()
-                                .map(|k| k.to_string())
+                                .cloned()
                                 .collect();
                             for key in keys {
                                 let new_desc = PropertyDescriptor {
@@ -6625,13 +6394,9 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         };
                         // Collect all descriptors first, calling [[GetOwnProperty]] per key
-                        let mut descriptors: Vec<(String, PropertyDescriptor)> = Vec::new();
+                        let mut descriptors: Vec<(JsPropertyKey, PropertyDescriptor)> = Vec::new();
                         for key_val in all_keys {
-                            let key = match &key_val {
-                                JsValue::String(s) => s.to_rust_string(),
-                                JsValue::Symbol(s) => s.to_property_key(),
-                                _ => continue,
-                            };
+                            let key = to_property_key_string(&key_val);
                             // Call [[GetOwnProperty]] to check enumerability
                             let desc_val = match interp.proxy_get_own_property_descriptor(d_id, &key) {
                                 Ok(v) => v,
@@ -6696,63 +6461,9 @@ impl Interpreter {
                             Ok(k) => k,
                             Err(e) => return Completion::Throw(e),
                         };
-                        // String exotic: prepend character indices
-                        let mut keys: Vec<String> = Vec::new();
-                        let is_string_wrapper = interp
-                            .get_object_cell(obj_id)
-                            .map(|ob| {
-                                matches!(ob.borrow().primitive_value, Some(JsValue::String(_)))
-                            })
-                            .unwrap_or(false);
-                        if is_string_wrapper && let Some(obj) = interp.get_object_cell(obj_id) {
-                            let b = obj.borrow();
-                            if let Some(JsValue::String(ref s)) = b.primitive_value {
-                                for i in 0..s.code_units.len() {
-                                    keys.push(i.to_string());
-                                }
-                            }
-                        }
-                        // Add keys from proxy_own_keys in sorted order
-                        let mut int_keys: Vec<(u64, String)> = Vec::new();
-                        let mut str_keys: Vec<String> = Vec::new();
-                        let mut sym_keys: Vec<String> = Vec::new();
-                        for kv in &all_keys {
-                            let k = match kv {
-                                JsValue::String(s) => s.to_rust_string(),
-                                JsValue::Symbol(s) => s.to_property_key(),
-                                _ => continue,
-                            };
-                            if keys.contains(&k) {
-                                continue;
-                            }
-                            if k.starts_with("Symbol(") {
-                                sym_keys.push(k);
-                            } else if let Ok(n) = k.parse::<u64>() {
-                                if n.to_string() == k {
-                                    int_keys.push((n, k));
-                                } else {
-                                    str_keys.push(k);
-                                }
-                            } else {
-                                str_keys.push(k);
-                            }
-                        }
-                        int_keys.sort_by_key(|(n, _)| *n);
-                        for (_, k) in int_keys {
-                            keys.push(k);
-                        }
-                        for k in str_keys {
-                            keys.push(k);
-                        }
-                        // String exotic: "length" is always own (add before symbols)
-                        if is_string_wrapper && !keys.contains(&"length".to_string()) {
-                            keys.push("length".to_string());
-                        }
-                        for k in sym_keys {
-                            keys.push(k);
-                        }
                         let result_id = interp.create_object_id();
-                        for key in keys {
+                        for key_val in all_keys {
+                            let key = to_property_key_string(&key_val);
                             // Use proxy_get_own_property_descriptor to invoke trap
                             let desc_val =
                                 match interp.proxy_get_own_property_descriptor(obj_id, &key) {
@@ -6760,16 +6471,10 @@ impl Interpreter {
                                     Err(e) => return Completion::Throw(e),
                                 };
                             if !matches!(desc_val, JsValue::Undefined) {
-                                let key_sym = interp.symbol_key_to_jsvalue(&key);
-                                let key_str = if let JsValue::String(ref s) = key_sym {
-                                    s.to_rust_string()
-                                } else {
-                                    key.clone()
-                                };
                                 interp
                                     .get_object_cell_expect(result_id)
                                     .borrow_mut()
-                                    .insert_value(key_str, desc_val);
+                                    .insert_value(key, desc_val);
                             }
                         }
                         let id = result_id;
@@ -7072,7 +6777,10 @@ impl Interpreter {
                                 .unwrap()
                                 .export_names
                                 .clone();
-                            if export_names.contains(&key) {
+                            if key
+                                .as_str()
+                                .is_some_and(|key| export_names.iter().any(|name| name == key))
+                            {
                                 return Completion::Normal(JsValue::Boolean(false));
                             }
                             return Completion::Normal(JsValue::Boolean(true));
@@ -7085,8 +6793,10 @@ impl Interpreter {
                         return Completion::Normal(JsValue::Boolean(false));
                     }
                     obj_mut.remove_property(&key);
-                    if let Some(map) = obj_mut.parameter_map_mut() {
-                        map.remove(&key);
+                    if let Some(key_str) = key.as_str()
+                        && let Some(map) = obj_mut.parameter_map_mut()
+                    {
+                        map.remove(key_str);
                     }
                     if let Ok(idx) = key.parse::<usize>()
                         && let Some(elems) = obj_mut.array_elements_mut()
@@ -7184,7 +6894,9 @@ impl Interpreter {
                                 .and_then(|obj| {
                                     let b = obj.borrow();
                                     let ns = b.module_namespace()?;
-                                    Some(ns.export_names.contains(&key))
+                                    Some(key.as_str().is_some_and(|key| {
+                                        ns.export_names.iter().any(|name| name == key)
+                                    }))
                                 })
                                 .unwrap_or(false);
                             if is_export {
@@ -7373,22 +7085,22 @@ impl Interpreter {
                             for i in 0..len {
                                 keys.push(JsValue::String(JsString::from_str(&i.to_string())));
                             }
-                            let mut strings: Vec<(String, usize)> = Vec::new();
-                            let mut symbols: Vec<(String, usize)> = Vec::new();
+                            let mut strings: Vec<(JsPropertyKey, usize)> = Vec::new();
+                            let mut symbols: Vec<(JsPropertyKey, usize)> = Vec::new();
                             for (pos, k) in property_order.iter().enumerate() {
                                 if k.starts_with("Symbol(") {
-                                    symbols.push((k.to_string(), pos));
+                                    symbols.push((k.clone(), pos));
                                 } else if let Ok(n) = k.parse::<u64>()
                                     && n < 0xFFFFFFFF
-                                    && n.to_string() == **k
+                                    && k.eq_str(&n.to_string())
                                 {
                                     // Skip numeric indices, already handled above
                                 } else {
-                                    strings.push((k.to_string(), pos));
+                                    strings.push((k.clone(), pos));
                                 }
                             }
                             for (s, _) in &strings {
-                                keys.push(JsValue::String(JsString::from_str(s)));
+                                keys.push(JsValue::String(s.to_js_string()));
                             }
                             for (sym_key, _) in &symbols {
                                 keys.push(interp.symbol_key_to_jsvalue(sym_key));
@@ -7414,29 +7126,29 @@ impl Interpreter {
                     }
                     let property_order = obj.borrow().property_order.clone();
                     // Collect keys already in property_order into virtual_indices set for dedup
-                    let existing_keys: HashSet<String> =
-                        property_order.iter().map(|k| k.to_string()).collect();
+                    let existing_keys: HashSet<JsPropertyKey> =
+                        property_order.iter().cloned().collect();
                     // OrdinaryOwnPropertyKeys: indices ascending, then strings, then symbols
                     let mut indices: Vec<(u32, usize)> = Vec::new();
-                    let mut strings: Vec<(String, usize)> = Vec::new();
-                    let mut symbols: Vec<(String, usize)> = Vec::new();
+                    let mut strings: Vec<(JsPropertyKey, usize)> = Vec::new();
+                    let mut symbols: Vec<(JsPropertyKey, usize)> = Vec::new();
                     // Add virtual string indices first (they have implicit position before all others)
                     for idx in &virtual_indices {
                         let k = idx.to_string();
-                        if !existing_keys.contains(&k) {
+                        if !existing_keys.contains(k.as_bytes()) {
                             indices.push((*idx, 0));
                         }
                     }
                     for (pos, k) in property_order.iter().enumerate() {
                         if k.starts_with("Symbol(") {
-                            symbols.push((k.to_string(), pos));
+                            symbols.push((k.clone(), pos));
                         } else if let Ok(n) = k.parse::<u64>()
                             && n < 0xFFFFFFFF
-                            && n.to_string() == **k
+                            && k.eq_str(&n.to_string())
                         {
                             indices.push((n as u32, pos));
                         } else {
-                            strings.push((k.to_string(), pos));
+                            strings.push((k.clone(), pos));
                         }
                     }
                     indices.sort_by_key(|&(n, _)| n);
@@ -7446,11 +7158,11 @@ impl Interpreter {
                         keys.push(JsValue::String(JsString::from_str(&n.to_string())));
                     }
                     // Add "length" for String exotic objects (before other strings)
-                    if has_virtual_length && !existing_keys.contains("length") {
+                    if has_virtual_length && !existing_keys.contains("length".as_bytes()) {
                         keys.push(JsValue::String(JsString::from_str("length")));
                     }
                     for (s, _) in &strings {
-                        keys.push(JsValue::String(JsString::from_str(s)));
+                        keys.push(JsValue::String(s.to_js_string()));
                     }
                     for (sym_key, _) in &symbols {
                         keys.push(interp.symbol_key_to_jsvalue(sym_key));
