@@ -153,7 +153,10 @@ shared core (which includes QUnit's own `equiv`, ported verbatim, for
 
 It also aliases Node's `global` to `globalThis`, which many bundles rely on for
 their root-object detection. The TAP frontend supports Jest's array-table
-`test.each` form in addition to the basic globals.
+`test.each` form in addition to the basic globals. Mocha-style `describe.only`
+and `it.only` filter the registered suite tree globally, including nested
+focus, direct-test precedence, and focused skipped tests; the exclusive table
+form `test.only.each` registers each generated row as a focused test.
 
 Layer it into a library by setting `LIB_SHIM="node-test-harness.js"` (it is
 prepended after `node-shim.js` and `node-buffer-shim.js`). Like the other shims
@@ -228,6 +231,7 @@ assertions).
 | `ajv` | v8.17.1 | ⚠️ 5,466 / 5,480 (Node: 5,480) | ~4 min; four codegen option variants across drafts 6, 7, 2019-09, and 2020-12; residuals tracked in #274 and #275 |
 | `prismjs` | v1.30.0 | ✅ 2,563 (cross-checked) | token streams for ~290 grammars |
 | `uglify-js` | v3.19.3 | ✅ 4,233 (cross-checked) | ~15 min; complete compress DSL parse/transform/mangle/codegen corpus |
+| `highlight.js` | 11.11.2 | ✅ 731 (cross-checked) | 536 markup + 195 auto-detection fixtures across 192 grammars; ~30 min |
 | `js-sha256` | v0.11.1 | ✅ 916 (cross-checked) | Pure-JS SHA-224/SHA-256 and HMAC vectors; string, Buffer, TypedArray, and ArrayBuffer inputs |
 | `luxon` | 3.7.2 | ⚠️ 1,045 / 1,152 | exact count cross-checked; Node is 1,152 / 1,152; blocked on #262–#265 |
 | `moment` | 2.30.1 | ⚠️ 198 failing assertions across 3,871 tests | exact registered-test count cross-checked; Node is green with 162,868 assertions; residual tracked in #311 |
@@ -260,6 +264,28 @@ The suite exposed a non-Unicode RegExp range gap: character classes spanning
 UTF-16 surrogates did not include jsse's internal PUA-mapped code units, and the
 functional `@@replace` path converted matched/replacement strings lossily. The
 engine now preserves those code units and the UglifyJS suite is skip-free.
+
+### highlight.js markup and auto-detection fixtures
+
+`scripts/gen-highlightjs-entry.js` registers all 192 built-in grammars from the
+pinned source tree and embeds its filesystem fixtures into one deterministic
+bundle. The 536 markup fixtures run in highlight.js debug mode and compare the
+generated HTML byte-for-byte with upstream's expected output after the same
+whitespace trimming as its Mocha suite.
+
+The auto-detection corpus contributes 195 more cases after applying upstream's
+`autoDetection()` filter to its 198 inputs (G-code, properties, and plain text
+opt out).
+Each eligible input competes against the complete grammar set, exercising the
+relevance-scoring state machine rather than a single-language fast path. This
+is the expensive half of the run: roughly 30 minutes on jsse's tree-walker.
+
+Upstream currently comments out its dynamic auto-detection assertions, and
+eight ambiguous samples are won by a different grammar when all languages
+compete. The generator records Node's winners for pinned 11.11.2 and runs the
+public production mode for detection; debug mode exposes an upstream Nix
+zero-width assertion on otherwise valid inputs. Both engines therefore compare
+against the same fixed Node oracle and still report the exact 731-case count.
 
 ### Luxon
 
