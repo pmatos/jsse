@@ -1266,19 +1266,25 @@
 
     // Jest's array-table form: test.each([[a, b], [c, d]])(name, callback).
     // The callback receives each row as positional arguments and every row is
-    // registered as a distinct test, preserving the oracle-visible count.
-    it.each = function (table) {
-      return function (name, fn) {
-        for (var i = 0; i < table.length; i++) {
-          (function (row, index) {
-            var args = Array.isArray(row) ? row : [row];
-            it(formatEachName(name, args, index), function () {
-              return fn.apply(this, args);
-            });
-          })(table[i], i);
-        }
+    // registered as a distinct test, preserving the oracle-visible count. The
+    // per-row registrar is a parameter so it.only.each can register each row as
+    // a *focused* test (mirroring Mocha/Jest's test.only.each) rather than an
+    // ordinary one.
+    function eachRegistrar(register) {
+      return function (table) {
+        return function (name, fn) {
+          for (var i = 0; i < table.length; i++) {
+            (function (row, index) {
+              var args = Array.isArray(row) ? row : [row];
+              register(formatEachName(name, args, index), function () {
+                return fn.apply(this, args);
+              });
+            })(table[i], i);
+          }
+        };
       };
-    };
+    }
+    it.each = eachRegistrar(it);
 
     function xit(name) {
       return addTest(name, null, true, false);
@@ -1297,6 +1303,11 @@
     it.only = function (name, fn) {
       return addTest(name, fn, false, true);
     };
+    // test.only.each(table)(...) must register each row as a *focused* test so
+    // exclusivity applies to the generated rows (global `test` aliases `it`, so
+    // this covers test.only.each too). Without it, replacing the old
+    // `it.only = it` alias would drop `.each` and throw at registration.
+    it.only.each = eachRegistrar(it.only);
 
     function hasOnly(suite) {
       if (suite.onlyTests.length || suite.onlySuites.length) return true;
