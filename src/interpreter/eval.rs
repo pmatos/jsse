@@ -3578,7 +3578,7 @@ impl Interpreter {
                                             if env.borrow().strict {
                                                 return Completion::Throw(self.create_type_error(
                                                 &format!(
-                                                    "Cannot assign to read only property '{key}'"
+                                                    "Cannot assign to read only property '{key}' of object '#<Object>'"
                                                 ),
                                             ));
                                             }
