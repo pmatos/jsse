@@ -273,10 +273,10 @@
   }
 
   // ==========================================================================
-  // objectType + equiv — ported verbatim from qunitjs 2.4.1 (qunit/qunit.js),
-  // the deepEqual engine. Hand-rolling structural equality is a known trap
-  // (NaN, Date, RegExp, Map/Set, cyclic, null-proto objects), so we keep QUnit's
-  // own implementation to match its semantics exactly.
+  // objectType + createEquiv — based on qunitjs 2.4.1 (qunit/qunit.js), the
+  // deepEqual engine. QUnit uses the original behavior; tape additionally
+  // compares array-index ownership because its deep-equal treats a sparse hole
+  // and an own property containing undefined as different values.
   // ==========================================================================
   function objectType(obj) {
     if (typeof obj === "undefined") return "undefined";
@@ -301,7 +301,7 @@
     }
   }
 
-  var equiv = (function () {
+  function createEquiv(compareArrayOwnership) {
     var pairs = [];
     var getProto =
       Object.getPrototypeOf ||
@@ -379,6 +379,13 @@
         len = a.length;
         if (len !== b.length) return false;
         for (i = 0; i < len; i++) {
+          if (
+            compareArrayOwnership &&
+            Object.prototype.hasOwnProperty.call(a, i) !==
+              Object.prototype.hasOwnProperty.call(b, i)
+          ) {
+            return false;
+          }
           if (!breadthFirstCompareChild(a[i], b[i])) return false;
         }
         return true;
@@ -471,7 +478,10 @@
       pairs.length = 0;
       return result;
     };
-  })();
+  }
+
+  var equiv = createEquiv(false);
+  var tapeEquiv = createEquiv(true);
 
   // A compact value renderer for failure diagnostics (not Node's util.inspect).
   function dump(v) {
@@ -1578,7 +1588,7 @@
         },
         deepEqual: function (actual, expected, message, extra) {
           assert(
-            equiv(actual, expected),
+            tapeEquiv(actual, expected),
             message || "should be deeply equivalent",
             actual,
             expected,
@@ -1587,7 +1597,7 @@
         },
         notDeepEqual: function (actual, expected, message, extra) {
           assert(
-            !equiv(actual, expected),
+            !tapeEquiv(actual, expected),
             message || "should not be deeply equivalent",
             actual,
             expected,
