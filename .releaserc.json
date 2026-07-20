@@ -1,0 +1,18 @@
+{
+  "branches": ["main"],
+  "tagFormat": "v${version}",
+  "plugins": [
+    "@semantic-release/commit-analyzer",
+    "@semantic-release/release-notes-generator",
+    ["@semantic-release/changelog", { "changelogFile": "CHANGELOG.md" }],
+    ["@semantic-release/exec", { "prepareCmd": "bash .github/semantic-release/prepare.sh ${nextRelease.version}" }],
+    ["@semantic-release/github", { "assets": [
+      { "path": "release-upload/*.tar.gz" },
+      { "path": "release-upload/SHA256SUMS.txt" }
+    ] }],
+    ["@semantic-release/git", {
+      "assets": ["CHANGELOG.md", "Cargo.toml", "Cargo.lock"],
+      "message": "chore(release): ${nextRelease.version} [skip ci]\n\n${nextRelease.notes}"
+    }]
+  ]
+}
