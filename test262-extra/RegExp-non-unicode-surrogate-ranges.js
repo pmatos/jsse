@@ -32,3 +32,21 @@ if (!/[\uD800-\uDFFF]/.test(high) || !/[\uD800-\uDFFF]/.test(low)) {
 if (/[^\uD800-\uDFFF]/.test(high) || /[^\uD800-\uDFFF]/.test(low)) {
   throw new Test262Error("negated surrogate range matched lone surrogates");
 }
+
+// A negated class beginning with a literal hyphen followed by a
+// surrogate-spanning atom must treat the leading '^' as the negation marker,
+// not as the low endpoint of a range. `[^-\uD800]` means "not '-' and not
+// U+D800", so it must match 'A' and reject both '-' and U+D800.
+if (!/[^-\uD800]/.test("A")) {
+  throw new Test262Error("negated class with leading hyphen rejected an unrelated char");
+}
+if (/[^-\uD800]/.test("\uD800")) {
+  throw new Test262Error("negated class with leading hyphen matched the excluded surrogate");
+}
+if (/[^-\uD800]/.test("-")) {
+  throw new Test262Error("negated class with leading hyphen matched the literal hyphen");
+}
+// The '^' as a genuine range endpoint mid-class must still form a range.
+if (!/[a^-￿]/.test("^") || !/[a^-￿]/.test("_")) {
+  throw new Test262Error("literal '^' range endpoint mid-class no longer forms a range");
+}

@@ -1888,6 +1888,10 @@ pub(super) fn translate_js_pattern_ex(
     let mut i = 0;
     let mut in_char_class = false;
     let mut cc_prev_was_class_escape = false;
+    // Index just past the '[' that opened the current class. A negation '^'
+    // (if present) sits here and is not part of ClassContents, so it must never
+    // be taken as the low endpoint of a surrogate-range expansion.
+    let mut cc_content_start: usize = 0;
     let mut groups_seen: u32 = 0;
     let mut open_groups: Vec<u32> = Vec::new();
     let mut open_group_names: Vec<Option<String>> = Vec::new();
@@ -2106,6 +2110,7 @@ pub(super) fn translate_js_pattern_ex(
             in_char_class = true;
             result.push(c);
             i += 1;
+            cc_content_start = i;
             continue;
         }
         if c == ']' && in_char_class {
@@ -2131,6 +2136,7 @@ pub(super) fn translate_js_pattern_ex(
         // astral character).
         if in_char_class
             && !unicode
+            && !(i == cc_content_start && chars[i] == '^')
             && let Some((lo, lo_end)) = parse_simple_class_atom(&chars, i)
             && lo_end < len
             && chars[lo_end] == '-'
