@@ -230,7 +230,9 @@ can similarly alias it to `node-buffer-module.js`. The selector exports the
 shared JS-only Buffer shim on JSSE and Node's native `node:buffer` module on the
 reference path. `node-util-module.js` provides the equivalent selector for the
 shared `util.format`/`util.inspect` implementation, while
-`node-string-decoder-module.js` supplies iconv-lite's buffered decoder seam.
+`node-string-decoder-module.js` supplies iconv-lite's buffered decoder seam,
+including UTF-8, UTF-16LE, base64, and base64url continuation state across
+`write()`/`end()` chunk boundaries.
 
 Full **chai** and **uvu** adapters remain deferred. Luxon settles the Jest seam
 concretely: `gen-luxon-entry.js` bundles the published `expect/build/matchers`
