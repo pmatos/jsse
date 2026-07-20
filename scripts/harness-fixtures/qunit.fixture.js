@@ -8,7 +8,7 @@
 // tests, expect() planning, raises, and — via one deliberately failing
 // assertion — that failures are detected and counted (not just passes).
 //
-// Expected summary: PASS: 23  FAIL: 1  TOTAL: 24
+// Expected summary: PASS: 24  FAIL: 1  TOTAL: 25
 
 QUnit.module("primitives");
 QUnit.test("equality asserts", function (assert) {
@@ -23,8 +23,9 @@ QUnit.test("equality asserts", function (assert) {
 
 QUnit.module("deepEqual");
 QUnit.test("structural equality edge cases", function (assert) {
-  assert.expect(8);
+  assert.expect(9);
   assert.deepEqual({ a: [1, 2], b: { c: 3 } }, { a: [1, 2], b: { c: 3 } }, "nested");
+  assert.deepEqual([, "x"], [undefined, "x"], "QUnit ignores sparse hole ownership");
   assert.deepEqual([NaN], [NaN], "NaN equals NaN structurally");
   assert.deepEqual(new Date(0), new Date(0), "Date by value");
   assert.deepEqual(/x/gi, /x/gi, "RegExp by source+flags");

@@ -1,15 +1,35 @@
 // Self-test for the tape assertion-object adapter. The shared harness is inert
 // on Node, so run-harness-selftest.sh validates this fixture on JSSE alone.
 //
-// Expected summary: PASS: 13  FAIL: 0  TOTAL: 13
+// Expected summary: PASS: 17  FAIL: 0  TOTAL: 17
 
 var tape = globalThis.__tape;
 var restored = { value: true };
+var nonEnumerableHole = [];
+Object.defineProperty(nonEnumerableHole, 0, {
+  value: undefined,
+  enumerable: false,
+  configurable: true,
+  writable: true,
+});
+nonEnumerableHole[1] = "x";
 
 tape("tape adapter", function (t) {
   t.equal(1, 1, "strict equality");
   t.notEqual(1, "1", "strict inequality");
   t.deepEqual({ a: [1, NaN] }, { a: [1, NaN] }, "deep equality");
+  t.deepEqual([, "x"], [, "x"], "matching sparse array holes");
+  t.notDeepEqual([, "x"], [undefined, "x"], "sparse hole is not undefined");
+  t.notDeepEqual(
+    { a: [, "x"] },
+    { a: [undefined, "x"] },
+    "nested sparse hole is not undefined"
+  );
+  t.deepEqual(
+    [, "x"],
+    nonEnumerableHole,
+    "sparse hole equals non-enumerable own undefined"
+  );
   t.ok(true, "truthy");
   t.notOk(false, "falsy");
 
