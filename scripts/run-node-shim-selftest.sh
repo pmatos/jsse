@@ -32,7 +32,7 @@ fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-FINAL="$TMP/selftest.bundle.js"
+FINAL="$TMP/selftest.bundle.cjs"
 cat "$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-shim.selftest.js" > "$FINAL"
 
 run_engine() {  # <label> <cmd...> → writes $TMP/<label>.out, sets RC
@@ -81,7 +81,7 @@ fi
 # run. Expected on both engines: exit code 3, no "UNREACHABLE" on stdout.
 echo ""
 echo "== process.exit probe =="
-EXIT_PROBE="$TMP/exit-probe.js"
+EXIT_PROBE="$TMP/exit-probe.cjs"
 cat "$SCRIPT_DIR/node-shim.js" > "$EXIT_PROBE"
 cat >> "$EXIT_PROBE" <<'PROBE'
 try { process.exit(3); } catch (e) {}
@@ -112,7 +112,7 @@ command -v node >/dev/null 2>&1 && check_exit node node
 # fallback stream never recurses through the shimmed console methods.
 echo ""
 echo "== jsse fallback without --node =="
-FALLBACK_PROBE="$TMP/fallback-probe.js"
+FALLBACK_PROBE="$TMP/fallback-probe.cjs"
 cat "$SCRIPT_DIR/node-shim.js" > "$FALLBACK_PROBE"
 cat >> "$FALLBACK_PROBE" <<'PROBE'
 process.stdout.write("fallback stdout\n");

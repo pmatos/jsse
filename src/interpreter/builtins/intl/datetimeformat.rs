@@ -1468,6 +1468,408 @@ fn icu_datetime_length(opts: &DtfOptions) -> Option<icu::datetime::options::Leng
     }
 }
 
+fn has_mixed_textual_widths(opts: &DtfOptions) -> bool {
+    let mut requested = [None; 3];
+    requested[0] = opts.weekday.as_deref();
+    requested[1] = opts.era.as_deref();
+    requested[2] = opts
+        .month
+        .as_deref()
+        .filter(|style| matches!(*style, "long" | "short" | "narrow"));
+
+    let mut widths = requested
+        .into_iter()
+        .flatten()
+        .filter(|style| matches!(*style, "long" | "short" | "narrow"));
+    let Some(first) = widths.next() else {
+        return false;
+    };
+    widths.any(|width| width != first)
+}
+
+fn legacy_icu_text_style(style: &str) -> Option<icu_datetime_legacy::options::components::Text> {
+    use icu_datetime_legacy::options::components::Text;
+
+    match style {
+        "long" => Some(Text::Long),
+        "short" => Some(Text::Short),
+        "narrow" => Some(Text::Narrow),
+        _ => None,
+    }
+}
+
+fn legacy_icu_numeric_style(
+    style: &str,
+) -> Option<icu_datetime_legacy::options::components::Numeric> {
+    use icu_datetime_legacy::options::components::Numeric;
+
+    match style {
+        "numeric" => Some(Numeric::Numeric),
+        "2-digit" => Some(Numeric::TwoDigit),
+        _ => None,
+    }
+}
+
+fn legacy_icu_pattern_string(
+    pattern: &icu_datetime_legacy::pattern::runtime::Pattern<'_>,
+    offset_style: Option<&str>,
+) -> String {
+    use icu_datetime_legacy::fields::{FieldLength, FieldSymbol};
+    use icu_datetime_legacy::pattern::PatternItem;
+
+    fn push_literal(output: &mut String, literal: &str) {
+        if literal.is_empty() {
+            return;
+        }
+        if literal
+            .chars()
+            .any(|ch| ch.is_ascii_alphabetic() || ch == '\'')
+        {
+            output.push('\'');
+            for ch in literal.chars() {
+                if ch == '\'' {
+                    output.push('\'');
+                }
+                output.push(ch);
+            }
+            output.push('\'');
+        } else {
+            output.push_str(literal);
+        }
+    }
+
+    let mut output = String::new();
+    let mut literal = String::new();
+    for item in pattern.items.iter() {
+        match item {
+            PatternItem::Literal(ch) => literal.push(ch),
+            PatternItem::Field(field) => {
+                push_literal(&mut output, &literal);
+                literal.clear();
+                // The legacy components::Bag exposes a single GmtOffset variant,
+                // so shortOffset and longOffset both resolve to the long
+                // localized-GMT token. Emit the requested localized-GMT width
+                // directly instead: `O` (short, e.g. GMT-5) or `OOOO` (long,
+                // e.g. GMT-05:00). ICU4X 2.0 honors this distinction when the
+                // generated pattern string is reparsed.
+                if let (Some(style), FieldSymbol::TimeZone(_)) = (offset_style, field.symbol) {
+                    let count = if style == "shortOffset" { 1 } else { 4 };
+                    output.extend(std::iter::repeat_n('O', count));
+                    continue;
+                }
+                let length = match field.length {
+                    FieldLength::One | FieldLength::NumericOverride(_) => 1,
+                    FieldLength::TwoDigit => 2,
+                    FieldLength::Abbreviated => 3,
+                    FieldLength::Wide => 4,
+                    FieldLength::Narrow => 5,
+                    FieldLength::Six => 6,
+                    FieldLength::Fixed(length) => usize::from(length),
+                };
+                output.extend(std::iter::repeat_n(char::from(field.symbol), length));
+            }
+        }
+    }
+    push_literal(&mut output, &literal);
+    output
+}
+
+fn legacy_icu_pattern_contains_fields(
+    pattern: &icu_datetime_legacy::pattern::runtime::Pattern<'_>,
+    requested: &[icu_datetime_legacy::fields::Field],
+) -> bool {
+    use icu_datetime_legacy::fields::{Field, FieldLength, FieldSymbol};
+    use icu_datetime_legacy::pattern::PatternItem;
+
+    fn same_kind(requested: FieldSymbol, actual: FieldSymbol) -> bool {
+        match (requested, actual) {
+            (FieldSymbol::Era, FieldSymbol::Era)
+            | (FieldSymbol::Year(_), FieldSymbol::Year(_))
+            | (FieldSymbol::Month(_), FieldSymbol::Month(_))
+            | (FieldSymbol::Week(_), FieldSymbol::Week(_))
+            | (FieldSymbol::Day(_), FieldSymbol::Day(_))
+            | (FieldSymbol::Weekday(_), FieldSymbol::Weekday(_))
+            | (FieldSymbol::DayPeriod(_), FieldSymbol::DayPeriod(_))
+            | (FieldSymbol::Hour(_), FieldSymbol::Hour(_))
+            | (FieldSymbol::Minute, FieldSymbol::Minute)
+            | (FieldSymbol::TimeZone(_), FieldSymbol::TimeZone(_)) => true,
+            (FieldSymbol::Second(requested), FieldSymbol::Second(actual)) => requested == actual,
+            _ => false,
+        }
+    }
+
+    fn normalized_length(field: Field) -> FieldLength {
+        match (field.symbol, field.length) {
+            (
+                FieldSymbol::Era | FieldSymbol::Weekday(_),
+                FieldLength::One | FieldLength::TwoDigit,
+            ) => FieldLength::Abbreviated,
+            (_, FieldLength::NumericOverride(_)) => FieldLength::One,
+            (_, length) => length,
+        }
+    }
+
+    fn requested_field_matches(requested: Field, actual: Field) -> bool {
+        same_kind(requested.symbol, actual.symbol)
+            && (matches!(requested.symbol, FieldSymbol::TimeZone(_))
+                || normalized_length(requested) == normalized_length(actual))
+    }
+
+    let actual = pattern
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            PatternItem::Field(field) => Some(field),
+            PatternItem::Literal(_) => None,
+        })
+        .collect::<Vec<_>>();
+    let hour_requested = requested
+        .iter()
+        .any(|field| matches!(field.symbol, FieldSymbol::Hour(_)));
+
+    requested.iter().all(|requested| {
+        actual
+            .iter()
+            .any(|actual| requested_field_matches(*requested, *actual))
+    }) && actual.iter().all(|actual| {
+        requested
+            .iter()
+            .any(|requested| requested_field_matches(*requested, *actual))
+            || (hour_requested && matches!(actual.symbol, FieldSymbol::DayPeriod(_)))
+    })
+}
+
+fn icu_mixed_width_pattern(
+    opts: &DtfOptions,
+    locale: &icu::locale::Locale,
+) -> Option<icu::datetime::pattern::DateTimePattern> {
+    use icu_datetime_legacy::fields::{
+        Day, Field, FieldLength, FieldSymbol, Hour, Month, Second, TimeZone, Weekday, Year,
+    };
+    use icu_datetime_legacy::options::{components, preferences};
+    use icu_datetime_legacy::provider::calendar::{
+        DateSkeletonPatternsV1Marker, GregorianDateLengthsV1Marker,
+    };
+    use icu_datetime_legacy::skeleton::{BestSkeleton, create_best_pattern_for_fields};
+    use icu_provider_legacy::prelude::{DataProvider, DataRequest};
+
+    if !has_mixed_textual_widths(opts)
+        || opts.date_style.is_some()
+        || opts.time_style.is_some()
+        || !matches!(opts.calendar.as_str(), "gregory" | "iso8601")
+        || opts.numbering_system == "hanidec"
+        || opts.day_period.is_some()
+    {
+        return None;
+    }
+
+    let mut bag = components::Bag::default();
+    let mut fields = Vec::new();
+
+    if let Some(style) = opts.era.as_deref() {
+        let style = legacy_icu_text_style(style)?;
+        bag.era = Some(style);
+        fields.push(Field {
+            symbol: FieldSymbol::Era,
+            length: match style {
+                components::Text::Long => FieldLength::Wide,
+                components::Text::Short => FieldLength::Abbreviated,
+                components::Text::Narrow => FieldLength::Narrow,
+                _ => return None,
+            },
+        });
+    }
+    if let Some(style) = opts.year.as_deref() {
+        bag.year = Some(match style {
+            "numeric" => components::Year::Numeric,
+            "2-digit" => components::Year::TwoDigit,
+            _ => return None,
+        });
+        fields.push(Field {
+            symbol: FieldSymbol::Year(Year::Calendar),
+            length: if style == "2-digit" {
+                FieldLength::TwoDigit
+            } else {
+                FieldLength::One
+            },
+        });
+    }
+    if let Some(style) = opts.month.as_deref() {
+        let style = match style {
+            "numeric" => components::Month::Numeric,
+            "2-digit" => components::Month::TwoDigit,
+            "long" => components::Month::Long,
+            "short" => components::Month::Short,
+            "narrow" => components::Month::Narrow,
+            _ => return None,
+        };
+        bag.month = Some(style);
+        fields.push(Field {
+            symbol: FieldSymbol::Month(Month::Format),
+            length: match style {
+                components::Month::Numeric => FieldLength::One,
+                components::Month::TwoDigit => FieldLength::TwoDigit,
+                components::Month::Long => FieldLength::Wide,
+                components::Month::Short => FieldLength::Abbreviated,
+                components::Month::Narrow => FieldLength::Narrow,
+                _ => return None,
+            },
+        });
+    }
+    if let Some(style) = opts.day.as_deref() {
+        let style = legacy_icu_numeric_style(style)?;
+        bag.day = Some(match style {
+            components::Numeric::Numeric => components::Day::NumericDayOfMonth,
+            components::Numeric::TwoDigit => components::Day::TwoDigitDayOfMonth,
+            _ => return None,
+        });
+        fields.push(Field {
+            symbol: FieldSymbol::Day(Day::DayOfMonth),
+            length: match style {
+                components::Numeric::Numeric => FieldLength::One,
+                components::Numeric::TwoDigit => FieldLength::TwoDigit,
+                _ => return None,
+            },
+        });
+    }
+    if let Some(style) = opts.weekday.as_deref() {
+        let style = legacy_icu_text_style(style)?;
+        bag.weekday = Some(style);
+        fields.push(Field {
+            symbol: FieldSymbol::Weekday(Weekday::Format),
+            length: match style {
+                components::Text::Long => FieldLength::Wide,
+                components::Text::Short => FieldLength::One,
+                components::Text::Narrow => FieldLength::Narrow,
+                _ => return None,
+            },
+        });
+    }
+
+    let hour_cycle = match resolve_hour_cycle(opts) {
+        "h11" => preferences::HourCycle::H11,
+        "h12" => preferences::HourCycle::H12,
+        "h23" => preferences::HourCycle::H23,
+        "h24" => preferences::HourCycle::H24,
+        _ => return None,
+    };
+    bag.preferences = Some(preferences::Bag::from_hour_cycle(hour_cycle));
+    if let Some(style) = opts.hour.as_deref() {
+        let style = legacy_icu_numeric_style(style)?;
+        bag.hour = Some(style);
+        fields.push(Field {
+            symbol: FieldSymbol::Hour(match hour_cycle {
+                preferences::HourCycle::H11 | preferences::HourCycle::H12 => Hour::H12,
+                preferences::HourCycle::H23 | preferences::HourCycle::H24 => Hour::H23,
+            }),
+            length: match style {
+                components::Numeric::Numeric => FieldLength::One,
+                components::Numeric::TwoDigit => FieldLength::TwoDigit,
+                _ => return None,
+            },
+        });
+    }
+    if let Some(style) = opts.minute.as_deref() {
+        let style = legacy_icu_numeric_style(style)?;
+        bag.minute = Some(style);
+        fields.push(Field {
+            symbol: FieldSymbol::Minute,
+            length: match style {
+                components::Numeric::Numeric => FieldLength::One,
+                components::Numeric::TwoDigit => FieldLength::TwoDigit,
+                _ => return None,
+            },
+        });
+    }
+    if let Some(style) = opts.second.as_deref() {
+        let style = legacy_icu_numeric_style(style)?;
+        bag.second = Some(style);
+        fields.push(Field {
+            symbol: FieldSymbol::Second(Second::Second),
+            length: match style {
+                components::Numeric::Numeric => FieldLength::One,
+                components::Numeric::TwoDigit => FieldLength::TwoDigit,
+                _ => return None,
+            },
+        });
+    }
+    if let Some(digits) = opts.fractional_second_digits {
+        let digits = u8::try_from(digits).ok()?;
+        bag.fractional_second = Some(digits);
+        fields.push(Field {
+            symbol: FieldSymbol::Second(Second::FractionalSecond),
+            length: FieldLength::Fixed(digits),
+        });
+    }
+    if let Some(style) = opts.time_zone_name.as_deref() {
+        let style = match style {
+            "short" => components::TimeZoneName::ShortSpecific,
+            "long" => components::TimeZoneName::LongSpecific,
+            "shortOffset" | "longOffset" => components::TimeZoneName::GmtOffset,
+            "shortGeneric" => components::TimeZoneName::ShortGeneric,
+            "longGeneric" => components::TimeZoneName::LongGeneric,
+            _ => return None,
+        };
+        bag.time_zone_name = Some(style);
+        fields.push(Field {
+            symbol: FieldSymbol::TimeZone(TimeZone::LowerV),
+            length: FieldLength::One,
+        });
+    }
+
+    let legacy_locale = locale
+        .to_string()
+        .parse::<icu_provider_legacy::DataLocale>()
+        .ok()?;
+    let request = || DataRequest {
+        locale: &legacy_locale,
+        metadata: Default::default(),
+    };
+    let lengths = <icu_datetime_legacy::provider::Baked as DataProvider<
+        GregorianDateLengthsV1Marker,
+    >>::load(&icu_datetime_legacy::provider::Baked, request())
+    .ok()?
+    .take_payload()
+    .ok()?;
+    let skeletons = <icu_datetime_legacy::provider::Baked as DataProvider<
+        DateSkeletonPatternsV1Marker,
+    >>::load(&icu_datetime_legacy::provider::Baked, request())
+    .ok()?
+    .take_payload()
+    .ok()?;
+
+    let pattern = match create_best_pattern_for_fields(
+        skeletons.get(),
+        &lengths.get().length_combinations,
+        &fields,
+        &bag,
+        false,
+    ) {
+        BestSkeleton::AllFieldsMatch(pattern) => {
+            pattern.expect_pattern("mixed-width fields do not use plural variants")
+        }
+        // ICU4X 1.5 classifies a skeleton with fractional seconds as missing a
+        // field even after create_best_pattern_for_fields appends that field to
+        // the selected seconds pattern. This is the only incomplete-match case
+        // that is safe to accept; all other cases keep the existing fallback.
+        BestSkeleton::MissingOrExtraFields(pattern) if opts.fractional_second_digits.is_some() => {
+            let pattern = pattern.expect_pattern("mixed-width fields do not use plural variants");
+            if !legacy_icu_pattern_contains_fields(&pattern, &fields) {
+                return None;
+            }
+            pattern
+        }
+        BestSkeleton::MissingOrExtraFields(_) | BestSkeleton::NoMatch => return None,
+    };
+    let offset_style = opts
+        .time_zone_name
+        .as_deref()
+        .filter(|style| matches!(*style, "shortOffset" | "longOffset"));
+    legacy_icu_pattern_string(&pattern, offset_style)
+        .parse()
+        .ok()
+}
+
 fn icu_datetime_field_set(
     opts: &DtfOptions,
 ) -> Option<icu::datetime::fieldsets::enums::CompositeFieldSet> {
@@ -1627,6 +2029,14 @@ fn collect_icu_datetime_parts(
     Some(writer.parts)
 }
 
+fn collect_icu_datetime_pattern_parts(
+    formatted: &impl writeable::TryWriteable,
+) -> Option<Vec<(String, String)>> {
+    let mut writer = IcuDateTimePartsWriter::default();
+    formatted.try_write_to_parts(&mut writer).ok()?.ok()?;
+    Some(writer.parts)
+}
+
 fn normalize_icu_datetime_parts(
     parts: Vec<(String, String)>,
     opts: &DtfOptions,
@@ -1651,6 +2061,27 @@ fn normalize_icu_datetime_parts(
             let mut digits = value.chars().rev().take(2).collect::<Vec<_>>();
             digits.reverse();
             value = digits.into_iter().collect();
+        }
+        if part_type == "hour"
+            && requested_style != Some("2-digit")
+            && matches!(opts.locale.split("-u-").next(), Some("es") | Some("es-ES"))
+            && value.chars().count() == 2
+            && value.chars().all(char::is_numeric)
+        {
+            // ICU4X 2.1's processed Spain-based Spanish time data uses HH, while
+            // the locale's ECMA-402/CLDR format record uses the unpadded H form.
+            // This covers both the language-only `es` (its base data is Spain's)
+            // and `es-ES`, but not region-carrying Latin-American tags such as
+            // `es-MX`/`es-419`, whose matched numeric-hour format legitimately
+            // has two digits. The `hour` option domain is {numeric, 2-digit,
+            // undefined}, so `!= 2-digit` un-pads both `hour: "numeric"` and the
+            // timeStyle presets (whose hour option is undefined but which use the
+            // same unpadded H record); only an explicit `hour: "2-digit"` keeps
+            // the leading zero.
+            let zero = transliterate_digits("0", &opts.numbering_system);
+            if let Some(unpadded) = value.strip_prefix(&zero) {
+                value = unpadded.to_string();
+            }
         }
         if requested_style == Some("2-digit")
             && value.chars().count() == 1
@@ -1704,9 +2135,14 @@ fn format_with_icu(ms: f64, opts: &DtfOptions) -> Option<Vec<(String, String)>> 
     use icu::datetime::input::{Date, DateTime, Time, ZonedDateTime};
     use icu::time::zone::{IanaParser, UtcOffset};
 
-    let field_set = icu_datetime_field_set(opts)?;
     let locale = icu_datetime_locale(opts)?;
-    let formatter = DateTimeFormatter::try_new(locale.into(), field_set).ok()?;
+    let mixed_width_pattern = icu_mixed_width_pattern(opts, &locale);
+    let formatter = if mixed_width_pattern.is_none() {
+        let field_set = icu_datetime_field_set(opts)?;
+        Some(DateTimeFormatter::try_new(locale.clone().into(), field_set).ok()?)
+    } else {
+        None
+    };
 
     let is_plain = matches!(
         opts.temporal_type,
@@ -1752,12 +2188,36 @@ fn format_with_icu(ms: f64, opts: &DtfOptions) -> Option<Vec<(String, String)>> 
             .with_offset(Some(offset))
             .at_date_time_iso(datetime)
     };
-    let zoned = ZonedDateTime {
-        date: datetime.date,
-        time: datetime.time,
-        zone,
+    let parts = if let Some(pattern) = mixed_width_pattern {
+        use icu::calendar::{Date as CalendarDate, Gregorian};
+        use icu::datetime::fieldsets::enums::CompositeFieldSet;
+        use icu::datetime::pattern::FixedCalendarDateTimeNames;
+
+        let date = CalendarDate::try_new_gregorian(
+            components.year,
+            components.month as u8,
+            components.day as u8,
+        )
+        .ok()?;
+        let zoned = ZonedDateTime {
+            date,
+            time: datetime.time,
+            zone,
+        };
+        let mut names = FixedCalendarDateTimeNames::<Gregorian, CompositeFieldSet>::try_new(
+            locale.clone().into(),
+        )
+        .ok()?;
+        let pattern_formatter = names.include_for_pattern(&pattern).ok()?;
+        collect_icu_datetime_pattern_parts(&pattern_formatter.format(&zoned))?
+    } else {
+        let zoned = ZonedDateTime {
+            date: datetime.date,
+            time: datetime.time,
+            zone,
+        };
+        collect_icu_datetime_parts(&formatter.as_ref()?.format(&zoned))?
     };
-    let parts = collect_icu_datetime_parts(&formatter.format(&zoned))?;
     // For dateStyle:"short", ICU4X may expand the year to a full year outside its
     // 2-digit-year window even for locales whose short pattern uses two digits
     // (e.g. en-US in 1886). Node/ICU always follow the pattern width, so probe
@@ -1767,7 +2227,7 @@ fn format_with_icu(ms: f64, opts: &DtfOptions) -> Option<Vec<(String, String)>> 
         && parts.iter().any(|(part_type, value)| {
             part_type == "year" && value.chars().count() > 2 && value.chars().all(char::is_numeric)
         })
-        && icu_short_year_is_two_digit(&formatter);
+        && icu_short_year_is_two_digit(formatter.as_ref()?);
     Some(normalize_icu_datetime_parts(
         parts,
         opts,

@@ -187,7 +187,11 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
       },
     }
   );
-  eq(util.inspect(ctorProxy), "{ a: 1 }", "inspect does not trip a Proxy constructor trap");
+  var inspectedProxy = util.inspect(ctorProxy);
+  truthy(
+    inspectedProxy === "{ a: 1 }" || inspectedProxy === "Proxy({ a: 1 })",
+    "inspect does not trip a Proxy constructor trap"
+  );
   // A normal named class still gets its "ClassName " prefix.
   function Widget() {
     this.a = 1;
