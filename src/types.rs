@@ -84,11 +84,15 @@ impl fmt::Display for JsString {
 /// String keys are stored as canonical WTF-8: well-formed UTF-16 has its usual
 /// UTF-8 encoding, while lone surrogates use the corresponding three-byte
 /// WTF-8 sequence. This makes ordinary Rust `str` keys directly borrowable as
-/// bytes while retaining every possible ECMAScript String value.
+/// bytes while retaining every possible ECMAScript String value. Symbol keys
+/// carry a leading byte that canonical WTF-8 can never produce, keeping their
+/// identity disjoint from every possible String key.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct JsPropertyKey {
     bytes: Arc<[u8]>,
 }
+
+const SYMBOL_PROPERTY_KEY_SIGIL: u8 = 0xFF;
 
 pub enum JsPropertyKeyParseError<E> {
     IllFormedUtf16,
@@ -140,20 +144,41 @@ impl JsPropertyKey {
         }
     }
 
+    fn from_symbol_encoding(encoding: String) -> Self {
+        let mut bytes = Vec::with_capacity(encoding.len() + 1);
+        bytes.push(SYMBOL_PROPERTY_KEY_SIGIL);
+        bytes.extend_from_slice(encoding.as_bytes());
+        Self {
+            bytes: Arc::from(bytes),
+        }
+    }
+
+    pub(crate) fn well_known_symbol(name: &str) -> Self {
+        Self::from_symbol_encoding(format!("Symbol(Symbol.{name})"))
+    }
+
     pub fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
     pub fn as_str(&self) -> Option<&str> {
+        if self.is_symbol() {
+            return None;
+        }
         std::str::from_utf8(&self.bytes).ok()
+    }
+
+    pub fn is_symbol(&self) -> bool {
+        self.bytes.first() == Some(&SYMBOL_PROPERTY_KEY_SIGIL)
+    }
+
+    pub(crate) fn symbol_encoding(&self) -> Option<&str> {
+        self.is_symbol()
+            .then(|| std::str::from_utf8(&self.bytes[1..]).expect("Symbol encoding is UTF-8"))
     }
 
     pub fn eq_str(&self, other: &str) -> bool {
         self.bytes.as_ref() == other.as_bytes()
-    }
-
-    pub fn starts_with(&self, prefix: &str) -> bool {
-        self.bytes.starts_with(prefix.as_bytes())
     }
 
     pub fn parse<T: FromStr>(&self) -> Result<T, JsPropertyKeyParseError<T::Err>> {
@@ -169,31 +194,36 @@ impl JsPropertyKey {
     }
 
     pub fn to_js_string(&self) -> JsString {
-        let mut units = Vec::with_capacity(self.bytes.len());
+        let bytes = if self.is_symbol() {
+            &self.bytes[1..]
+        } else {
+            &self.bytes
+        };
+        let mut units = Vec::with_capacity(bytes.len());
         let mut i = 0;
-        while i < self.bytes.len() {
-            let first = self.bytes[i];
+        while i < bytes.len() {
+            let first = bytes[i];
             if first < 0x80 {
                 units.push(first as u16);
                 i += 1;
             } else if first < 0xE0 {
-                debug_assert!(i + 1 < self.bytes.len());
-                let code_point = ((first as u32 & 0x1F) << 6) | (self.bytes[i + 1] as u32 & 0x3F);
+                debug_assert!(i + 1 < bytes.len());
+                let code_point = ((first as u32 & 0x1F) << 6) | (bytes[i + 1] as u32 & 0x3F);
                 units.push(code_point as u16);
                 i += 2;
             } else if first < 0xF0 {
-                debug_assert!(i + 2 < self.bytes.len());
+                debug_assert!(i + 2 < bytes.len());
                 let code_point = ((first as u32 & 0x0F) << 12)
-                    | ((self.bytes[i + 1] as u32 & 0x3F) << 6)
-                    | (self.bytes[i + 2] as u32 & 0x3F);
+                    | ((bytes[i + 1] as u32 & 0x3F) << 6)
+                    | (bytes[i + 2] as u32 & 0x3F);
                 units.push(code_point as u16);
                 i += 3;
             } else {
-                debug_assert!(i + 3 < self.bytes.len());
+                debug_assert!(i + 3 < bytes.len());
                 let code_point = ((first as u32 & 0x07) << 18)
-                    | ((self.bytes[i + 1] as u32 & 0x3F) << 12)
-                    | ((self.bytes[i + 2] as u32 & 0x3F) << 6)
-                    | (self.bytes[i + 3] as u32 & 0x3F);
+                    | ((bytes[i + 1] as u32 & 0x3F) << 12)
+                    | ((bytes[i + 2] as u32 & 0x3F) << 6)
+                    | (bytes[i + 3] as u32 & 0x3F);
                 let offset = code_point - 0x10000;
                 units.push((0xD800 + (offset >> 10)) as u16);
                 units.push((0xDC00 + (offset & 0x3FF)) as u16);
@@ -309,18 +339,19 @@ pub struct JsSymbol {
 }
 
 impl JsSymbol {
-    /// Convert to the internal property key string.
+    /// Convert to the internal Symbol-valued property key.
     /// Well-known symbols (description starts with "Symbol.") use a stable format
-    /// without id, so hardcoded lookups like "Symbol(Symbol.iterator)" still work.
+    /// without id, so bootstrap lookups can construct the same key directly.
     /// User-created symbols include the unique id to avoid collisions.
-    pub fn to_property_key(&self) -> String {
-        match &self.description {
+    pub fn to_property_key(&self) -> JsPropertyKey {
+        let encoding = match &self.description {
             Some(desc) if desc.to_string().starts_with("Symbol.") => {
                 format!("Symbol({})", desc)
             }
             Some(desc) => format!("Symbol({})#{}", desc, self.id),
             None => format!("Symbol()#{}", self.id),
-        }
+        };
+        JsPropertyKey::from_symbol_encoding(encoding)
     }
 }
 
@@ -977,6 +1008,39 @@ mod tests {
         assert_ne!(replacement, high);
         assert_ne!(replacement, low);
         assert_ne!(high, low);
+    }
+
+    #[test]
+    fn symbol_property_keys_do_not_collide_with_display_text() {
+        let symbol = JsSymbol {
+            id: 7,
+            description: Some(JsString::from_str("x")),
+        }
+        .to_property_key();
+        let text = JsPropertyKey::from_str("Symbol(x)#7");
+
+        assert!(symbol.is_symbol());
+        assert!(!text.is_symbol());
+        assert_ne!(symbol, text);
+        assert_eq!(symbol.symbol_encoding(), Some("Symbol(x)#7"));
+        assert_eq!(symbol.to_string(), "Symbol(x)#7");
+    }
+
+    #[test]
+    fn well_known_symbol_property_keys_are_tagged() {
+        let constructed = JsPropertyKey::well_known_symbol("iterator");
+        let symbol = JsSymbol {
+            id: 1,
+            description: Some(JsString::from_str("Symbol.iterator")),
+        }
+        .to_property_key();
+
+        assert_eq!(constructed, symbol);
+        assert!(constructed.is_symbol());
+        assert_ne!(
+            constructed,
+            JsPropertyKey::from_str("Symbol(Symbol.iterator)")
+        );
     }
 
     // ----- JsValue method surface (issue #69 NaN-box migration) -------------

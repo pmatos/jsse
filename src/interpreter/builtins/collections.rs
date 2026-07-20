@@ -69,7 +69,7 @@ impl Interpreter {
         self.get_object_cell_expect(map_iter_proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
                     JsValue::String(JsString::from_str("Map Iterator")),
                     false,
@@ -446,7 +446,7 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
                     JsValue::String(JsString::from_str("Map")),
                     false,
@@ -585,7 +585,7 @@ impl Interpreter {
                 |_interp, this_val, _args| Completion::Normal(this_val.clone()),
             ));
             ctor_obj.borrow_mut().insert_property(
-                "Symbol(Symbol.species)".to_string(),
+                JsPropertyKey::well_known_symbol("species"),
                 PropertyDescriptor {
                     value: None,
                     writable: None,
@@ -757,7 +757,7 @@ impl Interpreter {
         self.get_object_cell_expect(set_iter_proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
                     JsValue::String(JsString::from_str("Set Iterator")),
                     false,
@@ -1503,7 +1503,7 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
                     JsValue::String(JsString::from_str("Set")),
                     false,
@@ -1637,7 +1637,7 @@ impl Interpreter {
                 |_interp, this_val, _args| Completion::Normal(this_val.clone()),
             ));
             ctor_obj.borrow_mut().insert_property(
-                "Symbol(Symbol.species)".to_string(),
+                JsPropertyKey::well_known_symbol("species"),
                 PropertyDescriptor {
                     value: None,
                     writable: None,
@@ -1871,7 +1871,7 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
                     JsValue::String(JsString::from_str("WeakMap")),
                     false,
@@ -2133,7 +2133,7 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
                     JsValue::String(JsString::from_str("WeakSet")),
                     false,
@@ -2313,7 +2313,7 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
+            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
             self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .property_order
@@ -2537,7 +2537,7 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
+            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
             self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .property_order

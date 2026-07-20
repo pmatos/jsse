@@ -2534,7 +2534,7 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
+            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
             self.get_object_cell_expect(math_obj_id)
                 .borrow_mut()
                 .property_order
@@ -3170,7 +3170,7 @@ impl Interpreter {
             self.get_object_cell_expect(af_proto_id)
                 .borrow_mut()
                 .insert_property(
-                    "Symbol(Symbol.toStringTag)".to_string(),
+                    JsPropertyKey::well_known_symbol("toStringTag"),
                     PropertyDescriptor::data(
                         JsValue::String(JsString::from_str("AsyncFunction")),
                         false,
@@ -3876,7 +3876,7 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
+            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
             self.get_object_cell_expect(json_obj_id)
                 .borrow_mut()
                 .property_order
@@ -4330,7 +4330,7 @@ impl Interpreter {
                                 "Object"
                             };
                             // Step 15: Let tag be ? Get(O, @@toStringTag).
-                            let tag_key = "Symbol(Symbol.toStringTag)".to_string();
+                            let tag_key = JsPropertyKey::well_known_symbol("toStringTag");
                             let tag_result = interp.get_object_property(obj_ref.id, &tag_key, &o);
                             let tag = match tag_result {
                                 Completion::Normal(JsValue::String(s)) => s.to_string(),
@@ -5772,7 +5772,7 @@ impl Interpreter {
                                     names.push(JsValue::String(JsString::from_str(&i.to_string())));
                                 }
                                 for k in &property_order {
-                                    if k.starts_with("Symbol(") {
+                                    if k.is_symbol() {
                                         continue;
                                     }
                                     if let Ok(n) = k.parse::<u64>()
@@ -5802,7 +5802,7 @@ impl Interpreter {
                         let prop_keys: Vec<JsPropertyKey> = b
                             .property_order
                             .iter()
-                            .filter(|k| !k.starts_with("Symbol("))
+                            .filter(|k| !k.is_symbol())
                             .cloned()
                             .collect();
                         drop(b);
@@ -5900,11 +5900,11 @@ impl Interpreter {
                                 let mut sym_keys: Vec<JsPropertyKey> = b
                                     .property_order
                                     .iter()
-                                    .filter(|k| k.starts_with("Symbol("))
+                                    .filter(|k| k.is_symbol())
                                     .cloned()
                                     .collect();
                                 for k in b.properties.keys() {
-                                    if k.starts_with("Symbol(") && !sym_keys.contains(k) {
+                                    if k.is_symbol() && !sym_keys.contains(k) {
                                         sym_keys.push(k.clone());
                                     }
                                 }
@@ -6767,7 +6767,7 @@ impl Interpreter {
                         }
                     }
                     // Module namespace exotic: [[Delete]] — only for string keys (not symbols)
-                    if !key.starts_with("Symbol(") {
+                    if !key.is_symbol() {
                         let is_ns = obj.borrow().module_namespace().is_some();
                         if is_ns {
                             let export_names = obj
@@ -7088,7 +7088,7 @@ impl Interpreter {
                             let mut strings: Vec<(JsPropertyKey, usize)> = Vec::new();
                             let mut symbols: Vec<(JsPropertyKey, usize)> = Vec::new();
                             for (pos, k) in property_order.iter().enumerate() {
-                                if k.starts_with("Symbol(") {
+                                if k.is_symbol() {
                                     symbols.push((k.clone(), pos));
                                 } else if let Ok(n) = k.parse::<u64>()
                                     && n < 0xFFFFFFFF
@@ -7140,7 +7140,7 @@ impl Interpreter {
                         }
                     }
                     for (pos, k) in property_order.iter().enumerate() {
-                        if k.starts_with("Symbol(") {
+                        if k.is_symbol() {
                             symbols.push((k.clone(), pos));
                         } else if let Ok(n) = k.parse::<u64>()
                             && n < 0xFFFFFFFF
@@ -7656,7 +7656,7 @@ impl Interpreter {
                 get: None,
                 set: None,
             };
-            let key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
+            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
             self.get_object_cell_expect(reflect_obj_id)
                 .borrow_mut()
                 .property_order
@@ -8149,7 +8149,7 @@ impl Interpreter {
         // ShadowRealm.prototype[Symbol.toStringTag] = "ShadowRealm"
         let to_string_tag_key = self
             .get_symbol_key("toStringTag")
-            .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
+            .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(

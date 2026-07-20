@@ -114,10 +114,7 @@ impl Interpreter {
         obj_id: u64,
         key: &K,
     ) -> Result<(), JsValue> {
-        if key
-            .as_property_key_str()
-            .is_some_and(|key| key.starts_with("Symbol("))
-        {
+        if key.to_js_property_key().is_symbol() {
             return Ok(());
         }
         let ns_data = if let Some(obj) = self.get_object_cell(obj_id) {
@@ -177,8 +174,8 @@ impl Interpreter {
         key: &K,
         deferred: bool,
     ) -> bool {
-        key.as_property_key_str()
-            .is_some_and(|key| key.starts_with("Symbol(") || (deferred && key == "then"))
+        let key = key.to_js_property_key();
+        key.is_symbol() || (deferred && key.eq_str("then"))
     }
 
     /// Trigger evaluation of a deferred module namespace when a non-symbol-like key is accessed.
@@ -275,8 +272,8 @@ impl Interpreter {
     ) -> Result<bool, JsValue> {
         let unscopables_val = {
             let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
-            let key = "Symbol(Symbol.unscopables)";
-            match self.get_object_property(obj_id, key, &this_val) {
+            let key = JsPropertyKey::well_known_symbol("unscopables");
+            match self.get_object_property(obj_id, &key, &this_val) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
                 _ => JsValue::Undefined,

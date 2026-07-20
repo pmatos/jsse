@@ -2146,7 +2146,6 @@ impl JsObjectData {
         // Module namespace exotic: §10.4.6.4 [[GetOwnProperty]]
         if let Some(key_str) = key.as_property_key_str()
             && let Some(ns_data) = self.module_namespace()
-            && !key_str.starts_with("Symbol(")
         {
             if ns_data.export_names.contains(&key_str.to_string()) {
                 let val = if let Some(binding_name) = ns_data.export_to_binding.get(key_str) {
@@ -2253,7 +2252,6 @@ impl JsObjectData {
         // Module namespace exotic: [[HasProperty]] checks export list
         if let Some(key_str) = key.as_property_key_str()
             && let Some(ns_data) = self.module_namespace()
-            && !key_str.starts_with("Symbol(")
         {
             return ns_data.export_names.contains(&key_str.to_string());
         }
@@ -3135,7 +3133,7 @@ impl JsObjectData {
         }
 
         for k in &self.property_order {
-            if k.starts_with("Symbol(") {
+            if k.is_symbol() {
                 continue;
             }
             if let Some(desc) = self.properties.get(k) {

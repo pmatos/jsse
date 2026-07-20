@@ -136,7 +136,11 @@ impl Interpreter {
         } else {
             return Ok(default_ctor.clone());
         };
-        let species = match self.get_object_property(ctor_id, "Symbol(Symbol.species)", &ctor) {
+        let species = match self.get_object_property(
+            ctor_id,
+            &JsPropertyKey::well_known_symbol("species"),
+            &ctor,
+        ) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Err(e),
             _ => return Ok(default_ctor.clone()),
@@ -384,7 +388,7 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
                     JsValue::String(JsString::from_str("Promise")),
                     false,
@@ -480,7 +484,7 @@ impl Interpreter {
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
-                    "Symbol(Symbol.species)".to_string(),
+                    JsPropertyKey::well_known_symbol("species"),
                     PropertyDescriptor {
                         value: None,
                         writable: None,

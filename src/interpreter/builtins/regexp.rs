@@ -7022,14 +7022,11 @@ fn regexp_exec_raw(
     Completion::Normal(result)
 }
 
-fn get_symbol_key(interp: &Interpreter, name: &str) -> Option<String> {
-    interp.get_global_var_ref("Symbol").and_then(|sv| {
-        if let JsValue::Object(so) = sv {
-            Some(to_js_string(&interp.get_property_on_id(so.id, name)))
-        } else {
-            None
-        }
-    })
+fn get_symbol_key(interp: &Interpreter, name: &str) -> Option<JsPropertyKey> {
+    interp
+        .well_known_symbols
+        .get(name)
+        .map(crate::types::JsSymbol::to_property_key)
 }
 
 impl Interpreter {
@@ -9339,7 +9336,7 @@ impl Interpreter {
                 |_interp, this_val, _args| Completion::Normal(this_val.clone()),
             ));
             obj.borrow_mut().insert_property(
-                "Symbol(Symbol.species)".to_string(),
+                JsPropertyKey::well_known_symbol("species"),
                 PropertyDescriptor {
                     value: None,
                     writable: None,
@@ -9580,7 +9577,7 @@ impl Interpreter {
         self.realm_mut().regexp_prototype = Some(regexp_proto_id);
     }
 
-    pub(crate) fn get_symbol_key(&self, name: &str) -> Option<String> {
+    pub(crate) fn get_symbol_key(&self, name: &str) -> Option<JsPropertyKey> {
         get_symbol_key(self, name)
     }
 }

@@ -1104,14 +1104,11 @@ impl Interpreter {
                 Completion::Throw(e)
             },
         ));
-        if let Some(sym_val) = self.get_global_var("Symbol")
-            && let JsValue::Object(sym_obj) = &sym_val
-        {
-            let tp_key = to_js_string(&self.get_property_on_id(sym_obj.id, "toPrimitive"));
+        if let Some(key) = self.get_symbol_key("toPrimitive") {
             self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_property(
-                    tp_key,
+                    key,
                     PropertyDescriptor::data(to_prim_fn, false, false, true),
                 );
         }

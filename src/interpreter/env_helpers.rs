@@ -22,10 +22,10 @@ impl Interpreter {
         self.env_get(&env, name)
     }
 
-    /// `&self` variant of `get_global_var` for read-only call sites that don't
-    /// have a `&mut Interpreter` (e.g. helpers like `get_symbol_iterator_key`).
-    /// Skips Proxy traps on the global object — sufficient for built-in name
-    /// lookups that should resolve via own properties.
+    /// Test-only `&self` variant of `get_global_var`.
+    /// Skips Proxy traps on the global object, which is sufficient for test
+    /// assertions that inspect the global object's own properties.
+    #[cfg(test)]
     pub(crate) fn get_global_var_ref(&self, name: &str) -> Option<JsValue> {
         let env = self.realm().global_env.borrow();
         if let Some(v) = env.get(name) {

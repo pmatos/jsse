@@ -129,7 +129,7 @@ pub(crate) fn js_value_to_code_units(val: &JsValue) -> Vec<u16> {
 pub(crate) fn to_property_key_string(val: &JsValue) -> JsPropertyKey {
     match val {
         JsValue::String(s) => JsPropertyKey::from_js_string(s),
-        JsValue::Symbol(s) => JsPropertyKey::from(s.to_property_key()),
+        JsValue::Symbol(s) => s.to_property_key(),
         _ => JsPropertyKey::from(format!("{val}")),
     }
 }
@@ -408,7 +408,7 @@ pub(crate) fn enumerable_own_keys(
                 if is_string_wrapper && k.eq_str("length") {
                     return false;
                 }
-                !k.starts_with("Symbol(")
+                !k.is_symbol()
                     && b.properties
                         .get(k)
                         .is_some_and(|d| d.enumerable != Some(false))

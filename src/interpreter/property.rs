@@ -185,9 +185,7 @@ impl Interpreter {
             if let Some(ns_data) = ns_data {
                 // Deferred namespace: IsSymbolLikeNamespaceKey check
                 if ns_data.deferred
-                    && !key
-                        .as_property_key_str()
-                        .is_some_and(|key| Self::is_symbol_like_namespace_key(key, true))
+                    && !Self::is_symbol_like_namespace_key(key, true)
                     && let Err(e) = self.ensure_deferred_namespace_evaluation(obj_id)
                 {
                     return Completion::Throw(e);
@@ -294,11 +292,7 @@ impl Interpreter {
                     .module_namespace()
                     .as_ref()
                     .is_some_and(|ns| ns.deferred);
-                if is_deferred_ns
-                    && !key
-                        .as_property_key_str()
-                        .is_some_and(|key| Self::is_symbol_like_namespace_key(key, true))
-                {
+                if is_deferred_ns && !Self::is_symbol_like_namespace_key(key, true) {
                     self.ensure_deferred_namespace_evaluation(obj_id)?;
                 }
             }
@@ -1555,7 +1549,7 @@ impl Interpreter {
             }
 
             for k in &b.property_order {
-                if k.starts_with("Symbol(") {
+                if k.is_symbol() {
                     sym_keys.push(k.clone());
                 } else if let Ok(n) = k.parse::<u64>() {
                     if k.eq_str(&n.to_string()) {
@@ -1608,9 +1602,6 @@ impl Interpreter {
             for key in &own_keys {
                 if let JsValue::String(s) = key {
                     let key_str = JsPropertyKey::from_js_string(s);
-                    if key_str.starts_with("Symbol(") {
-                        continue;
-                    }
                     if seen.contains(&key_str) {
                         continue;
                     }

@@ -3653,7 +3653,7 @@ impl Interpreter {
             self.get_object_cell_expect(array_id)
                 .borrow_mut()
                 .insert_property(
-                    "Symbol(Symbol.species)".to_string(),
+                    JsPropertyKey::well_known_symbol("species"),
                     PropertyDescriptor {
                         value: None,
                         writable: None,
@@ -3704,7 +3704,7 @@ impl Interpreter {
             self.get_object_cell_expect(proto_id)
                 .borrow_mut()
                 .insert_property(
-                    "Symbol(Symbol.unscopables)".to_string(),
+                    JsPropertyKey::well_known_symbol("unscopables"),
                     PropertyDescriptor::data(unscopables_val, false, false, true),
                 );
         }

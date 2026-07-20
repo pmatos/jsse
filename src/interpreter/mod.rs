@@ -99,7 +99,7 @@ pub struct Interpreter {
     pub(crate) active_array_joins: Vec<u64>,
     pub(crate) generator_inline_iters: FxHashMap<u64, Vec<JsValue>>,
     pub(crate) scheduler: scheduler::JobScheduler,
-    cached_has_instance_key: Option<String>,
+    cached_has_instance_key: Option<JsPropertyKey>,
     module_registry: HashMap<(usize, PathBuf), Rc<RefCell<LoadedModule>>>,
     synthetic_module_registry: HashMap<(PathBuf, ImportModuleType), Rc<RefCell<LoadedModule>>>,
     current_module_path: Option<PathBuf>,
@@ -818,7 +818,7 @@ impl Interpreter {
         self.get_object_cell_expect(ams_proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor {
                     value: None,
                     writable: None,
@@ -1672,28 +1672,22 @@ impl Interpreter {
         result
     }
 
-    /// Convert a symbol property key string (e.g. "Symbol(Symbol.toStringTag)" or "Symbol(desc)#42")
-    /// back to a JsValue::Symbol.
+    /// Convert an internal property key back to its ECMAScript String or Symbol value.
     pub(crate) fn symbol_key_to_jsvalue<K: PropertyKeyLike + ?Sized>(
         &mut self,
         property_key: &K,
     ) -> JsValue {
         let exact_key = property_key.to_js_property_key();
-        let Some(key) = exact_key.as_str() else {
+        let Some(key) = exact_key.symbol_encoding() else {
             return JsValue::String(exact_key.to_js_string());
         };
-        // Well-known symbols: "Symbol(Symbol.xyz)" — look up from Symbol constructor
+        // Well-known symbols: "Symbol(Symbol.xyz)" — recover the intrinsic Symbol value.
         if key.starts_with("Symbol(Symbol.") && key.ends_with(')') && !key.contains('#') {
             // Extract the well-known name (e.g. "toStringTag" from "Symbol(Symbol.toStringTag)")
             let inner = &key[7..key.len() - 1]; // "Symbol.toStringTag"
             let name = &inner[7..]; // "toStringTag"
-            if let Some(sym_val) = self.get_global_var("Symbol")
-                && let JsValue::Object(so) = sym_val
-            {
-                let val = self.get_property_on_id(so.id, name);
-                if let JsValue::Symbol(s) = val {
-                    return JsValue::Symbol(s);
-                }
+            if let Some(symbol) = self.well_known_symbols.get(name) {
+                return JsValue::Symbol(symbol.clone());
             }
         }
         // User symbols with id: "Symbol(desc)#id" or "Symbol()#id"
@@ -4401,7 +4395,7 @@ impl Interpreter {
         // writable=false, enumerable=false, configurable=false
         let sym_key = self
             .get_symbol_key("toStringTag")
-            .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
+            .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
         self.get_object_cell_expect(obj_id)
             .borrow_mut()
             .insert_property(
@@ -4477,7 +4471,7 @@ impl Interpreter {
 
         let sym_key = self
             .get_symbol_key("toStringTag")
-            .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
+            .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
         self.get_object_cell_expect(obj_id)
             .borrow_mut()
             .insert_property(

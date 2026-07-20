@@ -177,7 +177,7 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor {
                     value: Some(JsValue::String(JsString::from_str("Intl.Segmenter"))),
                     writable: Some(false),
@@ -553,7 +553,7 @@ impl Interpreter {
                     .get_object_cell_expect(segments_obj_id)
                     .borrow_mut()
                     .insert_property(
-                        "Symbol(Symbol.iterator)".to_string(),
+                        JsPropertyKey::well_known_symbol("iterator"),
                         PropertyDescriptor::data(iter_fn, true, false, true),
                     );
 

@@ -139,11 +139,11 @@ impl Interpreter {
         }
         match val {
             JsValue::String(s) => Ok(JsPropertyKey::from_js_string(s)),
-            JsValue::Symbol(s) => Ok(JsPropertyKey::from(s.to_property_key())),
+            JsValue::Symbol(s) => Ok(s.to_property_key()),
             JsValue::Object(_) => {
                 let prim = self.to_primitive(val, "string")?;
                 if let JsValue::Symbol(s) = &prim {
-                    return Ok(JsPropertyKey::from(s.to_property_key()));
+                    return Ok(s.to_property_key());
                 }
                 match prim {
                     JsValue::String(s) => Ok(JsPropertyKey::from_js_string(&s)),

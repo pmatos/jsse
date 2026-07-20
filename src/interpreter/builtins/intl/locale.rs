@@ -207,7 +207,7 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor {
                     value: Some(JsValue::String(JsString::from_str("Intl.Locale"))),
                     writable: Some(false),
