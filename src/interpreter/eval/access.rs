@@ -511,7 +511,7 @@ impl Interpreter {
     /// caller's slow path re-records it.
     fn ic_probe_prop_kind<K: PropertyKeyLike + ?Sized>(
         &self,
-        obj_rc: &Rc<RefCell<JsObjectData>>,
+        obj_rc: &ObjectHandle,
         key: &K,
         kind: crate::interpreter::ic::PropIcKind,
     ) -> Option<JsValue> {

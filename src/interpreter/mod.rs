@@ -32,6 +32,7 @@ pub(crate) mod ic;
 pub(crate) mod ic_store;
 pub(crate) mod key_intern;
 mod object_arena;
+pub(crate) use object_arena::ObjectHandle;
 mod property;
 mod property_map;
 pub(crate) use property_map::PropertyMap;
@@ -1435,14 +1436,15 @@ impl Interpreter {
         getter
     }
 
-    /// Get a fresh `Rc::clone` of the slot's `Rc<RefCell<…>>` if live.
+    /// Get a fresh owned clone of the slot's object handle if live.
     /// New callers should prefer `get_object_cell` / `get_object_cell_expect`
-    /// (returns `&RefCell<…>`) to avoid the per-call `Rc::clone`; this
+    /// (returns `&RefCell<…>`) to avoid the per-call handle refcount change; this
     /// function remains for the (large) set of legacy callers that
     /// pattern-match `if let Some(obj) = interp.get_object(id) { obj.borrow*() }`
     /// and need a value-type binding outliving any inner `&mut self`
     /// callback (proxy traps, getter dispatch, error allocation).
-    pub(crate) fn get_object(&self, id: u64) -> Option<Rc<RefCell<JsObjectData>>> {
+    #[inline(always)]
+    pub(crate) fn get_object(&self, id: u64) -> Option<ObjectHandle> {
         self.objects.get(id)
     }
 

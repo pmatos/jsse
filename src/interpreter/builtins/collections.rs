@@ -6,14 +6,14 @@ use super::super::*;
 /// sibling of `string.rs`'s `this_string_value` / `this_js_string`: it
 /// concentrates the receiver brand-check that every `Map.prototype` method would
 /// otherwise open-code, returning the receiver's object id and cell, or a
-/// TypeError completion naming the method. The cell is an owned `Rc` (via
+/// TypeError completion naming the method. The cell is an owned handle (via
 /// `get_object`) so callers may re-enter the interpreter — e.g. `forEach`
 /// invoking a callback — while holding it.
 fn this_map(
     interp: &mut Interpreter,
     this: &JsValue,
     method: &str,
-) -> Result<(u64, Rc<RefCell<JsObjectData>>), Completion> {
+) -> Result<(u64, ObjectHandle), Completion> {
     if let JsValue::Object(o) = this
         && let Some(obj) = interp.get_object(o.id)
         && {
@@ -35,7 +35,7 @@ fn this_set(
     interp: &mut Interpreter,
     this: &JsValue,
     method: &str,
-) -> Result<(u64, Rc<RefCell<JsObjectData>>), Completion> {
+) -> Result<(u64, ObjectHandle), Completion> {
     if let JsValue::Object(o) = this
         && let Some(obj) = interp.get_object(o.id)
         && {
