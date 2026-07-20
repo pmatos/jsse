@@ -27,3 +27,24 @@ rules:
       # tag can be pushed back to main. It uploads only the packaged binary and
       # checksums (no .git), so the token cannot leak via artifacts.
       - release.yml
+
+  # lint-pr-title.yml uses pull_request_target so the check runs with a real
+  # GITHUB_TOKEN even on PRs from forks. It never checks out the PR's ref and
+  # never executes anything the PR controls: amannn/action-semantic-pull-request
+  # only reads the PR title/body via the GitHub API and validates them against
+  # the Conventional Commits regex, with permissions scoped to
+  # `pull-requests: read`. There is no code-execution or exfiltration path for
+  # PR-controlled content to reach the elevated token.
+  dangerous-triggers:
+    ignore:
+      - lint-pr-title.yml
+
+  # commitlint.yml installs @commitlint/cli and @commitlint/config-conventional
+  # ad-hoc (pinned to major version @21) rather than via a project lockfile:
+  # this repo has no package.json/lockfile of its own (it's a Rust project),
+  # so there is nothing for these CI-only tools to lock against. The job only
+  # has `contents: read` and never pushes, so a compromised transitive
+  # dependency has no credentials to exfiltrate.
+  adhoc-packages:
+    ignore:
+      - commitlint.yml
