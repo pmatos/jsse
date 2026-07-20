@@ -805,7 +805,8 @@ impl<'a> Parser<'a> {
                 Self::expr_contains_await_identifier(e)
             }
             Expression::OptionalChain(object, chain) => {
-                Self::expr_contains_await_identifier(object) || Self::expr_contains_await_identifier(chain)
+                Self::expr_contains_await_identifier(object)
+                    || Self::optional_chain_contains_await_identifier(chain)
             }
             Expression::Literal(_)
             | Expression::This
@@ -816,6 +817,23 @@ impl<'a> Parser<'a> {
             | Expression::Class(_)
             | Expression::ArrowFunction(_)
             | Expression::PrivateIdentifier(_) => false,
+        }
+    }
+
+    fn optional_chain_contains_await_identifier(chain: &Expression) -> bool {
+        match chain {
+            // Optional-chain tails use identifiers for static property names and
+            // as placeholders for computed access and optional calls.
+            Expression::Identifier(_) => false,
+            Expression::Member(base, property, _) => {
+                Self::optional_chain_contains_await_identifier(base)
+                    || matches!(property, MemberProperty::Computed(e) if Self::expr_contains_await_identifier(e))
+            }
+            Expression::Call(callee, args, _) => {
+                Self::optional_chain_contains_await_identifier(callee)
+                    || args.iter().any(Self::expr_contains_await_identifier)
+            }
+            _ => Self::expr_contains_await_identifier(chain),
         }
     }
 
@@ -1631,6 +1649,24 @@ mod tests {
     fn parse_arrow_function() {
         let prog = parse("var f = (a, b) => a + b;");
         assert!(matches!(&prog.body.as_slice()[0], Statement::Variable(_)));
+    }
+
+    #[test]
+    fn optional_chain_await_property_in_async_arrow_parameters() {
+        assert!(
+            Parser::new("var f = async (x = ({await: 1})?.await) => x;")
+                .unwrap()
+                .parse_program()
+                .is_ok()
+        );
+
+        for source in [
+            "var f = async (x = await) => x;",
+            "var f = async (x = ({})?.[await]) => x;",
+            "var f = async (x = (() => 1)?.(await)) => x;",
+        ] {
+            assert!(Parser::new(source).unwrap().parse_program().is_err());
+        }
     }
 
     #[test]
