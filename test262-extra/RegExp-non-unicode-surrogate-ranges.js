@@ -50,3 +50,26 @@ if (/[^-\uD800]/.test("-")) {
 if (!/[a^-￿]/.test("^") || !/[a^-￿]/.test("_")) {
   throw new Test262Error("literal '^' range endpoint mid-class no longer forms a range");
 }
+
+// String (non-functional) replacement must preserve captured lone surrogates
+// through numbered ($N) and named ($<name>) template substitution, just as the
+// functional replacement path already does.
+var loneNumbered = String.fromCharCode(0xD801).replace(/([\uD800-\uDFFF])/g, "$1");
+if (loneNumbered.length !== 1 || loneNumbered.charCodeAt(0) !== 0xD801) {
+  throw new Test262Error("numbered $1 substitution lost the captured lone surrogate");
+}
+var loneNamed = String.fromCharCode(0xD801).replace(/(?<c>[\uD800-\uDFFF])/g, "$<c>");
+if (loneNamed.length !== 1 || loneNamed.charCodeAt(0) !== 0xD801) {
+  throw new Test262Error("named $<c> substitution lost the captured lone surrogate");
+}
+
+// Astral characters (proper surrogate pairs) must round-trip unchanged through
+// $N substitution in both /u and non-Unicode modes.
+var astralUnicode = "😀".replace(/(.)/u, "$1");
+if (astralUnicode !== "😀") {
+  throw new Test262Error("/u $1 substitution corrupted an astral capture");
+}
+var astralGlobal = "😀".replace(/(😀)/g, "$1");
+if (astralGlobal !== "😀") {
+  throw new Test262Error("non-Unicode $1 substitution corrupted an astral capture");
+}

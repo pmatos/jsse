@@ -6582,8 +6582,16 @@ fn get_substitution(
                         if nn >= 1 && nn <= m {
                             let cap = &captures[nn - 1];
                             if !cap.is_undefined() {
-                                let cap_s = interp.to_string_value(cap)?;
-                                result.push_str(&cap_s);
+                                // Preserve lone surrogates: `result` is PUA-mapped
+                                // regex-output space and is finalized via
+                                // regex_output_to_js_string, so route captures
+                                // through the same UTF-16-preserving mapping rather
+                                // than the lossy to_string_value (which yields
+                                // U+FFFD for unpaired surrogates).
+                                let cap_js = interp.to_js_string(cap)?;
+                                result.push_str(&js_string_to_regex_input_non_unicode(
+                                    &cap_js.code_units,
+                                ));
                             }
                             i += 3;
                             continue;
@@ -6592,8 +6600,10 @@ fn get_substitution(
                     if d1 >= 1 && d1 <= m {
                         let cap = &captures[d1 - 1];
                         if !cap.is_undefined() {
-                            let cap_s = interp.to_string_value(cap)?;
-                            result.push_str(&cap_s);
+                            let cap_js = interp.to_js_string(cap)?;
+                            result.push_str(&js_string_to_regex_input_non_unicode(
+                                &cap_js.code_units,
+                            ));
                         }
                     } else {
                         result.push('$');
@@ -6633,8 +6643,10 @@ fn get_substitution(
                                 _ => JsValue::Undefined,
                             };
                             if !capture.is_undefined() {
-                                let cap_str = interp.to_string_value(&capture)?;
-                                result.push_str(&cap_str);
+                                let cap_js = interp.to_js_string(&capture)?;
+                                result.push_str(&js_string_to_regex_input_non_unicode(
+                                    &cap_js.code_units,
+                                ));
                             }
                             i = start + rest[..end_pos].chars().count() + 1;
                         } else {
