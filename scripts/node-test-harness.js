@@ -275,8 +275,9 @@
   // ==========================================================================
   // objectType + createEquiv — based on qunitjs 2.4.1 (qunit/qunit.js), the
   // deepEqual engine. QUnit uses the original behavior; tape additionally
-  // compares array-index ownership because its deep-equal treats a sparse hole
-  // and an own property containing undefined as different values.
+  // compares array-index enumerability (matching its deep-equal's Object.keys
+  // semantics) because a sparse hole and an enumerable own undefined are
+  // different values, while a non-enumerable own undefined is not.
   // ==========================================================================
   function objectType(obj) {
     if (typeof obj === "undefined") return "undefined";
@@ -381,8 +382,8 @@
         for (i = 0; i < len; i++) {
           if (
             compareArrayOwnership &&
-            Object.prototype.hasOwnProperty.call(a, i) !==
-              Object.prototype.hasOwnProperty.call(b, i)
+            Object.prototype.propertyIsEnumerable.call(a, i) !==
+              Object.prototype.propertyIsEnumerable.call(b, i)
           ) {
             return false;
           }
