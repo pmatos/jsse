@@ -651,11 +651,15 @@ impl Interpreter {
                                 PropertyDescriptor::data(v, true, true, true),
                             );
                         }
-                    } else if let Some(od) = interp.get_object_cell(this_id)
-                        && !od.borrow_mut().set_property_value(&prop_key, v)
-                    {
-                        let err = interp.create_type_error("Cannot set property");
-                        return Completion::Throw(err);
+                    } else {
+                        match interp.set_object_property(this_id, &prop_key, v, this) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                let err = interp.create_type_error("Cannot set property");
+                                return Completion::Throw(err);
+                            }
+                            Err(err) => return Completion::Throw(err),
+                        }
                     }
                     Completion::Normal(JsValue::Undefined)
                 },
@@ -814,11 +818,14 @@ impl Interpreter {
                         }
                     } else {
                         // Set(this, "constructor", v, true)
-                        if let Some(od) = interp.get_object_cell(this_id)
-                            && !od.borrow_mut().set_property_value("constructor", v)
-                        {
-                            let err = interp.create_type_error("Cannot set property constructor");
-                            return Completion::Throw(err);
+                        match interp.set_object_property(this_id, "constructor", v, this) {
+                            Ok(true) => {}
+                            Ok(false) => {
+                                let err =
+                                    interp.create_type_error("Cannot set property constructor");
+                                return Completion::Throw(err);
+                            }
+                            Err(err) => return Completion::Throw(err),
                         }
                     }
                     Completion::Normal(JsValue::Undefined)

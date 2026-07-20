@@ -145,9 +145,6 @@ assertSame(
   '02/01/20',
   'explicit year:2-digit still truncates to two digits');
 
-// fractionalSecond must be split out of the "second" part using the locale's
-// own decimal separator. Many locales (fr-FR, de-DE) use a comma, not a dot,
-// and the "arab" numbering system uses the Arabic decimal separator.
 function partValue(parts, type) {
   for (var i = 0; i < parts.length; i++) {
     if (parts[i].type === type) {
@@ -157,6 +154,139 @@ function partValue(parts, type) {
   return undefined;
 }
 
+// An hour selected as "numeric" follows the effective locale's matched
+// DateTime Format Record. Spanish (Spain) uses the unpadded H pattern even
+// when minute and second fields are also present.
+var numericHourTimestamp = Date.UTC(2020, 0, 2, 3, 4, 5);
+var esNumericHour = new Intl.DateTimeFormat('es-ES', {
+  hour: 'numeric',
+  minute: 'numeric',
+  second: 'numeric',
+  hourCycle: 'h23',
+  timeZone: 'UTC'
+});
+
+assertSame(
+  esNumericHour.format(numericHourTimestamp),
+  '3:04:05',
+  'Spanish numeric hour follows the unpadded H pattern');
+
+assertSame(
+  partValue(esNumericHour.formatToParts(numericHourTimestamp), 'hour'),
+  '3',
+  'Spanish formatToParts exposes an unpadded numeric hour');
+
+assertSame(
+  new Intl.DateTimeFormat('es-ES', {
+    hour: 'numeric',
+    hourCycle: 'h23',
+    timeZone: 'UTC'
+  }).format(numericHourTimestamp),
+  '3',
+  'standalone Spanish numeric hour follows the unpadded H pattern');
+
+assertSame(
+  new Intl.DateTimeFormat('es-ES', {
+    hour: '2-digit',
+    hourCycle: 'h23',
+    timeZone: 'UTC'
+  }).format(numericHourTimestamp),
+  '03',
+  'explicit Spanish 2-digit hour remains padded');
+
+assertSame(
+  new Intl.DateTimeFormat('es-ES-u-nu-arab', {
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hourCycle: 'h23',
+    timeZone: 'UTC'
+  }).format(numericHourTimestamp),
+  '٣:٠٤:٠٥',
+  'Spanish numeric hour removes the locale zero digit');
+
+function numericHms(locale) {
+  return new Intl.DateTimeFormat(locale, {
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hourCycle: 'h23',
+    timeZone: 'UTC'
+  }).format(numericHourTimestamp);
+}
+
+assertSame(numericHms('es'), '3:04:05',
+  'language-only Spanish resolves to Spain data and stays unpadded');
+assertSame(numericHms('es-u-hc-h23'), '3:04:05',
+  'Spanish numeric hour with a Unicode hour-cycle extension stays unpadded');
+assertSame(numericHms('ca-ES'), '3:04:05',
+  'Catalan numeric hour remains unpadded');
+assertSame(numericHms('es-MX'), '03:04:05',
+  'Mexican Spanish numeric hour remains padded');
+assertSame(numericHms('es-419'), '03:04:05',
+  'Latin-American Spanish (es-419) numeric hour remains padded');
+assertSame(numericHms('en-US'), '03:04:05',
+  'English numeric hour remains padded');
+assertSame(numericHms('fr-FR'), '03:04:05',
+  'French numeric hour remains padded');
+assertSame(numericHms('it-IT'), '03:04:05',
+  'Italian numeric hour remains padded in an h:m:s pattern');
+
+// timeStyle presets select the same unpadded-H record as hour:"numeric" for
+// Spain-based Spanish (the hour option is undefined, so the correction must key
+// off "not explicitly 2-digit" rather than requiring hour:"numeric"). Only an
+// explicit hour:"2-digit" keeps the leading zero, and region-carrying
+// Latin-American es-* stay padded.
+function timeStyleHour(locale, style, timestamp) {
+  return new Intl.DateTimeFormat(locale, {
+    timeStyle: style,
+    hourCycle: 'h23',
+    timeZone: 'UTC'
+  }).format(timestamp === undefined ? numericHourTimestamp : timestamp);
+}
+
+assertSame(timeStyleHour('es-ES', 'medium'), '3:04:05',
+  'Spanish timeStyle:medium uses the unpadded H hour');
+assertSame(timeStyleHour('es-ES', 'short'), '3:04',
+  'Spanish timeStyle:short uses the unpadded H hour');
+assertSame(timeStyleHour('es', 'medium'), '3:04:05',
+  'language-only Spanish timeStyle:medium uses the unpadded H hour');
+assertSame(timeStyleHour('es-ES', 'medium', Date.UTC(2020, 0, 2, 0, 4, 5)), '0:04:05',
+  'Spanish timeStyle midnight hour is a single zero, not 00');
+assertSame(timeStyleHour('es-ES', 'medium', Date.UTC(2020, 0, 2, 13, 4, 5)), '13:04:05',
+  'Spanish timeStyle two-digit hours (13) are left untouched');
+assertSame(timeStyleHour('es-MX', 'medium'), '03:04:05',
+  'Mexican Spanish timeStyle hour remains padded');
+
+// The correction reaches every formatter entry point, not just format().
+var esTimeStyle = new Intl.DateTimeFormat('es-ES', {
+  timeStyle: 'medium',
+  hourCycle: 'h23',
+  timeZone: 'UTC'
+});
+var laterHour = Date.UTC(2020, 0, 2, 5, 4, 5);
+assertSame(partValue(esTimeStyle.formatToParts(numericHourTimestamp), 'hour'), '3',
+  'Spanish timeStyle formatToParts exposes an unpadded hour');
+assertSame(esTimeStyle.formatRange(numericHourTimestamp, laterHour),
+  '3:04:05 – 5:04:05',
+  'Spanish timeStyle formatRange un-pads both endpoint hours');
+
+// An explicit hour:"2-digit" must still keep its leading zero even in an
+// otherwise all-numeric time (guards the "!= 2-digit" broadening).
+assertSame(
+  new Intl.DateTimeFormat('es-ES', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+    timeZone: 'UTC'
+  }).format(numericHourTimestamp),
+  '03:04:05',
+  'explicit Spanish 2-digit hour stays padded alongside numeric minute/second');
+
+// fractionalSecond must be split out of the "second" part using the locale's
+// own decimal separator. Many locales (fr-FR, de-DE) use a comma, not a dot,
+// and the "arab" numbering system uses the Arabic decimal separator.
 function separatorAfterSecond(parts) {
   for (var i = 0; i < parts.length - 1; i++) {
     if (parts[i].type === 'second' && parts[i + 1].type === 'literal') {

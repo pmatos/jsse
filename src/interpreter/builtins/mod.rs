@@ -744,7 +744,7 @@ impl Interpreter {
                             };
                         }
                         // 5a. Set(this, "stack", v, true) (fires set trap).
-                        return match interp.proxy_set(o_id, "stack", v, this_val) {
+                        return match interp.set_object_property(o_id, "stack", v, this_val) {
                             Ok(true) => Completion::Normal(JsValue::Undefined),
                             Ok(false) => Completion::Throw(
                                 interp.create_type_error("Cannot set property 'stack'"),
@@ -765,32 +765,13 @@ impl Interpreter {
                             }
                         }
                         // 5a. Set(this, "stack", v, true) with receiver == this.
-                        Some(desc) => {
-                            if desc.is_accessor_descriptor() {
-                                match desc.set {
-                                    Some(setter_fn) if !matches!(setter_fn, JsValue::Undefined) => {
-                                        match interp.call_function(&setter_fn, this_val, &[v]) {
-                                            Completion::Normal(_) => {
-                                                Completion::Normal(JsValue::Undefined)
-                                            }
-                                            other => other,
-                                        }
-                                    }
-                                    _ => Completion::Throw(interp.create_type_error(
-                                        "Cannot set property 'stack' which has only a getter",
-                                    )),
-                                }
-                            } else if desc.writable == Some(false) {
-                                Completion::Throw(interp.create_type_error(
-                                    "Cannot assign to read only property 'stack'",
-                                ))
-                            } else {
-                                if let Some(cell) = interp.get_object_cell(o_id) {
-                                    cell.borrow_mut().set_property_value("stack", v);
-                                }
-                                Completion::Normal(JsValue::Undefined)
-                            }
-                        }
+                        Some(_) => match interp.set_object_property(o_id, "stack", v, this_val) {
+                            Ok(true) => Completion::Normal(JsValue::Undefined),
+                            Ok(false) => Completion::Throw(
+                                interp.create_type_error("Cannot set property 'stack'"),
+                            ),
+                            Err(e) => Completion::Throw(e),
+                        },
                     }
                 },
             ));

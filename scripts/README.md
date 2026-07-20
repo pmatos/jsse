@@ -153,7 +153,10 @@ shared core (which includes QUnit's own `equiv`, ported verbatim, for
 
 It also aliases Node's `global` to `globalThis`, which many bundles rely on for
 their root-object detection. The TAP frontend supports Jest's array-table
-`test.each` form in addition to the basic globals.
+`test.each` form in addition to the basic globals. Mocha-style `describe.only`
+and `it.only` filter the registered suite tree globally, including nested
+focus, direct-test precedence, and focused skipped tests; the exclusive table
+form `test.only.each` registers each generated row as a focused test.
 
 Layer it into a library by setting `LIB_SHIM="node-test-harness.js"` (it is
 prepended after `node-shim.js` and `node-buffer-shim.js`). Like the other shims
@@ -182,6 +185,15 @@ per-test ordering. Async QUnit tests (`assert.async`) and callback-style TAP
 tests/hooks (`function (done) { ... }`) are bounded by a 10 s timeout so a
 completion callback that never fires becomes a failure instead of stalling the
 run.
+
+QUnit suites whose tests and hooks are entirely synchronous may set
+`QUnit.config.sync = true` before `QUnit.start()`. This opt-in executes the
+suite in the main script instead of scheduling one Promise continuation per
+test, which keeps large synchronous corpora out of jsse's bounded host-async
+drain window. Async behavior remains the default; the synchronous mode rejects
+Promise-returning tests/hooks and incomplete `assert.async()` tokens. Moment
+uses this mode because its 3,871 synchronous tests take roughly 35 minutes on
+the tree-walker.
 
 The assembled bundle uses a `.cjs` suffix so Node always evaluates the
 reference oracle as CommonJS. This is independent of any unrelated ancestor
@@ -217,9 +229,12 @@ assertions).
 | `big.js` | v6.2.2 | ✅ 47,456 (cross-checked) | ~7 min — heavy arbitrary-precision division/sqrt/pow on the tree-walker |
 | `lodash` | 4.17.21 | ✅ 6,794 (cross-checked) | QUnit via the shared harness; a few tests skipped on jsse — see below |
 | `ajv` | v8.17.1 | ⚠️ 5,466 / 5,480 (Node: 5,480) | ~4 min; four codegen option variants across drafts 6, 7, 2019-09, and 2020-12; residuals tracked in #274 and #275 |
-| `prismjs` | v1.30.0 | ✅ 2,563 (cross-checked) | token streams for ~290 grammars; 3 jsse-only skips — see below |
+| `prismjs` | v1.30.0 | ✅ 2,563 (cross-checked) | token streams for ~290 grammars |
+| `uglify-js` | v3.19.3 | ✅ 4,233 (cross-checked) | ~15 min; complete compress DSL parse/transform/mangle/codegen corpus |
+| `highlight.js` | 11.11.2 | ✅ 731 (cross-checked) | 536 markup + 195 auto-detection fixtures across 192 grammars; ~30 min |
 | `js-sha256` | v0.11.1 | ✅ 916 (cross-checked) | Pure-JS SHA-224/SHA-256 and HMAC vectors; string, Buffer, TypedArray, and ArrayBuffer inputs |
 | `luxon` | 3.7.2 | ⚠️ 1,045 / 1,152 | exact count cross-checked; Node is 1,152 / 1,152; blocked on #262–#265 |
+| `moment` | 2.30.1 | ⚠️ 198 failing assertions across 3,871 tests | exact registered-test count cross-checked; Node is green with 162,868 assertions; residual tracked in #311 |
 | `bignumber.js` | v9.1.2 | ⚠️ blocked | see below; green on Node today |
 
 ### PrismJS token-stream fixtures
@@ -231,12 +246,46 @@ simplified token stream is compared byte-for-byte with the upstream expected
 JSON. The 11 `.html.test` fixtures are excluded because they test Prism's DOM
 markup rendering instead of tokenization.
 
-Node executes all 2,563 fixtures. JSSE currently counts three documented skips
-while preserving the cross-check count: `bison/c_feature.test`,
-`parser/expression_feature.test`, and `parser/keyword_feature.test`. They expose
-the nested-alternation greedy-match bug tracked in
-[issue #271](https://github.com/pmatos/jsse/issues/271); remove the skip map from
-the generated entry when that issue is fixed.
+JSSE and Node execute all 2,563 fixtures. The cross-check requires both engines
+to report the same fixture count, so engine-specific skips cannot masquerade as
+a successful run.
+
+### UglifyJS compress fixtures
+
+`scripts/gen-uglify-js-entry.js` embeds UglifyJS's implementation sources and
+all 126 `test/compress/*.js` DSL files into a deterministic, filesystem-free
+entry. All 4,233 cases run UglifyJS's parser, compressor and tree transforms,
+scope analysis, optional identifier/property mangling, exact code-generation
+comparison, AST validation, and output reparse. The native runner's
+`expect_stdout` stage is excluded because it executes generated programs through
+Node's `vm` or child processes rather than testing the transformation pipeline.
+
+The suite exposed a non-Unicode RegExp range gap: character classes spanning
+UTF-16 surrogates did not include jsse's internal PUA-mapped code units, and the
+functional `@@replace` path converted matched/replacement strings lossily. The
+engine now preserves those code units and the UglifyJS suite is skip-free.
+
+### highlight.js markup and auto-detection fixtures
+
+`scripts/gen-highlightjs-entry.js` registers all 192 built-in grammars from the
+pinned source tree and embeds its filesystem fixtures into one deterministic
+bundle. The 536 markup fixtures run in highlight.js debug mode and compare the
+generated HTML byte-for-byte with upstream's expected output after the same
+whitespace trimming as its Mocha suite.
+
+The auto-detection corpus contributes 195 more cases after applying upstream's
+`autoDetection()` filter to its 198 inputs (G-code, properties, and plain text
+opt out).
+Each eligible input competes against the complete grammar set, exercising the
+relevance-scoring state machine rather than a single-language fast path. This
+is the expensive half of the run: roughly 30 minutes on jsse's tree-walker.
+
+Upstream currently comments out its dynamic auto-detection assertions, and
+eight ambiguous samples are won by a different grammar when all languages
+compete. The generator records Node's winners for pinned 11.11.2 and runs the
+public production mode for detection; debug mode exposes an upstream Nix
+zero-width assertion on otherwise valid inputs. Both engines therefore compare
+against the same fixed Node oracle and still report the exact 731-case count.
 
 ### Luxon
 
@@ -257,6 +306,26 @@ They are concentrated in four follow-ups surfaced by the suite:
 - #263 — Node host mode does not honor `TZ` for the system time zone.
 - #264 — unknown IANA-shaped identifiers are accepted as valid time zones.
 - #265 — `Intl.Locale#getWeekInfo()` omits `minimalDays`.
+
+### Moment
+
+Moment's 137 locale definitions, 52 core QUnit files, and 138 locale QUnit
+files are statically imported by `gen-moment-entry.js`. This replaces only
+upstream's filesystem discovery and dynamic locale `require()` path; the test
+bodies remain upstream code. `patch-moment-bundle.js` makes one deprecation
+expectation explicit because esbuild deduplicates a hooks module that upstream
+transpiles separately. It strengthens the check symmetrically on both engines
+and does not change the registered-test count.
+
+Both engines run the same generated bundle and shared synchronous QUnit
+adapter under `TZ=America/New_York`, `LANG=en_US.utf8`, and
+`LC_ALL=en_US.utf8`. Node passes all 3,871 registered tests and 162,868
+assertions. jsse also executes all 3,871 tests, recording 153,088 passing and
+198 failing assertions out of 153,286 reached assertions; callbacks that throw
+early account for the lower assertion total. The failures remain visible and
+are tracked in #311. The first 100 diagnostics all report
+`TypeError: Cannot convert object to primitive value`, concentrated in week/year
+and locale parser/formatting cases.
 
 ### lodash skip list (jsse only; each preserves the assertion count via `skipAssert`)
 
@@ -309,3 +378,9 @@ running those thousands of timers natively would otherwise exhaust OS threads.
   are green on Node (1,152 tests). jsse runs the same 1,152 cases and passes
   1,045; the remaining failures stay visible until the four root Intl and host
   time-zone gaps above land.
+
+- **Moment sustained object-to-primitive failures (jsse#311).** The pinned
+  bundle is green on Node (3,871 tests, 162,868 assertions). jsse executes every
+  registered test but 198 callbacks fail with `TypeError: Cannot convert object
+  to primitive value`; representative operations pass in a fresh bundle, so
+  the follow-up tracks the sustained-execution/state interaction.

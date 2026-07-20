@@ -13,6 +13,14 @@ impl Interpreter {
         value: JsValue,
         receiver: &JsValue,
     ) -> Result<bool, JsValue> {
+        // Module namespace exotic [[Set]] (§10.4.6.9) always rejects the set,
+        // even though exported bindings have writable own data descriptors.
+        if self
+            .get_object_cell(obj_id)
+            .is_some_and(|obj| obj.borrow().module_namespace().is_some())
+        {
+            return Ok(false);
+        }
         self.proxy_set(obj_id, key, value, receiver)
     }
 
