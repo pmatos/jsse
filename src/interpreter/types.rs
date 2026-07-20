@@ -541,8 +541,8 @@ impl Realm {
         random_bits as f64 / 9_007_199_254_740_992.0
     }
 
-    pub(crate) fn collect_roots(&self, worklist: &mut Vec<u64>) {
-        super::Interpreter::collect_env_roots(&self.global_env, worklist);
+    pub(crate) fn collect_roots(&self, worklist: &mut Vec<u64>, seen_envs: &mut HashSet<usize>) {
+        super::Interpreter::collect_env_roots(&self.global_env, worklist, seen_envs);
         if let Some(id) = self.global_object {
             worklist.push(id);
         }
