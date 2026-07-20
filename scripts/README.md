@@ -153,7 +153,10 @@ shared core (which includes QUnit's own `equiv`, ported verbatim, for
 
 It also aliases Node's `global` to `globalThis`, which many bundles rely on for
 their root-object detection. The TAP frontend supports Jest's array-table
-`test.each` form in addition to the basic globals.
+`test.each` form in addition to the basic globals. Mocha-style `describe.only`
+and `it.only` filter the registered suite tree globally, including nested
+focus, direct-test precedence, and focused skipped tests; the exclusive table
+form `test.only.each` registers each generated row as a focused test.
 
 Layer it into a library by setting `LIB_SHIM="node-test-harness.js"` (it is
 prepended after `node-shim.js` and `node-buffer-shim.js`). Like the other shims
