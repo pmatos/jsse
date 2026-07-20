@@ -25,7 +25,6 @@ lib_prepare() {
     # lint/docs/release toolchain is unrelated to the runtime corpus.
     node -e "const p=require('./package.json'); p.devDependencies={ 'es-value-fixtures':'1.7.1', 'for-each':'0.3.5', 'has-bigints':'1.1.0', 'has-override-mistake':'1.0.1', 'has-property-descriptors':'1.0.2', 'has-proto':'1.2.0', 'has-symbols':'1.1.0', 'iconv-lite':'0.5.2', 'mock-property':'1.1.2', 'object-inspect':'1.13.4', 'safer-buffer':'2.1.2', tape:'5.10.2' }; p.scripts={}; require('fs').writeFileSync('package.json', JSON.stringify(p,null,2)+'\n')"
     npm install --ignore-scripts --no-audit --no-fund
-    node "$SCRIPT_DIR/patch-qs-diagnostic.js" test/parse.js
     cp "$SCRIPT_DIR/node-buffer-module.js" test/jsse-buffer.js
     cp "$SCRIPT_DIR/node-tape-module.js" test/jsse-tape.js
     cp "$SCRIPT_DIR/node-string-decoder-module.js" test/jsse-string-decoder.js

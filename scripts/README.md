@@ -277,15 +277,15 @@ array outputs that fail `Object.isFrozen` after Zod freezes them (#314), and the
 Node-specific text of a `JSON.parse` error snapshot (#315), each repeated in
 normal and jitless mode. These remain failing assertions rather than skips.
 
-### qs iconv-lite shim and diagnostic parity
+### qs iconv-lite shim
 
 qs uses only iconv-lite's core `encode`/`decode` surface. Its JSSE-only shim
 therefore hides the fake `process.versions.node` marker so iconv-lite does not
 activate optional Node stream and Buffer-prototype extensions; real Node keeps
-the marker and exercises its normal path. One strict-assignment assertion also
-selects JSSE's exact, shorter `TypeError` message while Node retains qs's
-upstream receiver-aware regular expression; the diagnostic parity gap is
-tracked in [#318](https://github.com/pmatos/jsse/issues/318).
+the marker and exercises its normal path. JSSE now emits the same receiver-aware
+strict-assignment `TypeError` message as Node after the #318 fix landed on main
+([#325](https://github.com/pmatos/jsse/pull/325)), so qs's upstream assertion
+runs unmodified on both engines.
 
 ### PrismJS token-stream fixtures
 
