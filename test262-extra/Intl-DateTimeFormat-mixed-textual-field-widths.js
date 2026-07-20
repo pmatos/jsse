@@ -138,3 +138,40 @@ assertSame(enDateTimeFields.month, 'January',
   'fractional seconds do not narrow the English month');
 assertSame(enDateTimeFields.fractionalSecond, '123',
   'mixed-width pattern retains fractional seconds');
+
+// A time-zone name requested alongside mixed textual widths must retain its own
+// requested width: shortOffset is the short localized GMT format (GMT-5) and
+// longOffset is the long form (GMT-05:00). ECMA-402 FormatDateTimePattern keeps
+// these distinct; they must not collapse to a single offset width.
+function assertOffsetName(timeZone, timeZoneName, ms, expected, message) {
+  var options = {
+    weekday: 'long', month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+    timeZone: timeZone, timeZoneName: timeZoneName
+  };
+  var parts = new Intl.DateTimeFormat('en-US', options).formatToParts(ms);
+  var actual;
+  for (var i = 0; i < parts.length; i++) {
+    if (parts[i].type === 'timeZoneName') {
+      actual = parts[i].value;
+      break;
+    }
+  }
+  assertSame(actual, expected, message);
+}
+
+var januaryNoon = Date.UTC(1970, 0, 1, 12, 0, 0);
+var julyNoon = Date.UTC(1970, 6, 1, 12, 0, 0);
+
+assertOffsetName('America/New_York', 'shortOffset', januaryNoon, 'GMT-5',
+  'mixed widths keep short offset (winter)');
+assertOffsetName('America/New_York', 'longOffset', januaryNoon, 'GMT-05:00',
+  'mixed widths keep long offset (winter)');
+assertOffsetName('America/New_York', 'shortOffset', julyNoon, 'GMT-4',
+  'mixed widths keep short offset (summer)');
+assertOffsetName('America/New_York', 'longOffset', julyNoon, 'GMT-04:00',
+  'mixed widths keep long offset (summer)');
+assertOffsetName('Asia/Kolkata', 'shortOffset', januaryNoon, 'GMT+5:30',
+  'mixed widths keep short half-hour offset');
+assertOffsetName('Asia/Kolkata', 'longOffset', januaryNoon, 'GMT+05:30',
+  'mixed widths keep long half-hour offset');

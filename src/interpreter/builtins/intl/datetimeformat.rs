@@ -1512,8 +1512,9 @@ fn legacy_icu_numeric_style(
 
 fn legacy_icu_pattern_string(
     pattern: &icu_datetime_legacy::pattern::runtime::Pattern<'_>,
+    offset_style: Option<&str>,
 ) -> String {
-    use icu_datetime_legacy::fields::FieldLength;
+    use icu_datetime_legacy::fields::{FieldLength, FieldSymbol};
     use icu_datetime_legacy::pattern::PatternItem;
 
     fn push_literal(output: &mut String, literal: &str) {
@@ -1545,6 +1546,17 @@ fn legacy_icu_pattern_string(
             PatternItem::Field(field) => {
                 push_literal(&mut output, &literal);
                 literal.clear();
+                // The legacy components::Bag exposes a single GmtOffset variant,
+                // so shortOffset and longOffset both resolve to the long
+                // localized-GMT token. Emit the requested localized-GMT width
+                // directly instead: `O` (short, e.g. GMT-5) or `OOOO` (long,
+                // e.g. GMT-05:00). ICU4X 2.0 honors this distinction when the
+                // generated pattern string is reparsed.
+                if let (Some(style), FieldSymbol::TimeZone(_)) = (offset_style, field.symbol) {
+                    let count = if style == "shortOffset" { 1 } else { 4 };
+                    output.extend(std::iter::repeat_n('O', count));
+                    continue;
+                }
                 let length = match field.length {
                     FieldLength::One | FieldLength::NumericOverride(_) => 1,
                     FieldLength::TwoDigit => 2,
@@ -1849,7 +1861,13 @@ fn icu_mixed_width_pattern(
         }
         BestSkeleton::MissingOrExtraFields(_) | BestSkeleton::NoMatch => return None,
     };
-    legacy_icu_pattern_string(&pattern).parse().ok()
+    let offset_style = opts
+        .time_zone_name
+        .as_deref()
+        .filter(|style| matches!(*style, "shortOffset" | "longOffset"));
+    legacy_icu_pattern_string(&pattern, offset_style)
+        .parse()
+        .ok()
 }
 
 fn icu_datetime_field_set(
