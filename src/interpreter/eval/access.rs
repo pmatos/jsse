@@ -29,7 +29,7 @@ impl Interpreter {
                     // §13.3.7.1: super property in optional chain — use HomeObject.__proto__
                     let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
                     let key = match member_prop {
-                        MemberProperty::Dot(name) => name.clone(),
+                        MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                         MemberProperty::Computed(expr) => {
                             let v = match self.eval_expr(expr, env) {
                                 Completion::Normal(v) => v,
@@ -91,7 +91,7 @@ impl Interpreter {
                         other => return Err(other),
                     };
                     let key = match member_prop {
-                        MemberProperty::Dot(name) => name.clone(),
+                        MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                         MemberProperty::Computed(expr) => {
                             let v = match self.eval_expr(expr, env) {
                                 Completion::Normal(v) => v,
@@ -380,7 +380,7 @@ impl Interpreter {
                     )));
                 }
                 let key = match mp {
-                    MemberProperty::Dot(name) => name.clone(),
+                    MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                     MemberProperty::Computed(expr) => {
                         let v = match self.eval_expr(expr, env) {
                             Completion::Normal(v) => v,
@@ -434,12 +434,13 @@ impl Interpreter {
         }
     }
 
-    pub(super) fn eval_delete_on_object(
+    pub(super) fn eval_delete_on_object<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_val: &JsValue,
-        key: &str,
+        key: &K,
         env: &EnvRef,
     ) -> Completion {
+        let key = key.to_js_property_key();
         let obj_val = if !matches!(obj_val, JsValue::Object(_)) {
             match self.to_object(obj_val) {
                 Completion::Normal(v) => v,
@@ -453,7 +454,7 @@ impl Interpreter {
             && let Some(obj) = self.get_object_cell(o.id)
         {
             if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
-                match self.proxy_delete_property(o.id, key) {
+                match self.proxy_delete_property(o.id, &key) {
                     Ok(false) => {
                         if env.borrow().strict {
                             return Completion::Throw(self.create_type_error(&format!(
@@ -468,7 +469,7 @@ impl Interpreter {
             }
             let is_strict = env.borrow().strict;
             let mut obj_mut = obj.borrow_mut();
-            if let Some(desc) = obj_mut.properties.get(key)
+            if let Some(desc) = obj_mut.properties.get(&key)
                 && desc.configurable == Some(false)
             {
                 if is_strict {
@@ -481,8 +482,10 @@ impl Interpreter {
                 }
                 return Completion::Normal(JsValue::Boolean(false));
             }
-            obj_mut.remove_property(key);
-            if let Some(map) = obj_mut.parameter_map_mut() {
+            obj_mut.remove_property(&key);
+            if let Some(map) = obj_mut.parameter_map_mut()
+                && let Some(key) = key.as_str()
+            {
                 map.remove(key);
             }
             if let Ok(idx) = key.parse::<usize>()
@@ -506,10 +509,10 @@ impl Interpreter {
     /// `ProtoData`/`Missing` re-verify the prototype identity (and, for
     /// `ProtoData`, the prototype's shape) here. A stale entry self-heals: the
     /// caller's slow path re-records it.
-    fn ic_probe_prop_kind(
+    fn ic_probe_prop_kind<K: PropertyKeyLike + ?Sized>(
         &self,
         obj_rc: &Rc<RefCell<JsObjectData>>,
-        key: &str,
+        key: &K,
         kind: crate::interpreter::ic::PropIcKind,
     ) -> Option<JsValue> {
         use crate::interpreter::ic::PropIcKind;
@@ -558,10 +561,10 @@ impl Interpreter {
     ///   immediate prototype is null (→ `Missing`).
     /// - Own accessors, depth-1 prototype *accessors*, and depth>1 hits/misses
     ///   return `None` (caller leaves the slot Empty rather than caching).
-    fn classify_for_prop_ic(
+    fn classify_for_prop_ic<K: PropertyKeyLike + ?Sized>(
         &self,
         obj_id: u64,
-        key: &str,
+        key: &K,
     ) -> Option<crate::interpreter::ic::PropIcEntry> {
         use crate::interpreter::ic::{PropIcEntry, PropIcKind};
         let obj_rc = self.get_object(obj_id)?;
@@ -776,7 +779,7 @@ impl Interpreter {
         // until after we check that the base is not null/undefined (spec: ToObject
         // precedes ToPropertyKey per §6.2.5.5 GetValue step 3.a vs 3.c.i).
         let (key, computed_raw) = match prop {
-            MemberProperty::Dot(name) => (name.clone(), None),
+            MemberProperty::Dot(name) => (JsPropertyKey::from(name.clone()), None),
             MemberProperty::Computed(expr) => {
                 let v = match self.eval_expr(expr, env) {
                     Completion::Normal(v) => v,
@@ -893,7 +896,7 @@ impl Interpreter {
                 self.get_object_property(o.id, &key, &obj_val.clone())
             }
             JsValue::String(s) => {
-                if key == "length" {
+                if key.eq_str("length") {
                     Completion::Normal(JsValue::Number(s.len() as f64))
                 } else if let Ok(idx) = key.parse::<usize>() {
                     if idx < s.code_units.len() {

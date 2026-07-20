@@ -251,6 +251,7 @@ needs outside that core (`toThrow` and one inline snapshot).
 | `highlight.js` | 11.11.2 | ✅ 731 (cross-checked) | 536 markup + 195 auto-detection fixtures across 192 grammars; ~30 min |
 | `js-sha256` | v0.11.1 | ✅ 916 (cross-checked) | Pure-JS SHA-224/SHA-256 and HMAC vectors; string, Buffer, TypedArray, and ArrayBuffer inputs |
 | `qs` | v6.15.3 | ✅ 1,013 (cross-checked) | tape corpus: nested parse/stringify, limits, charsets, Buffer, pollution guards, Map/WeakMap side channels |
+| `js-md5` | v0.8.3 | ✅ 550 (cross-checked) | Pure-JS MD5 and HMAC-MD5 vectors; UTF-8 strings, Buffer, TypedArray, and ArrayBuffer inputs |
 | `luxon` | 3.7.2 | ⚠️ 1,045 / 1,152 | exact count cross-checked; Node is 1,152 / 1,152; blocked on #262–#265 |
 | `zod` | v4.4.3 | ⚠️ 2,176 / 2,184 | normal + jitless, exact count cross-checked; Node is 2,184 / 2,184; residuals tracked in #313–#315 |
 | `moment` | 2.30.1 | ⚠️ 198 failing assertions across 3,871 tests | exact registered-test count cross-checked; Node is green with 162,868 assertions; residual tracked in #311 |

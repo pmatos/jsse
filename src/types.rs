@@ -1,4 +1,6 @@
+use std::borrow::Borrow;
 use std::fmt;
+use std::str::FromStr;
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
@@ -74,6 +76,229 @@ impl JsString {
 impl fmt::Display for JsString {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.to_rust_string())
+    }
+}
+
+/// Exact internal representation of an ECMAScript property key.
+///
+/// String keys are stored as canonical WTF-8: well-formed UTF-16 has its usual
+/// UTF-8 encoding, while lone surrogates use the corresponding three-byte
+/// WTF-8 sequence. This makes ordinary Rust `str` keys directly borrowable as
+/// bytes while retaining every possible ECMAScript String value.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct JsPropertyKey {
+    bytes: Arc<[u8]>,
+}
+
+pub enum JsPropertyKeyParseError<E> {
+    IllFormedUtf16,
+    Value(E),
+}
+
+impl JsPropertyKey {
+    pub fn from_str(s: &str) -> Self {
+        Self {
+            bytes: Arc::from(s.as_bytes()),
+        }
+    }
+
+    pub fn from_js_string(s: &JsString) -> Self {
+        let units = &s.code_units;
+        let mut bytes = Vec::with_capacity(units.len() * 3);
+        let mut i = 0;
+        while i < units.len() {
+            let unit = units[i];
+            if (0xD800..=0xDBFF).contains(&unit)
+                && i + 1 < units.len()
+                && (0xDC00..=0xDFFF).contains(&units[i + 1])
+            {
+                let code_point =
+                    ((unit as u32 - 0xD800) << 10) + (units[i + 1] as u32 - 0xDC00) + 0x10000;
+                bytes.push((0xF0 | (code_point >> 18)) as u8);
+                bytes.push((0x80 | ((code_point >> 12) & 0x3F)) as u8);
+                bytes.push((0x80 | ((code_point >> 6) & 0x3F)) as u8);
+                bytes.push((0x80 | (code_point & 0x3F)) as u8);
+                i += 2;
+            } else if unit < 0x80 {
+                bytes.push(unit as u8);
+                i += 1;
+            } else if unit < 0x800 {
+                bytes.push((0xC0 | (unit >> 6)) as u8);
+                bytes.push((0x80 | (unit & 0x3F)) as u8);
+                i += 1;
+            } else {
+                // This is ordinary three-byte UTF-8 for BMP scalars and the
+                // canonical WTF-8 encoding for a lone surrogate.
+                bytes.push((0xE0 | (unit >> 12)) as u8);
+                bytes.push((0x80 | ((unit >> 6) & 0x3F)) as u8);
+                bytes.push((0x80 | (unit & 0x3F)) as u8);
+                i += 1;
+            }
+        }
+        Self {
+            bytes: Arc::from(bytes),
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn as_str(&self) -> Option<&str> {
+        std::str::from_utf8(&self.bytes).ok()
+    }
+
+    pub fn eq_str(&self, other: &str) -> bool {
+        self.bytes.as_ref() == other.as_bytes()
+    }
+
+    pub fn starts_with(&self, prefix: &str) -> bool {
+        self.bytes.starts_with(prefix.as_bytes())
+    }
+
+    pub fn parse<T: FromStr>(&self) -> Result<T, JsPropertyKeyParseError<T::Err>> {
+        let text = self
+            .as_str()
+            .ok_or(JsPropertyKeyParseError::IllFormedUtf16)?;
+        text.parse().map_err(JsPropertyKeyParseError::Value)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.bytes, &other.bytes)
+    }
+
+    pub fn to_js_string(&self) -> JsString {
+        let mut units = Vec::with_capacity(self.bytes.len());
+        let mut i = 0;
+        while i < self.bytes.len() {
+            let first = self.bytes[i];
+            if first < 0x80 {
+                units.push(first as u16);
+                i += 1;
+            } else if first < 0xE0 {
+                debug_assert!(i + 1 < self.bytes.len());
+                let code_point = ((first as u32 & 0x1F) << 6) | (self.bytes[i + 1] as u32 & 0x3F);
+                units.push(code_point as u16);
+                i += 2;
+            } else if first < 0xF0 {
+                debug_assert!(i + 2 < self.bytes.len());
+                let code_point = ((first as u32 & 0x0F) << 12)
+                    | ((self.bytes[i + 1] as u32 & 0x3F) << 6)
+                    | (self.bytes[i + 2] as u32 & 0x3F);
+                units.push(code_point as u16);
+                i += 3;
+            } else {
+                debug_assert!(i + 3 < self.bytes.len());
+                let code_point = ((first as u32 & 0x07) << 18)
+                    | ((self.bytes[i + 1] as u32 & 0x3F) << 12)
+                    | ((self.bytes[i + 2] as u32 & 0x3F) << 6)
+                    | (self.bytes[i + 3] as u32 & 0x3F);
+                let offset = code_point - 0x10000;
+                units.push((0xD800 + (offset >> 10)) as u16);
+                units.push((0xDC00 + (offset & 0x3FF)) as u16);
+                i += 4;
+            }
+        }
+        JsString::from_vec(units)
+    }
+}
+
+impl Borrow<[u8]> for JsPropertyKey {
+    fn borrow(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+impl From<&str> for JsPropertyKey {
+    fn from(value: &str) -> Self {
+        Self::from_str(value)
+    }
+}
+
+impl From<String> for JsPropertyKey {
+    fn from(value: String) -> Self {
+        Self {
+            bytes: Arc::from(value.into_bytes()),
+        }
+    }
+}
+
+impl From<JsString> for JsPropertyKey {
+    fn from(value: JsString) -> Self {
+        Self::from_js_string(&value)
+    }
+}
+
+impl fmt::Display for JsPropertyKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.to_js_string())
+    }
+}
+
+pub trait PropertyKeyLike {
+    fn as_property_key_bytes(&self) -> &[u8];
+
+    fn as_property_key_str(&self) -> Option<&str> {
+        std::str::from_utf8(self.as_property_key_bytes()).ok()
+    }
+
+    fn to_js_property_key(&self) -> JsPropertyKey;
+}
+
+impl PropertyKeyLike for str {
+    fn as_property_key_bytes(&self) -> &[u8] {
+        self.as_bytes()
+    }
+
+    fn as_property_key_str(&self) -> Option<&str> {
+        Some(self)
+    }
+
+    fn to_js_property_key(&self) -> JsPropertyKey {
+        JsPropertyKey::from_str(self)
+    }
+}
+
+impl PropertyKeyLike for String {
+    fn as_property_key_bytes(&self) -> &[u8] {
+        self.as_bytes()
+    }
+
+    fn as_property_key_str(&self) -> Option<&str> {
+        Some(self)
+    }
+
+    fn to_js_property_key(&self) -> JsPropertyKey {
+        JsPropertyKey::from_str(self)
+    }
+}
+
+impl PropertyKeyLike for JsPropertyKey {
+    fn as_property_key_bytes(&self) -> &[u8] {
+        self.as_bytes()
+    }
+
+    fn as_property_key_str(&self) -> Option<&str> {
+        self.as_str()
+    }
+
+    fn to_js_property_key(&self) -> JsPropertyKey {
+        self.clone()
+    }
+}
+
+impl<T: PropertyKeyLike + ?Sized> PropertyKeyLike for &T {
+    fn as_property_key_bytes(&self) -> &[u8] {
+        (*self).as_property_key_bytes()
+    }
+
+    fn as_property_key_str(&self) -> Option<&str> {
+        (*self).as_property_key_str()
+    }
+
+    fn to_js_property_key(&self) -> JsPropertyKey {
+        (*self).to_js_property_key()
     }
 }
 
@@ -725,6 +950,33 @@ mod tests {
             format!("{}", JsValue::String(JsString::from_str("hi"))),
             "hi"
         );
+    }
+
+    #[test]
+    fn property_key_wtf8_round_trips_all_utf16_shapes() {
+        let units = vec![0x0061, 0xD834, 0x0062, 0xDF06, 0xD834, 0xDF06];
+        let key = JsPropertyKey::from_js_string(&JsString::from_vec(units.clone()));
+        assert_eq!(&*key.to_js_string().code_units, &units);
+        assert!(key.as_str().is_none(), "lone surrogates are not UTF-8");
+    }
+
+    #[test]
+    fn property_key_well_formed_text_keeps_utf8_bytes() {
+        let text = "plain-𝌆";
+        let key = JsPropertyKey::from_js_string(&JsString::from_str(text));
+        assert_eq!(key.as_bytes(), text.as_bytes());
+        assert_eq!(key.as_str(), Some(text));
+        assert_eq!(key.to_js_string(), JsString::from_str(text));
+    }
+
+    #[test]
+    fn property_key_lone_surrogates_do_not_collide_with_replacement() {
+        let replacement = JsPropertyKey::from_str("\u{FFFD}");
+        let high = JsPropertyKey::from_js_string(&JsString::from_vec(vec![0xD834]));
+        let low = JsPropertyKey::from_js_string(&JsString::from_vec(vec![0xDF06]));
+        assert_ne!(replacement, high);
+        assert_ne!(replacement, low);
+        assert_ne!(high, low);
     }
 
     // ----- JsValue method surface (issue #69 NaN-box migration) -------------

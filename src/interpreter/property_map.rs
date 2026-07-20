@@ -1,9 +1,9 @@
 use std::collections::HashMap;
-use std::rc::Rc;
 
 use smallvec::SmallVec;
 
 use super::types::PropertyDescriptor;
+use crate::types::{JsPropertyKey, PropertyKeyLike};
 
 // Inline up to this many properties before spilling to a HashMap. 8 was the
 // threshold proposed in issue #68; measurement showed it pushes JsObjectData
@@ -23,15 +23,14 @@ pub struct PropertyMap {
 // The inline variant is intentionally large — eliminating the heap allocation
 // for small objects is the entire point of issue #68. Boxing it would defeat
 // the optimisation.
-// Keys are `Rc<str>` (issue #74): the same interned `Rc<str>` is shared with
+// Keys are `JsPropertyKey` (issue #317): the same interned backing bytes are shared with
 // `JsObjectData.property_order`, so the two stored copies of a property name
-// share one allocation. `Rc<str>` derefs to `&str`, so read-side lookups taking
-// `&str` are unchanged, and `Rc<str>: Borrow<str>` lets the spilled `HashMap`
-// be queried with `&str` keys.
+// share one allocation. Its WTF-8 bytes preserve arbitrary UTF-16 keys, and
+// ordinary `&str` lookups borrow their UTF-8 bytes directly.
 #[allow(clippy::large_enum_variant)]
 enum PropertyMapInner {
-    Inline(SmallVec<[(Rc<str>, PropertyDescriptor); INLINE_CAP]>),
-    Spilled(HashMap<Rc<str>, PropertyDescriptor>),
+    Inline(SmallVec<[(JsPropertyKey, PropertyDescriptor); INLINE_CAP]>),
+    Spilled(HashMap<JsPropertyKey, PropertyDescriptor>),
 }
 
 impl PropertyMap {
@@ -41,35 +40,41 @@ impl PropertyMap {
         }
     }
 
-    pub fn contains_key(&self, key: &str) -> bool {
+    pub fn contains_key<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> bool {
         match &self.inner {
-            PropertyMapInner::Inline(v) => v.iter().any(|(k, _)| k.as_ref() == key),
-            PropertyMapInner::Spilled(m) => m.contains_key(key),
+            PropertyMapInner::Inline(v) => v
+                .iter()
+                .any(|(k, _)| k.as_bytes() == key.as_property_key_bytes()),
+            PropertyMapInner::Spilled(m) => m.contains_key(key.as_property_key_bytes()),
         }
     }
 
-    pub fn get(&self, key: &str) -> Option<&PropertyDescriptor> {
+    pub fn get<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<&PropertyDescriptor> {
         match &self.inner {
-            PropertyMapInner::Inline(v) => {
-                v.iter().find(|(k, _)| k.as_ref() == key).map(|(_, d)| d)
-            }
-            PropertyMapInner::Spilled(m) => m.get(key),
+            PropertyMapInner::Inline(v) => v
+                .iter()
+                .find(|(k, _)| k.as_bytes() == key.as_property_key_bytes())
+                .map(|(_, d)| d),
+            PropertyMapInner::Spilled(m) => m.get(key.as_property_key_bytes()),
         }
     }
 
-    pub fn get_mut(&mut self, key: &str) -> Option<&mut PropertyDescriptor> {
+    pub fn get_mut<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        key: &K,
+    ) -> Option<&mut PropertyDescriptor> {
         match &mut self.inner {
             PropertyMapInner::Inline(v) => v
                 .iter_mut()
-                .find(|(k, _)| k.as_ref() == key)
+                .find(|(k, _)| k.as_bytes() == key.as_property_key_bytes())
                 .map(|(_, d)| d),
-            PropertyMapInner::Spilled(m) => m.get_mut(key),
+            PropertyMapInner::Spilled(m) => m.get_mut(key.as_property_key_bytes()),
         }
     }
 
     pub fn insert(
         &mut self,
-        key: Rc<str>,
+        key: JsPropertyKey,
         value: PropertyDescriptor,
     ) -> Option<PropertyDescriptor> {
         match &mut self.inner {
@@ -83,7 +88,7 @@ impl PropertyMap {
                 } else {
                     // Spill: drain inline entries into a fresh randomised HashMap,
                     // then add the new entry.
-                    let mut map: HashMap<Rc<str>, PropertyDescriptor> =
+                    let mut map: HashMap<JsPropertyKey, PropertyDescriptor> =
                         HashMap::with_capacity(INLINE_CAP + 1);
                     for (k, d) in v.drain(..) {
                         map.insert(k, d);
@@ -97,13 +102,15 @@ impl PropertyMap {
         }
     }
 
-    pub fn remove(&mut self, key: &str) -> Option<PropertyDescriptor> {
+    pub fn remove<K: PropertyKeyLike + ?Sized>(&mut self, key: &K) -> Option<PropertyDescriptor> {
         match &mut self.inner {
             PropertyMapInner::Inline(v) => {
-                let pos = v.iter().position(|(k, _)| k.as_ref() == key)?;
+                let pos = v
+                    .iter()
+                    .position(|(k, _)| k.as_bytes() == key.as_property_key_bytes())?;
                 Some(v.remove(pos).1)
             }
-            PropertyMapInner::Spilled(m) => m.remove(key),
+            PropertyMapInner::Spilled(m) => m.remove(key.as_property_key_bytes()),
         }
     }
 
@@ -115,7 +122,7 @@ impl PropertyMap {
         PropertyMapIter { inner }
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = &Rc<str>> {
+    pub fn keys(&self) -> impl Iterator<Item = &JsPropertyKey> {
         self.iter().map(|(k, _)| k)
     }
 
@@ -135,12 +142,12 @@ pub struct PropertyMapIter<'a> {
 }
 
 enum PropertyMapIterInner<'a> {
-    Inline(std::slice::Iter<'a, (Rc<str>, PropertyDescriptor)>),
-    Spilled(std::collections::hash_map::Iter<'a, Rc<str>, PropertyDescriptor>),
+    Inline(std::slice::Iter<'a, (JsPropertyKey, PropertyDescriptor)>),
+    Spilled(std::collections::hash_map::Iter<'a, JsPropertyKey, PropertyDescriptor>),
 }
 
 impl<'a> Iterator for PropertyMapIter<'a> {
-    type Item = (&'a Rc<str>, &'a PropertyDescriptor);
+    type Item = (&'a JsPropertyKey, &'a PropertyDescriptor);
 
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.inner {
@@ -156,8 +163,8 @@ mod tests {
     use crate::interpreter::types::JsObjectData;
     use crate::types::JsValue;
 
-    fn key(s: impl AsRef<str>) -> Rc<str> {
-        Rc::from(s.as_ref())
+    fn key(s: impl AsRef<str>) -> JsPropertyKey {
+        JsPropertyKey::from_str(s.as_ref())
     }
 
     fn desc(n: f64) -> PropertyDescriptor {
@@ -310,16 +317,16 @@ mod tests {
         let mut m = PropertyMap::new();
         m.insert(key("Symbol(foo)"), desc(1.0));
         m.insert(key("plain"), desc(2.0));
-        let keys: Vec<&Rc<str>> = m.keys().collect();
-        assert!(keys.iter().any(|k| k.as_ref() == "Symbol(foo)"));
-        assert!(keys.iter().any(|k| k.as_ref() == "plain"));
+        let keys: Vec<&JsPropertyKey> = m.keys().collect();
+        assert!(keys.iter().any(|k| k.eq_str("Symbol(foo)")));
+        assert!(keys.iter().any(|k| k.eq_str("plain")));
         for i in 0..INLINE_CAP {
             m.insert(key(format!("k{i}")), desc(i as f64));
         }
         assert!(!is_inline(&m));
-        let keys: Vec<&Rc<str>> = m.keys().collect();
+        let keys: Vec<&JsPropertyKey> = m.keys().collect();
         assert!(
-            keys.iter().any(|k| k.as_ref() == "Symbol(foo)"),
+            keys.iter().any(|k| k.eq_str("Symbol(foo)")),
             "Symbol key lost on spill"
         );
     }

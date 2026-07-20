@@ -1620,15 +1620,11 @@ impl Interpreter {
         };
 
         let remaining = Rc::new(Cell::new(1u64));
-        let keys: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let keys: Rc<RefCell<Vec<JsPropertyKey>>> = Rc::new(RefCell::new(Vec::new()));
         let values: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
 
         for key_val in all_keys {
-            let key_str = match &key_val {
-                JsValue::String(s) => s.to_rust_string(),
-                JsValue::Symbol(s) => s.to_property_key(),
-                _ => continue,
-            };
+            let key_str = to_property_key_string(&key_val);
 
             // desc = ? promises.[[GetOwnProperty]](key)
             let desc_val = match self.proxy_get_own_property_descriptor(promises_obj_id, &key_str) {
@@ -1776,15 +1772,11 @@ impl Interpreter {
         };
 
         let remaining = Rc::new(Cell::new(1u64));
-        let keys: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let keys: Rc<RefCell<Vec<JsPropertyKey>>> = Rc::new(RefCell::new(Vec::new()));
         let values: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
 
         for key_val in all_keys {
-            let key_str = match &key_val {
-                JsValue::String(s) => s.to_rust_string(),
-                JsValue::Symbol(s) => s.to_property_key(),
-                _ => continue,
-            };
+            let key_str = to_property_key_string(&key_val);
 
             let desc_val = match self.proxy_get_own_property_descriptor(promises_obj_id, &key_str) {
                 Ok(v) => v,
@@ -1941,7 +1933,7 @@ impl Interpreter {
     /// Build a null-prototype object mapping `keys[i] → values[i]`.
     /// Used by Promise.allKeyed / Promise.allSettledKeyed to produce the
     /// CreateKeyedPromiseCombinatorResultObject result.
-    fn build_keyed_result(&mut self, keys: &[String], values: &[JsValue]) -> JsValue {
+    fn build_keyed_result(&mut self, keys: &[JsPropertyKey], values: &[JsValue]) -> JsValue {
         let id = self.create_object_id();
         {
             let cell = self.get_object_cell_expect(id);

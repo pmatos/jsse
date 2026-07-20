@@ -196,12 +196,13 @@ fn obj_set_throw(
     Ok(())
 }
 
-pub(crate) fn create_data_property_or_throw(
+pub(crate) fn create_data_property_or_throw<K: PropertyKeyLike + ?Sized>(
     interp: &mut Interpreter,
     o: &JsValue,
-    key: &str,
+    key: &K,
     value: JsValue,
 ) -> Result<(), JsValue> {
+    let key = key.to_js_property_key();
     if let JsValue::Object(obj_ref) = o {
         // Deferred namespace: trigger evaluation on [[DefineOwnProperty]]
         {
@@ -210,7 +211,7 @@ pub(crate) fn create_data_property_or_throw(
                     .module_namespace()
                     .is_some_and(|ns| ns.deferred)
             });
-            if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(key, true) {
+            if is_deferred_ns && !Interpreter::is_symbol_like_namespace_key(&key, true) {
                 interp.ensure_deferred_namespace_evaluation(obj_ref.id)?;
             }
         }
@@ -230,7 +231,7 @@ pub(crate) fn create_data_property_or_throw(
             }
             let desc_id = desc_obj_id;
             let desc_val = JsValue::Object(crate::types::JsObject { id: desc_id });
-            return match interp.proxy_define_own_property(obj_ref.id, key.to_string(), &desc_val) {
+            return match interp.proxy_define_own_property(obj_ref.id, key.clone(), &desc_val) {
                 Ok(true) => Ok(()),
                 Ok(false) => {
                     Err(interp.create_type_error(&format!("Cannot define property: {key}")))
@@ -244,7 +245,7 @@ pub(crate) fn create_data_property_or_throw(
             // property must not satisfy the check; cf. OrdinaryDefineOwnProperty).
             let (not_extensible, has_own) = {
                 let borrow = interp.get_object_cell_expect(obj_ref.id).borrow();
-                (!borrow.extensible, borrow.has_own_property(key))
+                (!borrow.extensible, borrow.has_own_property(&key))
             };
             if not_extensible && !has_own {
                 return Err(interp.create_type_error(&format!(
@@ -255,7 +256,7 @@ pub(crate) fn create_data_property_or_throw(
             let non_configurable = {
                 let borrow = interp.get_object_cell_expect(obj_ref.id).borrow();
                 borrow
-                    .get_own_property(key)
+                    .get_own_property(&key)
                     .is_some_and(|desc| desc.configurable == Some(false))
             };
             if non_configurable {
@@ -291,7 +292,7 @@ pub(crate) fn create_data_property_or_throw(
                     borrow.set_property_value("length", JsValue::Number((idx + 1) as f64));
                 }
             }
-            borrow.define_own_property(key.to_string(), PropertyDescriptor::data_default(value));
+            borrow.define_own_property(key, PropertyDescriptor::data_default(value));
         }
     }
     Ok(())

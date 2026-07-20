@@ -1,5 +1,15 @@
 use super::*;
 
+fn literal_string_property_key(code_units: &[u16]) -> JsPropertyKey {
+    JsPropertyKey::from_js_string(&JsString::from_vec(code_units.to_vec()))
+}
+
+fn prefixed_function_name(prefix: &str, key: &JsPropertyKey) -> JsPropertyKey {
+    let mut code_units: Vec<u16> = prefix.encode_utf16().collect();
+    code_units.extend_from_slice(&key.to_js_string().code_units);
+    JsPropertyKey::from_js_string(&JsString::from_vec(code_units))
+}
+
 impl Interpreter {
     pub(super) fn get_template_object(&mut self, tmpl: &TemplateLiteral) -> JsValue {
         let cache_key = tmpl.id;
@@ -119,24 +129,28 @@ impl Interpreter {
     }
 
     #[allow(clippy::wrong_self_convention)]
-    pub(crate) fn to_property_key(&mut self, val: &JsValue) -> Result<String, JsValue> {
+    pub(crate) fn to_property_key(&mut self, val: &JsValue) -> Result<JsPropertyKey, JsValue> {
         // Fast path: non-negative integer Number → integer string (avoids ryu_js)
         if let JsValue::Number(n) = val {
             let trunc = n.trunc();
             if *n == trunc && trunc >= 0.0 && trunc <= u32::MAX as f64 {
-                return Ok((trunc as u32).to_string());
+                return Ok(JsPropertyKey::from((trunc as u32).to_string()));
             }
         }
         match val {
-            JsValue::Symbol(s) => Ok(s.to_property_key()),
+            JsValue::String(s) => Ok(JsPropertyKey::from_js_string(s)),
+            JsValue::Symbol(s) => Ok(JsPropertyKey::from(s.to_property_key())),
             JsValue::Object(_) => {
                 let prim = self.to_primitive(val, "string")?;
                 if let JsValue::Symbol(s) = &prim {
-                    return Ok(s.to_property_key());
+                    return Ok(JsPropertyKey::from(s.to_property_key()));
                 }
-                self.to_string_value(&prim)
+                match prim {
+                    JsValue::String(s) => Ok(JsPropertyKey::from_js_string(&s)),
+                    _ => self.to_string_value(&prim).map(JsPropertyKey::from),
+                }
             }
-            _ => self.to_string_value(val),
+            _ => self.to_string_value(val).map(JsPropertyKey::from),
         }
     }
 
@@ -517,11 +531,11 @@ impl Interpreter {
         //          collect instance field defs, and defer static fields/blocks.
         // Phase 2: Execute static field initializers and static blocks in order.
         enum DeferredStatic {
-            PublicField(String, Option<Expression>),
+            PublicField(JsPropertyKey, Option<Expression>),
             // (source_name, branded_name, initializer)
             PrivateField(String, String, Option<Expression>),
             Block(Vec<Statement>),
-            AutoAccessor(String, String, Option<Expression>),
+            AutoAccessor(JsPropertyKey, String, Option<Expression>),
         }
         let mut deferred_static: Vec<DeferredStatic> = Vec::new();
 
@@ -532,12 +546,17 @@ impl Interpreter {
                         continue;
                     }
                     let (key, fn_name_for_key) = match &m.key {
-                        PropertyKey::Identifier(s) | PropertyKey::String(s) => {
-                            (s.clone(), s.clone())
+                        PropertyKey::Identifier(s) => {
+                            let key = JsPropertyKey::from(s.clone());
+                            (key.clone(), key)
+                        }
+                        PropertyKey::String(s) => {
+                            let key = literal_string_property_key(s);
+                            (key.clone(), key)
                         }
                         PropertyKey::Number(n) => {
-                            let s = to_js_string(&JsValue::Number(*n));
-                            (s.clone(), s)
+                            let key = JsPropertyKey::from(to_js_string(&JsValue::Number(*n)));
+                            (key.clone(), key)
                         }
                         PropertyKey::Computed(expr) => match self.eval_expr(expr, &class_env) {
                             Completion::Normal(v) => {
@@ -552,7 +571,11 @@ impl Interpreter {
                                 };
                                 match self.to_property_key(&v) {
                                     Ok(s) => {
-                                        let name = if is_symbol { fn_name } else { s.clone() };
+                                        let name = if is_symbol {
+                                            JsPropertyKey::from(fn_name)
+                                        } else {
+                                            s.clone()
+                                        };
                                         (s, name)
                                     }
                                     Err(e) => return Completion::Throw(e),
@@ -733,8 +756,8 @@ impl Interpreter {
                         }
                     };
                     let method_display_name = match m.kind {
-                        ClassMethodKind::Get => format!("get {fn_name_for_key}"),
-                        ClassMethodKind::Set => format!("set {fn_name_for_key}"),
+                        ClassMethodKind::Get => prefixed_function_name("get ", &fn_name_for_key),
+                        ClassMethodKind::Set => prefixed_function_name("set ", &fn_name_for_key),
                         _ => fn_name_for_key.clone(),
                     };
                     let home_target = if m.is_static {
@@ -753,7 +776,9 @@ impl Interpreter {
                         .borrow_mut()
                         .initialize_binding("__home_object__", home_target);
                     let method_func = JsFunction::User {
-                        name: Some(method_display_name),
+                        // create_function installs an empty configurable name, then
+                        // SetFunctionName below replaces it without a lossy Rust String seam.
+                        name: Some(String::new()),
                         params: Rc::new(m.value.params.clone()),
                         body: m.value.body.clone(),
                         closure: method_closure,
@@ -768,6 +793,7 @@ impl Interpreter {
                         has_simple_params: crate::ast::params_are_simple(&m.value.params),
                     };
                     let method_val = self.create_function(method_func);
+                    self.set_function_name(&method_val, &method_display_name);
 
                     let target = if m.is_static {
                         if let JsValue::Object(ref o) = ctor_val {
@@ -853,8 +879,11 @@ impl Interpreter {
                     if p.is_static {
                         // Evaluate computed key NOW in phase 1, defer initializer to phase 2
                         let key = match &p.key {
-                            PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
-                            PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
+                            PropertyKey::Identifier(s) => JsPropertyKey::from(s.clone()),
+                            PropertyKey::String(s) => literal_string_property_key(s),
+                            PropertyKey::Number(n) => {
+                                JsPropertyKey::from(to_js_string(&JsValue::Number(*n)))
+                            }
                             PropertyKey::Computed(expr) => match self.eval_expr(expr, &class_env) {
                                 Completion::Normal(v) => match self.to_property_key(&v) {
                                     Ok(s) => s,
@@ -864,7 +893,7 @@ impl Interpreter {
                             },
                             PropertyKey::Private(_) => unreachable!(),
                         };
-                        if key == "prototype" {
+                        if key.eq_str("prototype") {
                             return Completion::Throw(self.create_type_error(
                                 "Classes may not have a static property named 'prototype'",
                             ));
@@ -873,8 +902,11 @@ impl Interpreter {
                     } else {
                         // Instance field: evaluate computed key, store field def
                         let key = match &p.key {
-                            PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
-                            PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
+                            PropertyKey::Identifier(s) => JsPropertyKey::from(s.clone()),
+                            PropertyKey::String(s) => literal_string_property_key(s),
+                            PropertyKey::Number(n) => {
+                                JsPropertyKey::from(to_js_string(&JsValue::Number(*n)))
+                            }
                             PropertyKey::Computed(expr) => match self.eval_expr(expr, &class_env) {
                                 Completion::Normal(v) => match self.to_property_key(&v) {
                                     Ok(s) => s,
@@ -919,8 +951,11 @@ impl Interpreter {
                         continue;
                     }
                     let key = match &p.key {
-                        PropertyKey::Identifier(s) | PropertyKey::String(s) => s.clone(),
-                        PropertyKey::Number(n) => to_js_string(&JsValue::Number(*n)),
+                        PropertyKey::Identifier(s) => JsPropertyKey::from(s.clone()),
+                        PropertyKey::String(s) => literal_string_property_key(s),
+                        PropertyKey::Number(n) => {
+                            JsPropertyKey::from(to_js_string(&JsValue::Number(*n)))
+                        }
                         PropertyKey::Computed(expr) => match self.eval_expr(expr, &class_env) {
                             Completion::Normal(v) => match self.to_property_key(&v) {
                                 Ok(s) => s,
@@ -936,7 +971,7 @@ impl Interpreter {
 
                     let getter_slot = storage_slot.clone();
                     let getter_func = JsFunction::native(
-                        format!("get {key}"),
+                        String::new(),
                         0,
                         move |interp, this, _args| {
                             let obj_id = match this {
@@ -959,10 +994,11 @@ impl Interpreter {
                         },
                     );
                     let getter_val = self.create_function(getter_func);
+                    self.set_function_name(&getter_val, &prefixed_function_name("get ", &key));
 
                     let setter_slot = storage_slot.clone();
                     let setter_func = JsFunction::native(
-                        format!("set {key}"),
+                        String::new(),
                         1,
                         move |interp, this, args| {
                             let obj_id = match this {
@@ -988,6 +1024,7 @@ impl Interpreter {
                         },
                     );
                     let setter_val = self.create_function(setter_func);
+                    self.set_function_name(&setter_val, &prefixed_function_name("set ", &key));
 
                     let target = if p.is_static {
                         if let JsValue::Object(ref o) = ctor_val {
@@ -1158,8 +1195,8 @@ impl Interpreter {
         &mut self,
         src_id: u64,
         src_val: &JsValue,
-        excluded: &[String],
-    ) -> Result<Vec<(String, JsValue)>, JsValue> {
+        excluded: &[JsPropertyKey],
+    ) -> Result<Vec<(JsPropertyKey, JsValue)>, JsValue> {
         let mut result = Vec::new();
         let keys = self.proxy_own_keys(src_id)?;
         for key_val in keys {
@@ -1233,11 +1270,17 @@ impl Interpreter {
                 let mut method_values: Vec<JsValue> = Vec::new();
                 for prop in props {
                     let (key, fn_name_for_key) = match &prop.key {
-                        PropertyKey::Identifier(n) => (n.clone(), n.clone()),
-                        PropertyKey::String(s) => (s.clone(), s.clone()),
+                        PropertyKey::Identifier(n) => {
+                            let key = JsPropertyKey::from(n.clone());
+                            (key.clone(), key)
+                        }
+                        PropertyKey::String(s) => {
+                            let key = literal_string_property_key(s);
+                            (key.clone(), key)
+                        }
                         PropertyKey::Number(n) => {
-                            let s = number_ops::to_string(*n);
-                            (s.clone(), s)
+                            let key = JsPropertyKey::from(number_ops::to_string(*n));
+                            (key.clone(), key)
                         }
                         PropertyKey::Computed(expr) => {
                             let v = match self.eval_expr(expr, env) {
@@ -1258,7 +1301,11 @@ impl Interpreter {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
                             };
-                            let name = if is_symbol { fn_name } else { pk.clone() };
+                            let name = if is_symbol {
+                                JsPropertyKey::from(fn_name)
+                            } else {
+                                pk.clone()
+                            };
                             (pk, name)
                         }
                         PropertyKey::Private(_) => {
@@ -1302,7 +1349,10 @@ impl Interpreter {
                     }
                     match prop.kind {
                         PropertyKind::Get => {
-                            self.set_function_name(&value, &format!("get {fn_name_for_key}"));
+                            self.set_function_name(
+                                &value,
+                                &prefixed_function_name("get ", &fn_name_for_key),
+                            );
                             method_values.push(value.clone());
                             let mut desc = obj_data.properties.get(&key).cloned().unwrap_or(
                                 PropertyDescriptor {
@@ -1320,7 +1370,10 @@ impl Interpreter {
                             obj_data.insert_property(key, desc);
                         }
                         PropertyKind::Set => {
-                            self.set_function_name(&value, &format!("set {fn_name_for_key}"));
+                            self.set_function_name(
+                                &value,
+                                &prefixed_function_name("set ", &fn_name_for_key),
+                            );
                             method_values.push(value.clone());
                             let mut desc = obj_data.properties.get(&key).cloned().unwrap_or(
                                 PropertyDescriptor {
@@ -1340,7 +1393,7 @@ impl Interpreter {
                         _ => {
                             // __proto__: value sets [[Prototype]] per spec §13.2.5.5
                             // Only plain property init, not methods, computed, or shorthand
-                            if key == "__proto__"
+                            if key.eq_str("__proto__")
                                 && !prop.computed
                                 && !prop.shorthand
                                 && !prop.method
