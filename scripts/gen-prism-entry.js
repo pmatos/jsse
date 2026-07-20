@@ -113,14 +113,6 @@ const CORE_SOURCE = ${serialize(coreSource)};
 const COMPONENT_SOURCES = ${serialize(componentSources)};
 const LANGUAGE_CONFIGS = ${serialize(languageConfigs)};
 const FIXTURES = ${serialize(fixtures)};
-// Node runs every fixture. JSSE temporarily preserves the same fixture count
-// for these known failures, which are isolated in engine issue #271.
-const JSSE_SKIP_FIXTURES = {
-\t'bison/c_feature.test': true,
-\t'parser/expression_feature.test': true,
-\t'parser/keyword_feature.test': true,
-};
-const RUNNING_ON_JSSE = typeof __host_write !== 'undefined';
 
 const coreFunction = new Function('module', 'global', CORE_SOURCE);
 const componentFunctions = {};
@@ -172,14 +164,8 @@ function printDifference(name, expected, actual) {
 
 let passed = 0;
 let failed = 0;
-let skipped = 0;
 for (let i = 0; i < FIXTURES.length; i++) {
 \tconst fixture = FIXTURES[i];
-\tif (RUNNING_ON_JSSE && JSSE_SKIP_FIXTURES[fixture[0]]) {
-\t\tpassed++;
-\t\tskipped++;
-\t\tcontinue;
-\t}
 \tconst config = LANGUAGE_CONFIGS[fixture[1]];
 \ttry {
 \t\tconst Prism = createPrism(config[0]);
@@ -197,8 +183,7 @@ for (let i = 0; i < FIXTURES.length; i++) {
 }
 
 console.log(
-\t'PrismJS: ' + passed + ' passed, ' + failed + ' failed, ' + FIXTURES.length + ' total' +
-\t(skipped ? ' (' + skipped + ' jsse skips; see #271)' : '')
+\t'PrismJS: ' + passed + ' passed, ' + failed + ' failed, ' + FIXTURES.length + ' total'
 );
 if (failed) {
 \tprocess.exit(1);
