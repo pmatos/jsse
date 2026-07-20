@@ -131,6 +131,37 @@ impl Interpreter {
         self.gc.release_external(bytes);
     }
 
+    fn enqueue_unmarked<I>(candidates: I, worklist: &mut Vec<u64>, marks: &mut [bool])
+    where
+        I: IntoIterator<Item = u64>,
+    {
+        for id in candidates {
+            let idx = id as usize;
+            if idx < marks.len() && !marks[idx] {
+                marks[idx] = true;
+                worklist.push(id);
+            }
+        }
+    }
+
+    fn trace_mark_worklist(
+        &self,
+        worklist: &mut Vec<u64>,
+        marks: &mut [bool],
+        seen_envs: &mut HashSet<usize>,
+    ) {
+        let mut children = Vec::new();
+        while let Some(id) = worklist.pop() {
+            let Some(obj_rc) = self.objects.get(id) else {
+                continue;
+            };
+            let obj = obj_rc.borrow();
+            children.clear();
+            Self::trace_object_fields(&obj, &mut children, seen_envs);
+            Self::enqueue_unmarked(children.drain(..), worklist, marks);
+        }
+    }
+
     pub(crate) fn gc_safepoint(&mut self) {
         if !self.gc.begin_collection() {
             return;
@@ -145,8 +176,9 @@ impl Interpreter {
 
         // Collect roots from all realms
         let mut worklist: Vec<u64> = Vec::new();
+        let mut seen_envs = HashSet::new();
         for realm in &self.realms {
-            realm.collect_roots(&mut worklist);
+            realm.collect_roots(&mut worklist, &mut seen_envs);
         }
         if let Some(JsValue::Object(o)) = &self.new_target {
             worklist.push(o.id);
@@ -154,7 +186,7 @@ impl Interpreter {
         // Root from module environments (not reachable from global_env)
         for module in self.module_registry.values() {
             let m = module.borrow();
-            Self::collect_env_roots(&m.env, &mut worklist);
+            Self::collect_env_roots(&m.env, &mut worklist, &mut seen_envs);
             for val in m.exports.values() {
                 Self::collect_value_roots(val, &mut worklist);
             }
@@ -169,7 +201,7 @@ impl Interpreter {
         }
         for module in self.synthetic_module_registry.values() {
             let m = module.borrow();
-            Self::collect_env_roots(&m.env, &mut worklist);
+            Self::collect_env_roots(&m.env, &mut worklist, &mut seen_envs);
             for val in m.exports.values() {
                 Self::collect_value_roots(val, &mut worklist);
             }
@@ -179,7 +211,7 @@ impl Interpreter {
         }
         // Trace active call stack environments
         for env in &self.call_stack_envs {
-            Self::collect_env_roots(env, &mut worklist);
+            Self::collect_env_roots(env, &mut worklist, &mut seen_envs);
         }
         for frame in &self.call_stack_frames {
             if frame.func_obj_id != 0 {
@@ -208,7 +240,7 @@ impl Interpreter {
             Self::collect_value_roots(val, &mut worklist);
         }
         for afs in self.scheduler.iter_async_function_states() {
-            Self::collect_env_roots(&afs.func_env, &mut worklist);
+            Self::collect_env_roots(&afs.func_env, &mut worklist, &mut seen_envs);
             Self::collect_value_roots(&afs.resolve_fn, &mut worklist);
             Self::collect_value_roots(&afs.reject_fn, &mut worklist);
             if let Some(ref v) = afs.pending_return {
@@ -218,24 +250,18 @@ impl Interpreter {
                 Self::collect_value_roots(v, &mut worklist);
             }
             if let Some(ref env) = afs.for_of_iter_env {
-                Self::collect_env_roots(env, &mut worklist);
+                Self::collect_env_roots(env, &mut worklist, &mut seen_envs);
             }
         }
 
-        // Mark phase (BFS)
-        while let Some(id) = worklist.pop() {
-            let idx = id as usize;
-            if idx >= obj_count || marks[idx] {
-                continue;
-            }
-            marks[idx] = true;
-            let obj_rc = match self.objects.get(id) {
-                Some(rc) => rc,
-                None => continue,
-            };
-            let obj = obj_rc.borrow();
-            Self::trace_object_fields(&obj, &mut worklist);
-        }
+        // Mark each object when it is enqueued, not when it is popped. Shared
+        // environments and prototypes can expose the same object through many
+        // edges; admitting each id once keeps the worklist linear in the live
+        // object graph instead of filling it with duplicate entries.
+        let roots = worklist;
+        let mut worklist = Vec::with_capacity(roots.len());
+        Self::enqueue_unmarked(roots, &mut worklist, &mut marks);
+        self.trace_mark_worklist(&mut worklist, &mut marks, &mut seen_envs);
 
         // Ephemeron fixpoint: mark WeakMap values whose keys are reachable
         loop {
@@ -271,21 +297,9 @@ impl Interpreter {
                     }
                 }
             }
-            // BFS from any newly marked objects (use same full tracing as main mark phase)
-            while let Some(id) = worklist.pop() {
-                let idx = id as usize;
-                if idx >= obj_count || marks[idx] {
-                    continue;
-                }
-                marks[idx] = true;
-                new_marks = true;
-                let obj_rc = match self.objects.get(id) {
-                    Some(rc) => rc,
-                    None => continue,
-                };
-                let obj = obj_rc.borrow();
-                Self::trace_object_fields(&obj, &mut worklist);
-            }
+            // Trace through any newly reachable WeakMap values using the same
+            // deduplicated worklist as the main mark phase.
+            self.trace_mark_worklist(&mut worklist, &mut marks, &mut seen_envs);
             if !new_marks {
                 break;
             }
@@ -363,7 +377,11 @@ impl Interpreter {
         }
     }
 
-    fn trace_object_fields(obj: &JsObjectData, worklist: &mut Vec<u64>) {
+    fn trace_object_fields(
+        obj: &JsObjectData,
+        worklist: &mut Vec<u64>,
+        seen_envs: &mut HashSet<usize>,
+    ) {
         if let Some(pid) = obj.prototype_id {
             worklist.push(pid);
         }
@@ -422,7 +440,7 @@ impl Interpreter {
         if let Some(ref func) = obj.callable
             && let JsFunction::User { closure, .. } = func
         {
-            Self::collect_env_roots(closure, worklist);
+            Self::collect_env_roots(closure, worklist, seen_envs);
         }
         if let Some(ref roots) = obj.gc_native_roots {
             for v in roots {
@@ -531,11 +549,11 @@ impl Interpreter {
                 }
             }
             ObjectKind::Iterator(state) => {
-                Self::collect_iterator_state_roots(state, worklist);
+                Self::collect_iterator_state_roots(state, worklist, seen_envs);
             }
             ObjectKind::Arguments(map) => {
                 for (env_ref, _) in map.values() {
-                    Self::collect_env_roots(env_ref, worklist);
+                    Self::collect_env_roots(env_ref, worklist, seen_envs);
                 }
             }
             ObjectKind::Array(_) => {
@@ -543,12 +561,16 @@ impl Interpreter {
                 // (array_elements is a separate compact storage; values are also tracked).
             }
             ObjectKind::ModuleNamespace(ns) => {
-                Self::collect_env_roots(&ns.env, worklist);
+                Self::collect_env_roots(&ns.env, worklist, seen_envs);
             }
         }
     }
 
-    fn collect_iterator_state_roots(state: &IteratorState, worklist: &mut Vec<u64>) {
+    fn collect_iterator_state_roots(
+        state: &IteratorState,
+        worklist: &mut Vec<u64>,
+        seen_envs: &mut HashSet<usize>,
+    ) {
         match state {
             IteratorState::ArrayIterator { array_id, .. } => worklist.push(*array_id),
             IteratorState::TypedArrayIterator { typed_array_id, .. } => {
@@ -566,7 +588,7 @@ impl Interpreter {
                 execution_state,
                 ..
             } => {
-                Self::collect_env_roots(func_env, worklist);
+                Self::collect_env_roots(func_env, worklist, seen_envs);
                 if let GeneratorExecutionState::SuspendedYield { prev_sent, .. } = execution_state {
                     for v in prev_sent {
                         Self::collect_value_roots(v, worklist);
@@ -589,7 +611,7 @@ impl Interpreter {
                 _sent_value,
                 ..
             } => {
-                Self::collect_env_roots(func_env, worklist);
+                Self::collect_env_roots(func_env, worklist, seen_envs);
                 Self::collect_value_roots(_sent_value, worklist);
                 if let Some(di) = delegated_iterator {
                     Self::collect_value_roots(&di.iterator, worklist);
@@ -606,12 +628,15 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn collect_env_roots(env: &EnvRef, worklist: &mut Vec<u64>) {
+    pub(crate) fn collect_env_roots(
+        env: &EnvRef,
+        worklist: &mut Vec<u64>,
+        seen_envs: &mut HashSet<usize>,
+    ) {
         let mut current = Some(env.clone());
-        let mut seen = HashSet::new();
         while let Some(e) = current {
             let ptr = Rc::as_ptr(&e) as usize;
-            if !seen.insert(ptr) {
+            if !seen_envs.insert(ptr) {
                 break;
             }
             let borrowed = e.borrow();
@@ -659,6 +684,18 @@ mod tests {
     }
 
     #[test]
+    fn mark_worklist_enqueues_shared_references_once() {
+        let mut marks = vec![false; 5];
+        let mut worklist = Vec::new();
+
+        Interpreter::enqueue_unmarked([1, 2, 1, 3, 2, 1, 9], &mut worklist, &mut marks);
+        assert_eq!(worklist, vec![1, 2, 3]);
+
+        Interpreter::enqueue_unmarked([2, 4, 3], &mut worklist, &mut marks);
+        assert_eq!(worklist, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
     fn trace_object_fields_roots_prototype_and_data_properties() {
         let mut data = JsObjectData::new();
         data.prototype_id = Some(7);
@@ -672,7 +709,7 @@ mod tests {
         );
 
         let mut worklist = Vec::new();
-        Interpreter::trace_object_fields(&data, &mut worklist);
+        Interpreter::trace_object_fields(&data, &mut worklist, &mut HashSet::new());
         assert_eq!(as_set(worklist), vec![7, 8]);
     }
 
@@ -685,7 +722,7 @@ mod tests {
         );
 
         let mut worklist = Vec::new();
-        Interpreter::trace_object_fields(&data, &mut worklist);
+        Interpreter::trace_object_fields(&data, &mut worklist, &mut HashSet::new());
         assert_eq!(as_set(worklist), vec![10, 11]);
     }
 
@@ -696,7 +733,7 @@ mod tests {
         data.gc_native_roots = Some(vec![obj(22)]);
 
         let mut worklist = Vec::new();
-        Interpreter::trace_object_fields(&data, &mut worklist);
+        Interpreter::trace_object_fields(&data, &mut worklist, &mut HashSet::new());
         assert_eq!(as_set(worklist), vec![20, 21, 22]);
     }
 
@@ -715,7 +752,7 @@ mod tests {
         );
 
         let mut worklist = Vec::new();
-        Interpreter::collect_env_roots(&child, &mut worklist);
+        Interpreter::collect_env_roots(&child, &mut worklist, &mut HashSet::new());
         assert_eq!(as_set(worklist), vec![30, 31]);
 
         // (b) self-referential env (parent points to itself) binds "c"=Object(32)
@@ -728,8 +765,24 @@ mod tests {
         cyclic.borrow_mut().parent = Some(cyclic.clone());
 
         let mut worklist = Vec::new();
-        Interpreter::collect_env_roots(&cyclic, &mut worklist);
+        Interpreter::collect_env_roots(&cyclic, &mut worklist, &mut HashSet::new());
         assert_eq!(worklist, vec![32]);
+    }
+
+    #[test]
+    fn environment_roots_are_scanned_once_per_collection() {
+        let env = Environment::new(None);
+        env.borrow_mut().bindings.insert(
+            "shared".to_string(),
+            Binding::new(obj(33), BindingKind::Var, true),
+        );
+        let mut worklist = Vec::new();
+        let mut seen_envs = HashSet::new();
+
+        Interpreter::collect_env_roots(&env, &mut worklist, &mut seen_envs);
+        Interpreter::collect_env_roots(&env, &mut worklist, &mut seen_envs);
+
+        assert_eq!(worklist, vec![33]);
     }
 
     // GcPacer — the allocation-pressure heuristic that decides when to collect.
