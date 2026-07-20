@@ -419,16 +419,21 @@ impl Interpreter {
                 // operator. Either phase can run user code and reach a GC
                 // safepoint, so keep object operands rooted until the operation
                 // has completed.
-                let gc_frame = self.gc_root_frame();
                 self.gc_root_value(&lval);
                 let rval = match self.eval_expr(right, env) {
                     Completion::Normal(v) => v,
                     other => {
-                        self.gc_unroot_frame(gc_frame);
+                        self.gc_unroot_value(&lval);
                         return other;
                     }
                 };
                 self.gc_root_value(&rval);
+                // The fast string-concat arm below moves lval/rval, so snapshot
+                // the object operands now for a targeted unroot afterwards. Only
+                // objects are ever rooted, and that arm runs only for primitives,
+                // so these are cheap handle copies or None.
+                let lroot = matches!(&lval, JsValue::Object(_)).then(|| lval.clone());
+                let rroot = matches!(&rval, JsValue::Object(_)).then(|| rval.clone());
                 let result = if *op == BinaryOp::Instanceof {
                     self.eval_instanceof(&lval, &rval)
                 // Fast path for string + on owned primitive values:
@@ -456,7 +461,16 @@ impl Interpreter {
                 } else {
                     self.eval_binary(*op, &lval, &rval)
                 };
-                self.gc_unroot_frame(gc_frame);
+                // Unroot only the operands we rooted (mirrors call_function_inner)
+                // so a persistent root a native builtin left alive during rval
+                // evaluation or operator coercion — e.g. Atomics.waitAsync or
+                // $262.agent.getReportAsync — is not dropped by a bulk truncate.
+                if let Some(ref r) = rroot {
+                    self.gc_unroot_value(r);
+                }
+                if let Some(ref l) = lroot {
+                    self.gc_unroot_value(l);
+                }
                 result
             }
             Expression::Logical(op, left, right) => self.eval_logical(*op, left, right, env),
