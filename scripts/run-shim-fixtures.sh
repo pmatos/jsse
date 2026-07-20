@@ -5,10 +5,10 @@
 #   ./scripts/run-shim-fixtures.sh [--node] [--no-cross-check]
 #
 # Each fixture in scripts/shim-fixtures/*.fixture.js is a self-verifying test
-# for the shared shims (node-shim.js + node-buffer-shim.js). The runner
-# prepends both shims to the fixture and runs the result on:
-#   - jsse (release) — the shims define Buffer/TextEncoder/TextDecoder
-#   - Node           — the shims are inert; the fixture exercises native APIs
+# for the shared shims and selector modules. The runner prepends the shims and
+# string_decoder selector to the fixture and runs the result on:
+#   - jsse (release) — the shims define the Node-compatible APIs
+#   - Node           — the selectors expose native APIs as the oracle
 # A fixture passes iff the engine exits 0. By default the two engines must also
 # report the same "N of N assertions passed" count, so a fixture silently
 # skipping checks on jsse cannot masquerade as a pass.
@@ -24,6 +24,7 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 FIXTURE_DIR="$SCRIPT_DIR/shim-fixtures"
 JSSE="$PROJECT_DIR/target/release/jsse"
 SHIMS=("$SCRIPT_DIR/node-shim.js" "$SCRIPT_DIR/node-buffer-shim.js")
+STRING_DECODER="$SCRIPT_DIR/node-string-decoder-module.js"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
@@ -45,12 +46,13 @@ fi
 # Parse "SHIM-FIXTURE: X of Y assertions passed"; echoes the count or empty.
 parse_count() { grep -oE 'SHIM-FIXTURE: [0-9]+ of [0-9]+' "$1" | tail -1 | grep -oE '[0-9]+ of' | grep -oE '^[0-9]+' || true; }
 
-# <engine> <fixture-bundle> <label> → returns 0 on pass, sets COUNT
+# <fixture-bundle> <label> <engine> [args...] → returns 0 on pass, sets COUNT
 COUNT=""
 run_one() {
-    local engine="$1" bundle="$2" label="$3"
+    local bundle="$1" label="$2"
+    shift 2
     local out="$WORK/out-$label.txt" rc=0
-    "$engine" "$bundle" > "$out" 2>&1 || rc=$?
+    "$@" "$bundle" > "$out" 2>&1 || rc=$?
     cat "$out"
     COUNT="$(parse_count "$out")"
     if [ "$rc" -ne 0 ]; then
@@ -78,24 +80,28 @@ fi
 FAIL=0
 for fixture in "${FIXTURES[@]}"; do
     name="$(basename "$fixture")"
-    bundle="$WORK/bundle-$name"
-    cat "${SHIMS[@]}" "$fixture" > "$bundle"
+    bundle="$WORK/bundle-$name.cjs"
+    {
+        cat "${SHIMS[@]}"
+        echo 'var module = { exports: {} };'
+        cat "$STRING_DECODER" "$fixture"
+    } > "$bundle"
     echo "========================================"
     echo "  Fixture: $name"
     echo "========================================"
 
     if [ "$NODE_ONLY" -eq 1 ]; then
-        run_one node "$bundle" node || FAIL=1
+        run_one "$bundle" node node || FAIL=1
         continue
     fi
 
     JSSE_COUNT=""
-    run_one "$JSSE" "$bundle" jsse && JSSE_COUNT="$COUNT" || FAIL=1
+    run_one "$bundle" jsse "$JSSE" --node && JSSE_COUNT="$COUNT" || FAIL=1
 
     if [ "$CROSS_CHECK" -eq 1 ]; then
         if command -v node >/dev/null 2>&1; then
             NODE_COUNT=""
-            run_one node "$bundle" node && NODE_COUNT="$COUNT" || FAIL=1
+            run_one "$bundle" node node && NODE_COUNT="$COUNT" || FAIL=1
             if [ -n "$JSSE_COUNT" ] && [ "$JSSE_COUNT" != "$NODE_COUNT" ]; then
                 echo "  MISMATCH: jsse ran $JSSE_COUNT assertions, Node ran $NODE_COUNT" >&2
                 FAIL=1
