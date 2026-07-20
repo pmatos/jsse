@@ -884,7 +884,7 @@ impl Interpreter {
 
         // @@toStringTag
         let tag = JsValue::String(JsString::from_str("ArrayBuffer"));
-        let sym_key = "Symbol(Symbol.toStringTag)".to_string();
+        let sym_key = JsPropertyKey::well_known_symbol("toStringTag");
         self.get_object_cell_expect(ab_proto_id)
             .borrow_mut()
             .insert_property(sym_key, PropertyDescriptor::data(tag, false, false, true));
@@ -1029,7 +1029,7 @@ impl Interpreter {
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
-                    "Symbol(Symbol.species)".to_string(),
+                    JsPropertyKey::well_known_symbol("species"),
                     PropertyDescriptor {
                         value: None,
                         writable: None,
@@ -1383,7 +1383,7 @@ impl Interpreter {
         // @@toStringTag
         {
             let tag = JsValue::String(JsString::from_str("SharedArrayBuffer"));
-            let sym_key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
+            let sym_key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
             let desc = PropertyDescriptor::data(tag, false, false, true);
             self.get_object_cell_expect(sab_proto_id)
                 .borrow_mut()
@@ -1511,7 +1511,7 @@ impl Interpreter {
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
-                    "Symbol(Symbol.species)".to_string(),
+                    JsPropertyKey::well_known_symbol("species"),
                     PropertyDescriptor {
                         value: None,
                         writable: None,
@@ -3136,7 +3136,7 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor {
                     value: None,
                     writable: None,
@@ -3177,7 +3177,7 @@ impl Interpreter {
             .insert_builtin("values".to_string(), values_fn.clone());
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .insert_builtin("Symbol(Symbol.iterator)".to_string(), values_fn);
+            .insert_builtin(JsPropertyKey::well_known_symbol("iterator"), values_fn);
     }
 
     fn setup_ta_iterator_methods(&mut self, proto_id: u64) {
@@ -3733,7 +3733,11 @@ impl Interpreter {
 
                 // Step 4: Get @@iterator from raw source (before ToObject)
                 let using_iterator = if let JsValue::Object(ref o) = source {
-                    match interp.get_object_property(o.id, "Symbol(Symbol.iterator)", &source) {
+                    match interp.get_object_property(
+                        o.id,
+                        &JsPropertyKey::well_known_symbol("iterator"),
+                        &source,
+                    ) {
                         Completion::Normal(v)
                             if !matches!(v, JsValue::Undefined | JsValue::Null) =>
                         {
@@ -3759,8 +3763,11 @@ impl Interpreter {
                         }
                     };
                     if let JsValue::Object(ref wo) = wrapped {
-                        match interp.get_object_property(wo.id, "Symbol(Symbol.iterator)", &wrapped)
-                        {
+                        match interp.get_object_property(
+                            wo.id,
+                            &JsPropertyKey::well_known_symbol("iterator"),
+                            &wrapped,
+                        ) {
                             Completion::Normal(v)
                                 if !matches!(v, JsValue::Undefined | JsValue::Null) =>
                             {
@@ -4017,7 +4024,7 @@ impl Interpreter {
             && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut().insert_property(
-                "Symbol(Symbol.species)".to_string(),
+                JsPropertyKey::well_known_symbol("species"),
                 PropertyDescriptor {
                     value: None,
                     writable: None,
@@ -5033,7 +5040,11 @@ impl Interpreter {
             && let Some(_obj) = self.get_object_cell(o.id)
         {
             // Step 5: Let usingIterator be ? GetMethod(object, @@iterator).
-            let iter_fn = match self.get_object_property(o.id, "Symbol(Symbol.iterator)", val) {
+            let iter_fn = match self.get_object_property(
+                o.id,
+                &JsPropertyKey::well_known_symbol("iterator"),
+                val,
+            ) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(Completion::Throw(e)),
                 _ => JsValue::Undefined,
@@ -5683,7 +5694,7 @@ impl Interpreter {
         self.get_object_cell_expect(dv_proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(tag, false, false, true),
             );
 

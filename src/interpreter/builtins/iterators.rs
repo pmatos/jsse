@@ -631,7 +631,7 @@ impl Interpreter {
                     }
                     let prop_key = tst_key_for_setter
                         .clone()
-                        .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
+                        .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
                     let has_own = if let Some(od) = interp.get_object_cell(this_id) {
                         od.borrow().properties.contains_key(&prop_key)
                     } else {
@@ -667,7 +667,7 @@ impl Interpreter {
             self.get_object_cell_expect(iter_proto_id)
                 .borrow_mut()
                 .insert_property(
-                    "Symbol(Symbol.toStringTag)".to_string(),
+                    JsPropertyKey::well_known_symbol("toStringTag"),
                     PropertyDescriptor {
                         value: None,
                         writable: None,
@@ -1217,7 +1217,7 @@ impl Interpreter {
         self.get_object_cell_expect(arr_iter_proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
                     JsValue::String(JsString::from_str("Array Iterator")),
                     false,
@@ -1311,7 +1311,7 @@ impl Interpreter {
         self.get_object_cell_expect(str_iter_proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
                     JsValue::String(JsString::from_str("String Iterator")),
                     false,
@@ -1485,7 +1485,7 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
                     JsValue::String(JsString::from_str("Iterator Helper")),
                     false,
@@ -3823,7 +3823,7 @@ impl Interpreter {
         self.get_object_cell_expect(gen_proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
                     JsValue::String(JsString::from_str("Generator")),
                     false,
@@ -3870,7 +3870,7 @@ impl Interpreter {
         self.get_object_cell_expect(gf_proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
                     JsValue::String(JsString::from_str("GeneratorFunction")),
                     false,
@@ -4130,7 +4130,7 @@ impl Interpreter {
         self.get_object_cell_expect(gen_proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
                     JsValue::String(JsString::from_str("AsyncGenerator")),
                     false,
@@ -4162,7 +4162,7 @@ impl Interpreter {
         self.get_object_cell_expect(agf_proto_id)
             .borrow_mut()
             .insert_property(
-                "Symbol(Symbol.toStringTag)".to_string(),
+                JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
                     JsValue::String(JsString::from_str("AsyncGeneratorFunction")),
                     false,
@@ -4187,14 +4187,8 @@ impl Interpreter {
 }
 
 impl Interpreter {
-    pub(crate) fn get_symbol_iterator_key(&self) -> Option<String> {
-        self.get_global_var_ref("Symbol").and_then(|sv| {
-            if let JsValue::Object(so) = sv {
-                Some(to_js_string(&self.get_property_on_id(so.id, "iterator")))
-            } else {
-                None
-            }
-        })
+    pub(crate) fn get_symbol_iterator_key(&self) -> Option<JsPropertyKey> {
+        self.get_symbol_key("iterator")
     }
 
     pub(crate) fn create_iter_result_object(&mut self, value: JsValue, done: bool) -> JsValue {

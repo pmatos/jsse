@@ -712,7 +712,7 @@ impl Interpreter {
         // @@toStringTag
         {
             let tag = JsValue::String(JsString::from_str("Atomics"));
-            let sym_key = crate::interpreter::key_intern::intern_key("Symbol(Symbol.toStringTag)");
+            let sym_key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
             let desc = PropertyDescriptor::data(tag, false, false, true);
             self.get_object_cell_expect(atomics_obj_id)
                 .borrow_mut()

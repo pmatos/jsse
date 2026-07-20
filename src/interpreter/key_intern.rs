@@ -4,7 +4,7 @@
 //! and once in `JsObjectData.property_order`. Both copies used to be owned
 //! `String`s, so every property cost two heap allocations of the same bytes.
 //!
-//! This module interns ordinary and symbol-encoded keys into a process-thread
+//! This module interns ordinary and tagged Symbol keys into a process-thread
 //! cache of `JsPropertyKey`. The storage layer (`PropertyMap` + `property_order`)
 //! holds `JsPropertyKey` rather than `String`, so the two stored copies share one
 //! allocation and "cloning" a key is a refcount bump.
@@ -54,10 +54,9 @@ const SEED_KEYS: &[&str] = &[
     "enumerable",
     "configurable",
     "writable",
-    "Symbol(Symbol.iterator)",
-    "Symbol(Symbol.toPrimitive)",
-    "Symbol(Symbol.toStringTag)",
 ];
+
+const SEED_SYMBOL_KEYS: &[&str] = &["iterator", "toPrimitive", "toStringTag"];
 
 impl KeyCache {
     fn new() -> Self {
@@ -65,6 +64,10 @@ impl KeyCache {
         for &s in SEED_KEYS {
             let key = JsPropertyKey::from_str(s);
             map.insert(Box::from(s.as_bytes()), key);
+        }
+        for &name in SEED_SYMBOL_KEYS {
+            let key = JsPropertyKey::well_known_symbol(name);
+            map.insert(Box::from(key.as_bytes()), key);
         }
         Self { map }
     }
@@ -99,7 +102,7 @@ fn is_canonical_array_index(s: &str) -> bool {
 
 /// Intern a property key into shared WTF-8 storage.
 ///
-/// Ordinary names and symbol-encoded keys (`"Symbol(...)#id"`) are cached so
+/// Ordinary names and tagged Symbol keys are cached so
 /// repeated uses share one allocation. Canonical array-index strings are NOT
 /// cached (see the integer-index gate in the module docs) — a fresh key
 /// is returned so the cache never accumulates unbounded numeric keys.
@@ -117,6 +120,11 @@ pub(crate) fn intern_js_key(key: JsPropertyKey) -> JsPropertyKey {
         return key;
     }
     KEY_CACHE.with(|c| c.borrow_mut().intern(key))
+}
+
+#[inline]
+pub(crate) fn intern_well_known_symbol(name: &str) -> JsPropertyKey {
+    intern_js_key(JsPropertyKey::well_known_symbol(name))
 }
 
 #[cfg(test)]
@@ -143,13 +151,17 @@ mod tests {
 
     #[test]
     fn symbol_keys_are_interned_and_preserved() {
-        let key = "Symbol(desc)#42";
-        let a = intern_key(key);
-        let b = intern_key(key);
-        assert!(a.shares_storage_with(&b), "symbol-encoded keys must intern");
+        let symbol = crate::types::JsSymbol {
+            id: 42,
+            description: Some(crate::types::JsString::from_str("desc")),
+        };
+        let a = intern_js_key(symbol.to_property_key());
+        let b = intern_js_key(symbol.to_property_key());
+        assert!(a.shares_storage_with(&b), "Symbol keys must intern");
         // Byte content must be preserved exactly for symbol_key_to_jsvalue.
-        assert!(a.eq_str(key));
-        assert!(a.starts_with("Symbol("));
+        assert_eq!(a.symbol_encoding(), Some("Symbol(desc)#42"));
+        assert!(a.is_symbol());
+        assert_ne!(a, intern_key("Symbol(desc)#42"));
     }
 
     #[test]

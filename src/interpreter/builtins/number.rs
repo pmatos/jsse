@@ -348,53 +348,28 @@ impl Interpreter {
             }),
             false,
         ));
-        // Get the @@toPrimitive well-known symbol key
-        if let Some(sym_val) = self.get_global_var("Symbol")
-            && let JsValue::Object(sym_obj) = &sym_val
-        {
-            let to_prim_sym = self.get_property_on_id(sym_obj.id, "toPrimitive");
-            if let JsValue::Symbol(s) = &to_prim_sym {
-                let key = format!(
-                    "Symbol({})",
-                    s.description
-                        .as_ref()
-                        .map(|d| d.to_rust_string())
-                        .unwrap_or_default()
+        if let Some(key) = self.get_symbol_key("toPrimitive") {
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    key,
+                    PropertyDescriptor::data(to_prim_fn, false, false, true),
                 );
-                self.get_object_cell_expect(proto_id)
-                    .borrow_mut()
-                    .insert_property(
-                        key,
-                        PropertyDescriptor::data(to_prim_fn, false, false, true),
-                    );
-            }
         }
 
         // [Symbol.toStringTag] = "Symbol"
-        if let Some(sym_val) = self.get_global_var("Symbol")
-            && let JsValue::Object(sym_obj) = &sym_val
-        {
-            let tag_sym = self.get_property_on_id(sym_obj.id, "toStringTag");
-            if let JsValue::Symbol(s) = &tag_sym {
-                let key = format!(
-                    "Symbol({})",
-                    s.description
-                        .as_ref()
-                        .map(|d| d.to_rust_string())
-                        .unwrap_or_default()
+        if let Some(key) = self.get_symbol_key("toStringTag") {
+            self.get_object_cell_expect(proto_id)
+                .borrow_mut()
+                .insert_property(
+                    key,
+                    PropertyDescriptor::data(
+                        JsValue::String(JsString::from_str("Symbol")),
+                        false,
+                        false,
+                        true,
+                    ),
                 );
-                self.get_object_cell_expect(proto_id)
-                    .borrow_mut()
-                    .insert_property(
-                        key,
-                        PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str("Symbol")),
-                            false,
-                            false,
-                            true,
-                        ),
-                    );
-            }
         }
 
         // Set Symbol.prototype on the Symbol constructor

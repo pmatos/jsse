@@ -313,22 +313,24 @@ mod tests {
     }
 
     #[test]
-    fn keys_includes_symbols_in_both_modes() {
+    fn keys_keep_symbol_and_symbol_like_string_distinct_in_both_modes() {
         let mut m = PropertyMap::new();
-        m.insert(key("Symbol(foo)"), desc(1.0));
-        m.insert(key("plain"), desc(2.0));
+        let symbol = JsPropertyKey::well_known_symbol("iterator");
+        let text = key("Symbol(Symbol.iterator)");
+        m.insert(symbol.clone(), desc(1.0));
+        m.insert(text.clone(), desc(2.0));
         let keys: Vec<&JsPropertyKey> = m.keys().collect();
-        assert!(keys.iter().any(|k| k.eq_str("Symbol(foo)")));
-        assert!(keys.iter().any(|k| k.eq_str("plain")));
+        assert!(keys.contains(&&symbol));
+        assert!(keys.contains(&&text));
+        assert_eq!(num(m.get(&symbol).expect("Symbol key present")), 1.0);
+        assert_eq!(num(m.get(&text).expect("String key present")), 2.0);
         for i in 0..INLINE_CAP {
             m.insert(key(format!("k{i}")), desc(i as f64));
         }
         assert!(!is_inline(&m));
         let keys: Vec<&JsPropertyKey> = m.keys().collect();
-        assert!(
-            keys.iter().any(|k| k.eq_str("Symbol(foo)")),
-            "Symbol key lost on spill"
-        );
+        assert!(keys.contains(&&symbol), "Symbol key lost on spill");
+        assert!(keys.contains(&&text), "String key lost on spill");
     }
 
     #[test]

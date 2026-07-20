@@ -138,7 +138,7 @@ impl Interpreter {
         // @@toStringTag
         let tag_key = self
             .get_symbol_key("toStringTag")
-            .unwrap_or_else(|| "Symbol(Symbol.toStringTag)".to_string());
+            .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .insert_property(

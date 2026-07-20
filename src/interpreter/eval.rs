@@ -727,7 +727,7 @@ impl Interpreter {
                             }
                         }
                         // Module namespace exotic: [[Delete]] — only for string keys (not symbols)
-                        if !key.starts_with("Symbol(") {
+                        if !key.is_symbol() {
                             let ns_info = obj
                                 .borrow()
                                 .module_namespace()
@@ -1594,8 +1594,8 @@ impl Interpreter {
             JsValue::Object(o) => {
                 // §7.1.1 Step 2-3: Check @@toPrimitive
                 let exotic_to_prim = {
-                    let key = "Symbol(Symbol.toPrimitive)";
-                    match self.get_object_property(o.id, key, val) {
+                    let key = JsPropertyKey::well_known_symbol("toPrimitive");
+                    match self.get_object_property(o.id, &key, val) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Err(e),
                         _ => JsValue::Undefined,
