@@ -215,10 +215,16 @@ function numericHms(locale) {
   }).format(numericHourTimestamp);
 }
 
+assertSame(numericHms('es'), '3:04:05',
+  'language-only Spanish resolves to Spain data and stays unpadded');
+assertSame(numericHms('es-u-hc-h23'), '3:04:05',
+  'Spanish numeric hour with a Unicode hour-cycle extension stays unpadded');
 assertSame(numericHms('ca-ES'), '3:04:05',
   'Catalan numeric hour remains unpadded');
 assertSame(numericHms('es-MX'), '03:04:05',
   'Mexican Spanish numeric hour remains padded');
+assertSame(numericHms('es-419'), '03:04:05',
+  'Latin-American Spanish (es-419) numeric hour remains padded');
 assertSame(numericHms('en-US'), '03:04:05',
   'English numeric hour remains padded');
 assertSame(numericHms('fr-FR'), '03:04:05',

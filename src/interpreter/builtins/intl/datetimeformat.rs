@@ -1654,14 +1654,16 @@ fn normalize_icu_datetime_parts(
         }
         if part_type == "hour"
             && requested_style == Some("numeric")
-            && opts.locale.split("-u-").next() == Some("es-ES")
+            && matches!(opts.locale.split("-u-").next(), Some("es") | Some("es-ES"))
             && value.chars().count() == 2
             && value.chars().all(char::is_numeric)
         {
-            // ICU4X 2.1's processed es-ES time data uses HH, while the
-            // locale's ECMA-402/CLDR format record uses the unpadded H form.
-            // Correct that data divergence without changing locales whose
-            // matched numeric-hour format legitimately has two digits.
+            // ICU4X 2.1's processed Spain-based Spanish time data uses HH, while
+            // the locale's ECMA-402/CLDR format record uses the unpadded H form.
+            // This covers both the language-only `es` (its base data is Spain's)
+            // and `es-ES`, but not region-carrying Latin-American tags such as
+            // `es-MX`/`es-419`, whose matched numeric-hour format legitimately
+            // has two digits.
             let zero = transliterate_digits("0", &opts.numbering_system);
             if let Some(unpadded) = value.strip_prefix(&zero) {
                 value = unpadded.to_string();
