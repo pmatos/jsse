@@ -11,9 +11,10 @@
 //
 // Covers: a done(error) `before all` (children skipped, siblings still run), a
 // synchronously-throwing `before all` (non-callback path also contained), and a
-// done(error) `after all` (its tests still count, the hook adds one failure). A
-// timed-out hook rejects through the identical path, so it is not re-exercised
-// here (it would cost ASYNC_TIMEOUT_MS of wall-clock).
+// done(error) `after all` whose late second done must reuse the original hook
+// result. Its tests still count, and the hook adds exactly one failure. A hook
+// timeout rejects through the identical path, so it is not re-exercised here
+// (it would cost ASYNC_TIMEOUT_MS of wall-clock).
 //
 // Expected summary: PASS: 2  FAIL: 3  TOTAL: 5
 
@@ -57,6 +58,7 @@ describe("suite-with-failing-after", function () {
   after(function (done) {
     setTimeout(function () {
       done(new Error("deliberate after-all failure"));
+      setTimeout(done, 5);
     }, 0);
   });
 
