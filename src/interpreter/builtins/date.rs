@@ -1,5 +1,20 @@
 use super::super::*;
 
+/// The pure core shared by every `Date.prototype.get*` component accessor: given
+/// a Date's time value `t`, an invalid Date (`t` is NaN) yields NaN without ever
+/// consulting `component`; otherwise `component` is applied to `t` in local time
+/// when `local`, or in UTC when not. `component` is one of the calendar/clock
+/// extractors (`year_from_time`, `hour_from_time`, ...) — or a small adapter for
+/// the odd ones out (`getTime`/`valueOf` pass `t` through, `getTimezoneOffset`
+/// returns `(t - local_time(t)) / 60_000`, Annex B `getYear` subtracts 1900).
+/// Interpreter-free so it is unit-testable without a running engine.
+fn date_field_value(t: f64, local: bool, component: fn(f64) -> f64) -> f64 {
+    if t.is_nan() {
+        return f64::NAN;
+    }
+    component(if local { local_time(t) } else { t })
+}
+
 fn date_to_locale_string(
     interp: &mut Interpreter,
     this: &JsValue,
@@ -225,6 +240,27 @@ impl Interpreter {
             None
         }
 
+        // Guard wrapper around `date_field_value`: brand-check `this` as a Date
+        // (throwing the standard TypeError otherwise), then delegate the NaN /
+        // local-vs-UTC / component logic to the pure core. Every `get*` component
+        // accessor is one call to this.
+        fn date_field(
+            interp: &mut Interpreter,
+            this: &JsValue,
+            local: bool,
+            component: fn(f64) -> f64,
+        ) -> Completion {
+            match this_time_value(interp, this) {
+                Some(t) => {
+                    Completion::Normal(JsValue::Number(date_field_value(t, local, component)))
+                }
+                None => {
+                    let e = interp.create_type_error("this is not a Date object");
+                    Completion::Throw(e)
+                }
+            }
+        }
+
         fn set_date_value(interp: &Interpreter, this: &JsValue, v: f64) {
             if let JsValue::Object(o) = this
                 && let Some(obj) = interp.get_object_cell(o.id)
@@ -274,230 +310,107 @@ impl Interpreter {
             usize,
             Rc<dyn Fn(&mut Interpreter, &JsValue, &[JsValue]) -> Completion>,
         )> = vec![
+            // getTime / valueOf return the (finite) time value straight through;
+            // date_field's NaN short-circuit yields NaN for an invalid Date, which
+            // is the value they would have returned anyway.
             (
                 "getTime",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) => Completion::Normal(JsValue::Number(t)),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, false, |t| t)),
             ),
             (
                 "valueOf",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) => Completion::Normal(JsValue::Number(t)),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, false, |t| t)),
             ),
+            // Local-time component accessors.
             (
                 "getFullYear",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(year_from_time(local_time(t)))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, true, year_from_time)),
             ),
             (
                 "getMonth",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(month_from_time(local_time(t)))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, true, month_from_time)),
             ),
             (
                 "getDate",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(date_from_time(local_time(t)))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, true, date_from_time)),
             ),
             (
                 "getDay",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(week_day(local_time(t)))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, true, week_day)),
             ),
             (
                 "getHours",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(hour_from_time(local_time(t)))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, true, hour_from_time)),
             ),
             (
                 "getMinutes",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(min_from_time(local_time(t)))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, true, min_from_time)),
             ),
             (
                 "getSeconds",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(sec_from_time(local_time(t)))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, true, sec_from_time)),
             ),
             (
                 "getMilliseconds",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(ms_from_time(local_time(t)))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, true, ms_from_time)),
             ),
+            // UTC component accessors (no local_time adjustment).
             (
                 "getUTCFullYear",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(year_from_time(t))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, false, year_from_time)),
             ),
             (
                 "getUTCMonth",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(month_from_time(t))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, false, month_from_time)),
             ),
             (
                 "getUTCDate",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(date_from_time(t))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, false, date_from_time)),
             ),
             (
                 "getUTCDay",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(week_day(t))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, false, week_day)),
             ),
             (
                 "getUTCHours",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(hour_from_time(t))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, false, hour_from_time)),
             ),
             (
                 "getUTCMinutes",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(min_from_time(t))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, false, min_from_time)),
             ),
             (
                 "getUTCSeconds",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(sec_from_time(t))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, false, sec_from_time)),
             ),
             (
                 "getUTCMilliseconds",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number(ms_from_time(t))),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
-                }),
+                Rc::new(|interp, this, _args| date_field(interp, this, false, ms_from_time)),
             ),
+            // Minutes between UTC and local time: component sees the raw UTC t.
             (
                 "getTimezoneOffset",
                 0,
-                Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                    Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                    Some(t) => Completion::Normal(JsValue::Number((t - local_time(t)) / 60_000.0)),
-                    None => {
-                        let e = interp.create_type_error("this is not a Date object");
-                        Completion::Throw(e)
-                    }
+                Rc::new(|interp, this, _args| {
+                    date_field(interp, this, false, |t| (t - local_time(t)) / 60_000.0)
                 }),
             ),
             // Setter methods -- all use to_number_value for proper error propagation
@@ -1456,20 +1369,12 @@ impl Interpreter {
         let env = self.realm().global_env.clone();
         let _ = self.env_set(&env, "Date", date_ctor);
 
-        // Annex B: getYear()
+        // Annex B: getYear() -- local full year offset by 1900.
         let get_year_fn = self.create_function(JsFunction::Native(
             "getYear".to_string(),
             0,
-            Rc::new(|interp, this, _args| match this_time_value(interp, this) {
-                Some(t) if t.is_nan() => Completion::Normal(JsValue::Number(f64::NAN)),
-                Some(t) => {
-                    let y = year_from_time(local_time(t));
-                    Completion::Normal(JsValue::Number(y - 1900.0))
-                }
-                None => {
-                    let e = interp.create_type_error("this is not a Date object");
-                    Completion::Throw(e)
-                }
+            Rc::new(|interp, this, _args| {
+                date_field(interp, this, true, |t| year_from_time(t) - 1900.0)
             }),
             false,
         ));
@@ -1559,5 +1464,87 @@ impl Interpreter {
         }
         let id = obj_id;
         JsValue::Object(crate::types::JsObject { id })
+    }
+}
+
+#[cfg(test)]
+mod date_field_tests {
+    use super::*;
+
+    // Independent known-good values, not recomputed the way the code does.
+    // Epoch 0 = 1970-01-01T00:00:00.000Z, a Thursday (week_day 4, 0=Sunday).
+    const EPOCH: f64 = 0.0;
+    // 2021-01-01T00:00:00.000Z (1_609_459_200 s * 1000), a Friday (week_day 5).
+    const Y2021: f64 = 1_609_459_200_000.0;
+    // 1970-01-01T13:37:42.123Z: 13h37m42.123s past epoch.
+    const TOD: f64 = 49_062_123.0;
+
+    #[test]
+    fn utc_calendar_components_at_epoch() {
+        assert_eq!(date_field_value(EPOCH, false, year_from_time), 1970.0);
+        assert_eq!(date_field_value(EPOCH, false, month_from_time), 0.0);
+        assert_eq!(date_field_value(EPOCH, false, date_from_time), 1.0);
+        assert_eq!(date_field_value(EPOCH, false, week_day), 4.0);
+        assert_eq!(date_field_value(EPOCH, false, hour_from_time), 0.0);
+        assert_eq!(date_field_value(EPOCH, false, min_from_time), 0.0);
+        assert_eq!(date_field_value(EPOCH, false, sec_from_time), 0.0);
+        assert_eq!(date_field_value(EPOCH, false, ms_from_time), 0.0);
+    }
+
+    #[test]
+    fn utc_calendar_components_at_2021() {
+        assert_eq!(date_field_value(Y2021, false, year_from_time), 2021.0);
+        assert_eq!(date_field_value(Y2021, false, month_from_time), 0.0);
+        assert_eq!(date_field_value(Y2021, false, date_from_time), 1.0);
+        assert_eq!(date_field_value(Y2021, false, week_day), 5.0);
+    }
+
+    #[test]
+    fn utc_time_of_day_components() {
+        assert_eq!(date_field_value(TOD, false, hour_from_time), 13.0);
+        assert_eq!(date_field_value(TOD, false, min_from_time), 37.0);
+        assert_eq!(date_field_value(TOD, false, sec_from_time), 42.0);
+        assert_eq!(date_field_value(TOD, false, ms_from_time), 123.0);
+    }
+
+    #[test]
+    fn nan_time_short_circuits_before_component() {
+        // A component that would panic if ever called proves the short-circuit.
+        fn boom(_: f64) -> f64 {
+            panic!("component must not run for an invalid Date");
+        }
+        assert!(date_field_value(f64::NAN, false, boom).is_nan());
+        assert!(date_field_value(f64::NAN, true, boom).is_nan());
+        assert!(date_field_value(f64::NAN, false, year_from_time).is_nan());
+    }
+
+    #[test]
+    fn getyear_component_offsets_by_1900() {
+        // Annex B getYear = year_from_time(...) - 1900.
+        assert_eq!(
+            date_field_value(EPOCH, false, |t| year_from_time(t) - 1900.0),
+            70.0
+        );
+        assert_eq!(
+            date_field_value(Y2021, false, |t| year_from_time(t) - 1900.0),
+            121.0
+        );
+    }
+
+    #[test]
+    fn gettime_component_is_identity() {
+        // getTime / valueOf pass the (finite) time value straight through.
+        assert_eq!(date_field_value(1234.0, false, |t| t), 1234.0);
+        assert_eq!(date_field_value(Y2021, false, |t| t), Y2021);
+    }
+
+    #[test]
+    fn local_branch_routes_through_local_time_utc_branch_does_not() {
+        // Deterministic regardless of the system time zone: the UTC branch
+        // must pass t through unchanged, and the local branch must apply
+        // local_time (whatever offset the host has).
+        let id = |t: f64| t;
+        assert_eq!(date_field_value(Y2021, false, id), Y2021);
+        assert_eq!(date_field_value(Y2021, true, id), local_time(Y2021));
     }
 }
