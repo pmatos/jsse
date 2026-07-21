@@ -1,3 +1,15 @@
+# [0.3.0](https://github.com/pmatos/jsse/compare/v0.2.1...v0.3.0) (2026-07-21)
+
+
+### Bug Fixes
+
+* **bytecode:** use HTMLDDA-aware truthiness in VM jump opcodes ([2618220](https://github.com/pmatos/jsse/commit/2618220391d666fec31d9803d304361aa40c65c0))
+
+
+### Features
+
+* **bytecode:** compile numeric loops ([b25a727](https://github.com/pmatos/jsse/commit/b25a727e39fa79e9543436ee2e38c0361a22cf80))
+
 ## [0.2.1](https://github.com/pmatos/jsse/compare/v0.2.0...v0.2.1) (2026-07-21)
 
 
