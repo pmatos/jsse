@@ -258,6 +258,7 @@ needs outside that core (`toThrow` and one inline snapshot).
 | `zod` | v4.4.3 | ❌ hangs (jsse#340) | normal + jitless; jsse livelocks indefinitely (spinning thread, never prints a result) instead of completing — see below. Last known result before the regression: 2,176 / 2,184, residuals tracked in #313–#315 |
 | `moment` | 2.30.1 | ✅ 162,868 assertions (cross-checked) | 3,871 tests, 0 failures — fixed by #311/PR #326 |
 | `bignumber.js` | v9.1.2 | ✅ 65,143 (cross-checked) | unblocked by #238 |
+| `tweetnacl-js` | 1.0.3 | ✅ 5,470 (cross-checked) | tape corpus: curve25519/Ed25519, secretbox, hash, onetimeauth; curve-heavy vectors sampled — see below |
 
 ### Zod normal and jitless corpus
 
@@ -305,6 +306,55 @@ the marker and exercises its normal path. JSSE now emits the same receiver-aware
 strict-assignment `TypeError` message as Node after the #318 fix landed on main
 ([#325](https://github.com/pmatos/jsse/pull/325)), so qs's upstream assertion
 runs unmodified on both engines.
+
+### tweetnacl-js curve25519/Ed25519 corpus
+
+Pinned to the `1.0.3` git tag (no `v` prefix, unlike every earlier tag —
+it points at the same commit as `v1.0.2`; that's the exact commit npm's
+published `tweetnacl@1.0.3` was cut from). The harness runs the same 13 files
+upstream's `test-node` script does (`tape test/*.js`); `test/c/*.js` needs a
+native addon built via its own Makefile and is out of scope, the same
+no-native-addon precedent js-sha256 sets.
+
+Every test file reads `nacl` via `(typeof window !== 'undefined') ?
+window.nacl : require('../' + (process.env.NACL_SRC || 'nacl.min.js'))`.
+esbuild cannot bundle that require — the argument is a runtime string
+concatenation, and esbuild treats a `'../' + x` require as a directory
+glob-import, trying (and failing) to bundle every file under the repo root,
+including `.git/`. `lib_prepare` rewrites that one identical line across all
+13 files to `window.nacl`; the jsse entry sets `window` and preloads `nacl`
+first, so this is a pure no-op simplification (the same browser/webpack mode
+upstream's own Node entry uses, and the one js-sha256-jsse-entry.js also
+forces), not a behavior change.
+
+`nacl.min.js`'s own PRNG auto-init detects Node via a `typeof require` probe.
+esbuild compiles that probe against its own external-require helper (always
+defined in the bundle), so the probe passes, but an unaliased
+`require('crypto')` call then throws "Dynamic require of crypto is not
+supported" the first time it's actually invoked in a non-Node host.
+`node-crypto-module.js` aliases `crypto` to the #229 `__host_random_bytes`
+syscall floor; the jsse entry also calls `nacl.setPRNG()` explicitly rather
+than relying on the auto-init picking that alias up. `node-test-harness.js`
+supplies the tape assertion adapter on jsse; Node loads real tape as an
+independent framework oracle.
+
+Curve25519/Ed25519 point arithmetic is roughly 100-3500x slower on the
+tree-walker than V8 per operation (measured: a single `scalarMult.base` call
+≈3.4s here vs ≈35ms on Node; `sign.detached.verify` ≈12s vs ≈76ms). At the
+full upstream vector counts (256 scalarmult, 256 box, 1024 Ed25519 sign
+vectors) the complete suite is on the order of ~7h, which isn't practical to
+run as part of landing the harness — a correctness smoke test first
+confirmed all 13 files pass 1233/1233 with truncated vectors, byte-identical
+to Node, so this is pure interpretation overhead rather than an engine bug.
+`lib_prepare` therefore evenly samples the three curve-heavy vector files
+(`scalarmult.random.js`, `box.random.js`, `sign.spec.js`) down to 20 entries
+each (stride-sampled across the full array, not a prefix, so the subset still
+spans the vector space); every other data file (secretbox, hash,
+onetimeauth — no elliptic-curve cost) keeps its full upstream count. This is
+the first sampled corpus in this harness — every other config runs its
+library's suite unmodified. Exhaustive coverage is tracked in
+[#361](https://github.com/pmatos/jsse/issues/361), to revisit once the engine
+has a faster numeric path.
 
 ### PrismJS token-stream fixtures
 
