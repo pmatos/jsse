@@ -1,3 +1,15 @@
+# [0.4.0](https://github.com/pmatos/jsse/compare/v0.3.0...v0.4.0) (2026-07-21)
+
+
+### Bug Fixes
+
+* **scripts:** compare both key sets in non-strict assert.deepEqual ([1d9175c](https://github.com/pmatos/jsse/commit/1d9175cf0ed865d28a9b13ea6752c4ce7a2ab469))
+
+
+### Features
+
+* **scripts:** add esprima Node-compat library harness ([#295](https://github.com/pmatos/jsse/issues/295)) ([f08883c](https://github.com/pmatos/jsse/commit/f08883c78d5594a8c2c605161bdf343e87ece886)), closes [#357](https://github.com/pmatos/jsse/issues/357) [#358](https://github.com/pmatos/jsse/issues/358) [#359](https://github.com/pmatos/jsse/issues/359)
+
 # [0.3.0](https://github.com/pmatos/jsse/compare/v0.2.1...v0.3.0) (2026-07-21)
 
 
