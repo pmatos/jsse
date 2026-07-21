@@ -271,7 +271,7 @@ dependencies = [
  "displaydoc",
  "ryu",
  "smallvec",
- "writeable 0.6.2",
+ "writeable 0.6.3",
 ]
 
 [[package]]
@@ -398,7 +398,7 @@ dependencies = [
  "icu_properties",
  "icu_provider 2.1.1",
  "potential_utf",
- "writeable 0.6.2",
+ "writeable 0.6.3",
  "zerovec 0.11.6",
 ]
 
@@ -490,7 +490,7 @@ dependencies = [
  "icu_time",
  "potential_utf",
  "tinystr 0.8.3",
- "writeable 0.6.2",
+ "writeable 0.6.3",
  "zerovec 0.11.6",
 ]
 
@@ -532,7 +532,7 @@ dependencies = [
  "icu_locale_core",
  "icu_provider 2.1.1",
  "serde",
- "writeable 0.6.2",
+ "writeable 0.6.3",
  "zerovec 0.11.6",
 ]
 
@@ -576,7 +576,7 @@ dependencies = [
  "potential_utf",
  "smallvec",
  "tinystr 0.8.3",
- "writeable 0.6.2",
+ "writeable 0.6.3",
  "zerotrie 0.2.3",
  "zerovec 0.11.6",
 ]
@@ -598,7 +598,7 @@ dependencies = [
  "icu_provider 2.1.1",
  "regex-automata",
  "serde",
- "writeable 0.6.2",
+ "writeable 0.6.3",
  "zerovec 0.11.6",
 ]
 
@@ -633,7 +633,7 @@ dependencies = [
  "litemap 0.8.1",
  "serde",
  "tinystr 0.8.3",
- "writeable 0.6.2",
+ "writeable 0.6.3",
  "zerovec 0.11.6",
 ]
 
@@ -708,7 +708,7 @@ dependencies = [
  "displaydoc",
  "either",
  "serde",
- "writeable 0.6.2",
+ "writeable 0.6.3",
  "yoke 0.8.2",
  "zerovec 0.11.6",
 ]
@@ -800,7 +800,7 @@ dependencies = [
  "icu_locale_core",
  "serde",
  "stable_deref_trait",
- "writeable 0.6.2",
+ "writeable 0.6.3",
  "yoke 0.8.2",
  "zerofrom",
  "zerotrie 0.2.3",
@@ -930,7 +930,7 @@ dependencies = [
  "smallvec",
  "tinystr 0.8.3",
  "unicode-ident",
- "writeable 0.6.2",
+ "writeable 0.6.3",
 ]
 
 [[package]]
@@ -1055,7 +1055,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b73949432f5e2a09657003c25bca5e19a0e9c84f8058ca374f49e0ebe605af77"
 dependencies = [
  "serde_core",
- "writeable 0.6.2",
+ "writeable 0.6.3",
  "zerovec 0.11.6",
 ]
 
@@ -1390,9 +1390,9 @@ checksum = "1e9df38ee2d2c3c5948ea468a8406ff0db0b29ae1ffde1bcf20ef305bcc95c51"
 
 [[package]]
 name = "writeable"
-version = "0.6.2"
+version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9edde0db4769d2dc68579893f2306b26c6ecfbe0ef499b013d731b7b9247e0b9"
+checksum = "1ffae5123b2d3fc086436f8834ae3ab053a283cfac8fe0a0b8eaae044768a4c4"
 dependencies = [
  "either",
 ]
