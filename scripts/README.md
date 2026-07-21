@@ -329,14 +329,13 @@ first, so this is a pure no-op simplification (the same browser/webpack mode
 upstream's own Node entry uses, and the one js-sha256-jsse-entry.js also
 forces), not a behavior change.
 
-`nacl.min.js`'s own PRNG auto-init detects Node via a `typeof require` probe.
-esbuild compiles that probe against its own external-require helper (always
-defined in the bundle), so the probe passes, but an unaliased
-`require('crypto')` call then throws "Dynamic require of crypto is not
-supported" the first time it's actually invoked in a non-Node host.
-`node-crypto-module.js` aliases `crypto` to the #229 `__host_random_bytes`
-syscall floor; the jsse entry also calls `nacl.setPRNG()` explicitly rather
-than relying on the auto-init picking that alias up. `node-test-harness.js`
+`nacl.min.js`'s own PRNG auto-init prefers the browser path
+(`self.crypto.getRandomValues`) before falling back to Node's
+`require('crypto')`. The jsse entry sets `self`, and `node-crypto-shim.js`
+(the Web Crypto shim already wired for the uuid harness, backed by the #229
+`__host_random_bytes` syscall floor) supplies `self.crypto`, so nacl's own
+auto-init configures its PRNG with no jsse-specific code here — the same
+mechanism as upstream's unmodified browser path. `node-test-harness.js`
 supplies the tape assertion adapter on jsse; Node loads real tape as an
 independent framework oracle.
 

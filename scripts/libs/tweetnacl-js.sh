@@ -20,14 +20,14 @@
 # upstream's own Node entry uses, and the one js-sha256-jsse-entry.js also
 # forces).
 #
-# nacl.min.js's own PRNG auto-init detects Node via a `typeof require` probe;
-# esbuild compiles that probe against its own external-require helper (always
-# defined) so the probe passes but an unaliased `require('crypto')` call then
-# throws "Dynamic require of crypto is not supported". node-test-harness.js
-# supplies a focused tape adapter on jsse (Node loads real tape as an
-# independent framework oracle), and node-crypto-module.js aliases `crypto` to
-# the #229 __host_random_bytes syscall floor; the jsse entry also sets the PRNG
-# explicitly rather than relying on nacl's own auto-init picking either up.
+# nacl.min.js's own PRNG auto-init prefers the browser path
+# (`self.crypto.getRandomValues`) before falling back to Node's `require('crypto')`.
+# The jsse entry sets `self`, and node-crypto-shim.js (the Web Crypto shim
+# already wired for the uuid harness, backed by the #229 __host_random_bytes
+# syscall floor) supplies `self.crypto`, so nacl's own auto-init configures
+# its PRNG with no jsse-specific code here — same mechanism as upstream's
+# unmodified browser path. node-test-harness.js supplies a focused tape
+# adapter on jsse; Node loads real tape as an independent framework oracle.
 #
 # Curve25519/Ed25519 point arithmetic is ~100-3500x slower on the tree-walker
 # than V8 per operation (a single scalarMult.base ≈ 3.4s here vs ≈35ms on
@@ -50,9 +50,8 @@ LIB_ENTRY="test/jsse-entry.js"
 LIB_ESBUILD_PLATFORM="node"
 LIB_ESBUILD_EXTRA=(
     --alias:tape=./test/jsse-tape.js
-    --alias:crypto=./test/jsse-crypto.js
 )
-LIB_SHIM="node-test-harness.js"
+LIB_SHIMS=("node-crypto-shim.js" "node-test-harness.js")
 LIB_EXPECT_COUNT="5470"   # locked: sampled corpus, equal on jsse and Node
 LIB_TIMEOUT="3600"        # 1h: the fixed 200-iteration scalarMult.base KAT loop alone is ~11min
 
@@ -93,7 +92,6 @@ lib_prepare() {
       console.log('tweetnacl-js: dropped ' + sampled + ' vectors sampling to a tractable runtime (issue #361)');
     "
     cp "$SCRIPT_DIR/node-tape-module.js" test/jsse-tape.js
-    cp "$SCRIPT_DIR/node-crypto-module.js" test/jsse-crypto.js
     cp "$SCRIPT_DIR/libs/tweetnacl-js-jsse-entry.js" "$LIB_ENTRY"
 }
 

@@ -12,22 +12,17 @@
 // ternary branch, so it never executes. This is the same trick
 // js-sha256-jsse-entry.js uses for its browser/webpack mode.
 globalThis.window = globalThis;
-globalThis.nacl = require("../nacl.min.js");
 
-// nacl.min.js's own PRNG auto-init picks Node's real crypto.randomBytes via a
-// `typeof require` probe. esbuild compiles that probe against its own
-// external-require helper (always defined), so the probe passes but the
-// subsequent call throws "Dynamic require of crypto is not supported" without
-// the alias below — and even with it, jsse has no real entropy source behind
-// a bare `require`. Wire the #229 syscall floor directly instead; Node is
-// unaffected (this only runs under jsse's --node host mode) and keeps using
-// its own auto-init.
-if (typeof __host_write !== "undefined") {
-  nacl.setPRNG(function (x, n) {
-    var v = __host_random_bytes(n);
-    for (var i = 0; i < n; i++) x[i] = v[i];
-  });
-}
+// nacl.min.js's own PRNG auto-init prefers the browser path: `typeof self !==
+// 'undefined' ? (self.crypto || self.msCrypto) : null`, then
+// `crypto.getRandomValues`. Setting `self` lets node-crypto-shim.js's Web
+// Crypto shim (issue #229's __host_random_bytes syscall floor, already wired
+// for the uuid harness) satisfy that check directly, so nacl configures its
+// own PRNG with no jsse-specific code here. Node has had a native global
+// `crypto` since Node 19, so this is a no-op there (nacl picks the native
+// implementation, matching upstream's unmodified auto-init).
+globalThis.self = globalThis;
+globalThis.nacl = require("../nacl.min.js");
 
 require("./00-api.js");
 require("./01-verify.quick.js");
