@@ -258,6 +258,7 @@ needs outside that core (`toThrow` and one inline snapshot).
 | `zod` | v4.4.3 | ❌ hangs (jsse#340) | normal + jitless; jsse livelocks indefinitely (spinning thread, never prints a result) instead of completing — see below. Last known result before the regression: 2,176 / 2,184, residuals tracked in #313–#315 |
 | `moment` | 2.30.1 | ✅ 162,868 assertions (cross-checked) | 3,871 tests, 0 failures — fixed by #311/PR #326 |
 | `bignumber.js` | v9.1.2 | ✅ 65,143 (cross-checked) | unblocked by #238 |
+| `uuid` | v14.0.1 | ✅ 75 (cross-checked) | Node's own `node:test`/`node:assert/strict` upstream suite, unmodified; browser build so v3/v5 use pure-JS MD5/SHA-1 and v1/v4/v6/v7 draw randomness via a `crypto.getRandomValues`/`randomUUID` shim (`node-crypto-shim.js`) backed by `__host_random_bytes` |
 
 ### Zod normal and jitless corpus
 
@@ -470,3 +471,54 @@ running those thousands of timers natively would otherwise exhaust OS threads.
   that's never signaled. Discovered 2026-07-20, same day as the moment fix
   above; suspected (unconfirmed) to be an edge case in the same GC temp-root
   rework, since zod's validation codegen is unusually binary-operator-heavy.
+
+### uuid: resolving `node:test` / `node:assert/strict`, and `crypto.getRandomValues`
+
+uuid's own upstream suite (`src/test/*.test.ts`, compiled by `tsc`) imports
+`node:test` and `node:assert/strict` directly and is bundled unmodified — no
+tape/QUnit-style adapter file like other libraries. Two new pieces make that
+possible:
+
+- **`node-crypto-shim.js`** (shared, opt-in via `LIB_SHIMS`) installs
+  `globalThis.crypto.getRandomValues`/`.randomUUID`, backed by the
+  `__host_random_bytes` syscall-floor primitive (#229). It only activates when
+  `crypto` isn't already present — real Node has had a native global `crypto`
+  since Node 19 (some older Node point releases only expose it under
+  `--experimental-global-webcrypto` when running a plain script file, which
+  would make this shim install unnecessarily and then throw, since
+  `__host_random_bytes` doesn't exist on Node; run the harness with a Node ≥ 20
+  from `~/.nvm/versions/node/` if you hit that).
+- **`libs/uuid-jsse-require-shim.js`** resolves those two specifiers for jsse
+  only. esbuild's `--platform=node` build (the default) treats Node-builtin
+  specifiers as external, compiling each import down to a literal
+  `require(specifier)` call via esbuild's own `__require` fallback helper —
+  which, at call time, uses whatever `require` identifier is in scope. On real
+  Node that's the CJS module's own `require` (visible from a nested IIFE via
+  closure), so Node keeps resolving both specifiers natively — the whole point
+  being that Node runs the *unmodified* upstream suite against its own
+  `node:test`/`node:assert` as an independent oracle, not a jsse-side
+  reimplementation. On jsse there is no ambient `require`, so this shim
+  installs one as a global, mapping `"node:test"` to a thin wrapper around
+  `node-test-harness.js`'s shared TAP `describe`/`test` globals (registering an
+  arity-0 function so the harness's done-callback-vs-promise heuristic always
+  takes the promise branch, while still handing the real callback a minimal
+  `t` TestContext supporting just `t.mock.method`/`t.mock.reset` — the only
+  TestContext surface the suite uses, for its "uses native `crypto.randomUUID`"
+  tests) and `"node:assert/strict"` to `globalThis.__jsseAssertStrict`.
+- **`libs/uuid-assert-connector.js`** sets `globalThis.__jsseAssertStrict` from
+  a real, pinned copy of the `assert` npm package (browserify's pure-JS port of
+  Node's own `assert` module) rather than a hand-rolled reimplementation. It's
+  vendored via a relative `require("../node_modules/assert")` — deliberately
+  *not* the bare specifier `"assert"`, which esbuild would also auto-external
+  under `--platform=node` — the same trick `node-tape-module.js` uses for
+  `tape`.
+- The guard in both new shims keys off `__host_write` (the #229 syscall
+  floor), not `process.versions.node`: `node-shim.js` installs a *fake*
+  `process` with `versions.node` set (to pass UMD-style Node checks in
+  bundled libraries), so any later shim checking `process.versions.node`
+  would incorrectly think it's running on real Node.
+- The suite is pinned to uuid's **browser** build (`dist/`, not `dist-node/`)
+  by running `tsc` directly and swapping in the `*-browser.ts`-derived
+  `md5.js`/`sha1.js` — the same rename `scripts/build.sh` does — so v3/v5
+  exercise uuid's own pure-JS MD5/SHA-1 instead of `node:crypto`'s
+  `createHash`, keeping this slice free of any `node:crypto` dependency.
