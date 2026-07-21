@@ -217,7 +217,18 @@ impl Interpreter {
             if frame.func_obj_id != 0 {
                 worklist.push(frame.func_obj_id);
             }
-            Self::collect_value_roots(&frame.arguments_obj, &mut worklist);
+            match &frame.arguments {
+                CallFrameArguments::None => {}
+                CallFrameArguments::Materialized(arguments) => {
+                    Self::collect_value_roots(arguments, &mut worklist);
+                }
+                CallFrameArguments::Deferred { args, func_env, .. } => {
+                    for argument in args.values() {
+                        Self::collect_value_roots(argument, &mut worklist);
+                    }
+                    Self::collect_env_roots(func_env, &mut worklist, &mut seen_envs);
+                }
+            }
         }
         // Temporary roots (iterators, etc.)
         worklist.extend_from_slice(&self.gc_temp_roots);

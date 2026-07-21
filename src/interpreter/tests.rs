@@ -89,6 +89,61 @@ fn write_case_file(dir: &Path, name: &str, source: &str) -> PathBuf {
 }
 
 #[test]
+fn function_environment_pool_reuses_and_resets_unescaped_storage() {
+    let mut interp = Interpreter::new();
+    let first_parent = Environment::new(None);
+    let env = interp.acquire_function_environment(first_parent, 3);
+    let allocation = Rc::as_ptr(&env);
+    {
+        let mut env = env.borrow_mut();
+        env.declare("stale", BindingKind::Var);
+        env.is_arrow_scope = true;
+        env.arguments_immutable = true;
+    }
+
+    interp.recycle_function_environment(env);
+    assert_eq!(interp.function_env_pool.len(), 1);
+
+    let second_parent = Environment::new(None);
+    let reused = interp.acquire_function_environment(second_parent.clone(), 2);
+    assert_eq!(Rc::as_ptr(&reused), allocation);
+    let reused_env = reused.borrow();
+    assert!(reused_env.bindings.is_empty());
+    assert!(!reused_env.is_arrow_scope);
+    assert!(!reused_env.arguments_immutable);
+    assert!(Rc::ptr_eq(
+        reused_env.parent.as_ref().expect("new parent"),
+        &second_parent
+    ));
+}
+
+#[test]
+fn function_environment_pool_rejects_escaped_storage() {
+    let mut interp = Interpreter::new();
+    let env = interp.acquire_function_environment(Environment::new(None), 1);
+    env.borrow_mut().declare("captured", BindingKind::Var);
+    let escaped = env.clone();
+
+    interp.recycle_function_environment(env);
+
+    assert!(interp.function_env_pool.is_empty());
+    assert!(escaped.borrow().bindings.contains_key("captured"));
+}
+
+#[test]
+fn ordinary_calls_return_non_escaping_activations_to_the_pool() {
+    let interp = run_script(
+        r#"
+        function addOne(value) { return value + 1; }
+        var result = addOne(addOne(0));
+        if (result !== 2) throw new Error("unexpected result");
+        "#,
+    );
+
+    assert!(!interp.function_env_pool.is_empty());
+}
+
+#[test]
 fn define_method_installs_a_correctly_shaped_builtin() {
     let mut interp = Interpreter::new();
     let target_id = interp.create_object_id();

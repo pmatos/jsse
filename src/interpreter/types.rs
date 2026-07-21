@@ -779,9 +779,16 @@ impl Environment {
     }
 
     pub fn new_function_scope(parent: Option<EnvRef>) -> EnvRef {
+        Self::new_function_scope_with_capacity(parent, 0)
+    }
+
+    pub fn new_function_scope_with_capacity(
+        parent: Option<EnvRef>,
+        binding_capacity: usize,
+    ) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::new(),
+            bindings: HashMap::with_capacity(binding_capacity),
             parent,
             strict,
             is_function_scope: true,
@@ -800,6 +807,29 @@ impl Environment {
             indirect_bindings: None,
             module_path: None,
         }))
+    }
+
+    pub(crate) fn reset_function_scope(&mut self, parent: Option<EnvRef>, binding_capacity: usize) {
+        let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
+        self.bindings.clear();
+        self.bindings.reserve(binding_capacity);
+        self.parent = parent;
+        self.strict = strict;
+        self.is_function_scope = true;
+        self.is_arrow_scope = false;
+        self.with_object = None;
+        self.dispose_stack = None;
+        self.global_object_id = None;
+        self.annexb_function_names = None;
+        self.class_private_names = None;
+        self.is_field_initializer = false;
+        self.arguments_immutable = false;
+        self.has_parameter_expressions = false;
+        self.has_simple_params = true;
+        self.is_simple_catch_scope = false;
+        self.is_derived_constructor_scope = false;
+        self.indirect_bindings = None;
+        self.module_path = None;
     }
 
     pub fn find_module_path(env: &EnvRef) -> Option<std::path::PathBuf> {
