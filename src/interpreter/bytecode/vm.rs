@@ -2,7 +2,6 @@ use super::chunk::Chunk;
 use super::op::Op;
 use crate::ast::{BinaryOp, UnaryOp, UpdateOp};
 use crate::interpreter::eval::IdentifierRef;
-use crate::interpreter::helpers::to_boolean;
 use crate::interpreter::types::{BindingKind, Completion, Environment};
 use crate::interpreter::{EnvRef, Interpreter};
 use crate::types::JsValue;
@@ -209,7 +208,7 @@ pub(crate) fn run_chunk(
                 let offset = decode_i16(chunk, pc) as i32;
                 pc += 2;
                 let v = stack.pop().expect("stack underflow on JumpIfFalse");
-                if !to_boolean(&v) {
+                if !interp.to_boolean_val(&v) {
                     pc = (pc as i32 + offset) as usize;
                 }
             }
@@ -217,7 +216,7 @@ pub(crate) fn run_chunk(
                 let offset = decode_i16(chunk, pc) as i32;
                 pc += 2;
                 let v = stack.pop().expect("stack underflow on JumpIfTrue");
-                if to_boolean(&v) {
+                if interp.to_boolean_val(&v) {
                     pc = (pc as i32 + offset) as usize;
                 }
             }
@@ -225,7 +224,7 @@ pub(crate) fn run_chunk(
                 let offset = decode_i16(chunk, pc) as i32;
                 pc += 2;
                 let v = stack.last().expect("stack underflow on JumpIfTruthyKeep");
-                if to_boolean(v) {
+                if interp.to_boolean_val(v) {
                     pc = (pc as i32 + offset) as usize;
                 }
             }
@@ -233,7 +232,7 @@ pub(crate) fn run_chunk(
                 let offset = decode_i16(chunk, pc) as i32;
                 pc += 2;
                 let v = stack.last().expect("stack underflow on JumpIfFalsyKeep");
-                if !to_boolean(v) {
+                if !interp.to_boolean_val(v) {
                     pc = (pc as i32 + offset) as usize;
                 }
             }

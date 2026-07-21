@@ -791,6 +791,26 @@ fn nested_for_and_while_loops_take_bytecode_path() {
 }
 
 #[test]
+fn while_loop_htmldda_truthiness_matches_tree_walker() {
+    // $262.IsHTMLDDA carries the [[IsHTMLDDA]] slot (Annex B.3.6) and must
+    // coerce to false despite being an object, matching document.all. `h` is
+    // declared outside the compiled function (member access on `$262` isn't
+    // itself compilable) and read as a captured identifier in the loop test.
+    assert_parity_number(
+        "var h = $262.IsHTMLDDA; var __r = (function(){ var i = 0; while (h) { i++; if (i > 2) return 99; } return 1; })();",
+        1.0,
+    );
+}
+
+#[test]
+fn for_loop_htmldda_truthiness_matches_tree_walker() {
+    assert_parity_number(
+        "var h = $262.IsHTMLDDA; var __r = (function(){ var i = 0; for (; h; ) { i++; if (i > 2) return 99; } return 1; })();",
+        1.0,
+    );
+}
+
+#[test]
 fn lexical_for_loop_falls_back_to_tree_walker() {
     let source = "var __r = (function(){ var sum = 0; for (let i = 0; i < 3; i++) sum += i; return sum; })();";
     let (value, count) = eval_with_mode(source, true);
