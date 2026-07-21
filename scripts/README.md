@@ -261,6 +261,7 @@ needs outside that core (`toThrow` and one inline snapshot).
 | `css-tree` | v3.2.1 | ⚠️ 16,725 / 16,727 (Node: 16,727) | its own Mocha suite, force-harness; the 2 residual failures are a genuine jsse engine bug, tracked in #355 — see below |
 | `esprima` | (unreleased) `512cd66` | ⚠️ 80,100 / 80,153 (Node: 80,153) | ~65 min; ~1,650 unit fixtures + api/grammar/hostile suites + a 78,402-scenario test262 grammar corpus; residuals tracked in #357 and #358 |
 | `uuid` | v14.0.1 | ✅ 75 (cross-checked) | Node's own `node:test`/`node:assert/strict` upstream suite, unmodified; browser build so v3/v5 use pure-JS MD5/SHA-1 and v1/v4/v6/v7 draw randomness via a `crypto.getRandomValues`/`randomUUID` shim (`node-crypto-shim.js`) backed by `__host_random_bytes` |
+| `tweetnacl-js` | 1.0.3 | ✅ 5,470 (cross-checked) | tape corpus: curve25519/Ed25519, secretbox, hash, onetimeauth; curve-heavy vectors sampled — see below |
 
 ### Zod normal and jitless corpus
 
@@ -308,6 +309,54 @@ the marker and exercises its normal path. JSSE now emits the same receiver-aware
 strict-assignment `TypeError` message as Node after the #318 fix landed on main
 ([#325](https://github.com/pmatos/jsse/pull/325)), so qs's upstream assertion
 runs unmodified on both engines.
+
+### tweetnacl-js curve25519/Ed25519 corpus
+
+Pinned to the `1.0.3` git tag (no `v` prefix, unlike every earlier tag —
+it points at the same commit as `v1.0.2`; that's the exact commit npm's
+published `tweetnacl@1.0.3` was cut from). The harness runs the same 13 files
+upstream's `test-node` script does (`tape test/*.js`); `test/c/*.js` needs a
+native addon built via its own Makefile and is out of scope, the same
+no-native-addon precedent js-sha256 sets.
+
+Every test file reads `nacl` via `(typeof window !== 'undefined') ?
+window.nacl : require('../' + (process.env.NACL_SRC || 'nacl.min.js'))`.
+esbuild cannot bundle that require — the argument is a runtime string
+concatenation, and esbuild treats a `'../' + x` require as a directory
+glob-import, trying (and failing) to bundle every file under the repo root,
+including `.git/`. `lib_prepare` rewrites that one identical line across all
+13 files to `window.nacl`; the jsse entry sets `window` and preloads `nacl`
+first, so this is a pure no-op simplification (the same browser/webpack mode
+upstream's own Node entry uses, and the one js-sha256-jsse-entry.js also
+forces), not a behavior change.
+
+`nacl.min.js`'s own PRNG auto-init prefers the browser path
+(`self.crypto.getRandomValues`) before falling back to Node's
+`require('crypto')`. The jsse entry sets `self`, and `node-crypto-shim.js`
+(the Web Crypto shim already wired for the uuid harness, backed by the #229
+`__host_random_bytes` syscall floor) supplies `self.crypto`, so nacl's own
+auto-init configures its PRNG with no jsse-specific code here — the same
+mechanism as upstream's unmodified browser path. `node-test-harness.js`
+supplies the tape assertion adapter on jsse; Node loads real tape as an
+independent framework oracle.
+
+Curve25519/Ed25519 point arithmetic is roughly 100-3500x slower on the
+tree-walker than V8 per operation (measured: a single `scalarMult.base` call
+≈3.4s here vs ≈35ms on Node; `sign.detached.verify` ≈12s vs ≈76ms). At the
+full upstream vector counts (256 scalarmult, 256 box, 1024 Ed25519 sign
+vectors) the complete suite is on the order of ~7h, which isn't practical to
+run as part of landing the harness — a correctness smoke test first
+confirmed all 13 files pass 1233/1233 with truncated vectors, byte-identical
+to Node, so this is pure interpretation overhead rather than an engine bug.
+`lib_prepare` therefore evenly samples the three curve-heavy vector files
+(`scalarmult.random.js`, `box.random.js`, `sign.spec.js`) down to 20 entries
+each (stride-sampled across the full array, not a prefix, so the subset still
+spans the vector space); every other data file (secretbox, hash,
+onetimeauth — no elliptic-curve cost) keeps its full upstream count. This is
+the first sampled corpus in this harness — every other config runs its
+library's suite unmodified. Exhaustive coverage is tracked in
+[#361](https://github.com/pmatos/jsse/issues/361), to revisit once the engine
+has a faster numeric path.
 
 ### PrismJS token-stream fixtures
 
