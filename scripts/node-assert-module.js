@@ -1,198 +1,208 @@
 // CommonJS `assert` selector for bundled library dependencies.
 //
-// css-tree's own test suite imports Node's built-in `assert` and uses only
-// strictEqual, notStrictEqual, deepStrictEqual, throws, and doesNotThrow.
-// Node keeps its native module (independent oracle); JSSE gets a minimal
-// same-surface implementation below.
+// Node's `assert` core module has no JS-only equivalent installed by
+// node-shim.js (unlike Buffer/util), so this selector supplies one: on real
+// Node the native module runs as the reference oracle; on JSSE a compact
+// polyfill covers the common assert.* surface so mocha/tap-style suites that
+// assert with `require('assert')` (rather than a bundled matcher library)
+// still execute.
 
 if (typeof __host_write !== "undefined") {
-  function isObjectLike(value) {
-    return value !== null && typeof value === "object";
+  function AssertionError(options) {
+    options = options || {};
+    Error.call(this, options.message || "");
+    this.name = "AssertionError";
+    this.message = options.message || "";
+    this.actual = options.actual;
+    this.expected = options.expected;
+    this.operator = options.operator;
+    this.code = "ERR_ASSERTION";
+    if (Error.captureStackTrace) Error.captureStackTrace(this, AssertionError);
+  }
+  AssertionError.prototype = Object.create(Error.prototype);
+  AssertionError.prototype.constructor = AssertionError;
+
+  function fail(actual, expected, message, operator) {
+    var hasArgs = arguments.length > 0;
+    var msg = hasArgs && arguments.length < 3 ? actual : message;
+    throw new AssertionError({
+      message: msg || (operator ? operator : "Failed"),
+      actual: hasArgs && arguments.length >= 3 ? actual : undefined,
+      expected: hasArgs && arguments.length >= 3 ? expected : undefined,
+      operator: operator || "fail",
+    });
   }
 
-  function sameValue(a, b) {
-    return Object.is(a, b);
+  function isRegExp(v) {
+    return Object.prototype.toString.call(v) === "[object RegExp]";
+  }
+  function isDate(v) {
+    return Object.prototype.toString.call(v) === "[object Date]";
   }
 
-  function looseDeepEqual(a, b, seen) {
-    if (a === b) return true;
-    // Node's legacy (non-strict) deepEqual treats two NaNs as equal, like
-    // strict deepEqual, but otherwise compares primitives with `==`.
-    if (!isObjectLike(a) || !isObjectLike(b)) {
-      if (typeof a === "number" && typeof b === "number" && Number.isNaN(a) && Number.isNaN(b)) {
-        return true;
+  // Recursive structural equality. `strict` selects Object.is()/=== for
+  // primitives and requires matching constructors/key sets; non-strict
+  // (legacy) mode uses `==` and only compares own enumerable keys.
+  function deepEqual(a, b, strict, seen) {
+    if (strict ? Object.is(a, b) : a == b) return true;
+    if (a === null || b === null || typeof a !== "object" || typeof b !== "object") {
+      return false;
+    }
+    if (strict && Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
+    if (isRegExp(a) || isRegExp(b)) {
+      return isRegExp(a) && isRegExp(b) && a.source === b.source && a.flags === b.flags;
+    }
+    if (isDate(a) || isDate(b)) {
+      return isDate(a) && isDate(b) && a.getTime() === b.getTime();
+    }
+    seen = seen || [];
+    for (var i = 0; i < seen.length; i++) {
+      if (seen[i][0] === a && seen[i][1] === b) return true;
+    }
+    seen.push([a, b]);
+
+    var aIsArray = Array.isArray(a), bIsArray = Array.isArray(b);
+    if (aIsArray !== bIsArray) return false;
+    if (aIsArray) {
+      if (a.length !== b.length) return false;
+      for (var i2 = 0; i2 < a.length; i2++) {
+        if (!deepEqual(a[i2], b[i2], strict, seen)) return false;
       }
-      return a == b; // eslint-disable-line eqeqeq
+      return true;
     }
 
-    var isArrayA = Array.isArray(a);
-    var isArrayB = Array.isArray(b);
-    if (isArrayA !== isArrayB) return false;
-    if (isArrayA && a.length !== b.length) return false;
-
-    var seenPair = seen.get(a);
-    if (seenPair && seenPair.has(b)) return true;
-    if (!seenPair) {
-      seenPair = new Set();
-      seen.set(a, seenPair);
-    }
-    seenPair.add(b);
-
-    var keysA = Object.keys(a);
-    var keysB = Object.keys(b);
-    if (keysA.length !== keysB.length) return false;
-
-    for (var i = 0; i < keysA.length; i++) {
-      var key = keysA[i];
+    var aKeys = Object.keys(a), bKeys = Object.keys(b);
+    if (strict && aKeys.length !== bKeys.length) return false;
+    for (var k = 0; k < aKeys.length; k++) {
+      var key = aKeys[k];
       if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
-      if (!looseDeepEqual(a[key], b[key], seen)) return false;
+      if (!deepEqual(a[key], b[key], strict, seen)) return false;
     }
-
+    for (var k2 = 0; k2 < bKeys.length; k2++) {
+      if (!Object.prototype.hasOwnProperty.call(a, bKeys[k2])) return false;
+    }
     return true;
-  }
-
-  function deepEqual(a, b, seen) {
-    if (sameValue(a, b)) return true;
-    if (!isObjectLike(a) || !isObjectLike(b)) return false;
-    if (Object.getPrototypeOf(a) !== Object.getPrototypeOf(b)) return false;
-
-    var isArrayA = Array.isArray(a);
-    var isArrayB = Array.isArray(b);
-    if (isArrayA !== isArrayB) return false;
-    if (isArrayA && a.length !== b.length) return false;
-
-    var seenPair = seen.get(a);
-    if (seenPair && seenPair.has(b)) return true;
-    if (!seenPair) {
-      seenPair = new Set();
-      seen.set(a, seenPair);
-    }
-    seenPair.add(b);
-
-    var keysA = Object.keys(a).concat(Object.getOwnPropertySymbols(a));
-    var keysB = Object.keys(b).concat(Object.getOwnPropertySymbols(b));
-    if (keysA.length !== keysB.length) return false;
-
-    for (var i = 0; i < keysA.length; i++) {
-      var key = keysA[i];
-      if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
-      if (!deepEqual(a[key], b[key], seen)) return false;
-    }
-
-    return true;
-  }
-
-  function AssertionError(message) {
-    var error = new Error(message);
-    error.name = "AssertionError";
-    return error;
-  }
-
-  function fail(message) {
-    throw AssertionError(message);
   }
 
   function assert(value, message) {
-    if (!value) fail(message || "The expression evaluated to a falsy value");
+    if (!value) {
+      throw new AssertionError({
+        message: message || "The expression evaluated to a falsy value",
+        actual: value,
+        expected: true,
+        operator: "==",
+      });
+    }
   }
-
   assert.ok = assert;
 
+  assert.equal = function (actual, expected, message) {
+    if (!(actual == expected)) {
+      throw new AssertionError({ message: message, actual: actual, expected: expected, operator: "==" });
+    }
+  };
+  assert.notEqual = function (actual, expected, message) {
+    if (actual == expected) {
+      throw new AssertionError({ message: message, actual: actual, expected: expected, operator: "!=" });
+    }
+  };
   assert.strictEqual = function (actual, expected, message) {
-    if (!sameValue(actual, expected)) {
-      fail(message || actual + " !== " + expected);
+    if (!Object.is(actual, expected)) {
+      throw new AssertionError({ message: message, actual: actual, expected: expected, operator: "===" });
     }
   };
-
   assert.notStrictEqual = function (actual, expected, message) {
-    if (sameValue(actual, expected)) {
-      fail(message || actual + " === " + expected);
+    if (Object.is(actual, expected)) {
+      throw new AssertionError({ message: message, actual: actual, expected: expected, operator: "!==" });
     }
   };
-
-  assert.deepStrictEqual = function (actual, expected, message) {
-    if (!deepEqual(actual, expected, new Map())) {
-      fail(
-        message ||
-          "Expected values to be strictly deep-equal:\n" +
-          JSON.stringify(actual) +
-          "\nvs\n" +
-          JSON.stringify(expected)
-      );
-    }
-  };
-
-  assert.notDeepStrictEqual = function (actual, expected, message) {
-    if (deepEqual(actual, expected, new Map())) {
-      fail(message || "Expected values not to be strictly deep-equal");
-    }
-  };
-
   assert.deepEqual = function (actual, expected, message) {
-    if (!looseDeepEqual(actual, expected, new Map())) {
-      fail(
-        message ||
-          "Expected values to be deep-equal:\n" +
-          JSON.stringify(actual) +
-          "\nvs\n" +
-          JSON.stringify(expected)
-      );
+    if (!deepEqual(actual, expected, false)) {
+      throw new AssertionError({ message: message, actual: actual, expected: expected, operator: "deepEqual" });
     }
   };
-
   assert.notDeepEqual = function (actual, expected, message) {
-    if (looseDeepEqual(actual, expected, new Map())) {
-      fail(message || "Expected values not to be deep-equal");
+    if (deepEqual(actual, expected, false)) {
+      throw new AssertionError({ message: message, actual: actual, expected: expected, operator: "notDeepEqual" });
+    }
+  };
+  assert.deepStrictEqual = function (actual, expected, message) {
+    if (!deepEqual(actual, expected, true)) {
+      throw new AssertionError({ message: message, actual: actual, expected: expected, operator: "deepStrictEqual" });
+    }
+  };
+  assert.notDeepStrictEqual = function (actual, expected, message) {
+    if (deepEqual(actual, expected, true)) {
+      throw new AssertionError({ message: message, actual: actual, expected: expected, operator: "notDeepStrictEqual" });
     }
   };
 
-  function matchesExpected(error, expected) {
-    if (expected === undefined) return true;
-    if (expected instanceof RegExp) return expected.test(String(error));
-    if (typeof expected === "function") {
-      if (expected.prototype instanceof Error || expected === Error) {
-        return error instanceof expected;
+  function matchesError(err, matcher) {
+    if (matcher === undefined) return true;
+    if (typeof matcher === "function") {
+      // Only treat matcher as an Error-subclass constructor for instanceof
+      // (arrow functions and plain validator functions have no `.prototype`
+      // — or one not descended from Error — and `instanceof` throws a
+      // TypeError against such a right-hand side rather than returning
+      // false). Everything else is a validation function: call it and
+      // require an explicit `true` return, matching Node's assert.throws.
+      if (matcher.prototype instanceof Error || matcher === Error) {
+        return err instanceof matcher;
       }
-      return Boolean(expected(error));
+      return matcher(err) === true;
     }
-    return true;
+    // Node tests a RegExp matcher against String(err) — "Name: message" —
+    // not err.message alone. css-tree's own suite relies on this exactly
+    // (e.g. `assert.throws(fn, /^Error: item doesn't belong to list$/)`).
+    if (isRegExp(matcher)) return matcher.test(String(err));
+    if (typeof matcher === "object" && matcher !== null) {
+      return Object.keys(matcher).every(function (key) {
+        return err && deepEqual(err[key], matcher[key], false);
+      });
+    }
+    return false;
   }
 
-  assert.throws = function (fn, expected, message) {
-    var threw = false;
-    var thrown;
+  assert.throws = function (fn, matcher, message) {
+    var threw = false, thrown;
     try {
       fn();
-    } catch (error) {
+    } catch (e) {
       threw = true;
-      thrown = error;
+      thrown = e;
     }
     if (!threw) {
-      fail(
-        (typeof expected === "string" ? expected : message) ||
-          "Missing expected exception"
-      );
+      throw new AssertionError({ message: message || "Missing expected exception", operator: "throws" });
     }
-    var expectedIsMessage = typeof expected === "string" && message === undefined;
-    if (!expectedIsMessage && !matchesExpected(thrown, expected)) {
+    if (typeof matcher !== "string" && !matchesError(thrown, matcher)) {
       throw thrown;
     }
   };
-
-  assert.doesNotThrow = function (fn, message) {
+  assert.doesNotThrow = function (fn, matcher, message) {
     try {
       fn();
-    } catch (error) {
-      fail(
-        message ||
-          "Got unwanted exception: " + (error && error.message ? error.message : error)
-      );
+    } catch (e) {
+      if (typeof matcher === "string" || matcher === undefined || matchesError(e, matcher)) {
+        throw new AssertionError({
+          message: (message ? message + ": " : "") + "Got unwanted exception: " + (e && e.message),
+          operator: "doesNotThrow",
+        });
+      }
+      throw e;
     }
   };
-
-  assert.fail = function (message) {
-    fail(message);
+  assert.ifError = function (value) {
+    if (value !== null && value !== undefined) {
+      throw value instanceof Error ? value : new AssertionError({
+        message: "ifError got unwanted exception: " + value,
+        actual: value,
+        expected: null,
+        operator: "ifError",
+      });
+    }
   };
+  assert.fail = fail;
+  assert.AssertionError = AssertionError;
 
   module.exports = assert;
 } else {
