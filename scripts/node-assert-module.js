@@ -78,7 +78,6 @@ if (typeof __host_write !== "undefined") {
       if (!Object.prototype.hasOwnProperty.call(b, key)) return false;
       if (!deepEqual(a[key], b[key], strict, seen)) return false;
     }
-    if (!strict) return true;
     for (var k2 = 0; k2 < bKeys.length; k2++) {
       if (!Object.prototype.hasOwnProperty.call(a, bKeys[k2])) return false;
     }
