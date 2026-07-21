@@ -258,6 +258,7 @@ needs outside that core (`toThrow` and one inline snapshot).
 | `zod` | v4.4.3 | ❌ hangs (jsse#340) | normal + jitless; jsse livelocks indefinitely (spinning thread, never prints a result) instead of completing — see below. Last known result before the regression: 2,176 / 2,184, residuals tracked in #313–#315 |
 | `moment` | 2.30.1 | ✅ 162,868 assertions (cross-checked) | 3,871 tests, 0 failures — fixed by #311/PR #326 |
 | `bignumber.js` | v9.1.2 | ✅ 65,143 (cross-checked) | unblocked by #238 |
+| `esprima` | (unreleased) `512cd66` | ⚠️ 80,100 / 80,153 (Node: 80,153) | ~65 min; ~1,650 unit fixtures + api/grammar/hostile suites + a 78,402-scenario test262 grammar corpus; residuals tracked in #357 and #358 |
 | `uuid` | v14.0.1 | ✅ 75 (cross-checked) | Node's own `node:test`/`node:assert/strict` upstream suite, unmodified; browser build so v3/v5 use pure-JS MD5/SHA-1 and v1/v4/v6/v7 draw randomness via a `crypto.getRandomValues`/`randomUUID` shim (`node-crypto-shim.js`) backed by `__host_random_bytes` |
 
 ### Zod normal and jitless corpus
@@ -404,6 +405,51 @@ PR #326 (`03df6fe`), which corrected GC temp-root handling around binary
 operators so a persistent root captured during sustained execution was no
 longer dropped.
 
+### esprima test262 grammar corpus
+
+esprima's own suites (`test/utils/create-testcases.js` + `evaluate-testcase.js`
+ported inline, `test/api-tests.js` unmodified via the `assert` alias, an
+everything.js smoke parse, and the two hostile-environment checks — see
+`scripts/libs/esprima-jsse-entry.js`) cover esprima's unit-level surface, but
+issue #295 also calls for a full test262 grammar-conformance pass. Reproducing
+test262-stream's live enumeration pipeline at runtime needs `fs`/`stream`/a
+real checkout — none of which exist in a jsse bundle — so
+`scripts/gen-esprima-test262-corpus.js` runs that traversal once, in Node, at
+`lib_prepare` time, and freezes the result into a bundlable data file
+(`test/jsse-test262-corpus.js`).
+
+It clones test262 pinned at `36d2d2d348d83e9d6554af59a672fbcd9413914b` and
+walks it with `test262-stream` (`omitRuntime: true` — parsing only, never
+evaluating), storing each file's raw source once (not per scenario — the
+"strict mode" scenario is always exactly `'"use strict";\n' + source`, so the
+runtime reconstructs it instead of storing a second copy) plus every
+default/strict/module scenario test262 defines for it. A leading-boilerplate
+strip (copyright header + YAML frontmatter) shrinks the unique-source payload
+from 55.5 MiB to 19.3 MiB, verified parse-neutral per file before applying it.
+`expected` per scenario is recorded by running local Node against the exact
+compiled `dist/esprima.js` esprima-jsse-entry.js's test262 runner replays at
+run time — not test262-stream's harness-bloated `contents` and not the
+spec-ideal outcome — so a jsse run can only diverge from what's recorded by
+actually behaving differently from Node on the identical esprima code;
+esprima's own pre-existing spec gaps (tracked in
+`test/test-262-whitelist.txt`) don't masquerade as new jsse bugs. The
+whitelist is cross-referenced only as a generation-time sanity log.
+Both the strip-safety check and the recording pass run in
+`gen-esprima-test262-corpus-worker.js`, spawned as fresh child processes, so
+the two concerns never share process state; the recording pass replays the
+exact (module, string) sequence in the exact file/scenario order the runtime
+test262 block replays, so generation and runtime are structurally the same
+parse sequence. The final corpus is a `module.exports = "<JSON-encoded
+string>"` (double-encoded so jsse's tokenizer scans one string token rather
+than building an AST for tens of thousands of nested literals) at 31 MiB,
+close to the ~26 MiB the issue estimates.
+
+Generation is deterministic: a from-scratch Node replay of the recorded
+(module, source) sequence reproduces the recorded `expected` values exactly,
+every time. jsse's 53 residual failures (of 80,153 total, cross-checked
+against Node) are genuine, reproducible jsse-vs-Node divergences, not corpus
+flakiness — see "Engine bugs surfaced" below for what they are.
+
 ### lodash skip list (jsse only; each preserves the assertion count via `skipAssert`)
 
 lodash is green and cross-checked at 6,794 assertions, with a small set of tests
@@ -471,6 +517,33 @@ running those thousands of timers natively would otherwise exhaust OS threads.
   that's never signaled. Discovered 2026-07-20, same day as the moment fix
   above; suspected (unconfirmed) to be an edge case in the same GC temp-root
   rework, since zod's validation codegen is unusually binary-operator-heavy.
+
+- **Astral-plane identifiers rejected (jsse#357, open).** esprima's own
+  parser, running unmodified inside jsse, rejects identifiers containing
+  astral-plane (surrogate-pair) Unicode code points that are valid
+  `ID_Start`/`ID_Continue` characters — e.g. `var \u{1E800};` throws
+  `Unexpected token ILLEGAL` on jsse but parses on Node. The same check gates
+  regex named-group names, so those are hit too. Accounts for 49 of the
+  esprima test262-corpus/unit-fixture residuals above (18 test262 identifier
+  files × 2 scenarios, 1 test262 named-groups file × 2 scenarios, 9 esprima
+  unit fixtures, 2 everything.js smoke fixtures).
+
+- **Regex property-escape range endpoint not rejected (jsse#358, open).**
+  `NonemptyClassRanges` static semantics require a Syntax Error when either
+  endpoint of a character-class range is a Unicode property escape
+  (`\p{...}`), since it denotes a whole class rather than one character.
+  esprima's own regex-validation logic misses this early error when run on
+  jsse (`/[￿-\p{Hex}]/u` and `/[\p{Hex}--]/u` both parse instead of
+  throwing) but catches it correctly on Node. Accounts for the remaining 4
+  esprima test262-corpus residuals above.
+
+- **Literal `{}` in a regex rejected instead of Annex B fallback (jsse#359,
+  open).** Found via manual exploration while wiring the esprima harness, not
+  surfaced by any esprima/test262 scenario checked so far. Per Annex B's
+  `ExtendedPatternCharacter`, a `{` not starting a valid quantifier should be
+  a literal character in non-`u`/non-`v` mode; jsse rejects `/{}/g` outright,
+  and as an uncatchable parse-time error for a regex *literal* specifically
+  (vs. a catchable `SyntaxError` for the equivalent `new RegExp("{}", "g")`).
 
 ### uuid: resolving `node:test` / `node:assert/strict`, and `crypto.getRandomValues`
 
