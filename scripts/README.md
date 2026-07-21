@@ -258,6 +258,7 @@ needs outside that core (`toThrow` and one inline snapshot).
 | `zod` | v4.4.3 | ❌ hangs (jsse#340) | normal + jitless; jsse livelocks indefinitely (spinning thread, never prints a result) instead of completing — see below. Last known result before the regression: 2,176 / 2,184, residuals tracked in #313–#315 |
 | `moment` | 2.30.1 | ✅ 162,868 assertions (cross-checked) | 3,871 tests, 0 failures — fixed by #311/PR #326 |
 | `bignumber.js` | v9.1.2 | ✅ 65,143 (cross-checked) | unblocked by #238 |
+| `css-tree` | v3.2.1 | ⚠️ 16,725 / 16,727 (Node: 16,727) | its own Mocha suite, force-harness; the 2 residual failures are a genuine jsse engine bug, tracked in #355 — see below |
 | `esprima` | (unreleased) `512cd66` | ⚠️ 80,100 / 80,153 (Node: 80,153) | ~65 min; ~1,650 unit fixtures + api/grammar/hostile suites + a 78,402-scenario test262 grammar corpus; residuals tracked in #357 and #358 |
 | `uuid` | v14.0.1 | ✅ 75 (cross-checked) | Node's own `node:test`/`node:assert/strict` upstream suite, unmodified; browser build so v3/v5 use pure-JS MD5/SHA-1 and v1/v4/v6/v7 draw randomness via a `crypto.getRandomValues`/`randomUUID` shim (`node-crypto-shim.js`) backed by `__host_random_bytes` |
 
@@ -405,6 +406,57 @@ PR #326 (`03df6fe`), which corrected GC temp-root handling around binary
 operators so a persistent root captured during sustained execution was no
 longer dropped.
 
+### css-tree
+
+css-tree is a CSS tokenizer/parser/generator/walker/lexer — a new grammar
+domain distinct from the JS-focused parser/transform cluster (acorn, prismjs,
+uglify-js, highlight.js). Unlike those, its own suite (`mocha lib/__tests`)
+needed almost no rewriting: it uses only Node's built-in `assert`
+(`strictEqual`/`notStrictEqual`/`deepStrictEqual`/`deepEqual`/`throws`/
+`doesNotThrow`) and `fs.readFileSync`/`readdirSync`/`statSync().isDirectory()`
+to load its own JSON fixture tree, so `gen-css-tree-entry.js` only needed to
+replace that discovery layer, not the test bodies.
+
+The generator snapshots the read-only `fixtures/` tree plus `package.json`
+into a manifest (`globalThis.__VFS_MANIFEST__`) and statically imports every
+top-level test file — Mocha's `describe`/`it`/`before`/`after`/`beforeEach`/
+`afterEach` are ambient globals the force-enabled shared harness installs, the
+same as running them under Mocha's own CLI. `node-fs-module.js` serves both
+engines from that manifest unconditionally (not a Node-vs-jsse selector like
+the other `node-*-module.js` files): the runner executes the generated bundle
+from an arbitrary working directory, not the library's clone directory, so a
+real `fs` call on the Node reference run can't resolve the suite's own
+`./fixtures/...` relative paths. There's no independent-oracle value given up
+by sharing one implementation here either — the manifest is a verbatim
+capture of the same files real `fs` would have returned, taken at generation
+time, so a lookup bug fails loudly (a thrown `ENOENT`) on both engines alike
+rather than silently diverging between them. `node-path-module.js` and
+`node-assert-module.js` keep the usual selector shape (Node's native modules
+vs. a minimal same-surface implementation), since neither depends on a
+particular working directory.
+
+`helpers/setup.js` is excluded from the generated entry: it only installs an
+enumerable, throw-on-read getter on `Object.prototype` as a poison pill
+against accidentally reading inherited properties, and no test depends on it
+being present (confirmed: it's the only file referencing
+`__proto_pollute__`) — registered/passing counts are identical without it,
+and leaving it out avoids every shim and the harness having to tolerate a
+hostile `Object.prototype` getter for no behavioral benefit.
+
+css-tree's own library source (not its tests) uses
+`createRequire(import.meta.url)` to load JSON at three call sites — the
+package version and the `mdn-data` CSS property/at-rule/syntax tables.
+esbuild bundles that pattern as a literal runtime `require()` call rather than
+inlining the JSON, and jsse has no module system to satisfy it at runtime.
+`patch-css-tree-esm.js` rewrites those three sites to static ESM
+`import x from '*.json'` (esbuild's built-in JSON loader) during `lib_prepare`
+— same JSON content, different loading mechanism.
+
+Both engines run the identical bundle and report the same registered-test
+count, 16,727 (cross-checked). Node passes all of them; jsse passes 16,725.
+The 2 residual failures (`List#some`/`#filter` "basic") are a genuine jsse
+engine bug surfaced by this suite, not a harness gap — see jsse#355 below.
+
 ### esprima test262 grammar corpus
 
 esprima's own suites (`test/utils/create-testcases.js` + `evaluate-testcase.js`
@@ -517,6 +569,16 @@ running those thousands of timers natively would otherwise exhaust OS threads.
   that's never signaled. Discovered 2026-07-20, same day as the moment fix
   above; suspected (unconfirmed) to be an edge case in the same GC temp-root
   rework, since zod's validation codegen is unusually binary-operator-heavy.
+
+- **Pooled call environment corrupted by a native-function first call
+  (jsse#355, open).** See the css-tree section above. Minimal repro:
+  a class method with a default 2nd parameter that calls `fn.call(...)`
+  breaks on its *second* invocation if its *first* invocation was passed a
+  native function (e.g. `Boolean`) as `fn` — any subsequent call then throws
+  `TypeError: undefined is not a function`, regardless of what's passed.
+  Removing any one of "class method", "default 2nd parameter", or "calls
+  `.call()`" makes it disappear. Suspected regression from the pooled
+  function-call-environment work (#73).
 
 - **Astral-plane identifiers rejected (jsse#357, open).** esprima's own
   parser, running unmodified inside jsse, rejects identifiers containing

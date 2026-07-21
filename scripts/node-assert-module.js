@@ -140,9 +140,21 @@ if (typeof __host_write !== "undefined") {
   function matchesError(err, matcher) {
     if (matcher === undefined) return true;
     if (typeof matcher === "function") {
-      return err instanceof matcher || matcher(err) === true;
+      // Only treat matcher as an Error-subclass constructor for instanceof
+      // (arrow functions and plain validator functions have no `.prototype`
+      // — or one not descended from Error — and `instanceof` throws a
+      // TypeError against such a right-hand side rather than returning
+      // false). Everything else is a validation function: call it and
+      // require an explicit `true` return, matching Node's assert.throws.
+      if (matcher.prototype instanceof Error || matcher === Error) {
+        return err instanceof matcher;
+      }
+      return matcher(err) === true;
     }
-    if (isRegExp(matcher)) return matcher.test(String(err && err.message));
+    // Node tests a RegExp matcher against String(err) — "Name: message" —
+    // not err.message alone. css-tree's own suite relies on this exactly
+    // (e.g. `assert.throws(fn, /^Error: item doesn't belong to list$/)`).
+    if (isRegExp(matcher)) return matcher.test(String(err));
     if (typeof matcher === "object" && matcher !== null) {
       return Object.keys(matcher).every(function (key) {
         return err && deepEqual(err[key], matcher[key], false);
