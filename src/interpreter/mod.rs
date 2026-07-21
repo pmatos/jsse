@@ -108,6 +108,7 @@ pub struct Interpreter {
     last_call_this_value: Option<JsValue>,
     constructing_derived: bool,
     calling_as_construct: bool,
+    function_env_pool: Vec<EnvRef>,
     pub(crate) call_stack_envs: Vec<EnvRef>,
     pub(crate) call_stack_frames: Vec<CallFrame>,
     pub(crate) gc_temp_roots: Vec<u64>,
@@ -247,9 +248,44 @@ pub(crate) const CALL_DEPTH_REARM_LIMIT: usize = 3_000;
 /// leaving ample headroom for the error object's own construction.
 pub(crate) const EVAL_DEPTH_LIMIT: usize = 50_000;
 
+const MAX_POOLED_FUNCTION_ENVIRONMENTS: usize = 256;
+const MAX_POOLED_FUNCTION_BINDING_CAPACITY: usize = 256;
+
+pub(crate) struct DeferredCallArguments {
+    first: Option<JsValue>,
+    rest: Vec<JsValue>,
+}
+
+impl DeferredCallArguments {
+    pub(crate) fn new(args: &[JsValue]) -> Self {
+        Self {
+            first: args.first().cloned(),
+            rest: args.get(1..).unwrap_or(&[]).to_vec(),
+        }
+    }
+
+    pub(crate) fn values(&self) -> impl Iterator<Item = &JsValue> {
+        self.first.iter().chain(self.rest.iter())
+    }
+
+    fn to_vec(&self) -> Vec<JsValue> {
+        self.values().cloned().collect()
+    }
+}
+
+pub(crate) enum CallFrameArguments {
+    None,
+    Materialized(JsValue),
+    Deferred {
+        args: DeferredCallArguments,
+        func_env: EnvRef,
+        mapped: bool,
+    },
+}
+
 pub(crate) struct CallFrame {
     pub func_obj_id: u64,
-    pub arguments_obj: JsValue,
+    pub arguments: CallFrameArguments,
     pub is_eval: bool,
 }
 
@@ -346,6 +382,7 @@ impl Interpreter {
             last_call_this_value: None,
             constructing_derived: false,
             calling_as_construct: false,
+            function_env_pool: Vec::new(),
             call_stack_envs: Vec::new(),
             call_stack_frames: Vec::new(),
             gc_temp_roots: Vec::new(),
@@ -1549,6 +1586,78 @@ impl Interpreter {
                 ),
             );
         }
+    }
+
+    pub(crate) fn acquire_function_environment(
+        &mut self,
+        parent: EnvRef,
+        binding_capacity: usize,
+    ) -> EnvRef {
+        if let Some(env) = self.function_env_pool.pop() {
+            debug_assert_eq!(Rc::strong_count(&env), 1);
+            env.borrow_mut()
+                .reset_function_scope(Some(parent), binding_capacity);
+            env
+        } else {
+            Environment::new_function_scope_with_capacity(Some(parent), binding_capacity)
+        }
+    }
+
+    pub(crate) fn recycle_function_environment(&mut self, env: EnvRef) {
+        if self.function_env_pool.len() >= MAX_POOLED_FUNCTION_ENVIRONMENTS
+            || Rc::strong_count(&env) != 1
+            || env.borrow().bindings.capacity() > MAX_POOLED_FUNCTION_BINDING_CAPACITY
+        {
+            return;
+        }
+        env.borrow_mut().reset_function_scope(None, 0);
+        self.function_env_pool.push(env);
+    }
+
+    pub(crate) fn materialize_call_frame_arguments(&mut self, frame_index: usize) -> JsValue {
+        let frame = &self.call_stack_frames[frame_index];
+        let (args, func_env, mapped, func_obj_id) = match &frame.arguments {
+            CallFrameArguments::None => return JsValue::Null,
+            CallFrameArguments::Materialized(arguments) => return arguments.clone(),
+            CallFrameArguments::Deferred {
+                args,
+                func_env,
+                mapped,
+            } => (args.to_vec(), func_env.clone(), *mapped, frame.func_obj_id),
+        };
+
+        let param_names = if mapped {
+            self.get_object_cell(func_obj_id)
+                .and_then(|obj| {
+                    let obj = obj.borrow();
+                    match &obj.callable {
+                        Some(JsFunction::User { params, .. }) => Some(
+                            params
+                                .iter()
+                                .filter_map(|param| match param {
+                                    Pattern::Identifier(name) => Some(name.clone()),
+                                    _ => None,
+                                })
+                                .collect(),
+                        ),
+                        _ => None,
+                    }
+                })
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let callee = JsValue::Object(crate::types::JsObject { id: func_obj_id });
+        let arguments = self.create_arguments_object(
+            &args,
+            callee,
+            false,
+            mapped.then_some(&func_env),
+            &param_names,
+        );
+        self.call_stack_frames[frame_index].arguments =
+            CallFrameArguments::Materialized(arguments.clone());
+        arguments
     }
 
     fn create_arguments_object(

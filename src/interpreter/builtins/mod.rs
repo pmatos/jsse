@@ -2954,7 +2954,7 @@ impl Interpreter {
                                 for i in (0..interp.call_stack_frames.len()).rev() {
                                     if interp.call_stack_frames[i].func_obj_id == this_id {
                                         return Completion::Normal(
-                                            interp.call_stack_frames[i].arguments_obj.clone(),
+                                            interp.materialize_call_frame_arguments(i),
                                         );
                                     }
                                 }

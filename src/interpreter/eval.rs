@@ -12465,6 +12465,45 @@ impl Interpreter {
         Completion::Normal(promise)
     }
 
+    fn bind_function_parameters(
+        &mut self,
+        params: &[Pattern],
+        args: &[JsValue],
+        func_env: &EnvRef,
+        has_simple_params: bool,
+    ) -> Result<(), JsValue> {
+        if has_simple_params {
+            let mut env = func_env.borrow_mut();
+            for (index, param) in params.iter().enumerate() {
+                let Pattern::Identifier(name) = param else {
+                    unreachable!("simple parameter metadata must match the parameter list");
+                };
+                env.bindings.insert(
+                    name.clone(),
+                    Binding {
+                        value: args.get(index).cloned().unwrap_or(JsValue::Undefined),
+                        kind: BindingKind::Var,
+                        initialized: true,
+                        deletable: false,
+                    },
+                );
+            }
+            return Ok(());
+        }
+
+        for (index, param) in params.iter().enumerate() {
+            if let Pattern::Rest(inner) = param {
+                let rest = args.get(index..).unwrap_or(&[]).to_vec();
+                let rest_array = self.create_array(rest);
+                self.bind_pattern(inner, rest_array, BindingKind::Var, func_env)?;
+                break;
+            }
+            let value = args.get(index).cloned().unwrap_or(JsValue::Undefined);
+            self.bind_pattern(param, value, BindingKind::Var, func_env)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn call_function(
         &mut self,
         func_val: &JsValue,
@@ -12738,7 +12777,10 @@ impl Interpreter {
                         }
                         if is_async && is_generator {
                             // Create persistent function environment
-                            let func_env = Environment::new_function_scope(Some(closure.clone()));
+                            let func_env = Environment::new_function_scope_with_capacity(
+                                Some(closure.clone()),
+                                params.len().saturating_add(2),
+                            );
                             func_env.borrow_mut().strict = is_strict;
                             func_env.borrow_mut().bindings.insert(
                                 "this".to_string(),
@@ -12788,28 +12830,14 @@ impl Interpreter {
                                 func_env.borrow_mut().has_parameter_expressions = true;
                             }
                             // §14.5.10 step 1: FunctionDeclarationInstantiation (bind params)
-                            for (i, param) in params.iter().enumerate() {
-                                if let Pattern::Rest(inner) = param {
-                                    let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                                    let rest_arr = self.create_array(rest);
-                                    if let Err(e) = self.bind_pattern(
-                                        inner,
-                                        rest_arr,
-                                        BindingKind::Var,
-                                        &func_env,
-                                    ) {
-                                        self.current_realm_id = caller_realm;
-                                        return Completion::Throw(e);
-                                    }
-                                    break;
-                                }
-                                let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-                                if let Err(e) =
-                                    self.bind_pattern(param, val, BindingKind::Var, &func_env)
-                                {
-                                    self.current_realm_id = caller_realm;
-                                    return Completion::Throw(e);
-                                }
+                            if let Err(error) = self.bind_function_parameters(
+                                &params,
+                                args,
+                                &func_env,
+                                is_simple_ag,
+                            ) {
+                                self.current_realm_id = caller_realm;
+                                return Completion::Throw(error);
                             }
                             // §14.5.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
                             let gen_obj_id = self.create_object_id();
@@ -12917,7 +12945,10 @@ impl Interpreter {
                         }
                         if is_generator {
                             // Create persistent function environment
-                            let func_env = Environment::new_function_scope(Some(closure.clone()));
+                            let func_env = Environment::new_function_scope_with_capacity(
+                                Some(closure.clone()),
+                                params.len().saturating_add(2),
+                            );
                             let closure_strict = closure.borrow().strict;
                             func_env.borrow_mut().strict = is_strict;
                             // §10.2.1.2 OrdinaryCallBindThis: sloppy mode this coercion
@@ -12987,28 +13018,11 @@ impl Interpreter {
                                 func_env.borrow_mut().has_parameter_expressions = true;
                             }
                             // §14.4.10 step 1: FunctionDeclarationInstantiation (bind params)
-                            for (i, param) in params.iter().enumerate() {
-                                if let Pattern::Rest(inner) = param {
-                                    let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                                    let rest_arr = self.create_array(rest);
-                                    if let Err(e) = self.bind_pattern(
-                                        inner,
-                                        rest_arr,
-                                        BindingKind::Var,
-                                        &func_env,
-                                    ) {
-                                        self.current_realm_id = caller_realm;
-                                        return Completion::Throw(e);
-                                    }
-                                    break;
-                                }
-                                let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-                                if let Err(e) =
-                                    self.bind_pattern(param, val, BindingKind::Var, &func_env)
-                                {
-                                    self.current_realm_id = caller_realm;
-                                    return Completion::Throw(e);
-                                }
+                            if let Err(error) =
+                                self.bind_function_parameters(&params, args, &func_env, is_simple_g)
+                            {
+                                self.current_realm_id = caller_realm;
+                                return Completion::Throw(error);
                             }
                             // §14.4.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
                             let gen_obj_id = self.create_object_id();
@@ -13115,12 +13129,13 @@ impl Interpreter {
                             }));
                         }
                         let closure_strict = closure.borrow().strict;
-                        let func_env = Environment::new_function_scope(Some(closure));
+                        let func_env = self
+                            .acquire_function_environment(closure, params.len().saturating_add(2));
                         if is_arrow {
                             func_env.borrow_mut().is_arrow_scope = true;
                         }
                         let is_simple = has_simple_params;
-                        let mut call_frame_args = JsValue::Null;
+                        let mut call_frame_arguments = CallFrameArguments::None;
                         if !is_arrow {
                             if self.constructing_derived {
                                 // Derived constructor: this is in TDZ until super() is called
@@ -13165,12 +13180,7 @@ impl Interpreter {
                                 );
                             }
                             let env_strict = func_env.borrow().strict;
-                            // Sloppy non-arrow functions need a real arguments object even
-                            // when the body doesn't reference it, because Annex B
-                            // `Function.prototype.arguments` (§B.3.7) observes the active
-                            // call frame's arguments_obj.
-                            let needs_args = uses_arguments || (!is_strict && !env_strict);
-                            if needs_args {
+                            if uses_arguments {
                                 let use_mapped = is_simple && !is_strict && !env_strict;
                                 let param_names: Vec<String> = if use_mapped {
                                     params
@@ -13194,7 +13204,8 @@ impl Interpreter {
                                     mapped_env,
                                     &param_names,
                                 );
-                                call_frame_args = arguments_obj.clone();
+                                call_frame_arguments =
+                                    CallFrameArguments::Materialized(arguments_obj.clone());
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
                                 let _ = self.env_set(&func_env, "arguments", arguments_obj);
                                 if is_strict || !is_simple {
@@ -13202,6 +13213,13 @@ impl Interpreter {
                                 }
                             } else {
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                                if !is_strict && !env_strict {
+                                    call_frame_arguments = CallFrameArguments::Deferred {
+                                        args: DeferredCallArguments::new(args),
+                                        func_env: func_env.clone(),
+                                        mapped: is_simple,
+                                    };
+                                }
                             }
                         }
                         // For arrows with non-simple params and "arguments" parameter,
@@ -13218,25 +13236,12 @@ impl Interpreter {
                             func_env.borrow_mut().has_parameter_expressions = true;
                         }
                         // Bind parameters (after this so default exprs can access this)
-                        for (i, param) in params.iter().enumerate() {
-                            if let Pattern::Rest(inner) = param {
-                                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                                let rest_arr = self.create_array(rest);
-                                if let Err(e) =
-                                    self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env)
-                                {
-                                    self.current_realm_id = caller_realm;
-                                    return Completion::Throw(e);
-                                }
-                                break;
-                            }
-                            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-                            if let Err(e) =
-                                self.bind_pattern(param, val, BindingKind::Var, &func_env)
-                            {
-                                self.current_realm_id = caller_realm;
-                                return Completion::Throw(e);
-                            }
+                        if let Err(error) =
+                            self.bind_function_parameters(&params, args, &func_env, is_simple)
+                        {
+                            self.current_realm_id = caller_realm;
+                            self.recycle_function_environment(func_env);
+                            return Completion::Throw(error);
                         }
                         let exec_env = if !is_simple {
                             let body_env = Environment::new_function_scope(Some(func_env.clone()));
@@ -13263,7 +13268,7 @@ impl Interpreter {
                         exec_env.borrow_mut().strict = is_strict;
                         self.call_stack_frames.push(CallFrame {
                             func_obj_id: o.id,
-                            arguments_obj: call_frame_args,
+                            arguments: call_frame_arguments,
                             is_eval: false,
                         });
                         self.call_stack_envs.push(exec_env.clone());
@@ -13279,6 +13284,8 @@ impl Interpreter {
                         let result = self.dispose_resources(&exec_env, result);
                         self.last_call_this_value = func_env.borrow().get("this");
                         self.current_realm_id = caller_realm;
+                        drop(exec_env);
+                        self.recycle_function_environment(func_env);
                         match result {
                             Completion::Return(v) => {
                                 self.last_call_had_explicit_return = true;
@@ -13720,7 +13727,7 @@ impl Interpreter {
         // Execute statements in lex_env
         self.call_stack_frames.push(CallFrame {
             func_obj_id: 0,
-            arguments_obj: JsValue::Null,
+            arguments: CallFrameArguments::None,
             is_eval: true,
         });
         self.call_stack_envs.push(lex_env.clone());
@@ -15711,7 +15718,10 @@ impl Interpreter {
         self.gc_root_value(&reject_fn);
 
         let closure_strict = closure.borrow().strict;
-        let func_env = Environment::new_function_scope(Some(closure));
+        let func_env = Environment::new_function_scope_with_capacity(
+            Some(closure),
+            params.len().saturating_add(2),
+        );
         if is_arrow {
             func_env.borrow_mut().is_arrow_scope = true;
         }
@@ -15786,34 +15796,18 @@ impl Interpreter {
                 func_env.borrow_mut().has_parameter_expressions = true;
             }
         }
-        for (i, param) in params.iter().enumerate() {
-            if let Pattern::Rest(inner) = param {
-                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                let rest_arr = self.create_array(rest);
-                if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
-                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                    self.drain_microtasks();
-                    self.gc_unroot_frame(gc_frame);
-                    // A default-param expression may have called `__host_exit`
-                    // (issue #229): return abrupt so the caller unwinds.
-                    if self.pending_exit.is_some() {
-                        return Completion::Throw(JsValue::Undefined);
-                    }
-                    return Completion::Normal(promise);
-                }
-                break;
+        if let Err(error) =
+            self.bind_function_parameters(params, args, &func_env, has_simple_params)
+        {
+            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[error]);
+            self.drain_microtasks();
+            self.gc_unroot_frame(gc_frame);
+            // A default-param expression may have called `__host_exit`
+            // (issue #229): return abrupt so the caller unwinds.
+            if self.pending_exit.is_some() {
+                return Completion::Throw(JsValue::Undefined);
             }
-            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-            if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
-                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                self.drain_microtasks();
-                self.gc_unroot_frame(gc_frame);
-                // See above: a default-param `__host_exit` must unwind abruptly.
-                if self.pending_exit.is_some() {
-                    return Completion::Throw(JsValue::Undefined);
-                }
-                return Completion::Normal(promise);
-            }
+            return Completion::Normal(promise);
         }
 
         func_env.borrow_mut().strict = is_strict;
