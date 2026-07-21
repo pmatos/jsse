@@ -4,10 +4,10 @@
 //! and once in `JsObjectData.property_order`. Both copies used to be owned
 //! `String`s, so every property cost two heap allocations of the same bytes.
 //!
-//! This module interns ordinary and tagged Symbol keys into a process-thread
-//! cache of `JsPropertyKey`. The storage layer (`PropertyMap` + `property_order`)
-//! holds `JsPropertyKey` rather than `String`, so the two stored copies share one
-//! allocation and "cloning" a key is a refcount bump.
+//! This module interns ordinary and tagged Symbol keys into a bounded
+//! process-thread cache of `JsPropertyKey`. The storage layer (`PropertyMap` +
+//! `property_order`) holds `JsPropertyKey` rather than `String`, so the two
+//! stored copies share one allocation and "cloning" a key is a refcount bump.
 //!
 //! A `thread_local!` cache is used so `JsObjectData` methods — which only have
 //! `&mut self`, not `&mut Interpreter` — can intern without threading any extra
@@ -19,6 +19,12 @@
 //! appears on at most a handful of objects). They are NOT cached: `intern_key`
 //! returns a fresh `JsPropertyKey` for them. The gate mirrors `parse_array_index`
 //! in `types.rs` (all-ASCII-digits, no leading zero except "0", value < 2^32-1).
+//!
+//! ## Admission bounds
+//! The cache retains at most `MAX_CACHE_ENTRIES` keys, each no longer than
+//! `MAX_CACHEABLE_KEY_BYTES`. A miss outside either bound is returned without
+//! being retained. This keeps thread-lifetime memory bounded without adding
+//! recency bookkeeping to cache hits.
 
 use std::cell::RefCell;
 
@@ -31,6 +37,11 @@ thread_local! {
 struct KeyCache {
     map: std::collections::HashMap<Box<[u8]>, JsPropertyKey>,
 }
+
+/// Includes the seed keys below. With the per-key byte limit, retained key
+/// payload is bounded to roughly 2 MiB (one map key and one `JsPropertyKey`).
+const MAX_CACHE_ENTRIES: usize = 4_096;
+const MAX_CACHEABLE_KEY_BYTES: usize = 256;
 
 // Common property names worth pre-seeding so the very first lookups hit the
 // cache. Symbol-encoded well-known keys are included because they recur on
@@ -73,8 +84,14 @@ impl KeyCache {
     }
 
     fn intern(&mut self, key: JsPropertyKey) -> JsPropertyKey {
+        if key.as_bytes().len() > MAX_CACHEABLE_KEY_BYTES {
+            return key;
+        }
         if let Some(existing) = self.map.get(key.as_bytes()) {
             return existing.clone();
+        }
+        if self.map.len() >= MAX_CACHE_ENTRIES {
+            return key;
         }
         self.map.insert(Box::from(key.as_bytes()), key.clone());
         key
@@ -102,10 +119,10 @@ fn is_canonical_array_index(s: &str) -> bool {
 
 /// Intern a property key into shared WTF-8 storage.
 ///
-/// Ordinary names and tagged Symbol keys are cached so
-/// repeated uses share one allocation. Canonical array-index strings are NOT
-/// cached (see the integer-index gate in the module docs) — a fresh key
-/// is returned so the cache never accumulates unbounded numeric keys.
+/// Eligible ordinary names and tagged Symbol keys are cached so repeated uses
+/// share one allocation. Canonical array-index strings are NOT cached (see the
+/// integer-index gate in the module docs), and misses outside the admission
+/// bounds are returned without being retained.
 #[inline]
 pub(crate) fn intern_key(s: &str) -> JsPropertyKey {
     if is_canonical_array_index(s) {
@@ -201,5 +218,65 @@ mod tests {
         let a = intern_key("01");
         let b = intern_key("01");
         assert!(a.shares_storage_with(&b));
+    }
+
+    #[test]
+    fn cache_stops_retaining_keys_at_entry_limit() {
+        let mut cache = KeyCache::new();
+        let available = MAX_CACHE_ENTRIES - cache.map.len();
+        for i in 0..available {
+            cache.intern(JsPropertyKey::from(format!("cache-bound-{i}")));
+        }
+        assert_eq!(cache.map.len(), MAX_CACHE_ENTRIES);
+
+        let a = cache.intern(JsPropertyKey::from_str("cache-bound-overflow"));
+        let b = cache.intern(JsPropertyKey::from_str("cache-bound-overflow"));
+        assert!(
+            !a.shares_storage_with(&b),
+            "keys beyond the entry limit must not be retained"
+        );
+        assert_eq!(cache.map.len(), MAX_CACHE_ENTRIES);
+
+        let seed = cache.intern(JsPropertyKey::from_str("length"));
+        assert!(
+            seed.shares_storage_with(cache.map.get(b"length".as_slice()).unwrap()),
+            "existing entries must still hit after the cache reaches its limit"
+        );
+    }
+
+    #[test]
+    fn oversized_keys_are_not_retained() {
+        let mut cache = KeyCache::new();
+        let oversized = "x".repeat(MAX_CACHEABLE_KEY_BYTES + 1);
+        let a = cache.intern(JsPropertyKey::from(oversized.clone()));
+        let b = cache.intern(JsPropertyKey::from(oversized.clone()));
+
+        assert_eq!(a.as_bytes(), oversized.as_bytes());
+        assert!(
+            !a.shares_storage_with(&b),
+            "oversized keys must not be retained"
+        );
+    }
+
+    #[test]
+    fn oversized_symbol_keys_preserve_their_exact_encoding() {
+        let mut cache = KeyCache::new();
+        let symbol = crate::types::JsSymbol {
+            id: 99,
+            description: Some(crate::types::JsString::from_str(
+                &"s".repeat(MAX_CACHEABLE_KEY_BYTES),
+            )),
+        };
+        let original = symbol.to_property_key();
+        let a = cache.intern(symbol.to_property_key());
+        let b = cache.intern(symbol.to_property_key());
+
+        assert_eq!(a, original);
+        assert!(a.is_symbol());
+        assert_eq!(a.symbol_encoding(), original.symbol_encoding());
+        assert!(
+            !a.shares_storage_with(&b),
+            "oversized Symbol keys must follow the non-retaining path"
+        );
     }
 }
