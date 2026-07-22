@@ -70,39 +70,85 @@ pub(crate) fn to_number(val: &JsValue) -> f64 {
     }
 }
 
+// §12 WhiteSpace | LineTerminator — the set trimmed from a StrNumericLiteral and
+// by String.prototype.trim / parseInt / parseFloat. Kept here, in the spec
+// conversions module, as the single canonical predicate every consumer shares.
+// (Distinct from Rust's `char::is_whitespace`, which adds U+0085 and omits U+FEFF.)
+pub(crate) fn is_ecma_whitespace(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{0009}'
+            | '\u{000A}'
+            | '\u{000B}'
+            | '\u{000C}'
+            | '\u{000D}'
+            | '\u{0020}'
+            | '\u{00A0}'
+            | '\u{FEFF}'
+            | '\u{1680}'
+            | '\u{2000}'
+            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
+    )
+}
+
+// Parse the digits of a §7.1.4.1 NonDecimalIntegerLiteral (0x / 0o / 0b) into an
+// f64, accumulating in floating point so a value beyond i64/u64 yields a finite
+// rounded result instead of overflowing to NaN. The accumulation is exact for
+// values ≤ 2^53; above that it is not guaranteed bit-identical to RoundMVResult.
+// Empty or invalid input → NaN.
+fn radix_digits_to_f64(digits: &str, radix: u32) -> f64 {
+    if digits.is_empty() {
+        return f64::NAN;
+    }
+    let mut acc = 0.0_f64;
+    for ch in digits.chars() {
+        match ch.to_digit(radix) {
+            Some(d) => acc = acc * f64::from(radix) + f64::from(d),
+            None => return f64::NAN,
+        }
+    }
+    acc
+}
+
 // §7.1.4.1.1 StringToNumber (uses §7.1.4.1.2 RoundMVResult via f64::parse)
 fn string_to_number(s: &JsString) -> f64 {
     let rust_str = s.to_rust_string();
-    // ECMA-262 §12.2 WhiteSpace includes <ZWNBSP> (U+FEFF), which Rust's
-    // char::is_whitespace omits (Unicode classifies it as Format, not White_Space).
-    let trimmed = rust_str.trim_matches(|c: char| c.is_whitespace() || c == '\u{FEFF}');
+    let trimmed = rust_str.trim_matches(is_ecma_whitespace);
     if trimmed.is_empty() {
         return 0.0;
     }
-    if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
-        return i64::from_str_radix(&trimmed[2..], 16)
-            .map(|n| n as f64)
-            .unwrap_or(f64::NAN);
+    // NonDecimalIntegerLiteral: no sign is permitted, so a leading '+'/'-' keeps
+    // the string out of these branches and it falls through to StrDecimalLiteral.
+    if let Some(rest) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return radix_digits_to_f64(rest, 16);
     }
-    if trimmed.starts_with("0o") || trimmed.starts_with("0O") {
-        return i64::from_str_radix(&trimmed[2..], 8)
-            .map(|n| n as f64)
-            .unwrap_or(f64::NAN);
+    if let Some(rest) = trimmed
+        .strip_prefix("0o")
+        .or_else(|| trimmed.strip_prefix("0O"))
+    {
+        return radix_digits_to_f64(rest, 8);
     }
-    if trimmed.starts_with("0b") || trimmed.starts_with("0B") {
-        return i64::from_str_radix(&trimmed[2..], 2)
-            .map(|n| n as f64)
-            .unwrap_or(f64::NAN);
+    if let Some(rest) = trimmed
+        .strip_prefix("0b")
+        .or_else(|| trimmed.strip_prefix("0B"))
+    {
+        return radix_digits_to_f64(rest, 2);
     }
-    if trimmed == "Infinity" || trimmed == "+Infinity" {
-        return f64::INFINITY;
+    // StrDecimalLiteral: the only Infinity token is exactly "Infinity" (with an
+    // optional sign). Every other inf/nan spelling Rust's f64 parser would accept
+    // must be NaN, so reject them before handing off to `parse`.
+    match trimmed {
+        "Infinity" | "+Infinity" => return f64::INFINITY,
+        "-Infinity" => return f64::NEG_INFINITY,
+        _ => {}
     }
-    if trimmed == "-Infinity" {
-        return f64::NEG_INFINITY;
-    }
-    if trimmed.eq_ignore_ascii_case("infinity")
-        || trimmed.eq_ignore_ascii_case("+infinity")
-        || trimmed.eq_ignore_ascii_case("-infinity")
+    let unsigned = trimmed.strip_prefix(['+', '-']).unwrap_or(trimmed);
+    if unsigned.eq_ignore_ascii_case("inf")
+        || unsigned.eq_ignore_ascii_case("infinity")
+        || unsigned.eq_ignore_ascii_case("nan")
     {
         return f64::NAN;
     }
@@ -2403,5 +2449,96 @@ mod make_date_clipped_tests {
         let v = make_date_clipped(0.0, 0.0, false);
         assert_eq!(v, 0.0);
         assert!(v.is_sign_positive());
+    }
+}
+
+#[cfg(test)]
+mod string_to_number_tests {
+    // §7.1.4.1 StringToNumber. Expected values below are the independent source
+    // of truth from ECMA-262 §12 (WhiteSpace) and §7.1.4.1 (StrNumericLiteral),
+    // cross-checked against node's `Number(...)`.
+    use super::string_to_number;
+    use crate::types::JsString;
+
+    fn n(s: &str) -> f64 {
+        string_to_number(&JsString::from_str(s))
+    }
+
+    #[test]
+    fn trims_exactly_the_ecmascript_whitespace_set() {
+        // In the ECMAScript StrWhiteSpace set (trimmed): must yield 1.
+        for ws in [
+            "\u{0009}", // TAB
+            "\u{000A}", // LF
+            "\u{000B}", // VT
+            "\u{000C}", // FF
+            "\u{000D}", // CR
+            "\u{0020}", // SP
+            "\u{00A0}", // NBSP
+            "\u{FEFF}", // ZWNBSP
+            "\u{1680}", // OGHAM SPACE MARK
+            "\u{2000}", // EN QUAD
+            "\u{200A}", // HAIR SPACE
+            "\u{2028}", // LINE SEPARATOR
+            "\u{2029}", // PARAGRAPH SEPARATOR
+            "\u{202F}", // NNBSP
+            "\u{205F}", // MMSP
+            "\u{3000}", // IDEOGRAPHIC SPACE
+        ] {
+            assert_eq!(
+                n(&format!("{ws}1{ws}")),
+                1.0,
+                "U+{:04X} must be trimmed",
+                ws.chars().next().unwrap() as u32
+            );
+        }
+        assert_eq!(n("\t\n\r 5 \t\n\r"), 5.0);
+    }
+
+    #[test]
+    fn does_not_trim_non_ecmascript_whitespace() {
+        // U+0085 NEL is in Rust's White_Space but NOT ECMAScript's set.
+        assert!(n("\u{0085}1").is_nan());
+        // U+200B ZERO WIDTH SPACE is not whitespace in either.
+        assert!(n("\u{200B}1").is_nan());
+    }
+
+    #[test]
+    fn infinity_is_case_sensitive_and_only_the_full_word() {
+        assert_eq!(n("Infinity"), f64::INFINITY);
+        assert_eq!(n("+Infinity"), f64::INFINITY);
+        assert_eq!(n("-Infinity"), f64::NEG_INFINITY);
+        // Every other inf/nan spelling Rust's float parser accepts must be NaN.
+        for s in [
+            "inf", "+inf", "-inf", "INF", "infinity", "INFINITY", "nan", "NaN", "NAN",
+        ] {
+            assert!(n(s).is_nan(), "Number({s:?}) must be NaN");
+        }
+    }
+
+    #[test]
+    fn non_decimal_integer_literals() {
+        assert_eq!(n("0x10"), 16.0);
+        assert_eq!(n("0X1F"), 31.0);
+        assert_eq!(n("0o17"), 15.0);
+        assert_eq!(n("0b101"), 5.0);
+        // Large hex must round to the nearest f64, not overflow to NaN.
+        assert_eq!(n("0x10000000000000000"), 2f64.powi(64));
+        // Empty digits, bad digits, and a leading sign are all NaN.
+        for s in ["0x", "0o", "0b", "0xG", "0o8", "0b2", "+0x1", "-0x1"] {
+            assert!(n(s).is_nan(), "Number({s:?}) must be NaN");
+        }
+    }
+
+    #[test]
+    fn decimals_and_empty() {
+        assert_eq!(n(""), 0.0);
+        assert_eq!(n("   "), 0.0);
+        assert_eq!(n("  12.5  "), 12.5);
+        assert_eq!(n("1e3"), 1000.0);
+        assert_eq!(n(".5"), 0.5);
+        assert_eq!(n("5."), 5.0);
+        assert_eq!(n("-0"), 0.0);
+        assert!(n("-0").is_sign_negative());
     }
 }
