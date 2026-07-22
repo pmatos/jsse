@@ -1,3 +1,10 @@
+## [0.4.1](https://github.com/pmatos/jsse/compare/v0.4.0...v0.4.1) (2026-07-22)
+
+
+### Bug Fixes
+
+* **regexp:** respect unicode mode for property escapes ([b19c344](https://github.com/pmatos/jsse/commit/b19c3443aea0ebb7537f6cc570fb5f8e3c0a997f))
+
 # [0.4.0](https://github.com/pmatos/jsse/compare/v0.3.0...v0.4.0) (2026-07-21)
 
 
