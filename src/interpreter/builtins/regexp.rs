@@ -3246,7 +3246,7 @@ fn push_case_fold_guarded(result: &mut String, ch: char, in_char_class: bool) {
     }
 }
 
-fn resolve_class_escape(chars: &[char], i: &mut usize) -> Option<u32> {
+fn resolve_class_escape(chars: &[char], i: &mut usize, unicode: bool) -> Option<u32> {
     if *i >= chars.len() {
         return None;
     }
@@ -3315,7 +3315,7 @@ fn resolve_class_escape(chars: &[char], i: &mut usize) -> Option<u32> {
                     }
                 }
                 'd' | 'D' | 'w' | 'W' | 's' | 'S' | 'b' | 'B' => None,
-                'p' | 'P' => {
+                'p' | 'P' if unicode => {
                     if *i < chars.len() && chars[*i] == '{' {
                         *i += 1;
                         while *i < chars.len() && chars[*i] != '}' {
@@ -4330,7 +4330,7 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
                     }
 
                     let save_i = i;
-                    let val = resolve_class_escape(&chars, &mut i);
+                    let val = resolve_class_escape(&chars, &mut i, unicode);
                     let is_class_esc = val.is_none()
                         && save_i < len
                         && chars[save_i] == '\\'
