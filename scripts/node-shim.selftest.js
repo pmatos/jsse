@@ -104,6 +104,31 @@ eq(
   "1970-01-01T00:00:00.000Z",
   "%s Date keeps built-in coercion on inspect path"
 );
+(function () {
+  var originalGetTime = Date.prototype.getTime;
+  var originalToISOString = Date.prototype.toISOString;
+  try {
+    Date.prototype.getTime = function () {
+      throw new Error("patched getTime called");
+    };
+    Date.prototype.toISOString = function () {
+      throw new Error("patched toISOString called");
+    };
+    eq(
+      util.format("%s", new Date(0)),
+      "1970-01-01T00:00:00.000Z",
+      "%s Date ignores patched formatting methods"
+    );
+    eq(
+      util.format("%s", new Date(NaN)),
+      "Invalid Date",
+      "%s invalid Date ignores patched formatting methods"
+    );
+  } finally {
+    Date.prototype.getTime = originalGetTime;
+    Date.prototype.toISOString = originalToISOString;
+  }
+})();
 eq(util.format("%s", /re/g), "/re/g", "%s RegExp uses inspect");
 eq(
   util.format("%s", { toString: null, a: 1 }),

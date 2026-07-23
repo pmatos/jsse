@@ -57,6 +57,13 @@
     return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k);
   }
 
+  // Capture uncurried Date intrinsics before bundled library code runs. Node's
+  // formatter reads [[DateValue]] directly, so patched prototype methods must
+  // not affect either valid or invalid Date inspection.
+  var functionCall = Function.prototype.call;
+  var dateGetTime = functionCall.bind(Date.prototype.getTime);
+  var dateToISOString = functionCall.bind(Date.prototype.toISOString);
+
   function inspect(value, opts) {
     opts = opts || {};
     var maxDepth = typeof opts.depth === "number" ? opts.depth : 2;
@@ -82,7 +89,7 @@
       }
       if (v instanceof RegExp) return String(v);
       if (v instanceof Date) {
-        return isNaN(v.getTime()) ? "Invalid Date" : v.toISOString();
+        return isNaN(dateGetTime(v)) ? "Invalid Date" : dateToISOString(v);
       }
 
       if (depth < 0) return Array.isArray(v) ? "[Array]" : "[Object]";
