@@ -53,6 +53,7 @@ The host-time-zone integration test will assert:
 - lower-boundary local construction using New York's first historical offset;
 - nonzero local offsets and formatting at both boundaries;
 - default Intl formatting using the recurring offset at the upper boundary;
+- primary default Intl identifiers when `TZ` contains an IANA link name;
 - existing daylight-saving gap, overlap, and cross-transition behavior.
 
 The full Date test262 subtree and full default test262 suite will guard the

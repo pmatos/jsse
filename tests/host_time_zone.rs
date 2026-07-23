@@ -66,3 +66,8 @@ fn tz_environment_controls_the_system_time_zone_and_date_offsets() {
 fn posix_tz_environment_controls_the_system_time_zone_and_date_offsets() {
     assert_tz_environment_controls_the_system_time_zone(":America/New_York");
 }
+
+#[test]
+fn iana_link_tz_environment_uses_the_primary_time_zone_identifier() {
+    assert_tz_environment_controls_the_system_time_zone("US/Eastern");
+}

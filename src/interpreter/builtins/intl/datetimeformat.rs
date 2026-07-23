@@ -1,4 +1,5 @@
 use super::super::super::*;
+use super::super::temporal::canonicalize_iana_tz;
 use crate::interpreter::helpers::{
     date_from_time, hour_from_time, min_from_time, month_from_time, ms_from_time,
     named_time_zone_offset_ms, now_ms, sec_from_time, week_day, year_from_time,
@@ -6325,7 +6326,7 @@ impl Interpreter {
                             canonicalize_timezone(&tz)
                         }
                     } else {
-                        canonicalize_timezone(&system_time_zone_identifier())
+                        canonicalize_iana_tz(&system_time_zone_identifier())
                     };
 
                 // Step 36: Table 7 component options (in table order)
