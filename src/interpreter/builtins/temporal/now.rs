@@ -15,7 +15,7 @@ impl Interpreter {
             "timeZoneId".to_string(),
             0,
             |_interp, _this, _args| {
-                let tz = iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string());
+                let tz = super::canonicalize_iana_tz(&system_time_zone_identifier());
                 Completion::Normal(JsValue::String(JsString::from_str(&tz)))
             },
         ));

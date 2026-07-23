@@ -1556,18 +1556,121 @@ pub(crate) fn time_clip(time: f64) -> f64 {
     if t == 0.0 { 0.0_f64 } else { t }
 }
 
-pub(crate) fn local_tza() -> f64 {
-    use chrono::Local;
-    let now = Local::now();
-    now.offset().local_minus_utc() as f64 * 1000.0
+fn resolve_system_time_zone() -> chrono_tz::Tz {
+    let parse = |identifier: &str| {
+        identifier.parse::<chrono_tz::Tz>().ok().or_else(|| {
+            chrono_tz::TZ_VARIANTS
+                .iter()
+                .copied()
+                .find(|tz| tz.name().eq_ignore_ascii_case(identifier))
+        })
+    };
+
+    if let Some(tz) = std::env::var("TZ").ok().and_then(|tz| parse(&tz)) {
+        return tz;
+    }
+    if let Some(tz) = iana_time_zone::get_timezone()
+        .ok()
+        .and_then(|tz| parse(&tz))
+    {
+        return tz;
+    }
+    chrono_tz::UTC
+}
+
+fn system_time_zone() -> chrono_tz::Tz {
+    use std::sync::OnceLock;
+
+    static SYSTEM_TIME_ZONE: OnceLock<chrono_tz::Tz> = OnceLock::new();
+    *SYSTEM_TIME_ZONE.get_or_init(resolve_system_time_zone)
+}
+
+pub(crate) fn system_time_zone_identifier() -> String {
+    system_time_zone().name().to_string()
+}
+
+fn naive_datetime_from_time_value(t: f64) -> Option<chrono::NaiveDateTime> {
+    if !t.is_finite() {
+        return None;
+    }
+    let epoch_ms = t.floor() as i64;
+    let epoch_secs = epoch_ms.div_euclid(1000);
+    let nanos = epoch_ms.rem_euclid(1000) as u32 * 1_000_000;
+    chrono::DateTime::from_timestamp(epoch_secs, nanos).map(|dt| dt.naive_utc())
+}
+
+pub(crate) fn local_tza(t: f64) -> f64 {
+    use chrono::Offset;
+
+    let Some(utc) = naive_datetime_from_time_value(t).map(|dt| dt.and_utc()) else {
+        return 0.0;
+    };
+    utc.with_timezone(&system_time_zone())
+        .offset()
+        .fix()
+        .local_minus_utc() as f64
+        * 1000.0
 }
 
 pub(crate) fn local_time(t: f64) -> f64 {
-    t + local_tza()
+    t + local_tza(t)
 }
 
 pub(crate) fn utc_time(t: f64) -> f64 {
-    t - local_tza()
+    use chrono::{MappedLocalTime, Offset, TimeDelta, TimeZone};
+
+    let Some(local) = naive_datetime_from_time_value(t) else {
+        return t;
+    };
+    let tz = system_time_zone();
+    let offset = match tz.from_local_datetime(&local) {
+        MappedLocalTime::Single(dt) => dt.offset().fix().local_minus_utc(),
+        MappedLocalTime::Ambiguous(first, second) => {
+            let earlier = if first.timestamp() <= second.timestamp() {
+                first
+            } else {
+                second
+            };
+            earlier.offset().fix().local_minus_utc()
+        }
+        MappedLocalTime::None => {
+            let mut offset_before = None;
+            for minutes in 1..=2 * 24 * 60 {
+                let Some(probe) = local.checked_sub_signed(TimeDelta::minutes(minutes)) else {
+                    break;
+                };
+                match tz.from_local_datetime(&probe) {
+                    MappedLocalTime::Single(dt) => {
+                        offset_before = Some(dt.offset().fix().local_minus_utc());
+                        break;
+                    }
+                    MappedLocalTime::Ambiguous(first, second) => {
+                        let later = if first.timestamp() >= second.timestamp() {
+                            first
+                        } else {
+                            second
+                        };
+                        offset_before = Some(later.offset().fix().local_minus_utc());
+                        break;
+                    }
+                    MappedLocalTime::None => {}
+                }
+            }
+            offset_before.unwrap_or(0)
+        }
+    };
+    t - offset as f64 * 1000.0
+}
+
+fn local_time_zone_abbreviation(t: f64) -> String {
+    naive_datetime_from_time_value(t)
+        .map(|dt| {
+            dt.and_utc()
+                .with_timezone(&system_time_zone())
+                .format("%Z")
+                .to_string()
+        })
+        .unwrap_or_else(system_time_zone_identifier)
 }
 
 /// Shared final step of every `Date.prototype.set*` method: combine a day
@@ -1640,14 +1743,14 @@ pub(crate) fn format_date_string(t: f64) -> String {
     let min = min_from_time(lt);
     let s = sec_from_time(lt);
 
-    let offset_ms = local_tza();
+    let offset_ms = local_tza(t);
     let offset_min = (offset_ms / 60_000.0) as i32;
     let sign = if offset_min >= 0 { '+' } else { '-' };
     let abs_offset = offset_min.unsigned_abs();
     let oh = abs_offset / 60;
     let om = abs_offset % 60;
 
-    let tz_abbr = chrono::Local::now().format("%Z").to_string();
+    let tz_abbr = local_time_zone_abbreviation(t);
     format!(
         "{} {} {:02} {} {:02}:{:02}:{:02} GMT{}{:02}{:02} ({})",
         day_name(wd),
@@ -1738,14 +1841,14 @@ pub(crate) fn format_time_only_string(t: f64) -> String {
     let min = min_from_time(lt);
     let s = sec_from_time(lt);
 
-    let offset_ms = local_tza();
+    let offset_ms = local_tza(t);
     let offset_min = (offset_ms / 60_000.0) as i32;
     let sign = if offset_min >= 0 { '+' } else { '-' };
     let abs_offset = offset_min.unsigned_abs();
     let oh = abs_offset / 60;
     let om = abs_offset % 60;
 
-    let tz_abbr = chrono::Local::now().format("%Z").to_string();
+    let tz_abbr = local_time_zone_abbreviation(t);
     format!(
         "{:02}:{:02}:{:02} GMT{}{:02}{:02} ({})",
         h as i32, min as i32, s as i32, sign, oh, om, tz_abbr

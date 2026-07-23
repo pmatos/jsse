@@ -1,3 +1,4 @@
+import os
 import stat
 import subprocess
 import sys
@@ -65,6 +66,7 @@ class RunTest262ExitStatusTests(unittest.TestCase):
                 "test262/test/sample.js",
             ],
             cwd=self.root,
+            env={**os.environ, "TZ": "America/New_York"},
             text=True,
             capture_output=True,
             check=False,
@@ -95,6 +97,25 @@ class RunTest262ExitStatusTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("REGRESSED: test262/test/sample.js", result.stdout)
         self.assertIn("Error: 1 baseline regression(s) detected.", result.stderr)
+
+    def test_child_engine_runs_in_utc(self):
+        engine = self.root / "engine_timezone.py"
+        engine.write_text(
+            textwrap.dedent(
+                f"""\
+                #!{sys.executable}
+                import os
+                import sys
+                sys.exit(0 if os.environ.get("TZ") == "UTC" else 1)
+                """
+            ),
+            encoding="utf-8",
+        )
+        engine.chmod(engine.stat().st_mode | stat.S_IXUSR)
+
+        result = self.run_runner(engine, "--fail-on-failures")
+
+        self.assertEqual(result.returncode, 0)
 
 
 if __name__ == "__main__":

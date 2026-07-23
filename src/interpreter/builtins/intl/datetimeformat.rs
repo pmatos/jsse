@@ -6329,7 +6329,7 @@ impl Interpreter {
                             canonicalize_timezone(&tz)
                         }
                     } else {
-                        "UTC".to_string()
+                        canonicalize_timezone(&system_time_zone_identifier())
                     };
 
                 // Step 36: Table 7 component options (in table order)

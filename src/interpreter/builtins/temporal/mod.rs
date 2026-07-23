@@ -2825,9 +2825,7 @@ pub(super) fn to_temporal_time_zone_identifier(
     arg: &JsValue,
 ) -> Result<String, Completion> {
     match arg {
-        JsValue::Undefined => {
-            Ok(iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string()))
-        }
+        JsValue::Undefined => Ok(canonicalize_iana_tz(&system_time_zone_identifier())),
         JsValue::String(s) => {
             let s_str = s.to_string();
             match parse_temporal_time_zone_string(&s_str) {
