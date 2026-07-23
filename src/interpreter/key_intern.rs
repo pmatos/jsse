@@ -139,11 +139,6 @@ pub(crate) fn intern_js_key(key: JsPropertyKey) -> JsPropertyKey {
     KEY_CACHE.with(|c| c.borrow_mut().intern(key))
 }
 
-#[inline]
-pub(crate) fn intern_well_known_symbol(name: &str) -> JsPropertyKey {
-    intern_js_key(JsPropertyKey::well_known_symbol(name))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

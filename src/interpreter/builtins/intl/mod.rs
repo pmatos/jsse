@@ -19,25 +19,7 @@ impl Interpreter {
         let intl_id = intl_obj_id;
 
         // @@toStringTag = "Intl" (per spec 8.1.1)
-        {
-            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Intl"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            self.get_object_cell_expect(intl_obj_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(intl_obj_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(intl_obj_id, "Intl");
 
         // Intl.getCanonicalLocales(locales)
         let gcl_fn = self.create_function(JsFunction::native(

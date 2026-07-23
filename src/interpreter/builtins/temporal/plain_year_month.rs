@@ -393,27 +393,7 @@ impl Interpreter {
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
             .class_name = "Temporal.PlainYearMonth".to_string();
-        {
-            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str(
-                    "Temporal.PlainYearMonth",
-                ))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            self.get_object_cell_expect(proto_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(proto_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(proto_id, "Temporal.PlainYearMonth");
 
         // Getters: calendarId, year, month, monthCode
         {
