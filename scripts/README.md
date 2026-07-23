@@ -259,7 +259,7 @@ needs outside that core (`toThrow` and one inline snapshot).
 | `moment` | 2.30.1 | ✅ 162,868 assertions (cross-checked) | 3,871 tests, 0 failures — fixed by #311/PR #326 |
 | `bignumber.js` | v9.1.2 | ✅ 65,143 (cross-checked) | unblocked by #238 |
 | `css-tree` | v3.2.1 | ⚠️ 16,725 / 16,727 (Node: 16,727) | its own Mocha suite, force-harness; the 2 residual failures are a genuine jsse engine bug, tracked in #355 — see below |
-| `esprima` | (unreleased) `512cd66` | ⚠️ 80,100 / 80,153 (Node: 80,153) | ~65 min; ~1,650 unit fixtures + api/grammar/hostile suites + a 78,402-scenario test262 grammar corpus; residuals tracked in #357 and #358 |
+| `esprima` | (unreleased) `512cd66` | ✅ 80,153 (cross-checked) | ~65 min; ~1,650 unit fixtures + api/grammar/hostile suites + a 78,402-scenario test262 grammar corpus; green since #357/#358 fixed |
 | `uuid` | v14.0.1 | ✅ 75 (cross-checked) | Node's own `node:test`/`node:assert/strict` upstream suite, unmodified; browser build so v3/v5 use pure-JS MD5/SHA-1 and v1/v4/v6/v7 draw randomness via a `crypto.getRandomValues`/`randomUUID` shim (`node-crypto-shim.js`) backed by `__host_random_bytes` |
 | `tweetnacl-js` | 1.0.3 | ✅ 5,470 (cross-checked) | tape corpus: curve25519/Ed25519, secretbox, hash, onetimeauth; curve-heavy vectors sampled — see below |
 
@@ -651,14 +651,14 @@ running those thousands of timers natively would otherwise exhaust OS threads.
   (Conditional's taken branch, Logical's short-circuited right operand,
   Sequence's last element, Call, TaggedTemplate).
 
-- **Regex property-escape range endpoint not rejected (jsse#358, open).**
-  `NonemptyClassRanges` static semantics require a Syntax Error when either
-  endpoint of a character-class range is a Unicode property escape
-  (`\p{...}`), since it denotes a whole class rather than one character.
-  esprima's own regex-validation logic misses this early error when run on
-  jsse (`/[￿-\p{Hex}]/u` and `/[\p{Hex}--]/u` both parse instead of
-  throwing) but catches it correctly on Node. Accounts for the remaining 4
-  esprima test262-corpus residuals above.
+- **Regex property-escape range endpoint not rejected (jsse#358, fixed by
+  PR #365).** `NonemptyClassRanges` static semantics require a Syntax Error
+  when either endpoint of a character-class range is a Unicode property
+  escape (`\p{...}`), since it denotes a whole class rather than one
+  character. esprima's own regex-validation logic missed this early error
+  when run on jsse (`/[￿-\p{Hex}]/u` and `/[\p{Hex}--]/u` both parsed
+  instead of throwing) but caught it correctly on Node. Accounted for the
+  remaining 4 esprima test262-corpus residuals above.
 
 - **Literal `{}` in a regex rejected instead of Annex B fallback (jsse#359,
   open).** Found via manual exploration while wiring the esprima harness, not
