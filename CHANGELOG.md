@@ -1,3 +1,10 @@
+## [0.4.3](https://github.com/pmatos/jsse/compare/v0.4.2...v0.4.3) (2026-07-23)
+
+
+### Bug Fixes
+
+* **interpreter:** guard boxing/error constructors against [[Call]] this-mutation ([#369](https://github.com/pmatos/jsse/issues/369)) ([a1f9351](https://github.com/pmatos/jsse/commit/a1f93516e93a47dbbb2b1df036ec451c286b147c))
+
 ## [0.4.2](https://github.com/pmatos/jsse/compare/v0.4.1...v0.4.2) (2026-07-23)
 
 

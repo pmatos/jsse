@@ -909,7 +909,7 @@ dependencies = [
 
 [[package]]
 name = "jsse"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "chrono",
  "chrono-tz",
