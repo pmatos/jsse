@@ -772,12 +772,40 @@ impl Interpreter {
         false
     }
 
+    // Languages CLDR ships with genuinely distinct per-script locale data (e.g.
+    // `zh-Hans` vs `zh-Hant`), so BestAvailableLocale matches the literal
+    // script-carrying tag instead of stripping it. Derived empirically against
+    // Node 25 (`Intl.NumberFormat(lang + "-" + defaultScript).resolvedOptions().locale`
+    // stays script-qualified only for these); every other language's script
+    // subtag is redundant with its default and gets dropped in
+    // `intl_resolve_locale` below.
+    const SCRIPT_SIGNIFICANT_LANGUAGES: [&str; 9] =
+        ["az", "bs", "kk", "kok", "ku", "pa", "sr", "uz", "zh"];
+
     // §9.2.8 ResolveLocale simplified
     pub(crate) fn intl_resolve_locale(&mut self, requested: &[String]) -> String {
         for tag in requested {
-            if tag.parse::<IcuLocale>().is_ok() && Self::intl_best_available_locale(tag) {
-                return tag.clone();
+            let Ok(mut locale) = tag.parse::<IcuLocale>() else {
+                continue;
+            };
+            if !Self::intl_best_available_locale(tag) {
+                continue;
             }
+            let lang = locale.id.language.to_string();
+            if locale.id.script.is_some()
+                && !Self::SCRIPT_SIGNIFICANT_LANGUAGES.contains(&lang.as_str())
+            {
+                // An explicit script subtag that merely repeats the language's
+                // default (e.g. `es-Latn-ES`) isn't present in most locale
+                // data as a literal key, so ECMA-402's BestAvailableLocale
+                // fallback strips it — and the region along with it, since
+                // subtags are stripped right-to-left and region comes after
+                // script.
+                locale.id.script = None;
+                locale.id.region = None;
+                locale.id.variants = icu::locale::subtags::Variants::new();
+            }
+            return locale.to_string();
         }
         "en".to_string()
     }

@@ -232,6 +232,38 @@ assertSame(numericHms('fr-FR'), '03:04:05',
 assertSame(numericHms('it-IT'), '03:04:05',
   'Italian numeric hour remains padded in an h:m:s pattern');
 
+// A requested tag carrying an explicit script subtag that merely repeats the
+// language's own default (e.g. "Latn" for Spanish) isn't literal locale-data
+// key, so resolution strips it — and any following region — down to the bare
+// language, same as Node/V8. This differs from the bare-region form (es-419
+// stays padded) because the explicit script pushes past es-419 entirely.
+assertSame(numericHms('es-Latn-ES'), '3:04:05',
+  'es-Latn-ES resolves past the redundant script down to Spain Spanish data');
+assertSame(numericHms('es-Latn'), '3:04:05',
+  'es-Latn (script-only) resolves down to Spain Spanish data');
+assertSame(numericHms('es-Latn-419'), '3:04:05',
+  'es-Latn-419 resolves down to bare Spanish, unlike padded bare es-419');
+
+assertSame(
+  new Intl.DateTimeFormat('es-Latn-ES').resolvedOptions().locale, 'es',
+  'es-Latn-ES resolvedOptions().locale reports the minimized bare language');
+assertSame(
+  new Intl.DateTimeFormat('es-Latn').resolvedOptions().locale, 'es',
+  'es-Latn resolvedOptions().locale reports the minimized bare language');
+assertSame(
+  new Intl.DateTimeFormat('es-Latn-419').resolvedOptions().locale, 'es',
+  'es-Latn-419 resolvedOptions().locale reports the minimized bare language');
+
+// Genuinely multi-script languages (CLDR ships distinct per-script data, e.g.
+// Simplified vs Traditional Chinese) must keep their explicit script subtag
+// rather than being folded away like the Spanish cases above.
+assertSame(
+  new Intl.DateTimeFormat('zh-Hant-TW').resolvedOptions().locale, 'zh-Hant-TW',
+  'zh-Hant-TW keeps its script-significant subtag untouched');
+assertSame(
+  new Intl.DateTimeFormat('sr-Cyrl-RS').resolvedOptions().locale, 'sr-Cyrl-RS',
+  'sr-Cyrl-RS keeps its script-significant subtag untouched');
+
 // timeStyle presets select the same unpadded-H record as hour:"numeric" for
 // Spain-based Spanish (the hour option is undefined, so the correction must key
 // off "not explicitly 2-digit" rather than requiring hour:"numeric"). Only an
