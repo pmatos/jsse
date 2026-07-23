@@ -17,6 +17,12 @@ console.log((new Date(2023, 4, 6) - new Date(2023, 0, 1)) / 3600000);
 console.log(new Date(2100, 6, 15, 12).toISOString());
 console.log(new Date(275760, 8, 12, 20).toISOString());
 console.log(new Date(8640000000000000).getTimezoneOffset());
+var maxDateParts = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  timeZoneName: "shortOffset"
+}).formatToParts(new Date(8640000000000000));
+console.log(maxDateParts.find(function(part) { return part.type === "hour"; }).value);
+console.log(maxDateParts.find(function(part) { return part.type === "timeZoneName"; }).value);
 console.log(new Date(-271821, 3, 20, 20).toISOString());
 console.log(new Date(-8640000000000000).getTimezoneOffset() !== 0);
 "#,
@@ -43,6 +49,8 @@ console.log(new Date(-8640000000000000).getTimezoneOffset() !== 0);
             "2100-07-15T16:00:00.000Z\n",
             "+275760-09-13T00:00:00.000Z\n",
             "240\n",
+            "8\n",
+            "GMT-4\n",
             "-271821-04-21T00:56:02.000Z\n",
             "true\n",
         )

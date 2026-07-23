@@ -1640,17 +1640,21 @@ fn time_zone_datetime_from_time_value(t: f64) -> Option<chrono::NaiveDateTime> {
     )
 }
 
-pub(crate) fn local_tza(t: f64) -> f64 {
+pub(crate) fn named_time_zone_offset_ms(time_zone: chrono_tz::Tz, t: f64) -> Option<f64> {
     use chrono::{Offset, TimeZone};
 
-    let Some(utc) = time_zone_datetime_from_time_value(t) else {
-        return 0.0;
-    };
-    system_time_zone()
-        .offset_from_utc_datetime(&utc)
-        .fix()
-        .local_minus_utc() as f64
-        * 1000.0
+    let utc = time_zone_datetime_from_time_value(t)?;
+    Some(
+        time_zone
+            .offset_from_utc_datetime(&utc)
+            .fix()
+            .local_minus_utc() as f64
+            * 1000.0,
+    )
+}
+
+pub(crate) fn local_tza(t: f64) -> f64 {
+    named_time_zone_offset_ms(system_time_zone(), t).unwrap_or(0.0)
 }
 
 pub(crate) fn local_time(t: f64) -> f64 {

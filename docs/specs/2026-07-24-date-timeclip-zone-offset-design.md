@@ -52,6 +52,7 @@ The host-time-zone integration test will assert:
   `+275760-09-13T00:00:00.000Z` in `America/New_York`;
 - lower-boundary local construction using New York's first historical offset;
 - nonzero local offsets and formatting at both boundaries;
+- default Intl formatting using the recurring offset at the upper boundary;
 - existing daylight-saving gap, overlap, and cross-transition behavior.
 
 The full Date test262 subtree and full default test262 suite will guard the
