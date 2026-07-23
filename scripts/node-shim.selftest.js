@@ -310,6 +310,31 @@ eq(
   }
 })();
 (function () {
+  var originalGetPrototypeOf = Object.getPrototypeOf;
+  var originalGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+  try {
+    Object.getPrototypeOf = function () {
+      throw new Error("patched getPrototypeOf called");
+    };
+    Object.getOwnPropertyDescriptor = function () {
+      throw new Error("patched getOwnPropertyDescriptor called");
+    };
+    eq(
+      util.format("%s", [1, 2]),
+      "[ 1, 2 ]",
+      "%s ignores patched Object reflection methods for arrays"
+    );
+    eq(
+      util.format("%s", { a: 1 }),
+      "{ a: 1 }",
+      "%s ignores patched Object reflection methods for objects"
+    );
+  } finally {
+    Object.getPrototypeOf = originalGetPrototypeOf;
+    Object.getOwnPropertyDescriptor = originalGetOwnPropertyDescriptor;
+  }
+})();
+(function () {
   class Array {
     toString() {
       return "USER ARRAY";

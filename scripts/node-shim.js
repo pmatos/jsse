@@ -61,6 +61,8 @@
   // formatter reads built-in internal slots rather than user-overridable
   // prototype methods.
   var functionCall = Function.prototype.call;
+  var objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+  var objectGetPrototypeOf = Object.getPrototypeOf;
   var dateGetTime = functionCall.bind(Date.prototype.getTime);
   var dateToISOString = functionCall.bind(Date.prototype.toISOString);
   var regexpToString = functionCall.bind(RegExp.prototype.toString);
@@ -169,7 +171,7 @@
     // cannot make a diagnostic print throw/mutate under jsse where it would not
     // under Node.
     function renderMember(container, key, depth) {
-      var desc = Object.getOwnPropertyDescriptor(container, key);
+      var desc = objectGetOwnPropertyDescriptor(container, key);
       if (desc && (desc.get || desc.set)) {
         return desc.get ? (desc.set ? "[Getter/Setter]" : "[Getter]") : "[Setter]";
       }
@@ -183,13 +185,13 @@
     function constructorName(v) {
       try {
         var ctor;
-        var own = Object.getOwnPropertyDescriptor(v, "constructor");
+        var own = objectGetOwnPropertyDescriptor(v, "constructor");
         if (own) {
           if (!own.get && !own.set) ctor = own.value;
         } else {
-          var proto = Object.getPrototypeOf(v);
+          var proto = objectGetPrototypeOf(v);
           var pd = proto
-            ? Object.getOwnPropertyDescriptor(proto, "constructor")
+            ? objectGetOwnPropertyDescriptor(proto, "constructor")
             : null;
           if (pd && !pd.get && !pd.set) ctor = pd.value;
         }
@@ -299,7 +301,7 @@
 
     var pointer = value;
     do {
-      pointer = Object.getPrototypeOf(pointer);
+      pointer = objectGetPrototypeOf(pointer);
     } while (
       pointer !== null &&
       !hasOwnToString(pointer, "toString") &&
@@ -311,7 +313,7 @@
     // pure-JS shim cannot, so treat that hook as user-defined.
     if (pointer === null) return false;
 
-    var descriptor = Object.getOwnPropertyDescriptor(pointer, "constructor");
+    var descriptor = objectGetOwnPropertyDescriptor(pointer, "constructor");
     return (
       descriptor !== undefined &&
       typeof descriptor.value === "function" &&
