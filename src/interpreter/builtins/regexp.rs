@@ -4789,6 +4789,7 @@ pub(crate) struct CachedRegex {
     compiled: CompiledRegex,
     dup_map: DupGroupMap,
     name_order: Vec<String>,
+    total_groups: usize,
 }
 
 const REGEX_CACHE_MAX: usize = 256;
@@ -4807,6 +4808,7 @@ fn build_regex_cached(
         compiled,
         dup_map,
         name_order,
+        total_groups: count_capture_groups(source),
     });
     if interp.regexp_legacy.regex_cache.len() >= REGEX_CACHE_MAX {
         interp.regexp_legacy.regex_cache.clear();
@@ -6828,6 +6830,16 @@ macro_rules! build_captures {
     }};
 }
 
+fn ensure_capture_slots(caps: &mut RegexCaptures, total_groups: usize) {
+    let expected_len = total_groups + 1;
+    if caps.groups.len() < expected_len {
+        caps.groups.resize_with(expected_len, || None);
+    }
+    if caps.names.len() < expected_len {
+        caps.names.resize_with(expected_len, || None);
+    }
+}
+
 fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<RegexCaptures> {
     match re {
         CompiledRegex::Fancy(r) => {
@@ -7458,6 +7470,7 @@ fn regexp_exec_raw(
     clear_stale_dup_captures(&mut caps, &cached.dup_map);
     strip_renamed_qi_captures(&mut caps);
     reset_quantifier_inner_captures(&mut caps, source);
+    ensure_capture_slots(&mut caps, cached.total_groups);
     let dup_map = &cached.dup_map;
     let name_order = &cached.name_order;
 
@@ -7524,7 +7537,7 @@ fn regexp_exec_raw(
         }
     }
 
-    let has_named = caps.names.iter().any(|n| n.is_some());
+    let has_named = !name_order.is_empty();
     let resolved_named = if has_named {
         Some(resolve_named_group_matches(&caps, dup_map, name_order))
     } else {
@@ -8394,6 +8407,7 @@ impl Interpreter {
                         clear_stale_dup_captures(&mut caps, &cached.dup_map);
                         strip_renamed_qi_captures(&mut caps);
                         reset_quantifier_inner_captures(&mut caps, &source);
+                        ensure_capture_slots(&mut caps, cached.total_groups);
 
                         let full_match = caps.get(0).unwrap();
                         let matched = &full_match.text;
@@ -8423,7 +8437,7 @@ impl Interpreter {
                         }
 
                         // Named captures
-                        let has_named = caps.names.iter().any(|n| n.is_some());
+                        let has_named = !cached.name_order.is_empty();
                         let named_captures_obj = if has_named {
                             let groups_obj_id = interp.create_object_id();
                             interp
@@ -9436,7 +9450,8 @@ impl Interpreter {
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         )
                     }
-                    Some(caps) => {
+                    Some(mut caps) => {
+                        ensure_capture_slots(&mut caps, count_capture_groups(&source));
                         let full = caps.get(0).unwrap();
                         let match_start = last_index + full.start;
                         let match_end = last_index + full.end;
