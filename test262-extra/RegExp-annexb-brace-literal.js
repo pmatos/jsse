@@ -1,0 +1,70 @@
+// Tests the Annex B ExtendedPatternCharacter fallback: in non-Unicode mode, a
+// `{` that does not open a syntactically valid quantifier (`{n}`, `{n,}`,
+// `{n,m}`, each requiring at least one leading digit) is an ordinary literal
+// character rather than a syntax error.
+// Spec: ECMAScript 2026, sec-additional-regular-expressions-patterns
+// (Pattern[~U, ~N] :: ExtendedTerm and InvalidBracedQuantifier).
+
+function assertLiteralSource(pattern, flags) {
+  var re = new RegExp(pattern, flags);
+  if (re.source !== pattern) {
+    throw new Test262Error(
+      "expected literal pattern to round-trip: " + pattern + " got " + re.source
+    );
+  }
+}
+
+function assertSyntaxError(pattern, flags) {
+  try {
+    new RegExp(pattern, flags);
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      return;
+    }
+    throw new Test262Error("expected SyntaxError, got " + error);
+  }
+  throw new Test262Error("expected invalid quantifier to be rejected: " + pattern);
+}
+
+// Braces with no digits at all: not a quantifier, fall back to literal.
+assertLiteralSource("{}", "g");
+assertLiteralSource("a{}", "");
+assertLiteralSource("{,}", "");
+assertLiteralSource("{,5}", "");
+
+// More than one comma is not valid QuantifierPrefix grammar either.
+assertLiteralSource("{1,2,3}", "");
+assertLiteralSource("a{1,2,3}", "");
+
+// A literal brace pair directly following a real quantifier must not be
+// misread as a second (invalid) quantifier on the same atom.
+assertLiteralSource("a*{}", "");
+assertLiteralSource("a+{}", "");
+assertLiteralSource("a?{}", "");
+assertLiteralSource("a{1}{}", "");
+
+// Lookaround assertions followed by a non-quantifier brace pair.
+assertLiteralSource("(?=a){}", "");
+assertLiteralSource("(?<=a){}", "");
+assertLiteralSource("(?<!a){}", "");
+
+// Genuine quantifiers (at least one leading digit) with no preceding atom
+// remain syntax errors — Annex B's InvalidBracedQuantifier still applies.
+assertSyntaxError("{1}", "");
+assertSyntaxError("{1,}", "");
+assertSyntaxError("{1,2}", "");
+
+// The `u`/`v` flags are unaffected: braces are always subject to the
+// (stricter) Unicode-mode quantifier grammar there.
+assertSyntaxError("{}", "u");
+assertSyntaxError("a{}", "u");
+assertSyntaxError("a*{}", "u");
+
+// Matching semantics: a literal `{}` must match itself, not just parse.
+if (!/{}/.test("{}")) {
+  throw new Test262Error("literal {} pattern failed to match its own text");
+}
+var match = /a{}b/.exec("a{}b");
+if (!match || match[0] !== "a{}b") {
+  throw new Test262Error("literal {} between atoms failed to match");
+}

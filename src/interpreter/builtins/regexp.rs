@@ -3867,6 +3867,35 @@ fn validate_v_flag_class_inner(
     err("Unterminated character class")
 }
 
+/// If `chars[open]` is `{` and it begins a syntactically valid quantifier body
+/// (`{n}`, `{n,}`, `{n,m}`, each requiring at least one leading digit per
+/// ECMA-262 QuantifierPrefix), returns the index just past the closing `}`.
+/// Otherwise returns `None`, meaning Annex B treats the brace as an ordinary
+/// literal character (`ExtendedPatternCharacter`) rather than a quantifier.
+fn quantifier_brace_end(chars: &[char], open: usize, len: usize) -> Option<usize> {
+    let mut j = open + 1;
+    let min_start = j;
+    while j < len && chars[j].is_ascii_digit() {
+        j += 1;
+    }
+    if j == min_start {
+        return None;
+    }
+    if j < len && chars[j] == '}' {
+        return Some(j + 1);
+    }
+    if j < len && chars[j] == ',' {
+        j += 1;
+        while j < len && chars[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j < len && chars[j] == '}' {
+            return Some(j + 1);
+        }
+    }
+    None
+}
+
 pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), String> {
     let unicode = flags.contains('u') || flags.contains('v');
     let v_flag = flags.contains('v');
@@ -4465,25 +4494,11 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
                                 source
                             ));
                         }
-                        if qc == '{' {
-                            let mut j = i + 1;
-                            let mut is_quant = false;
-                            while j < len {
-                                if chars[j] == '}' {
-                                    is_quant = true;
-                                    break;
-                                }
-                                if !chars[j].is_ascii_digit() && chars[j] != ',' {
-                                    break;
-                                }
-                                j += 1;
-                            }
-                            if is_quant {
-                                return Err(format!(
-                                    "Invalid regular expression: /{}/ : Nothing to repeat",
-                                    source
-                                ));
-                            }
+                        if qc == '{' && quantifier_brace_end(&chars, i, len).is_some() {
+                            return Err(format!(
+                                "Invalid regular expression: /{}/ : Nothing to repeat",
+                                source
+                            ));
                         }
                     }
                     has_atom = false;
@@ -4510,30 +4525,16 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
         if c == '*' || c == '+' || c == '?' || c == '{' {
             if !has_atom {
                 // Check if '{' is really a quantifier
-                if c == '{' {
-                    let mut j = i + 1;
-                    let mut is_quant = false;
-                    while j < len {
-                        if chars[j] == '}' {
-                            is_quant = true;
-                            break;
-                        }
-                        if !chars[j].is_ascii_digit() && chars[j] != ',' {
-                            break;
-                        }
-                        j += 1;
+                if c == '{' && quantifier_brace_end(&chars, i, len).is_none() {
+                    if unicode {
+                        return Err(format!(
+                            "Invalid regular expression: /{}/ : Lone quantifier brackets",
+                            source
+                        ));
                     }
-                    if !is_quant {
-                        if unicode {
-                            return Err(format!(
-                                "Invalid regular expression: /{}/ : Lone quantifier brackets",
-                                source
-                            ));
-                        }
-                        has_atom = true;
-                        i += 1;
-                        continue;
-                    }
+                    has_atom = true;
+                    i += 1;
+                    continue;
                 }
                 return Err(format!(
                     "Invalid regular expression: /{}/ : Nothing to repeat",
