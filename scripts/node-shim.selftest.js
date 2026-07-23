@@ -85,6 +85,117 @@ eq(
   "OBJ",
   "%s object with toString"
 );
+eq(util.format("%s", [1, 2, 3]), "[ 1, 2, 3 ]", "%s array uses inspect");
+eq(util.format("%s", { a: 1 }), "{ a: 1 }", "%s plain object uses inspect");
+eq(
+  util.format(
+    "%s",
+    new (class {
+      toString() {
+        return "CLASS";
+      }
+    })()
+  ),
+  "CLASS",
+  "%s class-prototype toString uses String"
+);
+eq(
+  util.format("%s", new Date(0)),
+  "1970-01-01T00:00:00.000Z",
+  "%s Date keeps built-in coercion on inspect path"
+);
+eq(util.format("%s", /re/g), "/re/g", "%s RegExp uses inspect");
+eq(
+  util.format("%s", { toString: null, a: 1 }),
+  "{ toString: null, a: 1 }",
+  "%s non-callable toString uses inspect"
+);
+(function () {
+  var value = {
+    [Symbol.toPrimitive]: function (hint) {
+      return hint === "string" ? "PRIMITIVE" : "WRONG HINT";
+    },
+  };
+  eq(
+    util.format("%s", value),
+    "PRIMITIVE",
+    "%s own Symbol.toPrimitive uses String with string hint"
+  );
+})();
+(function () {
+  function Base() {}
+  Base.prototype.toString = function () {
+    return "INHERITED";
+  };
+  function Child() {}
+  Object.setPrototypeOf(Child.prototype, Base.prototype);
+  eq(
+    util.format("%s", new Child()),
+    "INHERITED",
+    "%s inherited user toString uses String"
+  );
+})();
+(function () {
+  function PrimitiveBase() {}
+  PrimitiveBase.prototype[Symbol.toPrimitive] = function (hint) {
+    return hint === "string" ? "INHERITED PRIMITIVE" : "WRONG HINT";
+  };
+  function PrimitiveChild() {}
+  Object.setPrototypeOf(PrimitiveChild.prototype, PrimitiveBase.prototype);
+  eq(
+    util.format("%s", new PrimitiveChild()),
+    "INHERITED PRIMITIVE",
+    "%s inherited user Symbol.toPrimitive uses String"
+  );
+})();
+(function () {
+  function Widget() {
+    this.a = 1;
+  }
+  eq(
+    util.format("%s", new Widget()),
+    "Widget { a: 1 }",
+    "%s inherited built-in Object toString uses inspect"
+  );
+})();
+(function () {
+  var original = Array.prototype.toString;
+  try {
+    Array.prototype.toString = function () {
+      return "PATCHED ARRAY";
+    };
+    eq(
+      util.format("%s", [1, 2]),
+      "[ 1, 2 ]",
+      "%s patched built-in prototype still uses inspect"
+    );
+  } finally {
+    Array.prototype.toString = original;
+  }
+})();
+(function () {
+  class Array {
+    toString() {
+      return "USER ARRAY";
+    }
+  }
+  eq(
+    util.format("%s", new Array()),
+    "Array {}",
+    "%s follows Node constructor-name classification"
+  );
+})();
+(function () {
+  var value = [1, 2];
+  value[Symbol.toPrimitive] = function () {
+    return "ARRAY PRIMITIVE";
+  };
+  eq(
+    util.format("%s", value),
+    "ARRAY PRIMITIVE",
+    "%s own Symbol.toPrimitive overrides built-in array coercion"
+  );
+})();
 
 // ---- util.format: %d %i %f ------------------------------------------------
 eq(util.format("%d", 42), "42", "%d integer");

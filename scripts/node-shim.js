@@ -156,6 +156,67 @@
   //
   // Node's printf-style formatter. The %s %d %i %f %j %c %% specifiers are
   // deterministic and matched exactly; %o/%O defer to the best-effort inspect.
+  var builtInObjectNames = (function () {
+    var names = Object.create(null);
+    var globals = Object.getOwnPropertyNames(globalThis);
+    for (var i = 0; i < globals.length; i++) {
+      var name = globals[i];
+      if (/^[A-Z][a-zA-Z0-9]+$/.test(name)) names[name] = true;
+    }
+    return names;
+  })();
+  var objectHasOwnProperty = Object.prototype.hasOwnProperty;
+  var symbolToPrimitive = Symbol.toPrimitive;
+
+  function hasOwnProperty(value, key) {
+    return objectHasOwnProperty.call(value, key);
+  }
+
+  function returnFalse() {
+    return false;
+  }
+
+  // Match Node's hasBuiltInToString classification. A bundled library's
+  // prototype method is user-defined even when inherited, while coercion hooks
+  // owned by a built-in prototype route through inspect.
+  function hasBuiltInToString(value) {
+    var hasOwnToString = hasOwnProperty;
+    var hasOwnToPrimitive = hasOwnProperty;
+
+    if (typeof value.toString !== "function") {
+      if (typeof value[symbolToPrimitive] !== "function") return true;
+      if (hasOwnProperty(value, symbolToPrimitive)) return false;
+      hasOwnToString = returnFalse;
+    } else if (hasOwnProperty(value, "toString")) {
+      return false;
+    } else if (typeof value[symbolToPrimitive] !== "function") {
+      hasOwnToPrimitive = returnFalse;
+    } else if (hasOwnProperty(value, symbolToPrimitive)) {
+      return false;
+    }
+
+    var pointer = value;
+    do {
+      pointer = Object.getPrototypeOf(pointer);
+    } while (
+      pointer !== null &&
+      !hasOwnToString(pointer, "toString") &&
+      !hasOwnToPrimitive(pointer, symbolToPrimitive)
+    );
+
+    // A callable hook visible through a Proxy get trap may not have an owner in
+    // the reported prototype chain. Node can unwrap proxies internally; the
+    // pure-JS shim cannot, so treat that hook as user-defined.
+    if (pointer === null) return false;
+
+    var descriptor = Object.getOwnPropertyDescriptor(pointer, "constructor");
+    return (
+      descriptor !== undefined &&
+      typeof descriptor.value === "function" &&
+      builtInObjectNames[descriptor.value.name] === true
+    );
+  }
+
   function convS(v) {
     var t = typeof v;
     if (t === "string") return v;
@@ -166,12 +227,7 @@
     if (t === "boolean") return String(v);
     if (t === "symbol") return v.toString();
     if (t === "function") return inspect(v, { depth: 0 });
-    // Object: String() when it defines its own toString, else inspect (Node
-    // uses inspect with depth 0 here).
-    if (typeof v.toString === "function" && v.toString !== Object.prototype.toString) {
-      return String(v);
-    }
-    return inspect(v, { depth: 0 });
+    return hasBuiltInToString(v) ? inspect(v, { depth: 0 }) : String(v);
   }
 
   function convD(v) {
