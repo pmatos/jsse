@@ -63,11 +63,22 @@
   var functionCall = Function.prototype.call;
   var dateGetTime = functionCall.bind(Date.prototype.getTime);
   var dateToISOString = functionCall.bind(Date.prototype.toISOString);
+  var regexpToString = functionCall.bind(RegExp.prototype.toString);
   var numberValueOf = functionCall.bind(Number.prototype.valueOf);
   var stringValueOf = functionCall.bind(String.prototype.valueOf);
   var booleanValueOf = functionCall.bind(Boolean.prototype.valueOf);
   var bigintValueOf = functionCall.bind(BigInt.prototype.valueOf);
   var symbolToString = functionCall.bind(Symbol.prototype.toString);
+
+  function tryApplyIntrinsic(intrinsic, value) {
+    try {
+      return { value: intrinsic(value) };
+    } catch (e) {
+      // `instanceof` also accepts objects that merely inherit a built-in
+      // prototype. Only a genuine instance has the corresponding internal slot.
+      return null;
+    }
+  }
 
   function inspect(value, opts) {
     opts = opts || {};
@@ -92,23 +103,37 @@
       if (v instanceof Error) {
         return v.stack ? String(v.stack) : String(v.name) + ": " + String(v.message);
       }
-      if (v instanceof RegExp) return String(v);
+      var boxed;
+      if (v instanceof RegExp) {
+        boxed = tryApplyIntrinsic(regexpToString, v);
+        if (boxed) return boxed.value;
+      }
       if (v instanceof Date) {
-        return isNaN(dateGetTime(v)) ? "Invalid Date" : dateToISOString(v);
+        boxed = tryApplyIntrinsic(dateGetTime, v);
+        if (boxed) {
+          return isNaN(boxed.value) ? "Invalid Date" : dateToISOString(v);
+        }
       }
       if (v instanceof Number) {
-        return "[Number: " + render(numberValueOf(v), depth) + "]";
+        boxed = tryApplyIntrinsic(numberValueOf, v);
+        if (boxed) return "[Number: " + render(boxed.value, depth) + "]";
       }
       if (v instanceof String) {
-        return "[String: " + render(stringValueOf(v), depth) + "]";
+        boxed = tryApplyIntrinsic(stringValueOf, v);
+        if (boxed) return "[String: " + render(boxed.value, depth) + "]";
       }
       if (v instanceof Boolean) {
-        return "[Boolean: " + render(booleanValueOf(v), depth) + "]";
+        boxed = tryApplyIntrinsic(booleanValueOf, v);
+        if (boxed) return "[Boolean: " + render(boxed.value, depth) + "]";
       }
       if (v instanceof BigInt) {
-        return "[BigInt: " + render(bigintValueOf(v), depth) + "]";
+        boxed = tryApplyIntrinsic(bigintValueOf, v);
+        if (boxed) return "[BigInt: " + render(boxed.value, depth) + "]";
       }
-      if (v instanceof Symbol) return "[Symbol: " + symbolToString(v) + "]";
+      if (v instanceof Symbol) {
+        boxed = tryApplyIntrinsic(symbolToString, v);
+        if (boxed) return "[Symbol: " + boxed.value + "]";
+      }
 
       if (depth < 0) return Array.isArray(v) ? "[Array]" : "[Object]";
 

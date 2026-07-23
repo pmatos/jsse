@@ -129,7 +129,32 @@ eq(
     Date.prototype.toISOString = originalToISOString;
   }
 })();
+eq(
+  util.format("%s", Object.create(Date.prototype)),
+  "Date {}",
+  "%s Date prototype spoof falls back to ordinary inspect"
+);
 eq(util.format("%s", /re/g), "/re/g", "%s RegExp uses inspect");
+(function () {
+  var original = RegExp.prototype.toString;
+  try {
+    RegExp.prototype.toString = function () {
+      throw new Error("patched RegExp toString called");
+    };
+    eq(
+      util.format("%s", /re/g),
+      "/re/g",
+      "%s RegExp ignores patched toString"
+    );
+  } finally {
+    RegExp.prototype.toString = original;
+  }
+})();
+eq(
+  util.format("%s", Object.create(RegExp.prototype)),
+  "RegExp {}",
+  "%s RegExp prototype spoof falls back to ordinary inspect"
+);
 eq(
   util.format("%s", { toString: null, a: 1 }),
   "{ toString: null, a: 1 }",
@@ -143,6 +168,31 @@ eq(
   util.format("%s", Object(Symbol("wrapped"))),
   "[Symbol: Symbol(wrapped)]",
   "%s Symbol wrapper"
+);
+eq(
+  util.format("%s", Object.create(Number.prototype)),
+  "Number {}",
+  "%s Number prototype spoof falls back to ordinary inspect"
+);
+eq(
+  util.format("%s", Object.create(String.prototype)),
+  "String {}",
+  "%s String prototype spoof falls back to ordinary inspect"
+);
+eq(
+  util.format("%s", Object.create(Boolean.prototype)),
+  "Boolean {}",
+  "%s Boolean prototype spoof falls back to ordinary inspect"
+);
+eq(
+  util.format("%s", Object.create(BigInt.prototype)),
+  "BigInt {}",
+  "%s BigInt prototype spoof falls back to ordinary inspect"
+);
+eq(
+  util.format("%s", Object.create(Symbol.prototype)),
+  "Symbol {}",
+  "%s Symbol prototype spoof falls back to ordinary inspect"
 );
 (function () {
   var methods = [
