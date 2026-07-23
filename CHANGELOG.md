@@ -1,3 +1,11 @@
+## [0.4.5](https://github.com/pmatos/jsse/compare/v0.4.4...v0.4.5) (2026-07-23)
+
+
+### Bug Fixes
+
+* **interpreter:** clear tail-call eligibility by default in eval_expr ([#372](https://github.com/pmatos/jsse/issues/372)) ([716a5d0](https://github.com/pmatos/jsse/commit/716a5d06a08a7fa457a6fc06701291381cee9647))
+* **regexp:** scope nullable-quantifier rewrite to nullable alternation branches ([#374](https://github.com/pmatos/jsse/issues/374)) ([8aa5729](https://github.com/pmatos/jsse/commit/8aa5729604699b815d7c518dde00d54482ab9a5c))
+
 ## [0.4.4](https://github.com/pmatos/jsse/compare/v0.4.3...v0.4.4) (2026-07-23)
 
 
