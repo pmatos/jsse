@@ -253,6 +253,10 @@ assertSame(
 assertSame(
   new Intl.DateTimeFormat('es-Latn-419').resolvedOptions().locale, 'es',
   'es-Latn-419 resolvedOptions().locale reports the minimized bare language');
+assertSame(
+  new Intl.DateTimeFormat('es-Latn-ES-u-hc-h23').resolvedOptions().locale,
+  'es-u-hc-h23',
+  'locale lookup preserves supported Unicode extensions on the matched locale');
 
 // Genuinely multi-script languages (CLDR ships distinct per-script data, e.g.
 // Simplified vs Traditional Chinese) must keep their explicit script subtag
