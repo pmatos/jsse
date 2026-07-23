@@ -1590,24 +1590,64 @@ pub(crate) fn system_time_zone_identifier() -> String {
     system_time_zone().name().to_string()
 }
 
-fn naive_datetime_from_time_value(t: f64) -> Option<chrono::NaiveDateTime> {
+fn time_zone_datetime_from_time_value(t: f64) -> Option<chrono::NaiveDateTime> {
+    use chrono::Datelike;
+
     if !t.is_finite() {
         return None;
     }
     let epoch_ms = t.floor() as i64;
     let epoch_secs = epoch_ms.div_euclid(1000);
     let nanos = epoch_ms.rem_euclid(1000) as u32 * 1_000_000;
-    chrono::DateTime::from_timestamp(epoch_secs, nanos).map(|dt| dt.naive_utc())
+    let direct = chrono::DateTime::from_timestamp(epoch_secs, nanos).map(|dt| dt.naive_utc());
+
+    // chrono-tz's generated transition tables include recurring rules through
+    // 2099. Beyond that they retain the final fixed offset, so project future
+    // dates onto the last complete 28-year calendar cycle instead.
+    if direct.as_ref().is_some_and(|dt| dt.year() <= 2099) {
+        return direct;
+    }
+
+    // A time before chrono's range also precedes every recorded IANA
+    // transition. Its earliest datetime therefore selects the zone's first
+    // historical offset.
+    if t.is_sign_negative() {
+        return Some(chrono::NaiveDateTime::MIN);
+    }
+
+    let year = year_from_time(t);
+    if !(i32::MIN as f64..=i32::MAX as f64).contains(&year) {
+        return None;
+    }
+    let year = year as i32;
+    let year_start_weekday = week_day(time_from_year(year as f64));
+    let days_in_target_year = days_in_year(year as f64);
+    let proxy_year = (2072..=2099).rev().find(|candidate| {
+        days_in_year(*candidate as f64) == days_in_target_year
+            && week_day(time_from_year(*candidate as f64)) == year_start_weekday
+    })?;
+
+    chrono::NaiveDate::from_ymd_opt(
+        proxy_year,
+        month_from_time(t) as u32 + 1,
+        date_from_time(t) as u32,
+    )?
+    .and_hms_milli_opt(
+        hour_from_time(t) as u32,
+        min_from_time(t) as u32,
+        sec_from_time(t) as u32,
+        ms_from_time(t) as u32,
+    )
 }
 
 pub(crate) fn local_tza(t: f64) -> f64 {
-    use chrono::Offset;
+    use chrono::{Offset, TimeZone};
 
-    let Some(utc) = naive_datetime_from_time_value(t).map(|dt| dt.and_utc()) else {
+    let Some(utc) = time_zone_datetime_from_time_value(t) else {
         return 0.0;
     };
-    utc.with_timezone(&system_time_zone())
-        .offset()
+    system_time_zone()
+        .offset_from_utc_datetime(&utc)
         .fix()
         .local_minus_utc() as f64
         * 1000.0
@@ -1620,19 +1660,19 @@ pub(crate) fn local_time(t: f64) -> f64 {
 pub(crate) fn utc_time(t: f64) -> f64 {
     use chrono::{MappedLocalTime, Offset, TimeDelta, TimeZone};
 
-    let Some(local) = naive_datetime_from_time_value(t) else {
+    let Some(local) = time_zone_datetime_from_time_value(t) else {
         return t;
     };
     let tz = system_time_zone();
-    let offset = match tz.from_local_datetime(&local) {
-        MappedLocalTime::Single(dt) => dt.offset().fix().local_minus_utc(),
+    let offset = match tz.offset_from_local_datetime(&local) {
+        MappedLocalTime::Single(offset) => offset.fix().local_minus_utc(),
         MappedLocalTime::Ambiguous(first, second) => {
-            let earlier = if first.timestamp() <= second.timestamp() {
-                first
-            } else {
-                second
-            };
-            earlier.offset().fix().local_minus_utc()
+            // The larger offset maps the repeated local time to the earlier
+            // instant, matching possibleInstants[0] in UTC.
+            first
+                .fix()
+                .local_minus_utc()
+                .max(second.fix().local_minus_utc())
         }
         MappedLocalTime::None => {
             let mut offset_before = None;
@@ -1640,18 +1680,21 @@ pub(crate) fn utc_time(t: f64) -> f64 {
                 let Some(probe) = local.checked_sub_signed(TimeDelta::minutes(minutes)) else {
                     break;
                 };
-                match tz.from_local_datetime(&probe) {
-                    MappedLocalTime::Single(dt) => {
-                        offset_before = Some(dt.offset().fix().local_minus_utc());
+                match tz.offset_from_local_datetime(&probe) {
+                    MappedLocalTime::Single(offset) => {
+                        offset_before = Some(offset.fix().local_minus_utc());
                         break;
                     }
                     MappedLocalTime::Ambiguous(first, second) => {
-                        let later = if first.timestamp() >= second.timestamp() {
+                        // The smaller offset maps the repeated local time to
+                        // the later instant, the last possible instant before
+                        // a gap.
+                        offset_before = Some(
                             first
-                        } else {
-                            second
-                        };
-                        offset_before = Some(later.offset().fix().local_minus_utc());
+                                .fix()
+                                .local_minus_utc()
+                                .min(second.fix().local_minus_utc()),
+                        );
                         break;
                     }
                     MappedLocalTime::None => {}
@@ -1664,13 +1707,10 @@ pub(crate) fn utc_time(t: f64) -> f64 {
 }
 
 fn local_time_zone_abbreviation(t: f64) -> String {
-    naive_datetime_from_time_value(t)
-        .map(|dt| {
-            dt.and_utc()
-                .with_timezone(&system_time_zone())
-                .format("%Z")
-                .to_string()
-        })
+    use chrono::TimeZone;
+
+    time_zone_datetime_from_time_value(t)
+        .map(|dt| system_time_zone().offset_from_utc_datetime(&dt).to_string())
         .unwrap_or_else(system_time_zone_identifier)
 }
 

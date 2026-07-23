@@ -14,6 +14,11 @@ console.log(new Date(2024, 0, 15, 12).toISOString());
 console.log(new Date(2024, 2, 10, 2, 30).toISOString());
 console.log(new Date(2024, 10, 3, 1, 30).toISOString());
 console.log((new Date(2023, 4, 6) - new Date(2023, 0, 1)) / 3600000);
+console.log(new Date(2100, 6, 15, 12).toISOString());
+console.log(new Date(275760, 8, 12, 20).toISOString());
+console.log(new Date(8640000000000000).getTimezoneOffset());
+console.log(new Date(-271821, 3, 20, 20).toISOString());
+console.log(new Date(-8640000000000000).getTimezoneOffset() !== 0);
 "#,
         ])
         .output()
@@ -35,6 +40,11 @@ console.log((new Date(2023, 4, 6) - new Date(2023, 0, 1)) / 3600000);
             "2024-03-10T07:30:00.000Z\n",
             "2024-11-03T05:30:00.000Z\n",
             "2999\n",
+            "2100-07-15T16:00:00.000Z\n",
+            "+275760-09-13T00:00:00.000Z\n",
+            "240\n",
+            "-271821-04-21T00:56:02.000Z\n",
+            "true\n",
         )
     );
 }
