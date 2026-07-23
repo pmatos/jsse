@@ -1,3 +1,11 @@
+## [0.4.2](https://github.com/pmatos/jsse/compare/v0.4.1...v0.4.2) (2026-07-23)
+
+
+### Bug Fixes
+
+* **interpreter:** deepen StringToNumber; concentrate the WhiteSpace predicate ([96ac1b0](https://github.com/pmatos/jsse/commit/96ac1b08890d20039d7c10de321fa4990cd86388))
+* **interpreter:** round non-decimal strings exactly ([7f2a516](https://github.com/pmatos/jsse/commit/7f2a51683fe8cff27e0c05cef2582dfd8cc78514))
+
 ## [0.4.1](https://github.com/pmatos/jsse/compare/v0.4.0...v0.4.1) (2026-07-22)
 
 
