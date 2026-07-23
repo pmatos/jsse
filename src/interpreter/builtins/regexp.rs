@@ -5847,11 +5847,27 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
 
 /// Per spec §22.2.2.6.1 step 2.b: when a nullable group body (one that can
 /// match the empty string) is quantified with `*` or `+`, an iteration that
-/// matches empty must fail.  fancy-regex stops the loop instead of
-/// backtracking, so we convert lazy min-0 quantifiers (`??`, `*?`) inside
-/// nullable bodies to greedy, forcing them to consume characters.
+/// matches empty must fail. `regex`/fancy-regex stop the loop instead of
+/// backtracking, so:
+/// - a single-alternative nullable body has its lazy min-0 quantifiers
+///   (`??`, `*?`) converted to greedy, forcing them to consume characters
+///   (greedy sub-quantifiers already prefer to consume as much as possible,
+///   so this alone is enough — see nq_mark_lazy).
+/// - a multi-alternative (`|`) nullable body additionally needs each
+///   individually-nullable branch to be prevented from ever contributing a
+///   zero-width "success" that pre-empts a sibling branch able to consume at
+///   this position (e.g. `(a*|dc??)*` on "dc"). Branches that reduce to a
+///   single quantified atom (`a*`, `a?`, `a{0,n}`) are rewritten to forbid
+///   zero occurrences (`a+`, `a`, `a{1,n}`) — this only removes the
+///   discarded empty match, identical otherwise — while non-nullable sibling
+///   branches are left untouched (previously *all* branches were stripped of
+///   laziness regardless of nullability, which is wrong on its own; see
+///   jsse#370). Branches that are nullable through some other shape (a bare
+///   empty alternative, or several jointly-optional atoms like `a?b?`) are
+///   still just lazy-stripped, matching prior (narrower) behavior — fixing
+///   those needs a lookaround-based rewrite, tracked separately.
 fn fix_nullable_quantifiers(source: &str) -> String {
-    if !source.contains("??") && !source.contains("*?") {
+    if !source.contains('|') && !source.contains("??") && !source.contains("*?") {
         return source.to_string();
     }
 
@@ -5883,6 +5899,7 @@ fn fix_nullable_quantifiers(source: &str) -> String {
     }
 
     let mut remove = vec![false; len];
+    let mut replace: HashMap<usize, char> = HashMap::new();
 
     for open_pos in 0..len {
         if chars[open_pos] != '(' || close_of[open_pos] == 0 {
@@ -5898,21 +5915,200 @@ fn fix_nullable_quantifiers(source: &str) -> String {
         if body_start >= close {
             continue;
         }
-        if nq_is_nullable(&chars, body_start, close, &close_of) {
-            nq_mark_lazy(&chars, body_start, close, &close_of, &mut remove);
+
+        let branches = nq_split_branches(&chars, body_start, close);
+        if branches.len() == 1 {
+            // No top-level alternation: greedy sub-quantifiers already
+            // consume maximally, so only lazy ones need forcing.
+            if nq_is_nullable(&chars, body_start, close, &close_of) {
+                nq_mark_lazy(&chars, body_start, close, &close_of, &mut remove);
+            }
+            continue;
+        }
+        for (bstart, bend) in branches {
+            if bstart >= bend {
+                continue; // bare empty alternative — not handled here (jsse#370 follow-up)
+            }
+            if !nq_is_nullable(&chars, bstart, bend, &close_of) {
+                continue;
+            }
+            if !nq_bump_bare_atom_min(&chars, bstart, bend, &close_of, &mut replace, &mut remove) {
+                nq_mark_lazy(&chars, bstart, bend, &close_of, &mut remove);
+            }
         }
     }
 
-    if !remove.iter().any(|&r| r) {
+    if !remove.iter().any(|&r| r) && replace.is_empty() {
         return source.to_string();
     }
     let mut result = String::with_capacity(len);
     for i in 0..len {
-        if !remove[i] {
-            result.push(chars[i]);
+        if remove[i] {
+            continue;
+        }
+        match replace.get(&i) {
+            Some(&c) => result.push(c),
+            None => result.push(chars[i]),
         }
     }
     result
+}
+
+/// Split `chars[start..end]` into top-level alternative branches (spans),
+/// on `|` not nested inside `(...)`/`[...]` and not escaped.
+fn nq_split_branches(chars: &[char], start: usize, end: usize) -> Vec<(usize, usize)> {
+    let mut branches = Vec::new();
+    let mut branch_start = start;
+    let mut i = start;
+    let mut depth = 0i32;
+    let mut in_cc = false;
+    while i < end {
+        match chars[i] {
+            '\\' if i + 1 < end => {
+                i += 2;
+                continue;
+            }
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '(' if !in_cc => depth += 1,
+            ')' if !in_cc => depth -= 1,
+            '|' if !in_cc && depth == 0 => {
+                branches.push((branch_start, i));
+                branch_start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    branches.push((branch_start, end));
+    branches
+}
+
+/// If `chars[start..end]` is exactly one atom followed by a single min-0
+/// quantifier (`*`, `?`, or `{0,n}`, greedy or lazy) spanning to `end` with
+/// nothing else in the branch, rewrite that quantifier's lower bound to 1.
+/// This forbids the branch from ever matching empty while leaving every
+/// non-empty match it could produce untouched — exactly the iteration that
+/// spec §22.2.2.6.1 step 2.b would discard anyway. Returns false (no
+/// changes) if the branch isn't this exact bare-atom shape.
+fn nq_bump_bare_atom_min(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    close_of: &[usize],
+    replace: &mut HashMap<usize, char>,
+    remove: &mut [bool],
+) -> bool {
+    if start >= end {
+        return false;
+    }
+    let atom_end = match chars[start] {
+        '\\' if start + 1 < end => start + 2,
+        '[' => {
+            let mut j = start + 1;
+            while j < end && chars[j] != ']' {
+                if chars[j] == '\\' && j + 1 < end {
+                    j += 1;
+                }
+                j += 1;
+            }
+            if j < end { j + 1 } else { j }
+        }
+        '(' => {
+            let close = close_of[start];
+            if close > 0 && close < end {
+                close + 1
+            } else {
+                end
+            }
+        }
+        _ => start + 1,
+    };
+    if atom_end >= end {
+        return false;
+    }
+    match chars[atom_end] {
+        '*' => {
+            let mut q_end = atom_end + 1;
+            if q_end < end && chars[q_end] == '?' {
+                q_end += 1;
+            }
+            if q_end != end {
+                return false;
+            }
+            replace.insert(atom_end, '+');
+            true
+        }
+        '?' => {
+            let mut q_end = atom_end + 1;
+            let lazy = q_end < end && chars[q_end] == '?';
+            if lazy {
+                q_end += 1;
+            }
+            if q_end != end {
+                return false;
+            }
+            remove[atom_end] = true;
+            if lazy {
+                remove[atom_end + 1] = true;
+            }
+            true
+        }
+        '{' => {
+            let brace_end = match quantifier_brace_end(chars, atom_end, end) {
+                Some(e) => e,
+                None => return false,
+            };
+            let mut q_end = brace_end;
+            if q_end < end && chars[q_end] == '?' {
+                q_end += 1;
+            }
+            if q_end != end {
+                return false;
+            }
+            let digit_start = atom_end + 1;
+            let mut digit_end = digit_start;
+            while digit_end < brace_end && chars[digit_end].is_ascii_digit() {
+                digit_end += 1;
+            }
+            if digit_end == digit_start {
+                return false;
+            }
+            let min_val: u32 = chars[digit_start..digit_end]
+                .iter()
+                .collect::<String>()
+                .parse()
+                .unwrap_or(1);
+            if min_val != 0 {
+                return false;
+            }
+            // "}" right after the min digits means an exact-count {0} quantifier —
+            // always empty, no max to bump against; leave it to the lazy-strip fallback.
+            let max_is_zero = if digit_end < brace_end && chars[digit_end] == ',' {
+                let max_start = digit_end + 1;
+                let max_end = brace_end - 1; // position of the closing '}'
+                if max_start == max_end {
+                    false // "{0,}" — unbounded
+                } else {
+                    chars[max_start..max_end]
+                        .iter()
+                        .collect::<String>()
+                        .parse::<u32>()
+                        .unwrap_or(1)
+                        == 0
+                }
+            } else {
+                true
+            };
+            if max_is_zero {
+                return false;
+            }
+            remove[digit_start..digit_end - 1].fill(true);
+            replace.insert(digit_end - 1, '1');
+            true
+        }
+        _ => false,
+    }
 }
 
 fn nq_body_start(chars: &[char], open: usize) -> usize {
