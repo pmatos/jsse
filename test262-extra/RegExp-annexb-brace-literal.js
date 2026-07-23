@@ -108,3 +108,32 @@ assertExecMatch("(?<=(a)){,}", "", "a{,}", "{,}");
 assertExecMatch("a{2,3}", "", "aaaa", "aaa");
 assertExecMatch("a{2}", "", "aaaa", "aa");
 assertExecMatch("a{2,}", "", "aaaa", "aaaa");
+
+// `{0,foo}` has a leading digit ("0") but is still not a valid quantifier,
+// since the grammar requires DecimalDigits on both sides of the comma. Two
+// internal passes independently reason about brace quantifiers by peeking at
+// the leading digit alone, and both must be gated the same way as the main
+// translator, or they mistake this literal for a genuine {0,...} minimum:
+// - the nullable/lazy-marker rewrite, which can drop a real `??` elsewhere in
+//   the same repeated group if it thinks the group can match empty;
+// - the quantified-group capture tracker, which clears a nested capture
+//   between "iterations" that don't actually exist.
+function assertExecGroups(pattern, flags, str, expectedGroups) {
+  var re = new RegExp(pattern, flags);
+  var m = re.exec(str);
+  var actual = m ? Array.prototype.slice.call(m) : null;
+  if (JSON.stringify(actual) !== JSON.stringify(expectedGroups)) {
+    throw new Test262Error(
+      "/" + pattern + "/" + flags + " against " + JSON.stringify(str) +
+      ": expected " + JSON.stringify(expectedGroups) + ", got " + JSON.stringify(actual)
+    );
+  }
+}
+
+assertExecMatch("(a{0,foo}b??)*", "", "a{0,foo}b", "a{0,foo}");
+assertExecGroups("(?:(?=(.))){0,foo}", "", "{0,foo}", ["{0,foo}", "{"]);
+assertExecGroups(
+  "((?:(?=(.))){0,foo}x)*", "", "{0,foo}x{0,foo}x",
+  ["{0,foo}x{0,foo}x", "{0,foo}x", "{"]
+);
+assertExecGroups("(a){0,foo}", "", "a{0,foo}", ["a{0,foo}", "a"]);

@@ -5064,31 +5064,34 @@ fn build_quantified_parent_map(
         if chars[i] == ')' {
             if let Some(group_idx) = group_stack.pop() {
                 groups_info[group_idx].end_pos = i;
-                // Check if followed by a quantifier
+                // Check if followed by a quantifier. A '{' only counts if it
+                // genuinely opens one (Annex B literal forms like `{0,foo}`
+                // must not be mistaken for a real min-zero quantifier).
                 let next = i + 1;
-                if next < len
+                let is_quant = next < len
                     && (chars[next] == '*'
                         || chars[next] == '+'
                         || chars[next] == '?'
-                        || chars[next] == '{')
-                {
+                        || (chars[next] == '{'
+                            && quantifier_brace_end(&chars, next, len).is_some()));
+                if is_quant {
                     groups_info[group_idx].is_quantified = true;
                     let min_zero = match chars[next] {
                         '*' | '?' => true,
                         '{' => {
-                            // Parse {N,...} to check if N == 0
+                            // Already confirmed valid above; parse the leading
+                            // DecimalDigits to check if the minimum is 0.
                             let mut k = next + 1;
                             let ns = k;
                             while k < len && chars[k].is_ascii_digit() {
                                 k += 1;
                             }
-                            if k > ns {
-                                let n: u32 =
-                                    chars[ns..k].iter().collect::<String>().parse().unwrap_or(1);
-                                n == 0
-                            } else {
-                                false
-                            }
+                            chars[ns..k]
+                                .iter()
+                                .collect::<String>()
+                                .parse::<u32>()
+                                .unwrap_or(1)
+                                == 0
                         }
                         _ => false, // '+'
                     };
@@ -6001,8 +6004,25 @@ fn nq_has_min0(chars: &[char], pos: usize, end: usize) -> bool {
     match chars[pos] {
         '?' | '*' => true,
         '{' => {
-            // {0,...}
-            pos + 1 < end && chars[pos + 1] == '0'
+            // {0,...} — but only a genuinely valid quantifier; Annex B
+            // literal forms like `{0,foo}` are not quantifiers at all and
+            // must not make the preceding atom look nullable.
+            match quantifier_brace_end(chars, pos, end) {
+                Some(_) => {
+                    let mut j = pos + 1;
+                    let digit_start = j;
+                    while j < end && chars[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    chars[digit_start..j]
+                        .iter()
+                        .collect::<String>()
+                        .parse::<u32>()
+                        .unwrap_or(1)
+                        == 0
+                }
+                None => false,
+            }
         }
         _ => false,
     }
