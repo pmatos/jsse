@@ -629,15 +629,27 @@ running those thousands of timers natively would otherwise exhaust OS threads.
   `.call()`" makes it disappear. Suspected regression from the pooled
   function-call-environment work (#73).
 
-- **Astral-plane identifiers rejected (jsse#357, open).** esprima's own
-  parser, running unmodified inside jsse, rejects identifiers containing
-  astral-plane (surrogate-pair) Unicode code points that are valid
-  `ID_Start`/`ID_Continue` characters — e.g. `var \u{1E800};` throws
-  `Unexpected token ILLEGAL` on jsse but parses on Node. The same check gates
-  regex named-group names, so those are hit too. Accounts for 49 of the
-  esprima test262-corpus/unit-fixture residuals above (18 test262 identifier
-  files × 2 scenarios, 1 test262 named-groups file × 2 scenarios, 9 esprima
-  unit fixtures, 2 everything.js smoke fixtures).
+- **Astral-plane identifiers truncated by a strict-mode TCO leak (jsse#357,
+  fixed).** Originally suspected to be a lexer/Unicode bug — jsse's own
+  lexer/parser actually handle astral-plane identifiers and regex named
+  groups correctly (100% on test262's identifier and named-groups suites).
+  The real defect: `Return`'s tail-call-optimization eligibility check
+  (`expr_may_contain_tail_call`) over-approximates through a `Conditional`'s
+  two branches with `||`, so a ternary whose consequent is a bare call marks
+  the *whole* return expression tail-call-eligible even while the alternate
+  branch is what actually executes. `eval_expr` evaluated every
+  sub-expression under the ambient `in_tail_position` flag instead of
+  clearing it by default, so a call nested in the branch that runs got
+  returned as an unevaluated `Completion::TailCall`, silently skipping
+  everything after it in that expression. esprima's own
+  `Character.fromCodePoint` — `(cp < 0x10000) ? String.fromCharCode(cp) :
+  String.fromCharCode(A) + String.fromCharCode(B)` — hit this exactly: the
+  alternate's second `fromCharCode` call never ran, truncating every astral
+  surrogate pair to its high half. Fixed at the root: `eval_expr` now
+  captures the ambient tail-call eligibility once at entry and clears it by
+  default, re-propagating only at the handful of genuine tail positions
+  (Conditional's taken branch, Logical's short-circuited right operand,
+  Sequence's last element, Call, TaggedTemplate).
 
 - **Regex property-escape range endpoint not rejected (jsse#358, open).**
   `NonemptyClassRanges` static semantics require a Syntax Error when either
