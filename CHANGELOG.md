@@ -1,3 +1,10 @@
+## [0.4.6](https://github.com/pmatos/jsse/compare/v0.4.5...v0.4.6) (2026-07-23)
+
+
+### Bug Fixes
+
+* **regexp:** close residual nullable-alternation gaps ([#376](https://github.com/pmatos/jsse/issues/376)) ([1d578bc](https://github.com/pmatos/jsse/commit/1d578bc4a2a3bd0676294ec663c0e629b67ddac8))
+
 ## [0.4.5](https://github.com/pmatos/jsse/compare/v0.4.4...v0.4.5) (2026-07-23)
 
 
