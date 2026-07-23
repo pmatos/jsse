@@ -1558,6 +1558,7 @@ pub(crate) fn time_clip(time: f64) -> f64 {
 
 fn resolve_system_time_zone() -> chrono_tz::Tz {
     let parse = |identifier: &str| {
+        let identifier = identifier.strip_prefix(':').unwrap_or(identifier);
         identifier.parse::<chrono_tz::Tz>().ok().or_else(|| {
             chrono_tz::TZ_VARIANTS
                 .iter()

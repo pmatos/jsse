@@ -1,9 +1,8 @@
 use std::process::Command;
 
-#[test]
-fn tz_environment_controls_the_system_time_zone_and_date_offsets() {
+fn assert_tz_environment_controls_the_system_time_zone(tz: &str) {
     let output = Command::new(env!("CARGO_BIN_EXE_jsse"))
-        .env("TZ", "America/New_York")
+        .env("TZ", tz)
         .args([
             "-e",
             r#"
@@ -38,4 +37,14 @@ console.log((new Date(2023, 4, 6) - new Date(2023, 0, 1)) / 3600000);
             "2999\n",
         )
     );
+}
+
+#[test]
+fn tz_environment_controls_the_system_time_zone_and_date_offsets() {
+    assert_tz_environment_controls_the_system_time_zone("America/New_York");
+}
+
+#[test]
+fn posix_tz_environment_controls_the_system_time_zone_and_date_offsets() {
+    assert_tz_environment_controls_the_system_time_zone(":America/New_York");
 }
