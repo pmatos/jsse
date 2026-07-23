@@ -206,12 +206,64 @@
   //
   // Node's printf-style formatter. The %s %d %i %f %j %c %% specifiers are
   // deterministic and matched exactly; %o/%O defer to the best-effort inspect.
+  // Node creates this set from globalThis while internal/util/inspect is
+  // bootstrapping. By the time user code runs, Node and jsse have both added
+  // more globals, but those late names are deliberately absent from Node's
+  // classifier. Keep the Node 26.5.0 bootstrap membership explicit so jsse-only
+  // globals (for example ShadowRealm) cannot change %s dispatch.
   var builtInObjectNames = (function () {
     var names = Object.create(null);
-    var globals = Object.getOwnPropertyNames(globalThis);
-    for (var i = 0; i < globals.length; i++) {
-      var name = globals[i];
-      if (/^[A-Z][a-zA-Z0-9]+$/.test(name)) names[name] = true;
+    var nodeBootstrapNames = [
+      "Object",
+      "Function",
+      "Array",
+      "Number",
+      "Infinity",
+      "NaN",
+      "Boolean",
+      "String",
+      "Symbol",
+      "Date",
+      "Promise",
+      "RegExp",
+      "Error",
+      "AggregateError",
+      "EvalError",
+      "RangeError",
+      "ReferenceError",
+      "SyntaxError",
+      "TypeError",
+      "URIError",
+      "JSON",
+      "Math",
+      "Intl",
+      "ArrayBuffer",
+      "Atomics",
+      "Uint8Array",
+      "Int8Array",
+      "Uint16Array",
+      "Int16Array",
+      "Uint32Array",
+      "Int32Array",
+      "BigUint64Array",
+      "BigInt64Array",
+      "Uint8ClampedArray",
+      "Float32Array",
+      "Float64Array",
+      "DataView",
+      "Map",
+      "BigInt",
+      "Set",
+      "Iterator",
+      "WeakMap",
+      "WeakSet",
+      "Proxy",
+      "Reflect",
+      "FinalizationRegistry",
+      "WeakRef",
+    ];
+    for (var i = 0; i < nodeBootstrapNames.length; i++) {
+      names[nodeBootstrapNames[i]] = true;
     }
     return names;
   })();

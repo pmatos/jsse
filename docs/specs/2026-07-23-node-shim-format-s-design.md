@@ -13,8 +13,16 @@ checks `Symbol.toPrimitive` before ordinary `toString`/`valueOf` coercion.
 
 ## Decision
 
-At shim startup, snapshot the capitalized names on `globalThis`, matching
-Node's built-in-constructor name set before user bundle code executes.
+Use an explicit copy of Node 26.5.0's built-in-name membership. Node constructs
+this set from `globalThis` while `internal/util/inspect` bootstraps, before
+later ECMAScript and host globals are installed. Snapshotting jsse's
+`globalThis` when the shim runs is observably different: it incorrectly adds
+names such as `ShadowRealm`, `DisposableStack`, and `Float16Array`.
+
+The explicit set is recovered through Node-oracle constructor-name collision
+probes and versioned in the shim comment. The byte-compared self-test locks
+every included name and representative late, host, and jsse-only exclusions so
+a reference-Node upgrade reports any membership drift.
 
 For each object:
 
@@ -37,12 +45,17 @@ pure-JavaScript shim and is outside this change.
 - Comparing against a static list of intrinsic method identities diverges for
   patched built-in prototypes, subclasses/cross-realm-style prototype chains,
   and Node's constructor-name collision behavior.
+- Snapshotting jsse's globals is not equivalent to Node's earlier bootstrap
+  snapshot and lets engine-specific globals alter host-compat dispatch.
+- Injecting a freshly probed set from the harness would couple every bundle
+  runner to a reference Node process and leave standalone shim use undefined.
 
 ## Verification
 
 Extend the byte-compared node-shim self-test with arrays, plain objects,
 user-defined own and inherited hooks, `Symbol.toPrimitive`, `Date`, `RegExp`,
 non-callable hooks, patched built-in prototypes, and a user class named after a
-built-in. Run the shim self-test on jsse and Node, the shared shim fixtures, the
-relevant ECMAScript coercion test262 directories, and the repository's complete
-quality gate.
+built-in. Lock the full Node bootstrap membership plus representative
+non-members through constructor-name collisions. Run the shim self-test on jsse
+and Node, the shared shim fixtures, the relevant ECMAScript coercion test262
+directories, and the repository's complete quality gate.

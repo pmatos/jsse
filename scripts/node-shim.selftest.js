@@ -322,6 +322,105 @@ eq(
   );
 })();
 (function () {
+  function namedToStringClass(name, marker) {
+    return ({
+      [name]: class {
+        toString() {
+          return marker;
+        }
+      },
+    })[name];
+  }
+
+  // Node snapshots this exact set while internal/util/inspect bootstraps. Lock
+  // every member through the observable constructor-name collision behavior so
+  // the shim cannot accidentally drift back to jsse's runtime global set.
+  var nodeBootstrapNames = [
+    "Object",
+    "Function",
+    "Array",
+    "Number",
+    "Infinity",
+    "NaN",
+    "Boolean",
+    "String",
+    "Symbol",
+    "Date",
+    "Promise",
+    "RegExp",
+    "Error",
+    "AggregateError",
+    "EvalError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "TypeError",
+    "URIError",
+    "JSON",
+    "Math",
+    "Intl",
+    "ArrayBuffer",
+    "Atomics",
+    "Uint8Array",
+    "Int8Array",
+    "Uint16Array",
+    "Int16Array",
+    "Uint32Array",
+    "Int32Array",
+    "BigUint64Array",
+    "BigInt64Array",
+    "Uint8ClampedArray",
+    "Float32Array",
+    "Float64Array",
+    "DataView",
+    "Map",
+    "BigInt",
+    "Set",
+    "Iterator",
+    "WeakMap",
+    "WeakSet",
+    "Proxy",
+    "Reflect",
+    "FinalizationRegistry",
+    "WeakRef",
+  ];
+  for (var i = 0; i < nodeBootstrapNames.length; i++) {
+    var builtInName = nodeBootstrapNames[i];
+    var builtInMarker = "USER " + builtInName;
+    var BuiltInCollision = namedToStringClass(builtInName, builtInMarker);
+    truthy(
+      util.format("%s", new BuiltInCollision()) !== builtInMarker,
+      "%s Node bootstrap name uses inspect: " + builtInName
+    );
+  }
+
+  // These names are visible later in Node, visible only in jsse, or supplied by
+  // the host shims. Node's early snapshot excludes all of them, so a colliding
+  // user class must retain its coercion hook.
+  var nonBootstrapNames = [
+    "Buffer",
+    "URL",
+    "Temporal",
+    "ShadowRealm",
+    "SuppressedError",
+    "DisposableStack",
+    "AsyncDisposableStack",
+    "Float16Array",
+    "SharedArrayBuffer",
+    "WebAssembly",
+  ];
+  for (var j = 0; j < nonBootstrapNames.length; j++) {
+    var userName = nonBootstrapNames[j];
+    var userMarker = "USER " + userName;
+    var UserCollision = namedToStringClass(userName, userMarker);
+    eq(
+      util.format("%s", new UserCollision()),
+      userMarker,
+      "%s non-bootstrap name uses String: " + userName
+    );
+  }
+})();
+(function () {
   var value = [1, 2];
   value[Symbol.toPrimitive] = function () {
     return "ARRAY PRIMITIVE";
