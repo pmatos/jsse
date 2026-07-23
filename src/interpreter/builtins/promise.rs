@@ -385,17 +385,7 @@ impl Interpreter {
             .insert_builtin("finally".to_string(), finally_fn);
 
         // @@toStringTag
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("Promise")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(proto_id, "Promise");
 
         // Promise constructor
         let _promise_proto = self.realm().promise_prototype;

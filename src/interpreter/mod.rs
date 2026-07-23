@@ -1473,6 +1473,35 @@ impl Interpreter {
         getter
     }
 
+    /// Install the `@@toStringTag` data property that gives `Object.prototype.
+    /// toString` (and the spec's `[Symbol.toStringTag]` lookups) their brand:
+    /// `{ [[Value]]: tag, [[Writable]]: false, [[Enumerable]]: false,
+    /// [[Configurable]]: true }` — the shape every builtin prototype's tag has.
+    /// Companion to `define_method` / `define_getter`; concentrates the
+    /// `@@toStringTag` install "dance" that was otherwise open-coded at ~45
+    /// builtin sites as a six-field `PropertyDescriptor` literal (some of which
+    /// bypassed `insert_property` with a raw `property_order.push` +
+    /// `properties.insert` pair). Routing through `insert_property` keeps
+    /// `property_order` and `properties` in sync in one place.
+    ///
+    /// This is the *data*-property tag only. The handful of prototypes whose
+    /// `@@toStringTag` is an accessor (`%TypedArray%.prototype`,
+    /// `Iterator.prototype`) or is non-configurable (Module Namespace exotics)
+    /// keep their bespoke installs.
+    pub(crate) fn define_to_string_tag(&mut self, target_id: u64, tag: &str) {
+        self.get_object_cell_expect(target_id)
+            .borrow_mut()
+            .insert_property(
+                JsPropertyKey::well_known_symbol("toStringTag"),
+                PropertyDescriptor::data(
+                    JsValue::String(JsString::from_str(tag)),
+                    false,
+                    false,
+                    true,
+                ),
+            );
+    }
+
     /// Get a fresh owned clone of the slot's object handle if live.
     /// New callers should prefer `get_object_cell` / `get_object_cell_expect`
     /// (returns `&RefCell<…>`) to avoid the per-call handle refcount change; this

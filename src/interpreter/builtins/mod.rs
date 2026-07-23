@@ -2525,25 +2525,7 @@ impl Interpreter {
             .insert_builtin("sumPrecise".to_string(), sum_precise_fn);
 
         // @@toStringTag
-        {
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Math"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
-            self.get_object_cell_expect(math_obj_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(math_obj_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(math_obj_id, "Math");
 
         let math_val = JsValue::Object(crate::types::JsObject { id: math_id });
         self.realm()
@@ -3167,17 +3149,7 @@ impl Interpreter {
             }
 
             // Symbol.toStringTag = "AsyncFunction"
-            self.get_object_cell_expect(af_proto_id)
-                .borrow_mut()
-                .insert_property(
-                    JsPropertyKey::well_known_symbol("toStringTag"),
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str("AsyncFunction")),
-                        false,
-                        false,
-                        true,
-                    ),
-                );
+            self.define_to_string_tag(af_proto_id, "AsyncFunction");
 
             self.realm_mut().async_function_prototype = Some(af_proto_id);
         }
@@ -3867,25 +3839,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("isRawJSON".to_string(), json_is_raw_json);
         // @@toStringTag
-        {
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("JSON"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
-            self.get_object_cell_expect(json_obj_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(json_obj_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(json_obj_id, "JSON");
         let json_val = JsValue::Object(crate::types::JsObject { id: json_obj_id });
         self.realm()
             .global_env
@@ -7647,25 +7601,7 @@ impl Interpreter {
             .insert_builtin("setPrototypeOf".to_string(), spo_fn);
 
         // @@toStringTag
-        {
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Reflect"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
-            self.get_object_cell_expect(reflect_obj_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(reflect_obj_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(reflect_obj_id, "Reflect");
 
         // Register Reflect as global
         let reflect_val = JsValue::Object(crate::types::JsObject { id: reflect_id });
@@ -8147,20 +8083,7 @@ impl Interpreter {
         }
 
         // ShadowRealm.prototype[Symbol.toStringTag] = "ShadowRealm"
-        let to_string_tag_key = self
-            .get_symbol_key("toStringTag")
-            .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                to_string_tag_key,
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("ShadowRealm")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(proto_id, "ShadowRealm");
 
         // ShadowRealm.prototype.evaluate
         let evaluate_fn = self.create_function(JsFunction::native(

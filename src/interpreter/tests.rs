@@ -266,6 +266,71 @@ fn define_getter_installs_a_correctly_shaped_accessor() {
 }
 
 #[test]
+fn define_to_string_tag_installs_a_correctly_shaped_data_property() {
+    let mut interp = Interpreter::new();
+    let target_id = interp.create_object_id();
+
+    interp.define_to_string_tag(target_id, "CorrectlyShaped");
+
+    // The tag lives under the @@toStringTag well-known symbol key.
+    let tag_key = crate::types::JsPropertyKey::well_known_symbol("toStringTag");
+
+    // Raw stored descriptor pins exactly what define_to_string_tag installs.
+    let desc = interp
+        .get_object_cell_expect(target_id)
+        .borrow()
+        .get_own_property_full(&tag_key)
+        .expect("@@toStringTag property installed");
+
+    // Per spec, @@toStringTag on builtin prototypes is a data property:
+    // { [[Value]]: tag, [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: true }.
+    match desc.value {
+        Some(JsValue::String(ref s)) => assert_eq!(s.to_rust_string(), "CorrectlyShaped"),
+        ref other => panic!("expected string tag value, got {other:?}"),
+    }
+    assert_eq!(desc.writable, Some(false), "@@toStringTag is non-writable");
+    assert_eq!(
+        desc.enumerable,
+        Some(false),
+        "@@toStringTag is non-enumerable"
+    );
+    assert_eq!(
+        desc.configurable,
+        Some(true),
+        "@@toStringTag stays configurable"
+    );
+    assert!(desc.get.is_none(), "data property has no getter");
+    assert!(desc.set.is_none(), "data property has no setter");
+
+    // Routed through insert_property, so property_order and properties stay in
+    // sync: the symbol key must appear exactly once in the enumeration order.
+    let cell = interp.get_object_cell_expect(target_id);
+    let order_hits = cell
+        .borrow()
+        .property_order
+        .iter()
+        .filter(|k| k.as_bytes() == tag_key.as_bytes())
+        .count();
+    assert_eq!(
+        order_hits, 1,
+        "@@toStringTag appears once in property_order"
+    );
+
+    // Observable: Object.prototype.toString sees the installed tag.
+    let target_val = JsValue::Object(crate::types::JsObject { id: target_id });
+    let to_string = match interp.run(&parse_program("Object.prototype.toString;")) {
+        Completion::Normal(v) => v,
+        other => panic!("expected Object.prototype.toString value, got {other:?}"),
+    };
+    match interp.call_function(&to_string, &target_val, &[]) {
+        Completion::Normal(JsValue::String(s)) => {
+            assert_eq!(s.to_rust_string(), "[object CorrectlyShaped]")
+        }
+        other => panic!("unexpected completion: {other:?}"),
+    }
+}
+
+#[test]
 fn microtask_queue_drains_before_run_returns() {
     let interp = run_script(
         r#"

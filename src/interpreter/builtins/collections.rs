@@ -66,17 +66,7 @@ impl Interpreter {
             .borrow_mut()
             .class_name = "Map Iterator".to_string();
 
-        self.get_object_cell_expect(map_iter_proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("Map Iterator")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(map_iter_proto_id, "Map Iterator");
 
         self.define_method(map_iter_proto_id, "next", 0, |interp, this, _args| {
             if let JsValue::Object(o) = this
@@ -443,17 +433,7 @@ impl Interpreter {
         );
 
         // @@toStringTag
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("Map")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(proto_id, "Map");
 
         // constructor property
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
@@ -754,17 +734,7 @@ impl Interpreter {
             .borrow_mut()
             .class_name = "Set Iterator".to_string();
 
-        self.get_object_cell_expect(set_iter_proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("Set Iterator")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(set_iter_proto_id, "Set Iterator");
 
         self.define_method(set_iter_proto_id, "next", 0, |interp, this, _args| {
             if let JsValue::Object(o) = this
@@ -1500,17 +1470,7 @@ impl Interpreter {
         });
 
         // @@toStringTag
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("Set")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(proto_id, "Set");
 
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
@@ -1868,17 +1828,7 @@ impl Interpreter {
         );
 
         // @@toStringTag
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("WeakMap")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(proto_id, "WeakMap");
 
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
@@ -2130,17 +2080,7 @@ impl Interpreter {
         });
 
         // @@toStringTag
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("WeakSet")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(proto_id, "WeakSet");
 
         let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
 
@@ -2304,25 +2244,7 @@ impl Interpreter {
         });
 
         // @@toStringTag
-        {
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("WeakRef"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
-            self.get_object_cell_expect(proto_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(proto_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(proto_id, "WeakRef");
 
         // WeakRef constructor
         let weakref_ctor = self.create_function(JsFunction::constructor(
@@ -2528,25 +2450,7 @@ impl Interpreter {
         });
 
         // @@toStringTag
-        {
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("FinalizationRegistry"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
-            self.get_object_cell_expect(proto_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(proto_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(proto_id, "FinalizationRegistry");
 
         // FinalizationRegistry constructor
         let fr_ctor = self.create_function(JsFunction::constructor(

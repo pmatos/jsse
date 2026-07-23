@@ -883,11 +883,7 @@ impl Interpreter {
             .insert_builtin("resize".to_string(), resize_fn);
 
         // @@toStringTag
-        let tag = JsValue::String(JsString::from_str("ArrayBuffer"));
-        let sym_key = JsPropertyKey::well_known_symbol("toStringTag");
-        self.get_object_cell_expect(ab_proto_id)
-            .borrow_mut()
-            .insert_property(sym_key, PropertyDescriptor::data(tag, false, false, true));
+        self.define_to_string_tag(ab_proto_id, "ArrayBuffer");
 
         // ArrayBuffer constructor
         let ab_proto_clone_id = ab_proto_id;
@@ -1381,19 +1377,7 @@ impl Interpreter {
             .insert_builtin("slice".to_string(), slice_fn);
 
         // @@toStringTag
-        {
-            let tag = JsValue::String(JsString::from_str("SharedArrayBuffer"));
-            let sym_key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
-            let desc = PropertyDescriptor::data(tag, false, false, true);
-            self.get_object_cell_expect(sab_proto_id)
-                .borrow_mut()
-                .property_order
-                .push(sym_key.clone());
-            self.get_object_cell_expect(sab_proto_id)
-                .borrow_mut()
-                .properties
-                .insert(sym_key, desc);
-        }
+        self.define_to_string_tag(sab_proto_id, "SharedArrayBuffer");
 
         // SharedArrayBuffer constructor
         let sab_proto_clone_id = sab_proto_id;
@@ -5690,13 +5674,7 @@ impl Interpreter {
         );
 
         // @@toStringTag
-        let tag = JsValue::String(JsString::from_str("DataView"));
-        self.get_object_cell_expect(dv_proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(tag, false, false, true),
-            );
+        self.define_to_string_tag(dv_proto_id, "DataView");
 
         // DataView constructor
         let dv_proto_clone_id = dv_proto_id;

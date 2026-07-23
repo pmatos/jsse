@@ -136,20 +136,7 @@ impl Interpreter {
         }
 
         // @@toStringTag
-        let tag_key = self
-            .get_symbol_key("toStringTag")
-            .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                tag_key,
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("BigInt")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(proto_id, "BigInt");
 
         // BigInt() — is a constructor but throws TypeError when called with new
         self.register_global_fn(

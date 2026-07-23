@@ -8,25 +8,7 @@ impl Interpreter {
         let now_id = now_obj_id;
 
         // @@toStringTag = "Temporal.Now"
-        {
-            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Temporal.Now"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            self.get_object_cell_expect(now_obj_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(now_obj_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(now_obj_id, "Temporal.Now");
 
         // Temporal.Now.timeZoneId()
         let tz_fn = self.create_function(JsFunction::native(

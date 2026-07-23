@@ -219,19 +219,7 @@ impl Interpreter {
             .class_name = "Intl.Collator".to_string();
 
         // @@toStringTag
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor {
-                    value: Some(JsValue::String(JsString::from_str("Intl.Collator"))),
-                    writable: Some(false),
-                    enumerable: Some(false),
-                    configurable: Some(true),
-                    get: None,
-                    set: None,
-                },
-            );
+        self.define_to_string_tag(proto_id, "Intl.Collator");
 
         // compare getter
         let compare_getter = self.create_function(JsFunction::native(
