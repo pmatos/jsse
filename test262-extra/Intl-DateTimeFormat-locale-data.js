@@ -274,6 +274,54 @@ assertSame(
   new Intl.DisplayNames('hi-Latn', { type: 'language' }).of('en'), 'English',
   'hi-Latn selects Latin-script display names instead of Devanagari Hindi');
 
+// A script can be genuinely significant for a language while a *specific*
+// script+region combination still isn't real CLDR data — only the region is
+// stripped then, keeping the (valid) script, rather than collapsing to the
+// bare language like an invalid script would.
+assertSame(
+  new Intl.DateTimeFormat('az-Latn-DE').resolvedOptions().locale, 'az-Latn',
+  'az-Latn-DE drops the non-data-bearing region but keeps the valid script');
+assertSame(
+  new Intl.DateTimeFormat('hi-Latn-DE').resolvedOptions().locale, 'hi-Latn',
+  'hi-Latn-DE drops the non-data-bearing region but keeps the valid Latin script');
+assertSame(
+  new Intl.DateTimeFormat('hi-Deva').resolvedOptions().locale, 'hi',
+  "hi-Deva repeats Hindi's own default script, so it collapses like an invalid one");
+assertSame(
+  new Intl.DateTimeFormat('zh-Hant-CN').resolvedOptions().locale, 'zh-Hant',
+  'zh-Hant-CN drops the region (Traditional Chinese has no CN data) but keeps the script');
+assertSame(
+  new Intl.DateTimeFormat('pa-Guru-PK').resolvedOptions().locale, 'pa-Guru',
+  'pa-Guru-PK drops the region (Gurmukhi Punjabi data is India-specific)');
+
+// A script that ISN'T real/distinct data for a language collapses fully to
+// the bare language (script and region both dropped) even though the
+// language itself has OTHER genuinely significant scripts.
+assertSame(
+  new Intl.DateTimeFormat('zh-Latn-CN').resolvedOptions().locale, 'zh',
+  'zh-Latn-CN has no Latin-script Chinese data, so it collapses to bare zh');
+assertSame(
+  new Intl.DateTimeFormat('kk-Latn-KZ').resolvedOptions().locale, 'kk',
+  'kk-Latn-KZ has no Latin-script Kazakh data (only Cyrl/Arab), collapses to bare kk');
+assertSame(
+  new Intl.DateTimeFormat('az-Arab-IR').resolvedOptions().locale, 'az',
+  'az-Arab-IR has no Arabic-script Azerbaijani data (only Latn/Cyrl), collapses to bare az');
+
+// A genuinely significant script keeps working correctly across every region
+// CLDR ships distinct data for, not just the single "home" region.
+assertSame(
+  new Intl.DateTimeFormat('zh-Hant-HK').resolvedOptions().locale, 'zh-Hant-HK',
+  'zh-Hant-HK (Hong Kong Traditional Chinese) is real, distinct data');
+assertSame(
+  new Intl.DateTimeFormat('kk-Arab-CN').resolvedOptions().locale, 'kk-Arab-CN',
+  'kk-Arab-CN (Arabic-script Kazakh in China) is real, distinct data');
+assertSame(
+  new Intl.DateTimeFormat('ku-Latn-IQ').resolvedOptions().locale, 'ku-Latn-IQ',
+  'ku-Latn-IQ (Latin-script Kurdish in Iraq) is real, distinct data');
+assertSame(
+  new Intl.DateTimeFormat('ku-Arab-IQ').resolvedOptions().locale, 'ku',
+  'ku-Arab-IQ has no Arabic-script Kurdish data (only Latn), collapses to bare ku');
+
 // timeStyle presets select the same unpadded-H record as hour:"numeric" for
 // Spain-based Spanish (the hour option is undefined, so the correction must key
 // off "not explicitly 2-digit" rather than requiring hour:"numeric"). Only an

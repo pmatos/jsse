@@ -772,15 +772,46 @@ impl Interpreter {
         false
     }
 
-    // Languages CLDR ships with genuinely distinct per-script locale data (e.g.
-    // `zh-Hans` vs `zh-Hant`), so BestAvailableLocale matches the literal
-    // script-carrying tag instead of stripping it. Derived by checking every
-    // supported language against the IANA script registry in Node: resolved
-    // DateTimeFormat locales stay script-qualified only for these languages.
-    // Every other language's script subtag is redundant with its default and
-    // gets dropped in `intl_resolve_locale` below.
-    const SCRIPT_SIGNIFICANT_LANGUAGES: [&str; 10] =
-        ["az", "bs", "hi", "kk", "kok", "ku", "pa", "sr", "uz", "zh"];
+    // (language, script) -> regions CLDR ships genuinely distinct locale data
+    // for. Derived empirically against Node 25
+    // (`Intl.NumberFormat(tag).resolvedOptions().locale`). Three outcomes for
+    // a requested `lang-Script-Region` tag, used by `intl_resolve_locale`:
+    //   - (language, script) absent entirely (e.g. `es-Latn`, `zh-Latn`,
+    //     `az-Arab`, `ku-Arab`, `kk-Latn`, `hi-Deva`): the script isn't
+    //     real/distinct data for this language, so BestAvailableLocale strips
+    //     it — and the region along with it (subtags strip right-to-left, so
+    //     region is lost before script).
+    //   - (language, script) present but the region isn't in its list (e.g.
+    //     `az-Latn-DE`, `zh-Hant-CN`, `pa-Guru-PK`, `hi-Latn-DE`): the script
+    //     is real but this particular region isn't, so only the region is
+    //     stripped.
+    //   - (language, script, region) all match a table entry: kept verbatim.
+    // Not an exhaustive CLDR availableLocales enumeration — covers the
+    // reported case plus a representative sample per language; exotic
+    // region combos beyond this list are treated as unavailable (region
+    // stripped), which errs toward Node's actual behavior more often than
+    // the coarser "any script for this language" rule it replaces.
+    const SCRIPT_SIGNIFICANT_LOCALE_DATA: &[(&str, &str, &[&str])] = &[
+        ("zh", "Hans", &["CN", "SG", "MY"]),
+        ("zh", "Hant", &["TW", "HK", "MO"]),
+        ("sr", "Cyrl", &["RS", "BA", "ME", "XK"]),
+        ("sr", "Latn", &["RS", "BA", "ME", "XK"]),
+        ("az", "Latn", &["AZ"]),
+        ("az", "Cyrl", &["AZ"]),
+        ("pa", "Guru", &["IN"]),
+        ("pa", "Arab", &["PK"]),
+        ("ku", "Latn", &["TR", "IQ"]),
+        ("uz", "Latn", &["UZ"]),
+        ("uz", "Cyrl", &["UZ"]),
+        ("uz", "Arab", &["AF"]),
+        ("bs", "Latn", &["BA"]),
+        ("bs", "Cyrl", &["BA"]),
+        ("kk", "Cyrl", &["KZ"]),
+        ("kk", "Arab", &["CN"]),
+        ("kok", "Deva", &["IN"]),
+        ("kok", "Latn", &["IN"]),
+        ("hi", "Latn", &["IN"]),
+    ];
 
     // §9.2.8 ResolveLocale simplified
     pub(crate) fn intl_resolve_locale(&mut self, requested: &[String]) -> String {
@@ -791,19 +822,30 @@ impl Interpreter {
             if !Self::intl_best_available_locale(tag) {
                 continue;
             }
-            let lang = locale.id.language.to_string();
-            if locale.id.script.is_some()
-                && !Self::SCRIPT_SIGNIFICANT_LANGUAGES.contains(&lang.as_str())
-            {
-                // An explicit script subtag that merely repeats the language's
-                // default (e.g. `es-Latn-ES`) isn't present in most locale
-                // data as a literal key, so ECMA-402's BestAvailableLocale
-                // fallback strips it — and the region along with it, since
-                // subtags are stripped right-to-left and region comes after
-                // script.
-                locale.id.script = None;
-                locale.id.region = None;
-                locale.id.variants = icu::locale::subtags::Variants::new();
+            if let Some(script) = locale.id.script {
+                let lang = locale.id.language.to_string();
+                let script_str = script.to_string();
+                let valid_regions = Self::SCRIPT_SIGNIFICANT_LOCALE_DATA
+                    .iter()
+                    .find(|(l, s, _)| *l == lang && *s == script_str)
+                    .map(|(_, _, regions)| *regions);
+                match valid_regions {
+                    Some(regions) => {
+                        let region_ok = match locale.id.region {
+                            Some(r) => regions.contains(&r.to_string().as_str()),
+                            None => true,
+                        };
+                        if !region_ok {
+                            locale.id.region = None;
+                            locale.id.variants = icu::locale::subtags::Variants::new();
+                        }
+                    }
+                    None => {
+                        locale.id.script = None;
+                        locale.id.region = None;
+                        locale.id.variants = icu::locale::subtags::Variants::new();
+                    }
+                }
             }
             return locale.to_string();
         }
