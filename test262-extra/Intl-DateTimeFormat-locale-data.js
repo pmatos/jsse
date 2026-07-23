@@ -267,6 +267,12 @@ assertSame(
 assertSame(
   new Intl.DateTimeFormat('sr-Cyrl-RS').resolvedOptions().locale, 'sr-Cyrl-RS',
   'sr-Cyrl-RS keeps its script-significant subtag untouched');
+assertSame(
+  new Intl.DateTimeFormat('hi-Latn').resolvedOptions().locale, 'hi-Latn',
+  'hi-Latn keeps its alternate Latin script data');
+assertSame(
+  new Intl.DisplayNames('hi-Latn', { type: 'language' }).of('en'), 'English',
+  'hi-Latn selects Latin-script display names instead of Devanagari Hindi');
 
 // timeStyle presets select the same unpadded-H record as hour:"numeric" for
 // Spain-based Spanish (the hour option is undefined, so the correction must key

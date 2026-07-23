@@ -774,13 +774,13 @@ impl Interpreter {
 
     // Languages CLDR ships with genuinely distinct per-script locale data (e.g.
     // `zh-Hans` vs `zh-Hant`), so BestAvailableLocale matches the literal
-    // script-carrying tag instead of stripping it. Derived empirically against
-    // Node 25 (`Intl.NumberFormat(lang + "-" + defaultScript).resolvedOptions().locale`
-    // stays script-qualified only for these); every other language's script
-    // subtag is redundant with its default and gets dropped in
-    // `intl_resolve_locale` below.
-    const SCRIPT_SIGNIFICANT_LANGUAGES: [&str; 9] =
-        ["az", "bs", "kk", "kok", "ku", "pa", "sr", "uz", "zh"];
+    // script-carrying tag instead of stripping it. Derived by checking every
+    // supported language against the IANA script registry in Node: resolved
+    // DateTimeFormat locales stay script-qualified only for these languages.
+    // Every other language's script subtag is redundant with its default and
+    // gets dropped in `intl_resolve_locale` below.
+    const SCRIPT_SIGNIFICANT_LANGUAGES: [&str; 10] =
+        ["az", "bs", "hi", "kk", "kok", "ku", "pa", "sr", "uz", "zh"];
 
     // §9.2.8 ResolveLocale simplified
     pub(crate) fn intl_resolve_locale(&mut self, requested: &[String]) -> String {
