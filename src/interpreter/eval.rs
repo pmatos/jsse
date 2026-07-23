@@ -340,6 +340,19 @@ impl Interpreter {
         }
         self.eval_depth.set(depth + 1);
         let _depth_guard = EvalDepthGuard(std::rc::Rc::clone(&self.eval_depth));
+
+        // A call is only ever in tail position if it is (recursively) the
+        // return statement's own expression: `return`, through a Conditional's
+        // taken branch, a Logical's short-circuited right operand, or a
+        // Sequence's last element (mirrors expr_may_contain_tail_call below).
+        // Capture the ambient eligibility once and clear it by default so
+        // *every* other sub-expression (operands, elements, computed keys,
+        // arguments, ...) evaluates as non-tail unless one of those few arms
+        // explicitly restores it right before its own recursive dispatch —
+        // this makes "not a tail position" the default instead of something
+        // each arm has to remember to establish.
+        let tail = self.in_tail_position;
+        self.in_tail_position = false;
         match expr {
             Expression::Literal(lit) => Completion::Normal(self.eval_literal(lit)),
             Expression::Identifier(name) => {
@@ -473,27 +486,28 @@ impl Interpreter {
                 }
                 result
             }
-            Expression::Logical(op, left, right) => self.eval_logical(*op, left, right, env),
+            Expression::Logical(op, left, right) => {
+                self.in_tail_position = tail;
+                self.eval_logical(*op, left, right, env)
+            }
             Expression::Update(op, prefix, arg) => self.eval_update(*op, *prefix, arg, env),
             Expression::Assign(op, left, right) => self.eval_assign(*op, left, right, env),
             Expression::Conditional(test, cons, alt) => {
-                let saved_tail = self.in_tail_position;
-                self.in_tail_position = false;
                 let test_val = match self.eval_expr(test, env) {
                     Completion::Normal(v) => v,
-                    other => {
-                        self.in_tail_position = saved_tail;
-                        return other;
-                    }
+                    other => return other,
                 };
-                self.in_tail_position = saved_tail;
+                self.in_tail_position = tail;
                 if self.to_boolean_val(&test_val) {
                     self.eval_expr(cons, env)
                 } else {
                     self.eval_expr(alt, env)
                 }
             }
-            Expression::Call(callee, args, site_id) => self.eval_call(callee, args, env, *site_id),
+            Expression::Call(callee, args, site_id) => {
+                self.in_tail_position = tail;
+                self.eval_call(callee, args, env, *site_id)
+            }
             Expression::New(callee, args, site_id) => self.eval_new(callee, args, env, *site_id),
             Expression::Member(obj, prop, site_id) => self.eval_member(obj, prop, env, *site_id),
             Expression::Array(elements, _) => self.eval_array_literal(elements, env),
@@ -904,11 +918,10 @@ impl Interpreter {
                 }
             },
             Expression::Sequence(exprs) | Expression::Comma(exprs) => {
-                let saved_tail = self.in_tail_position;
                 let last_idx = exprs.len().saturating_sub(1);
                 let mut result = JsValue::Undefined;
                 for (i, e) in exprs.iter().enumerate() {
-                    self.in_tail_position = if i == last_idx { saved_tail } else { false };
+                    self.in_tail_position = if i == last_idx { tail } else { false };
                     match self.eval_expr(e, env) {
                         Completion::Normal(v) => result = v,
                         other => return other,
@@ -1322,8 +1335,6 @@ impl Interpreter {
                 self.eval_optional_chain_tail_with_base_this(&base_val, &base_this, prop, env)
             }
             Expression::TaggedTemplate(tag_expr, tmpl) => {
-                let saved_tail = self.in_tail_position;
-                self.in_tail_position = false;
                 let (func_val, this_val) = match tag_expr.as_ref() {
                     Expression::Member(obj_expr, prop, _) => {
                         let obj_val = match self.eval_expr(obj_expr, env) {
@@ -1391,7 +1402,7 @@ impl Interpreter {
                     }
                 }
 
-                if saved_tail {
+                if tail {
                     self.gc_unroot_frame(gc_frame);
                     return Completion::TailCall {
                         func: func_val,

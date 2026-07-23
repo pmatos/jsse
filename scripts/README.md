@@ -259,7 +259,7 @@ needs outside that core (`toThrow` and one inline snapshot).
 | `moment` | 2.30.1 | ✅ 162,868 assertions (cross-checked) | 3,871 tests, 0 failures — fixed by #311/PR #326 |
 | `bignumber.js` | v9.1.2 | ✅ 65,143 (cross-checked) | unblocked by #238 |
 | `css-tree` | v3.2.1 | ⚠️ 16,725 / 16,727 (Node: 16,727) | its own Mocha suite, force-harness; the 2 residual failures are a genuine jsse engine bug, tracked in #355 — see below |
-| `esprima` | (unreleased) `512cd66` | ⚠️ 80,100 / 80,153 (Node: 80,153) | ~65 min; ~1,650 unit fixtures + api/grammar/hostile suites + a 78,402-scenario test262 grammar corpus; residuals tracked in #357 and #358 |
+| `esprima` | (unreleased) `512cd66` | ✅ 80,153 (cross-checked) | ~65 min; ~1,650 unit fixtures + api/grammar/hostile suites + a 78,402-scenario test262 grammar corpus; green since #357/#358 fixed |
 | `uuid` | v14.0.1 | ✅ 75 (cross-checked) | Node's own `node:test`/`node:assert/strict` upstream suite, unmodified; browser build so v3/v5 use pure-JS MD5/SHA-1 and v1/v4/v6/v7 draw randomness via a `crypto.getRandomValues`/`randomUUID` shim (`node-crypto-shim.js`) backed by `__host_random_bytes` |
 | `tweetnacl-js` | 1.0.3 | ✅ 5,470 (cross-checked) | tape corpus: curve25519/Ed25519, secretbox, hash, onetimeauth; curve-heavy vectors sampled — see below |
 
@@ -629,24 +629,36 @@ running those thousands of timers natively would otherwise exhaust OS threads.
   `.call()`" makes it disappear. Suspected regression from the pooled
   function-call-environment work (#73).
 
-- **Astral-plane identifiers rejected (jsse#357, open).** esprima's own
-  parser, running unmodified inside jsse, rejects identifiers containing
-  astral-plane (surrogate-pair) Unicode code points that are valid
-  `ID_Start`/`ID_Continue` characters — e.g. `var \u{1E800};` throws
-  `Unexpected token ILLEGAL` on jsse but parses on Node. The same check gates
-  regex named-group names, so those are hit too. Accounts for 49 of the
-  esprima test262-corpus/unit-fixture residuals above (18 test262 identifier
-  files × 2 scenarios, 1 test262 named-groups file × 2 scenarios, 9 esprima
-  unit fixtures, 2 everything.js smoke fixtures).
+- **Astral-plane identifiers truncated by a strict-mode TCO leak (jsse#357,
+  fixed).** Originally suspected to be a lexer/Unicode bug — jsse's own
+  lexer/parser actually handle astral-plane identifiers and regex named
+  groups correctly (100% on test262's identifier and named-groups suites).
+  The real defect: `Return`'s tail-call-optimization eligibility check
+  (`expr_may_contain_tail_call`) over-approximates through a `Conditional`'s
+  two branches with `||`, so a ternary whose consequent is a bare call marks
+  the *whole* return expression tail-call-eligible even while the alternate
+  branch is what actually executes. `eval_expr` evaluated every
+  sub-expression under the ambient `in_tail_position` flag instead of
+  clearing it by default, so a call nested in the branch that runs got
+  returned as an unevaluated `Completion::TailCall`, silently skipping
+  everything after it in that expression. esprima's own
+  `Character.fromCodePoint` — `(cp < 0x10000) ? String.fromCharCode(cp) :
+  String.fromCharCode(A) + String.fromCharCode(B)` — hit this exactly: the
+  alternate's second `fromCharCode` call never ran, truncating every astral
+  surrogate pair to its high half. Fixed at the root: `eval_expr` now
+  captures the ambient tail-call eligibility once at entry and clears it by
+  default, re-propagating only at the handful of genuine tail positions
+  (Conditional's taken branch, Logical's short-circuited right operand,
+  Sequence's last element, Call, TaggedTemplate).
 
-- **Regex property-escape range endpoint not rejected (jsse#358, open).**
-  `NonemptyClassRanges` static semantics require a Syntax Error when either
-  endpoint of a character-class range is a Unicode property escape
-  (`\p{...}`), since it denotes a whole class rather than one character.
-  esprima's own regex-validation logic misses this early error when run on
-  jsse (`/[￿-\p{Hex}]/u` and `/[\p{Hex}--]/u` both parse instead of
-  throwing) but catches it correctly on Node. Accounts for the remaining 4
-  esprima test262-corpus residuals above.
+- **Regex property-escape range endpoint not rejected (jsse#358, fixed by
+  PR #365).** `NonemptyClassRanges` static semantics require a Syntax Error
+  when either endpoint of a character-class range is a Unicode property
+  escape (`\p{...}`), since it denotes a whole class rather than one
+  character. esprima's own regex-validation logic missed this early error
+  when run on jsse (`/[￿-\p{Hex}]/u` and `/[\p{Hex}--]/u` both parsed
+  instead of throwing) but caught it correctly on Node. Accounted for the
+  remaining 4 esprima test262-corpus residuals above.
 
 - **Literal `{}` in a regex rejected instead of Annex B fallback (jsse#359,
   open).** Found via manual exploration while wiring the esprima harness, not
