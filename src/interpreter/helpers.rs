@@ -827,7 +827,7 @@ pub(crate) fn json_trim(s: &str) -> &str {
 pub(crate) type SourceTextMap = HashMap<(u64, JsPropertyKey), String>;
 
 pub(crate) fn json_parse_value(interp: &mut Interpreter, s: &str) -> Completion {
-    json_parse_value_inner(interp, s, None)
+    json_parse_value_inner(interp, s, None, s)
 }
 
 pub(crate) fn json_parse_value_with_source(
@@ -835,7 +835,7 @@ pub(crate) fn json_parse_value_with_source(
     s: &str,
 ) -> (Completion, SourceTextMap) {
     let mut source_map = SourceTextMap::default();
-    let result = json_parse_value_inner(interp, s, Some(&mut source_map));
+    let result = json_parse_value_inner(interp, s, Some(&mut source_map), s);
     (result, source_map)
 }
 
@@ -843,6 +843,7 @@ fn json_parse_value_inner(
     interp: &mut Interpreter,
     s: &str,
     mut source_map: Option<&mut SourceTextMap>,
+    root_source: &str,
 ) -> Completion {
     let s = json_trim(s);
     if s == "null" {
@@ -869,15 +870,14 @@ fn json_parse_value_inner(
     }
     if s.starts_with('[') && s.ends_with(']') {
         let inner = &s[1..s.len() - 1];
-        if json_has_invalid_comma(inner) {
-            let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
-            return Completion::Throw(err);
+        if let Some(token) = json_invalid_comma_token(inner, ']') {
+            return json_unexpected_token_error(interp, token, root_source);
         }
         let items = json_split_items(inner);
         let mut parsed_items: Vec<(JsValue, String)> = Vec::new();
         for item in &items {
             let trimmed_src = json_trim(item).to_string();
-            match json_parse_value_inner(interp, item, source_map.as_deref_mut()) {
+            match json_parse_value_inner(interp, item, source_map.as_deref_mut(), root_source) {
                 Completion::Normal(v) => parsed_items.push((v, trimmed_src)),
                 other => return other,
             }
@@ -898,9 +898,8 @@ fn json_parse_value_inner(
     }
     if s.starts_with('{') && s.ends_with('}') {
         let inner = &s[1..s.len() - 1];
-        if json_has_invalid_comma(inner) {
-            let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
-            return Completion::Throw(err);
+        if let Some(token) = json_invalid_comma_token(inner, '}') {
+            return json_unexpected_token_error(interp, token, root_source);
         }
         let pairs = json_split_items(inner);
         let obj_id = interp.create_object_id();
@@ -930,7 +929,7 @@ fn json_parse_value_inner(
                 return Completion::Throw(err);
             };
             let val_src = json_trim(val_str).to_string();
-            match json_parse_value_inner(interp, val_str, source_map.as_deref_mut()) {
+            match json_parse_value_inner(interp, val_str, source_map.as_deref_mut(), root_source) {
                 Completion::Normal(v) => {
                     if let Some(ref mut smap) = source_map
                         && is_json_primitive(&v)
@@ -947,8 +946,19 @@ fn json_parse_value_inner(
         }
         return Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }));
     }
+    if let Some(token) = s.chars().next() {
+        return json_unexpected_token_error(interp, token, root_source);
+    }
     let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
     Completion::Throw(err)
+}
+
+fn json_unexpected_token_error(interp: &mut Interpreter, token: char, source: &str) -> Completion {
+    let message = format!(
+        "Unexpected token '{}', \"{}\" is not valid JSON",
+        token, source
+    );
+    Completion::Throw(interp.create_error("SyntaxError", &message))
 }
 
 pub(crate) fn is_json_primitive(val: &JsValue) -> bool {
@@ -1287,10 +1297,10 @@ fn json_is_valid_number(s: &str) -> bool {
     i == bytes.len()
 }
 
-fn json_has_invalid_comma(inner: &str) -> bool {
+fn json_invalid_comma_token(inner: &str, closing_token: char) -> Option<char> {
     let trimmed = json_trim(inner);
     if trimmed.is_empty() {
-        return false;
+        return None;
     }
     let mut depth = 0i32;
     let mut in_string = false;
@@ -1324,7 +1334,7 @@ fn json_has_invalid_comma(inner: &str) -> bool {
             }
             ',' if depth == 0 => {
                 if prev_was_comma {
-                    return true; // double comma or leading comma
+                    return Some(','); // double comma or leading comma
                 }
                 prev_was_comma = true;
             }
@@ -1334,7 +1344,16 @@ fn json_has_invalid_comma(inner: &str) -> bool {
             }
         }
     }
-    prev_was_comma // trailing comma
+    if !prev_was_comma {
+        return None;
+    }
+
+    let before_comma = trimmed.strip_suffix(',').map(json_trim).unwrap_or_default();
+    if closing_token == '}' && before_comma.ends_with(':') {
+        Some(',')
+    } else {
+        Some(closing_token)
+    }
 }
 
 pub(crate) fn json_split_items(s: &str) -> Vec<String> {
