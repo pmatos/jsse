@@ -1,3 +1,11 @@
+## [0.4.4](https://github.com/pmatos/jsse/compare/v0.4.3...v0.4.4) (2026-07-23)
+
+
+### Bug Fixes
+
+* **intl:** strip redundant script subtags in locale resolution ([#367](https://github.com/pmatos/jsse/issues/367)) ([687dbc1](https://github.com/pmatos/jsse/commit/687dbc1661943ddbca119abae98ede485b5c3e80))
+* **regexp:** treat non-quantifier { as Annex B literal ([#368](https://github.com/pmatos/jsse/issues/368)) ([a9b7f60](https://github.com/pmatos/jsse/commit/a9b7f607a5444ba4999dcb18e6c630b3ebf35956))
+
 ## [0.4.3](https://github.com/pmatos/jsse/compare/v0.4.2...v0.4.3) (2026-07-23)
 
 
