@@ -41,3 +41,14 @@ var m = /((a)*|(dc)??)*/.exec("dc");
 assert.sameValue(m[0], "dc");
 assert.sameValue(m[2], undefined);
 assert.sameValue(m[3], "dc");
+
+// The bump must not apply under `+` (min=1): the *required* first iteration
+// of a `+`-quantified group is still allowed to match empty per spec — only
+// iterations after it are discarded if empty — so a nullable branch (`a*`,
+// or its lazy form `a*?`) must stay able to satisfy that first iteration.
+// Forbidding the empty case there (as an earlier draft of this fix did) is
+// its own regression, distinct from the `*` case above.
+assert.sameValue(/(a*|b)+/.exec("")[0], "");
+assert.sameValue(/(a*|b)+/.exec("")[1], "");
+assert.sameValue(/(a*?|b)+/.exec("")[0], "");
+assert.sameValue(/(a*?|b)+/.exec("")[1], "");

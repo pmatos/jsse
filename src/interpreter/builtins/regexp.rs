@@ -5866,6 +5866,13 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
 ///   empty alternative, or several jointly-optional atoms like `a?b?`) are
 ///   still just lazy-stripped, matching prior (narrower) behavior — fixing
 ///   those needs a lookaround-based rewrite, tracked separately.
+/// - this bump is scoped to `*` groups only (min=0): under `+` (min=1) the
+///   *required* first iteration is still allowed to match empty per spec —
+///   only later iterations are subject to the 2.b discard — so bumping a
+///   nullable branch's floor there would wrongly forbid a legitimate empty
+///   first iteration (e.g. `/(a*|b)+/.exec("")` must stay `["",""]`). `+`
+///   groups keep falling through to the lazy-strip only, same as before this
+///   branch-aware rewrite existed.
 fn fix_nullable_quantifiers(source: &str) -> String {
     if !source.contains('|') && !source.contains("??") && !source.contains("*?") {
         return source.to_string();
@@ -5932,7 +5939,23 @@ fn fix_nullable_quantifiers(source: &str) -> String {
             if !nq_is_nullable(&chars, bstart, bend, &close_of) {
                 continue;
             }
-            if !nq_bump_bare_atom_min(&chars, bstart, bend, &close_of, &mut replace, &mut remove) {
+            // Under `+` (min=1), the *required* first iteration is still
+            // allowed to match empty per spec — only iterations after it are
+            // subject to the 2.b discard. Bumping a nullable branch's floor
+            // would forbid that legitimate empty first iteration (e.g.
+            // `/(a*|b)+/.exec("")` must stay `["",""]`), so only `*` groups
+            // get the bump; `+` groups fall through to the existing
+            // lazy-strip, exactly as before this branch-aware rewrite.
+            let bumped = chars[after] == '*'
+                && nq_bump_bare_atom_min(
+                    &chars,
+                    bstart,
+                    bend,
+                    &close_of,
+                    &mut replace,
+                    &mut remove,
+                );
+            if !bumped {
                 nq_mark_lazy(&chars, bstart, bend, &close_of, &mut remove);
             }
         }
