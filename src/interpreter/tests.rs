@@ -1958,11 +1958,15 @@ mod string_to_number_seam_tests {
         let interp = run_script(
             r#"
             var big   = Number("0x10000000000000000"); // 2**64
+            var exact = Number("0x6269e107215582e");
+            var carry = Number("0x200000000000011");
             var small = Number("0o17");
             var empty = Number("0x");
             "#,
         );
         assert_eq!(global_number(&interp, "big"), 2f64.powi(64));
+        assert_eq!(global_number(&interp, "exact"), 443_215_406_813_239_360.0);
+        assert_eq!(global_number(&interp, "carry"), 2f64.powi(57) + 32.0);
         assert_eq!(global_number(&interp, "small"), 15.0);
         assert!(global_number(&interp, "empty").is_nan());
     }

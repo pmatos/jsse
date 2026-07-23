@@ -51,10 +51,21 @@ assertEq(Number("0o17"), 15, "octal");
 assertEq(Number("0b101"), 5, "binary");
 assertEq(Number("0x10000000000000000"), Math.pow(2, 64), "hex 2**64 rounds, not NaN");
 assertEq(Number("0xffffffffffffffffffff"), Math.pow(2, 80), "hex 2**80-1 rounds to 2**80");
+assertEq(
+  Number("0x6269e107215582e"),
+  443215406813239360,
+  "non-decimal conversion rounds the exact integer once"
+);
+assertEq(
+  Number("0x200000000000011"),
+  Math.pow(2, 57) + 32,
+  "non-decimal conversion does not double-round an intermediate prefix"
+);
 assertNaN(Number("0x"), "empty hex digits");
 assertNaN(Number("0b"), "empty binary digits");
 assertNaN(Number("0xG"), "invalid hex digit");
 assertNaN(Number("0o8"), "invalid octal digit");
+assertNaN(Number("0x1_0"), "numeric separators are not allowed in string numeric literals");
 assertNaN(Number("+0x1"), "NonDecimalIntegerLiteral forbids a leading sign");
 assertNaN(Number("-0x1"), "NonDecimalIntegerLiteral forbids a leading sign");
 

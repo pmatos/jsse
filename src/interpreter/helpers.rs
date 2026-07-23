@@ -91,23 +91,18 @@ pub(crate) fn is_ecma_whitespace(ch: char) -> bool {
     )
 }
 
-// Parse the digits of a §7.1.4.1 NonDecimalIntegerLiteral (0x / 0o / 0b) into an
-// f64, accumulating in floating point so a value beyond i64/u64 yields a finite
-// rounded result instead of overflowing to NaN. The accumulation is exact for
-// values ≤ 2^53; above that it is not guaranteed bit-identical to RoundMVResult.
+// Parse the digits of a §7.1.4.1 NonDecimalIntegerLiteral (0x / 0o / 0b) as an
+// exact integer, then convert it to f64 once. Parsing through the exact decimal
+// representation gives Rust's float parser the full mathematical value to round,
+// avoiding both fixed-width overflow and intermediate floating-point rounding.
 // Empty or invalid input → NaN.
 fn radix_digits_to_f64(digits: &str, radix: u32) -> f64 {
-    if digits.is_empty() {
+    if digits.is_empty() || !digits.chars().all(|ch| ch.is_digit(radix)) {
         return f64::NAN;
     }
-    let mut acc = 0.0_f64;
-    for ch in digits.chars() {
-        match ch.to_digit(radix) {
-            Some(d) => acc = acc * f64::from(radix) + f64::from(d),
-            None => return f64::NAN,
-        }
-    }
-    acc
+    num_bigint::BigUint::parse_bytes(digits.as_bytes(), radix)
+        .and_then(|exact| exact.to_string().parse::<f64>().ok())
+        .unwrap_or(f64::NAN)
 }
 
 // §7.1.4.1.1 StringToNumber (uses §7.1.4.1.2 RoundMVResult via f64::parse)
@@ -2524,8 +2519,14 @@ mod string_to_number_tests {
         assert_eq!(n("0b101"), 5.0);
         // Large hex must round to the nearest f64, not overflow to NaN.
         assert_eq!(n("0x10000000000000000"), 2f64.powi(64));
+        // Convert the exact integer once: incremental f64 accumulation can
+        // double-round these values one ULP below their correct result.
+        assert_eq!(n("0x6269e107215582e"), 443_215_406_813_239_360.0);
+        assert_eq!(n("0x200000000000011"), 2f64.powi(57) + 32.0);
         // Empty digits, bad digits, and a leading sign are all NaN.
-        for s in ["0x", "0o", "0b", "0xG", "0o8", "0b2", "+0x1", "-0x1"] {
+        for s in [
+            "0x", "0o", "0b", "0xG", "0o8", "0b2", "0x1_0", "0o1_0", "0b1_0", "+0x1", "-0x1",
+        ] {
             assert!(n(s).is_nan(), "Number({s:?}) must be NaN");
         }
     }
