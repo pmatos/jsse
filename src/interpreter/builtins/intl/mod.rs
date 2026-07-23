@@ -772,12 +772,80 @@ impl Interpreter {
         false
     }
 
+    // (language, script) -> regions CLDR ships genuinely distinct locale data
+    // for. Derived by exhaustively sweeping every ISO 3166-1 alpha-2 region
+    // code (plus CLDR's non-ISO Kosovo code `XK`) against Node 25
+    // (`Intl.NumberFormat(lang + "-" + script + "-" + region).resolvedOptions().locale`,
+    // keeping a region only when the tag survives verbatim) for each
+    // (language, script) pair below — not hand-sampled. Three outcomes for a
+    // requested `lang-Script-Region` tag, used by `intl_resolve_locale`:
+    //   - (language, script) absent entirely (e.g. `es-Latn`, `zh-Latn`,
+    //     `az-Arab`, `ku-Arab`, `kk-Latn`, `hi-Deva`): the script isn't
+    //     real/distinct data for this language, so BestAvailableLocale strips
+    //     it — and the region along with it (subtags strip right-to-left, so
+    //     region is lost before script).
+    //   - (language, script) present but the region isn't in its list (e.g.
+    //     `az-Latn-DE`, `zh-Hant-CN`, `pa-Guru-PK`, `hi-Latn-DE`): the script
+    //     is real but this particular region isn't, so only the region is
+    //     stripped.
+    //   - (language, script, region) all match a table entry: kept verbatim.
+    const SCRIPT_SIGNIFICANT_LOCALE_DATA: &[(&str, &str, &[&str])] = &[
+        ("zh", "Hans", &["CN", "HK", "MO", "MY", "SG"]),
+        ("zh", "Hant", &["HK", "MO", "MY", "TW"]),
+        ("sr", "Cyrl", &["BA", "ME", "RS", "XK"]),
+        ("sr", "Latn", &["BA", "ME", "RS", "XK"]),
+        ("az", "Latn", &["AZ"]),
+        ("az", "Cyrl", &["AZ"]),
+        ("pa", "Guru", &["IN"]),
+        ("pa", "Arab", &["PK"]),
+        ("ku", "Latn", &["IQ", "SY", "TR"]),
+        ("uz", "Latn", &["UZ"]),
+        ("uz", "Cyrl", &["UZ"]),
+        ("uz", "Arab", &["AF"]),
+        ("bs", "Latn", &["BA"]),
+        ("bs", "Cyrl", &["BA"]),
+        ("kk", "Cyrl", &["KZ"]),
+        ("kk", "Arab", &["CN"]),
+        ("kok", "Deva", &["IN"]),
+        ("kok", "Latn", &["IN"]),
+        ("hi", "Latn", &["IN"]),
+    ];
+
     // §9.2.8 ResolveLocale simplified
     pub(crate) fn intl_resolve_locale(&mut self, requested: &[String]) -> String {
         for tag in requested {
-            if tag.parse::<IcuLocale>().is_ok() && Self::intl_best_available_locale(tag) {
-                return tag.clone();
+            let Ok(mut locale) = tag.parse::<IcuLocale>() else {
+                continue;
+            };
+            if !Self::intl_best_available_locale(tag) {
+                continue;
             }
+            if let Some(script) = locale.id.script {
+                let lang = locale.id.language.to_string();
+                let script_str = script.to_string();
+                let valid_regions = Self::SCRIPT_SIGNIFICANT_LOCALE_DATA
+                    .iter()
+                    .find(|(l, s, _)| *l == lang && *s == script_str)
+                    .map(|(_, _, regions)| *regions);
+                match valid_regions {
+                    Some(regions) => {
+                        let region_ok = match locale.id.region {
+                            Some(r) => regions.contains(&r.to_string().as_str()),
+                            None => true,
+                        };
+                        if !region_ok {
+                            locale.id.region = None;
+                            locale.id.variants = icu::locale::subtags::Variants::new();
+                        }
+                    }
+                    None => {
+                        locale.id.script = None;
+                        locale.id.region = None;
+                        locale.id.variants = icu::locale::subtags::Variants::new();
+                    }
+                }
+            }
+            return locale.to_string();
         }
         "en".to_string()
     }
