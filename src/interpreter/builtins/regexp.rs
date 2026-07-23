@@ -5862,10 +5862,21 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
 ///   discarded empty match, identical otherwise — while non-nullable sibling
 ///   branches are left untouched (previously *all* branches were stripped of
 ///   laziness regardless of nullability, which is wrong on its own; see
-///   jsse#370). Branches that are nullable through some other shape (a bare
-///   empty alternative, or several jointly-optional atoms like `a?b?`) are
-///   still just lazy-stripped, matching prior (narrower) behavior — fixing
-///   those needs a lookaround-based rewrite, tracked separately.
+///   jsse#370). A bare group atom with no quantifier of its own (`(a*)`) is
+///   nullable-checked and fixed by recursing into its own top-level
+///   alternation/sequence (jsse#373, nq_fix_branch's `(` case). A branch that
+///   can only ever match empty — a bare empty alternative (`(|a)*`), or a
+///   single atom with an exact-zero quantifier (`a{0}`, `a{0,0}`) — is
+///   spliced out of the alternation entirely (jsse#373, nq_branch_always_empty
+///   / nq_delete_branch) rather than bumped. Several jointly-optional atoms
+///   (`a?b?`, jointly nullable only because every atom is individually
+///   optional) are expanded into an alternation requiring the
+///   first-consuming atom to be present (jsse#373,
+///   nq_expand_joint_optional), e.g. `a?b?` -> `(?:ab?|b)`. The splice and
+///   expansion rewrites both bail out (falling back to the lazy-strip only,
+///   same as before jsse#373) whenever a capturing group is involved —
+///   deleting or duplicating one would silently renumber every later
+///   capture group.
 /// - this bump is scoped to `*` groups only (min=0): under `+` (min=1) the
 ///   *required* first iteration is still allowed to match empty per spec —
 ///   only later iterations are subject to the 2.b discard — so bumping a
@@ -5907,6 +5918,7 @@ fn fix_nullable_quantifiers(source: &str) -> String {
 
     let mut remove = vec![false; len];
     let mut replace: HashMap<usize, char> = HashMap::new();
+    let mut span_replace: HashMap<usize, (usize, String)> = HashMap::new();
 
     for open_pos in 0..len {
         if chars[open_pos] != '(' || close_of[open_pos] == 0 {
@@ -5932,49 +5944,379 @@ fn fix_nullable_quantifiers(source: &str) -> String {
             }
             continue;
         }
-        for (bstart, bend) in branches {
-            if bstart >= bend {
-                continue; // bare empty alternative — not handled here (jsse#370 follow-up)
-            }
-            if !nq_is_nullable(&chars, bstart, bend, &close_of) {
-                continue;
-            }
-            // Under `+` (min=1), the *required* first iteration is still
-            // allowed to match empty per spec — only iterations after it are
-            // subject to the 2.b discard. Bumping a nullable branch's floor
-            // would forbid that legitimate empty first iteration (e.g.
-            // `/(a*|b)+/.exec("")` must stay `["",""]`), so only `*` groups
-            // get the bump; `+` groups fall through to the existing
-            // lazy-strip, exactly as before this branch-aware rewrite.
-            let bumped = chars[after] == '*'
-                && nq_bump_bare_atom_min(
-                    &chars,
-                    bstart,
-                    bend,
-                    &close_of,
-                    &mut replace,
-                    &mut remove,
-                );
-            if !bumped {
-                nq_mark_lazy(&chars, bstart, bend, &close_of, &mut remove);
-            }
-        }
+        // Under `+` (min=1), the *required* first iteration is still allowed
+        // to match empty per spec — only iterations after it are subject to
+        // the 2.b discard. Bumping a nullable branch's floor would forbid
+        // that legitimate empty first iteration (e.g. `/(a*|b)+/.exec("")`
+        // must stay `["",""]`), so only `*` groups get the bump/rewrite
+        // treatment; `+` groups fall through to the existing lazy-strip.
+        let allow_bump = chars[after] == '*';
+        nq_fix_branches(
+            &chars,
+            &branches,
+            &close_of,
+            allow_bump,
+            &mut replace,
+            &mut remove,
+            &mut span_replace,
+        );
     }
 
-    if !remove.iter().any(|&r| r) && replace.is_empty() {
+    if !remove.iter().any(|&r| r) && replace.is_empty() && span_replace.is_empty() {
         return source.to_string();
     }
     let mut result = String::with_capacity(len);
-    for i in 0..len {
+    let mut i = 0;
+    while i < len {
+        if let Some((send, text)) = span_replace.get(&i) {
+            result.push_str(text);
+            i = *send;
+            continue;
+        }
         if remove[i] {
+            i += 1;
             continue;
         }
         match replace.get(&i) {
             Some(&c) => result.push(c),
             None => result.push(chars[i]),
         }
+        i += 1;
     }
     result
+}
+
+/// Process a full set of top-level alternation branches: for each nullable
+/// branch, prevent it from ever contributing a zero-width "success" that
+/// pre-empts a sibling branch able to consume input at this position (spec
+/// §22.2.2.6.1 step 2.b). A branch that can only ever match empty — a bare
+/// empty alternative (`(|a)*`), or a single atom with an exact-zero
+/// quantifier (`a{0}`, `a{0,0}`) — is spliced out entirely (itself plus one
+/// adjacent `|`) rather than bumped, provided it contains no capturing group
+/// (splicing one out would silently renumber every later capture, jsse#373).
+/// Returns true if anything was touched.
+fn nq_fix_branches(
+    chars: &[char],
+    branches: &[(usize, usize)],
+    close_of: &[usize],
+    allow_bump: bool,
+    replace: &mut HashMap<usize, char>,
+    remove: &mut [bool],
+    span_replace: &mut HashMap<usize, (usize, String)>,
+) -> bool {
+    let mut touched = false;
+    for (idx, &(bstart, bend)) in branches.iter().enumerate() {
+        if bstart >= bend {
+            // A bare empty alternative contains no capturing group by
+            // construction, so splicing it out is always capture-safe.
+            if allow_bump {
+                nq_delete_branch(branches, idx, remove);
+                touched = true;
+            }
+            continue;
+        }
+        if !nq_is_nullable(chars, bstart, bend, close_of) {
+            continue;
+        }
+        if allow_bump
+            && nq_branch_always_empty(chars, bstart, bend, close_of)
+            && !nq_branch_has_capture(chars, bstart, bend)
+        {
+            nq_delete_branch(branches, idx, remove);
+            touched = true;
+            continue;
+        }
+        if nq_fix_branch(
+            chars,
+            bstart,
+            bend,
+            close_of,
+            allow_bump,
+            replace,
+            remove,
+            span_replace,
+        ) {
+            touched = true;
+        }
+    }
+    touched
+}
+
+/// Remove branch `idx`'s own text plus one adjacent `|`, splicing it out of
+/// its alternation entirely.
+fn nq_delete_branch(branches: &[(usize, usize)], idx: usize, remove: &mut [bool]) {
+    let (bstart, bend) = branches[idx];
+    remove[bstart..bend].fill(true);
+    if idx + 1 < branches.len() {
+        remove[bend] = true; // the `|` immediately after this branch
+    } else if idx > 0 {
+        remove[bstart - 1] = true; // the `|` immediately before this branch
+    }
+}
+
+/// Whether `chars[start..end]` can ONLY ever match the empty string — never
+/// anything else, regardless of input. True for a single atom with an
+/// exact-zero quantifier (`a{0}`, `a{0,0}`), or (recursively) a bare group
+/// with no quantifier of its own whose every top-level branch is itself
+/// always-empty. Callers must additionally confirm the caller already knows
+/// the span is nullable; this only distinguishes "always empty" from
+/// "sometimes empty, sometimes not" within that.
+fn nq_branch_always_empty(chars: &[char], start: usize, end: usize, close_of: &[usize]) -> bool {
+    if start >= end {
+        return true;
+    }
+    let atom_end = match chars[start] {
+        '\\' if start + 1 < end => start + 2,
+        '[' => {
+            let mut j = start + 1;
+            while j < end && chars[j] != ']' {
+                if chars[j] == '\\' && j + 1 < end {
+                    j += 1;
+                }
+                j += 1;
+            }
+            if j < end { j + 1 } else { j }
+        }
+        '(' => {
+            let close = close_of[start];
+            if close > 0 && close < end {
+                close + 1
+            } else {
+                end
+            }
+        }
+        _ => start + 1,
+    };
+    if let Some(q_end) = nq_exact_zero_quant_end(chars, atom_end, end)
+        && q_end == end
+    {
+        return true;
+    }
+    if chars[start] == '(' && atom_end == end {
+        let close = close_of[start];
+        if close > 0 {
+            let interior_start = nq_body_start(chars, start);
+            if interior_start < close {
+                return nq_split_branches(chars, interior_start, close)
+                    .into_iter()
+                    .all(|(bs, be)| nq_branch_always_empty(chars, bs, be, close_of));
+            }
+        }
+    }
+    false
+}
+
+/// If `chars[pos..end]` starts with an exact-zero quantifier (`{0}` or
+/// `{0,0}`, optionally lazy), return the position right after it.
+fn nq_exact_zero_quant_end(chars: &[char], pos: usize, end: usize) -> Option<usize> {
+    if pos >= end || chars[pos] != '{' {
+        return None;
+    }
+    let brace_end = quantifier_brace_end(chars, pos, end)?;
+    let digit_start = pos + 1;
+    let mut digit_end = digit_start;
+    while digit_end < brace_end && chars[digit_end].is_ascii_digit() {
+        digit_end += 1;
+    }
+    if digit_end == digit_start
+        || chars[digit_start..digit_end]
+            .iter()
+            .collect::<String>()
+            .parse::<u32>()
+            .unwrap_or(1)
+            != 0
+    {
+        return None;
+    }
+    let is_exact = digit_end == brace_end - 1;
+    let max_is_zero = !is_exact
+        && digit_end < brace_end
+        && chars[digit_end] == ','
+        && digit_end + 1 != brace_end - 1
+        && chars[digit_end + 1..brace_end - 1]
+            .iter()
+            .collect::<String>()
+            .parse::<u32>()
+            .unwrap_or(1)
+            == 0;
+    if !is_exact && !max_is_zero {
+        return None;
+    }
+    let mut q_end = brace_end;
+    if q_end < end && chars[q_end] == '?' {
+        q_end += 1;
+    }
+    Some(q_end)
+}
+
+/// Whether `chars[start..end]` contains a capturing group anywhere within it
+/// (including nested inside other groups). Non-capturing forms — `(?:...)`,
+/// lookaround assertions, and (deliberately, conservatively) any other
+/// `(?...)` form this engine doesn't specifically recognize as capturing —
+/// are excluded; a plain `(...)` or named `(?<name>...)` counts.
+fn nq_branch_has_capture(chars: &[char], start: usize, end: usize) -> bool {
+    let mut i = start;
+    let mut in_cc = false;
+    while i < end {
+        match chars[i] {
+            '\\' if !in_cc && i + 1 < end => {
+                i += 2;
+                continue;
+            }
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '(' if !in_cc && nq_group_is_capturing(chars, i) => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+fn nq_group_is_capturing(chars: &[char], open: usize) -> bool {
+    let len = chars.len();
+    if open + 1 >= len || chars[open + 1] != '?' {
+        return true; // plain `(...)`
+    }
+    if open + 2 < len && chars[open + 2] == '<' {
+        // `(?<=...)`/`(?<!...)` are lookbehind assertions; `(?<name>...)` is
+        // a named CAPTURING group.
+        return !(open + 3 < len && matches!(chars[open + 3], '=' | '!'));
+    }
+    false // `(?:...)`, `(?=...)`, `(?!...)` — non-capturing
+}
+
+/// Apply the nullable-branch treatment to one alternation branch that is
+/// nullable but not unconditionally empty. Returns true if the branch was
+/// touched (bumped, fixed via recursion, or lazy-stripped).
+fn nq_fix_branch(
+    chars: &[char],
+    bstart: usize,
+    bend: usize,
+    close_of: &[usize],
+    allow_bump: bool,
+    replace: &mut HashMap<usize, char>,
+    remove: &mut [bool],
+    span_replace: &mut HashMap<usize, (usize, String)>,
+) -> bool {
+    // Under `+` (min=1), the *required* first iteration is still allowed to
+    // match empty per spec, so the caller disables bumping/rewriting
+    // entirely for those outer groups; only the lazy-strip fallback applies.
+    if allow_bump && nq_bump_bare_atom_min(chars, bstart, bend, close_of, replace, remove) {
+        return true;
+    }
+    // Several jointly-optional atoms (e.g. `a?b?`) rather than one — expand
+    // into an alternation that requires the first-consuming atom to be
+    // present (jsse#373), unless a capturing group is involved (splicing
+    // atoms across new branches would renumber captures).
+    if allow_bump
+        && !nq_branch_has_capture(chars, bstart, bend)
+        && let Some(text) = nq_expand_joint_optional(chars, bstart, bend, close_of)
+    {
+        span_replace.insert(bstart, (bend, text));
+        return true;
+    }
+    // Not a single quantified atom, but still nullable. If the branch is
+    // exactly one group with no quantifier of its own, the nullability came
+    // from the group's own interior (mirrors nq_is_nullable's `(` handling)
+    // — recurse the same per-branch treatment into it (jsse#373).
+    if allow_bump && chars[bstart] == '(' {
+        let close = close_of[bstart];
+        if close > 0 && close + 1 == bend {
+            let interior_start = nq_body_start(chars, bstart);
+            if interior_start < close {
+                let interior_branches = nq_split_branches(chars, interior_start, close);
+                if nq_fix_branches(
+                    chars,
+                    &interior_branches,
+                    close_of,
+                    allow_bump,
+                    replace,
+                    remove,
+                    span_replace,
+                ) {
+                    return true;
+                }
+            }
+        }
+    }
+    nq_mark_lazy(chars, bstart, bend, close_of, remove);
+    true
+}
+
+/// If `chars[start..end]` is a sequence of two or more atoms, each with its
+/// own min-0 quantifier (e.g. `a?b?`, `a*b?c{0,2}`), jointly nullable only
+/// because every atom is individually optional, build a replacement that
+/// requires the first-consuming atom to be present while leaving the rest as
+/// optional as before — e.g. `a?b?` -> `(?:ab?|b)`: atoms before the chosen
+/// one are dropped (matching them having occurred zero times), the chosen
+/// atom's own quantifier floor is bumped by one (reusing
+/// nq_bump_bare_atom_min), and atoms after it are left as-is. This preserves
+/// every non-empty match the sequence could produce (spec §22.2.2.6.1 step
+/// 2.b only discards the fully-empty iteration) while forbidding the
+/// all-absent case. Returns None if the span isn't this shape.
+fn nq_expand_joint_optional(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    close_of: &[usize],
+) -> Option<String> {
+    let mut atoms: Vec<(usize, usize)> = Vec::new();
+    let mut i = start;
+    while i < end {
+        let atom_end = match chars[i] {
+            '\\' if i + 1 < end => i + 2,
+            '[' => {
+                let mut j = i + 1;
+                while j < end && chars[j] != ']' {
+                    if chars[j] == '\\' && j + 1 < end {
+                        j += 1;
+                    }
+                    j += 1;
+                }
+                if j < end { j + 1 } else { j }
+            }
+            '(' => {
+                let close = close_of[i];
+                if close == 0 || close >= end {
+                    return None;
+                }
+                close + 1
+            }
+            '^' | '$' => return None, // zero-width assertions aren't quantifiable atoms here
+            _ => i + 1,
+        };
+        if !nq_has_min0(chars, atom_end, end) {
+            return None;
+        }
+        let quant_end = nq_skip_quant(chars, atom_end, end);
+        atoms.push((i, quant_end));
+        i = quant_end;
+    }
+    if atoms.len() < 2 {
+        return None; // single-atom case is nq_bump_bare_atom_min's job
+    }
+
+    let mut branches: Vec<String> = Vec::with_capacity(atoms.len());
+    for (k, &(astart, aend)) in atoms.iter().enumerate() {
+        let mut a_replace: HashMap<usize, char> = HashMap::new();
+        let mut a_remove = vec![false; chars.len()];
+        if !nq_bump_bare_atom_min(chars, astart, aend, close_of, &mut a_replace, &mut a_remove) {
+            return None; // shouldn't happen — a min-0 quantifier was just confirmed
+        }
+        let mut piece = String::new();
+        for idx in astart..aend {
+            if a_remove[idx] {
+                continue;
+            }
+            piece.push(*a_replace.get(&idx).unwrap_or(&chars[idx]));
+        }
+        for &(bstart, bend) in &atoms[k + 1..] {
+            piece.extend(chars[bstart..bend].iter());
+        }
+        branches.push(piece);
+    }
+    Some(format!("(?:{})", branches.join("|")))
 }
 
 /// Split `chars[start..end]` into top-level alternative branches (spans),
@@ -6160,15 +6502,20 @@ fn nq_body_start(chars: &[char], open: usize) -> usize {
 
 /// Check whether the regex segment chars[start..end] can match the empty string.
 fn nq_is_nullable(chars: &[char], start: usize, end: usize, close_of: &[usize]) -> bool {
+    // A top-level alternation is nullable iff any branch is (an empty branch
+    // is trivially nullable). Recurse per branch rather than short-circuiting
+    // on the first one — a later branch may be nullable even if an earlier
+    // one isn't.
+    let branches = nq_split_branches(chars, start, end);
+    if branches.len() > 1 {
+        return branches
+            .into_iter()
+            .any(|(bstart, bend)| bstart >= bend || nq_is_nullable(chars, bstart, bend, close_of));
+    }
+
     let mut i = start;
     while i < end {
         match chars[i] {
-            '|' => {
-                // Left alternative was all nullable (we got here without returning false).
-                // If ANY alternative is nullable, the whole alternation is nullable.
-                // Skip right side — it's nullable if left side was.
-                return true;
-            }
             '\\' if i + 1 < end => {
                 let atom_end = i + 2;
                 if !nq_has_min0(chars, atom_end, end) {
@@ -6196,7 +6543,19 @@ fn nq_is_nullable(chars: &[char], start: usize, end: usize, close_of: &[usize]) 
                     return false;
                 }
                 let atom_end = close + 1;
-                if !nq_has_min0(chars, atom_end, end) {
+                if nq_has_min0(chars, atom_end, end) {
+                    i = nq_skip_quant(chars, atom_end, end);
+                    continue;
+                }
+                // No min-0 quantifier directly on the group (possibly no
+                // quantifier at all, or one with a nonzero minimum). A single
+                // occurrence can still match empty if the group's own
+                // interior can — e.g. `(a*)`, or `(a*){2,3}` where each of
+                // the required occurrences may itself match empty.
+                let interior_start = nq_body_start(chars, i);
+                if interior_start >= close
+                    || !nq_is_nullable(chars, interior_start, close, close_of)
+                {
                     return false;
                 }
                 i = nq_skip_quant(chars, atom_end, end);

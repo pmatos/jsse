@@ -52,3 +52,47 @@ assert.sameValue(/(a*|b)+/.exec("")[0], "");
 assert.sameValue(/(a*|b)+/.exec("")[1], "");
 assert.sameValue(/(a*?|b)+/.exec("")[0], "");
 assert.sameValue(/(a*?|b)+/.exec("")[1], "");
+
+// --- Residual gaps closed (jsse#373) ---
+// A few other shapes are nullable through mechanisms the bump above doesn't
+// cover: a bare empty alternative, a nullable atom with no quantifier suffix
+// of its own, several jointly-optional atoms, and an exact-zero quantifier.
+// All four pre-existed the #370 fix (confirmed via a Node-diff matrix, not
+// regressions) and are fixed here.
+
+// Shape 1: a bare empty alternative branch (`(|a)*`, `(a|)*`) has nothing to
+// bump — it's spliced out of the alternation entirely instead.
+assert.sameValue(/(|a)*/.exec("a")[0], "a");
+assert.sameValue(/(a|)*/.exec("a")[0], "a");
+assert.sameValue(/(|a|b)*/.exec("ba")[0], "ba");
+
+// Shape 2: several jointly-optional atoms (`a?b?`) are nullable only because
+// every atom is individually optional — bumping any single one would wrongly
+// reject strings where only the others are present, so the whole sequence is
+// expanded into an alternation requiring the first-consuming atom.
+assert.sameValue(/(a?b?|dc??)*/.exec("dc")[0], "d");
+assert.sameValue(/(a?b?|dc??)*/.exec("ab")[0], "ab");
+assert.sameValue(/(a?b?|dc??)*/.exec("ba")[0], "ba");
+assert.sameValue(/(a*b?c{0,2}|dc??)*/.exec("aabcc")[0], "aabcc");
+// A capturing group among the jointly-optional atoms must block the
+// rewrite (it would otherwise renumber later capture groups) — this stays
+// the pre-#373 (unfixed) result, not a regression.
+assert.sameValue(/((a)?(b)?|dc??)*/.exec("ab")[0], "ab");
+
+// Shape 3: a bare group atom with no quantifier of its own (`(a*)`) is
+// nullable through its own interior, not a suffix quantifier — recognized by
+// recursing nullability/fix logic into the group's own alternation.
+assert.sameValue(/(?:(a*)|(?:dc)??)*/.exec("dc")[0], "dc");
+assert.sameValue(/(?:((a*))|(?:dc)??)*/.exec("dc")[0], "dc");
+
+// Shape 4: an exact-zero quantifier (`a{0}`, `a{0,0}`) always matches empty
+// — bumping the floor to 1 with max already 0 would produce an invalid
+// quantifier, so it's spliced out like shape 1 instead.
+assert.sameValue(/(a{0}|dc??)*/.exec("dc")[0], "d");
+assert.sameValue(/(a{0,0}|dc??)*/.exec("dc")[0], "d");
+
+// Capture-group numbering must be unaffected by the splice: deleting the
+// non-capturing `a{0}` branch must not disturb the sibling's own capture.
+var m2 = /(a{0}|(dc)??)*/.exec("dc");
+assert.sameValue(m2[0], "dc");
+assert.sameValue(m2[1], "dc");
