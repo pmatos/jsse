@@ -2913,7 +2913,10 @@ pub(super) fn translate_js_pattern_ex(
             //   min == 0: remove the assertion entirely
             if was_lookahead && !unicode && i + 1 < len {
                 let qc = chars[i + 1];
-                let is_quant = qc == '*' || qc == '+' || qc == '?' || qc == '{';
+                let is_quant = qc == '*'
+                    || qc == '+'
+                    || qc == '?'
+                    || (qc == '{' && quantifier_brace_end(&chars, i + 1, len).is_some());
                 if is_quant {
                     let (min_is_zero, quant_end) = parse_quantifier_min(&chars, i + 1, len);
                     if min_is_zero {
@@ -3057,6 +3060,17 @@ pub(super) fn translate_js_pattern_ex(
                     );
                 }
             }
+            i += 1;
+            continue;
+        }
+
+        // Annex B: a '{' that doesn't open a valid quantifier is an ordinary
+        // literal character. fancy-regex is more lenient than ECMAScript here
+        // (e.g. it accepts `{,n}` as shorthand for `{0,n}`), so it must be
+        // escaped explicitly rather than passed through, or it and the
+        // characters after it get reinterpreted as a real quantifier.
+        if c == '{' && !in_char_class && quantifier_brace_end(&chars, i, len).is_none() {
+            push_escaped(&mut result, c);
             i += 1;
             continue;
         }

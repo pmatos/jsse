@@ -68,3 +68,43 @@ var match = /a{}b/.exec("a{}b");
 if (!match || match[0] !== "a{}b") {
   throw new Test262Error("literal {} between atoms failed to match");
 }
+
+// Comma-leading brace forms (`{,}`, `{,n}`) are the ones a host regex engine
+// is most likely to mistake for a lenient real quantifier (many non-ECMA
+// flavors treat `{,n}` as shorthand for `{0,n}`). Assert actual matched text
+// via exec(), not just whether the pattern parses, in every context that
+// resets `has_atom`: no atom, a plain atom, after a real quantifier, and
+// after each lookaround assertion kind.
+function assertExecMatch(pattern, flags, str, expected) {
+  var re = new RegExp(pattern, flags);
+  var m = re.exec(str);
+  var actual = m ? m[0] : null;
+  if (actual !== expected) {
+    throw new Test262Error(
+      "/" + pattern + "/" + flags + " against " + JSON.stringify(str) +
+      ": expected " + JSON.stringify(expected) + ", got " + JSON.stringify(actual)
+    );
+  }
+}
+
+assertExecMatch("{,}", "", "{,}", "{,}");
+assertExecMatch("{,5}", "", "{,5}", "{,5}");
+assertExecMatch("a{,}", "", "a", null);
+assertExecMatch("a{,}", "", "a{,}", "a{,}");
+assertExecMatch("a*{,}", "", "aaa", null);
+assertExecMatch("a*{,}", "", "aaa{,}", "aaa{,}");
+assertExecMatch("(?=.){,}", "", "{,}", "{,}");
+assertExecMatch("(?=.){,}", "", "x", null);
+assertExecMatch("(?=a){,}", "", "a", null);
+assertExecMatch("(?<=a){,}", "", "a", null);
+assertExecMatch("(?<=a){,}", "", "a{,}", "{,}");
+assertExecMatch("(?<=a){,5}", "", "a", null);
+assertExecMatch("(?<=(a)){,}", "", "a", null);
+assertExecMatch("(?<=(a)){,}", "", "a{,}", "{,}");
+
+// Real quantifiers must be unaffected by the escaping added for the literal
+// fallback (they still consume the braces as an actual quantifier, not as
+// literal text).
+assertExecMatch("a{2,3}", "", "aaaa", "aaa");
+assertExecMatch("a{2}", "", "aaaa", "aa");
+assertExecMatch("a{2,}", "", "aaaa", "aaaa");
