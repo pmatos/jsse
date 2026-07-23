@@ -773,9 +773,12 @@ impl Interpreter {
     }
 
     // (language, script) -> regions CLDR ships genuinely distinct locale data
-    // for. Derived empirically against Node 25
-    // (`Intl.NumberFormat(tag).resolvedOptions().locale`). Three outcomes for
-    // a requested `lang-Script-Region` tag, used by `intl_resolve_locale`:
+    // for. Derived by exhaustively sweeping every ISO 3166-1 alpha-2 region
+    // code (plus CLDR's non-ISO Kosovo code `XK`) against Node 25
+    // (`Intl.NumberFormat(lang + "-" + script + "-" + region).resolvedOptions().locale`,
+    // keeping a region only when the tag survives verbatim) for each
+    // (language, script) pair below — not hand-sampled. Three outcomes for a
+    // requested `lang-Script-Region` tag, used by `intl_resolve_locale`:
     //   - (language, script) absent entirely (e.g. `es-Latn`, `zh-Latn`,
     //     `az-Arab`, `ku-Arab`, `kk-Latn`, `hi-Deva`): the script isn't
     //     real/distinct data for this language, so BestAvailableLocale strips
@@ -786,21 +789,16 @@ impl Interpreter {
     //     is real but this particular region isn't, so only the region is
     //     stripped.
     //   - (language, script, region) all match a table entry: kept verbatim.
-    // Not an exhaustive CLDR availableLocales enumeration — covers the
-    // reported case plus a representative sample per language; exotic
-    // region combos beyond this list are treated as unavailable (region
-    // stripped), which errs toward Node's actual behavior more often than
-    // the coarser "any script for this language" rule it replaces.
     const SCRIPT_SIGNIFICANT_LOCALE_DATA: &[(&str, &str, &[&str])] = &[
-        ("zh", "Hans", &["CN", "SG", "MY"]),
-        ("zh", "Hant", &["TW", "HK", "MO"]),
-        ("sr", "Cyrl", &["RS", "BA", "ME", "XK"]),
-        ("sr", "Latn", &["RS", "BA", "ME", "XK"]),
+        ("zh", "Hans", &["CN", "HK", "MO", "MY", "SG"]),
+        ("zh", "Hant", &["HK", "MO", "MY", "TW"]),
+        ("sr", "Cyrl", &["BA", "ME", "RS", "XK"]),
+        ("sr", "Latn", &["BA", "ME", "RS", "XK"]),
         ("az", "Latn", &["AZ"]),
         ("az", "Cyrl", &["AZ"]),
         ("pa", "Guru", &["IN"]),
         ("pa", "Arab", &["PK"]),
-        ("ku", "Latn", &["TR", "IQ"]),
+        ("ku", "Latn", &["IQ", "SY", "TR"]),
         ("uz", "Latn", &["UZ"]),
         ("uz", "Cyrl", &["UZ"]),
         ("uz", "Arab", &["AF"]),

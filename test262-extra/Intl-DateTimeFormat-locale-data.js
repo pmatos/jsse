@@ -321,6 +321,21 @@ assertSame(
 assertSame(
   new Intl.DateTimeFormat('ku-Arab-IQ').resolvedOptions().locale, 'ku',
   'ku-Arab-IQ has no Arabic-script Kurdish data (only Latn), collapses to bare ku');
+assertSame(
+  new Intl.DateTimeFormat('zh-Hans-HK').resolvedOptions().locale, 'zh-Hans-HK',
+  'zh-Hans-HK (Simplified Chinese in Hong Kong) is real, distinct data');
+assertSame(
+  new Intl.DateTimeFormat('zh-Hans-MO').resolvedOptions().locale, 'zh-Hans-MO',
+  'zh-Hans-MO (Simplified Chinese in Macao) is real, distinct data');
+assertSame(
+  new Intl.DateTimeFormat('zh-Hant-MY').resolvedOptions().locale, 'zh-Hant-MY',
+  'zh-Hant-MY (Traditional Chinese in Malaysia) is real, distinct data');
+assertSame(
+  new Intl.DateTimeFormat('ku-Latn-SY').resolvedOptions().locale, 'ku-Latn-SY',
+  'ku-Latn-SY (Latin-script Kurdish in Syria) is real, distinct data');
+assertSame(
+  new Intl.DateTimeFormat('sr-Latn-XK').resolvedOptions().locale, 'sr-Latn-XK',
+  "sr-Latn-XK (Kosovo's non-ISO CLDR region code) is real, distinct data");
 
 // timeStyle presets select the same unpadded-H record as hour:"numeric" for
 // Spain-based Spanish (the hour option is undefined, so the correction must key
