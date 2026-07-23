@@ -1913,6 +1913,65 @@ mod to_integer_or_infinity_value_tests {
     }
 }
 
+/// §7.1.4.1 StringToNumber through the public `Number(...)` seam. Expected
+/// values are the ECMA-262 truth table (cross-checked against node): these lock
+/// the three divergences the deepened conversion fixes — Rust's whitespace set,
+/// hex overflow, and leaked `inf`/`nan` spellings. Whitespace chars are built
+/// with `String.fromCharCode` so the source stays ASCII-clean.
+mod string_to_number_seam_tests {
+    use super::*;
+
+    #[test]
+    fn ecmascript_whitespace_is_trimmed_but_rust_only_whitespace_is_not() {
+        let interp = run_script(
+            r#"
+            var nel    = Number(String.fromCharCode(0x85) + "1");   // U+0085 NEL: not WhiteSpace
+            var zwnbsp = Number(String.fromCharCode(0xFEFF) + "1"); // U+FEFF ZWNBSP: WhiteSpace
+            var mixed  = Number("\t\n\r 5 \t");
+            "#,
+        );
+        assert!(global_number(&interp, "nel").is_nan());
+        assert_eq!(global_number(&interp, "zwnbsp"), 1.0);
+        assert_eq!(global_number(&interp, "mixed"), 5.0);
+    }
+
+    #[test]
+    fn only_the_capitalized_infinity_word_is_infinite() {
+        let interp = run_script(
+            r#"
+            var inf   = Number("inf");
+            var pInf  = Number("+Infinity");
+            var nInf  = Number("-Infinity");
+            var lc    = Number("infinity");
+            var nan   = +"nan";
+            "#,
+        );
+        assert!(global_number(&interp, "inf").is_nan());
+        assert_eq!(global_number(&interp, "pInf"), f64::INFINITY);
+        assert_eq!(global_number(&interp, "nInf"), f64::NEG_INFINITY);
+        assert!(global_number(&interp, "lc").is_nan());
+        assert!(global_number(&interp, "nan").is_nan());
+    }
+
+    #[test]
+    fn large_non_decimal_literals_round_instead_of_overflowing() {
+        let interp = run_script(
+            r#"
+            var big   = Number("0x10000000000000000"); // 2**64
+            var exact = Number("0x6269e107215582e");
+            var carry = Number("0x200000000000011");
+            var small = Number("0o17");
+            var empty = Number("0x");
+            "#,
+        );
+        assert_eq!(global_number(&interp, "big"), 2f64.powi(64));
+        assert_eq!(global_number(&interp, "exact"), 443_215_406_813_239_360.0);
+        assert_eq!(global_number(&interp, "carry"), 2f64.powi(57) + 32.0);
+        assert_eq!(global_number(&interp, "small"), 15.0);
+        assert!(global_number(&interp, "empty").is_nan());
+    }
+}
+
 /// Node host-compat "syscall floor" (issue #229). These exercise the ON-path
 /// (`enable_node_host`); the OFF-path 0-regression guarantee is covered by the
 /// full test262 run, which never enables the floor.

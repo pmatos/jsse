@@ -1,22 +1,6 @@
 use super::super::*;
+use crate::interpreter::helpers::is_ecma_whitespace;
 use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed};
-
-pub(crate) fn is_ecma_whitespace(ch: char) -> bool {
-    matches!(
-        ch,
-        '\u{0009}'
-            | '\u{000A}'
-            | '\u{000B}'
-            | '\u{000C}'
-            | '\u{000D}'
-            | '\u{0020}'
-            | '\u{00A0}'
-            | '\u{FEFF}'
-            | '\u{1680}'
-            | '\u{2000}'
-            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
-    )
-}
 
 // §22.1.3 thisStringValue — RequireObjectCoercible + extract primitive from String wrapper
 fn this_string_value(interp: &mut Interpreter, this: &JsValue) -> Result<String, Completion> {

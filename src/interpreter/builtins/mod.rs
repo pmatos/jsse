@@ -1775,7 +1775,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let mut radix = number_ops::to_int32(radix_num);
-                let s = s.trim_matches(crate::interpreter::builtins::string::is_ecma_whitespace);
+                let s = s.trim_matches(crate::interpreter::helpers::is_ecma_whitespace);
                 let (negative, s) = if let Some(rest) = s.strip_prefix('-') {
                     (true, rest)
                 } else if let Some(rest) = s.strip_prefix('+') {
@@ -1835,7 +1835,7 @@ impl Interpreter {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
-                let s = s.trim_matches(crate::interpreter::builtins::string::is_ecma_whitespace);
+                let s = s.trim_matches(crate::interpreter::helpers::is_ecma_whitespace);
                 if s.is_empty() {
                     return Completion::Normal(JsValue::Number(f64::NAN));
                 }
