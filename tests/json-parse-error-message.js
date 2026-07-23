@@ -30,11 +30,28 @@ assertParseMessage(zodSource, function (_key, value) { return value; }, zodMessa
 assertParseMessage(
   '{"outer":{"invalid":,}}',
   undefined,
-  'Unexpected token \',\', "{"outer":{"invalid":,}}" is not valid JSON'
+  'Unexpected token \',\', "{"outer":{"... is not valid JSON'
 );
 
 assertParseMessage(
   '~~invalid~~',
   undefined,
   'Unexpected token \'~\', "~~invalid~~" is not valid JSON'
+);
+
+assertParseMessage(
+  'x'.repeat(20),
+  undefined,
+  'Unexpected token \'x\', "xxxxxxxxxxxxxxxxxxxx" is not valid JSON'
+);
+
+var truncatedMessage =
+  'Unexpected token \'x\', "xxxxxxxxxx"... is not valid JSON';
+assertParseMessage('x'.repeat(21), undefined, truncatedMessage);
+assertParseMessage('x'.repeat(1000000), undefined, truncatedMessage);
+
+assertParseMessage(
+  'é'.repeat(21),
+  undefined,
+  'Unexpected token \'é\', "éééééééééé"... is not valid JSON'
 );

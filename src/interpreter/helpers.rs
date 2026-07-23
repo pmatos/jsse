@@ -954,9 +954,21 @@ fn json_parse_value_inner(
 }
 
 fn json_unexpected_token_error(interp: &mut Interpreter, token: char, source: &str) -> Completion {
+    const MAX_SOURCE_CHARS: usize = 20;
+    const TRUNCATED_SOURCE_CHARS: usize = 10;
+
+    let (source, ellipsis) = if source.chars().nth(MAX_SOURCE_CHARS).is_some() {
+        let prefix_end = source
+            .char_indices()
+            .nth(TRUNCATED_SOURCE_CHARS)
+            .map_or(source.len(), |(index, _)| index);
+        (&source[..prefix_end], "...")
+    } else {
+        (source, "")
+    };
     let message = format!(
-        "Unexpected token '{}', \"{}\" is not valid JSON",
-        token, source
+        "Unexpected token '{}', \"{}\"{} is not valid JSON",
+        token, source, ellipsis
     );
     Completion::Throw(interp.create_error("SyntaxError", &message))
 }
