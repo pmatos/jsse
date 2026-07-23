@@ -135,6 +135,67 @@ eq(
   "{ toString: null, a: 1 }",
   "%s non-callable toString uses inspect"
 );
+eq(util.format("%s", new Number(-0)), "[Number: -0]", "%s Number wrapper");
+eq(util.format("%s", new String("x")), "[String: 'x']", "%s String wrapper");
+eq(util.format("%s", new Boolean(true)), "[Boolean: true]", "%s Boolean wrapper");
+eq(util.format("%s", Object(10n)), "[BigInt: 10n]", "%s BigInt wrapper");
+eq(
+  util.format("%s", Object(Symbol("wrapped"))),
+  "[Symbol: Symbol(wrapped)]",
+  "%s Symbol wrapper"
+);
+(function () {
+  var methods = [
+    [Number.prototype, "valueOf"],
+    [Number.prototype, "toString"],
+    [String.prototype, "valueOf"],
+    [String.prototype, "toString"],
+    [Boolean.prototype, "valueOf"],
+    [Boolean.prototype, "toString"],
+    [BigInt.prototype, "valueOf"],
+    [BigInt.prototype, "toString"],
+    [Symbol.prototype, "valueOf"],
+    [Symbol.prototype, "toString"],
+  ];
+  var originals = [];
+  try {
+    for (var i = 0; i < methods.length; i++) {
+      originals.push(methods[i][0][methods[i][1]]);
+      methods[i][0][methods[i][1]] = function () {
+        throw new Error("patched wrapper method called");
+      };
+    }
+    eq(
+      util.format("%s", new Number(1)),
+      "[Number: 1]",
+      "%s Number wrapper ignores patched methods"
+    );
+    eq(
+      util.format("%s", new String("x")),
+      "[String: 'x']",
+      "%s String wrapper ignores patched methods"
+    );
+    eq(
+      util.format("%s", new Boolean(true)),
+      "[Boolean: true]",
+      "%s Boolean wrapper ignores patched methods"
+    );
+    eq(
+      util.format("%s", Object(10n)),
+      "[BigInt: 10n]",
+      "%s BigInt wrapper ignores patched methods"
+    );
+    eq(
+      util.format("%s", Object(Symbol("wrapped"))),
+      "[Symbol: Symbol(wrapped)]",
+      "%s Symbol wrapper ignores patched methods"
+    );
+  } finally {
+    for (var j = 0; j < methods.length; j++) {
+      methods[j][0][methods[j][1]] = originals[j];
+    }
+  }
+})();
 (function () {
   var value = {
     [Symbol.toPrimitive]: function (hint) {

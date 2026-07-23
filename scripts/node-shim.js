@@ -57,12 +57,17 @@
     return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k);
   }
 
-  // Capture uncurried Date intrinsics before bundled library code runs. Node's
-  // formatter reads [[DateValue]] directly, so patched prototype methods must
-  // not affect either valid or invalid Date inspection.
+  // Capture uncurried intrinsics before bundled library code runs. Node's
+  // formatter reads built-in internal slots rather than user-overridable
+  // prototype methods.
   var functionCall = Function.prototype.call;
   var dateGetTime = functionCall.bind(Date.prototype.getTime);
   var dateToISOString = functionCall.bind(Date.prototype.toISOString);
+  var numberValueOf = functionCall.bind(Number.prototype.valueOf);
+  var stringValueOf = functionCall.bind(String.prototype.valueOf);
+  var booleanValueOf = functionCall.bind(Boolean.prototype.valueOf);
+  var bigintValueOf = functionCall.bind(BigInt.prototype.valueOf);
+  var symbolToString = functionCall.bind(Symbol.prototype.toString);
 
   function inspect(value, opts) {
     opts = opts || {};
@@ -91,6 +96,19 @@
       if (v instanceof Date) {
         return isNaN(dateGetTime(v)) ? "Invalid Date" : dateToISOString(v);
       }
+      if (v instanceof Number) {
+        return "[Number: " + render(numberValueOf(v), depth) + "]";
+      }
+      if (v instanceof String) {
+        return "[String: " + render(stringValueOf(v), depth) + "]";
+      }
+      if (v instanceof Boolean) {
+        return "[Boolean: " + render(booleanValueOf(v), depth) + "]";
+      }
+      if (v instanceof BigInt) {
+        return "[BigInt: " + render(bigintValueOf(v), depth) + "]";
+      }
+      if (v instanceof Symbol) return "[Symbol: " + symbolToString(v) + "]";
 
       if (depth < 0) return Array.isArray(v) ? "[Array]" : "[Object]";
 
