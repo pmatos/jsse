@@ -150,6 +150,35 @@ eq(util.format("%s", /re/g), "/re/g", "%s RegExp uses inspect");
     RegExp.prototype.toString = original;
   }
 })();
+(function () {
+  function checkThrowingAccessor(name) {
+    var original = Object.getOwnPropertyDescriptor(RegExp.prototype, name);
+    var sentinel = new Error("patched RegExp " + name);
+    var caught;
+    try {
+      Object.defineProperty(RegExp.prototype, name, {
+        configurable: true,
+        get: function () {
+          throw sentinel;
+        },
+      });
+      try {
+        util.format("%s", /re/g);
+      } catch (e) {
+        caught = e;
+      }
+      truthy(
+        caught === sentinel,
+        "%s RegExp rethrows patched " + name + " accessor error"
+      );
+    } finally {
+      Object.defineProperty(RegExp.prototype, name, original);
+    }
+  }
+
+  checkThrowingAccessor("source");
+  checkThrowingAccessor("flags");
+})();
 eq(
   util.format("%s", Object.create(RegExp.prototype)),
   "RegExp {}",

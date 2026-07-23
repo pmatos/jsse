@@ -65,6 +65,9 @@
   var objectGetPrototypeOf = Object.getPrototypeOf;
   var dateGetTime = functionCall.bind(Date.prototype.getTime);
   var dateToISOString = functionCall.bind(Date.prototype.toISOString);
+  var regexpGetSource = functionCall.bind(
+    objectGetOwnPropertyDescriptor(RegExp.prototype, "source").get
+  );
   var regexpToString = functionCall.bind(RegExp.prototype.toString);
   var numberValueOf = functionCall.bind(Number.prototype.valueOf);
   var stringValueOf = functionCall.bind(String.prototype.valueOf);
@@ -107,8 +110,8 @@
       }
       var boxed;
       if (v instanceof RegExp) {
-        boxed = tryApplyIntrinsic(regexpToString, v);
-        if (boxed) return boxed.value;
+        boxed = tryApplyIntrinsic(regexpGetSource, v);
+        if (boxed) return regexpToString(v);
       }
       if (v instanceof Date) {
         boxed = tryApplyIntrinsic(dateGetTime, v);
