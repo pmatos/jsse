@@ -1,3 +1,13 @@
+## [0.4.7](https://github.com/pmatos/jsse/compare/v0.4.6...v0.4.7) (2026-07-24)
+
+
+### Bug Fixes
+
+* **date:** honor TZ as the system time zone ([#379](https://github.com/pmatos/jsse/issues/379)) ([2eb7009](https://github.com/pmatos/jsse/commit/2eb7009b98a3c54c181c495760164d3cede490b5))
+* **json:** include token context in parse errors ([#382](https://github.com/pmatos/jsse/issues/382)) ([3b6a03a](https://github.com/pmatos/jsse/commit/3b6a03a35ceed5bdbe9aa924ace6f83d18adf778))
+* **node-shim:** match Node %s object dispatch ([#380](https://github.com/pmatos/jsse/issues/380)) ([01537c0](https://github.com/pmatos/jsse/commit/01537c00cdae09f288ce1405af9cfd34dbc7717f))
+* **regexp:** preserve exact-zero capture slots ([#381](https://github.com/pmatos/jsse/issues/381)) ([c957b1c](https://github.com/pmatos/jsse/commit/c957b1cb42fc95c096b90494906878ae8d60ebe0))
+
 ## [0.4.6](https://github.com/pmatos/jsse/compare/v0.4.5...v0.4.6) (2026-07-23)
 
 
