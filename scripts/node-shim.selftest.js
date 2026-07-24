@@ -136,6 +136,43 @@ eq(
 );
 eq(util.format("%s", /re/g), "/re/g", "%s RegExp uses inspect");
 (function () {
+  var original = Object.getOwnPropertyDescriptor(
+    RegExp,
+    Symbol.hasInstance
+  );
+  try {
+    Object.defineProperty(RegExp, Symbol.hasInstance, {
+      configurable: true,
+      value: function () {
+        return false;
+      },
+    });
+    eq(
+      util.format("%s", /re/g),
+      "/re/g",
+      "%s RegExp ignores false Symbol.hasInstance"
+    );
+
+    Object.defineProperty(RegExp, Symbol.hasInstance, {
+      configurable: true,
+      value: function () {
+        throw new Error("patched RegExp Symbol.hasInstance called");
+      },
+    });
+    eq(
+      util.format("%s", /re/g),
+      "/re/g",
+      "%s RegExp ignores throwing Symbol.hasInstance"
+    );
+  } finally {
+    if (original) {
+      Object.defineProperty(RegExp, Symbol.hasInstance, original);
+    } else {
+      delete RegExp[Symbol.hasInstance];
+    }
+  }
+})();
+(function () {
   var original = RegExp.prototype.toString;
   try {
     RegExp.prototype.toString = function () {

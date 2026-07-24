@@ -61,6 +61,9 @@
   // formatter reads built-in internal slots rather than user-overridable
   // prototype methods.
   var functionCall = Function.prototype.call;
+  var functionHasInstance = functionCall.bind(
+    Function.prototype[Symbol.hasInstance]
+  );
   var objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
   var objectGetPrototypeOf = Object.getPrototypeOf;
   var dateGetTime = functionCall.bind(Date.prototype.getTime);
@@ -109,7 +112,7 @@
         return v.stack ? String(v.stack) : String(v.name) + ": " + String(v.message);
       }
       var boxed;
-      if (v instanceof RegExp) {
+      if (functionHasInstance(RegExp, v)) {
         boxed = tryApplyIntrinsic(regexpGetSource, v);
         if (boxed) return regexpToString(v);
       }
