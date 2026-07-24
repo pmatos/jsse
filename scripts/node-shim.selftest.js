@@ -235,6 +235,129 @@ eq(
   "[Symbol: Symbol(wrapped)]",
   "%s Symbol wrapper"
 );
+(function () {
+  var cases = [
+    [
+      Date,
+      function () {
+        return new Date(0);
+      },
+      "1970-01-01T00:00:00.000Z",
+      "Date",
+    ],
+    [
+      Number,
+      function () {
+        return new Number(1);
+      },
+      "[Number: 1]",
+      "Number",
+    ],
+    [
+      String,
+      function () {
+        return new String("x");
+      },
+      "[String: 'x']",
+      "String",
+    ],
+    [
+      Boolean,
+      function () {
+        return new Boolean(true);
+      },
+      "[Boolean: true]",
+      "Boolean",
+    ],
+    [
+      BigInt,
+      function () {
+        return Object(10n);
+      },
+      "Object [BigInt] {}",
+      "BigInt",
+    ],
+    [
+      Symbol,
+      function () {
+        return Object(Symbol("wrapped"));
+      },
+      "Object [Symbol] {}",
+      "Symbol",
+    ],
+  ];
+
+  for (var i = 0; i < cases.length; i++) {
+    var ctor = cases[i][0];
+    var makeValue = cases[i][1];
+    var expected = cases[i][2];
+    var name = cases[i][3];
+    var original = Object.getOwnPropertyDescriptor(ctor, Symbol.hasInstance);
+    try {
+      Object.defineProperty(ctor, Symbol.hasInstance, {
+        configurable: true,
+        value: function () {
+          return false;
+        },
+      });
+      eq(
+        util.format("%s", makeValue()),
+        expected,
+        "%s " + name + " ignores false Symbol.hasInstance"
+      );
+
+      Object.defineProperty(ctor, Symbol.hasInstance, {
+        configurable: true,
+        value: function () {
+          throw new Error("patched Symbol.hasInstance called");
+        },
+      });
+      eq(
+        util.format("%s", makeValue()),
+        expected,
+        "%s " + name + " ignores throwing Symbol.hasInstance"
+      );
+    } finally {
+      if (original) {
+        Object.defineProperty(ctor, Symbol.hasInstance, original);
+      } else {
+        delete ctor[Symbol.hasInstance];
+      }
+    }
+  }
+})();
+(function () {
+  var original = Object.getOwnPropertyDescriptor(Error, Symbol.hasInstance);
+  var modes = [
+    function () {
+      return false;
+    },
+    function () {
+      throw new Error("patched Error Symbol.hasInstance called");
+    },
+  ];
+  try {
+    for (var i = 0; i < modes.length; i++) {
+      Object.defineProperty(Error, Symbol.hasInstance, {
+        configurable: true,
+        value: modes[i],
+      });
+      truthy(
+        util.format("%s", new Error("has-instance sentinel"))
+          .indexOf("Error: has-instance sentinel") !== -1,
+        "%s Error ignores " +
+          (i === 0 ? "false" : "throwing") +
+          " Symbol.hasInstance"
+      );
+    }
+  } finally {
+    if (original) {
+      Object.defineProperty(Error, Symbol.hasInstance, original);
+    } else {
+      delete Error[Symbol.hasInstance];
+    }
+  }
+})();
 eq(
   util.format("%s", Object.create(Number.prototype)),
   "Number {}",

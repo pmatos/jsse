@@ -88,6 +88,14 @@
     }
   }
 
+  function tryInstanceOf(value, constructor) {
+    try {
+      return value instanceof constructor;
+    } catch (e) {
+      return false;
+    }
+  }
+
   function inspect(value, opts) {
     opts = opts || {};
     var maxDepth = typeof opts.depth === "number" ? opts.depth : 2;
@@ -108,7 +116,7 @@
 
       // Objects.
       if (seen.indexOf(v) !== -1) return "[Circular *1]";
-      if (v instanceof Error) {
+      if (functionHasInstance(Error, v)) {
         return v.stack ? String(v.stack) : String(v.name) + ": " + String(v.message);
       }
       var boxed;
@@ -116,31 +124,43 @@
         boxed = tryApplyIntrinsic(regexpGetSource, v);
         if (boxed) return regexpToString(v);
       }
-      if (v instanceof Date) {
+      if (functionHasInstance(Date, v)) {
         boxed = tryApplyIntrinsic(dateGetTime, v);
         if (boxed) {
           return isNaN(boxed.value) ? "Invalid Date" : dateToISOString(v);
         }
       }
-      if (v instanceof Number) {
+      if (functionHasInstance(Number, v)) {
         boxed = tryApplyIntrinsic(numberValueOf, v);
         if (boxed) return "[Number: " + render(boxed.value, depth) + "]";
       }
-      if (v instanceof String) {
+      if (functionHasInstance(String, v)) {
         boxed = tryApplyIntrinsic(stringValueOf, v);
         if (boxed) return "[String: " + render(boxed.value, depth) + "]";
       }
-      if (v instanceof Boolean) {
+      if (functionHasInstance(Boolean, v)) {
         boxed = tryApplyIntrinsic(booleanValueOf, v);
         if (boxed) return "[Boolean: " + render(boxed.value, depth) + "]";
       }
-      if (v instanceof BigInt) {
+      if (functionHasInstance(BigInt, v)) {
         boxed = tryApplyIntrinsic(bigintValueOf, v);
-        if (boxed) return "[BigInt: " + render(boxed.value, depth) + "]";
+        if (boxed) {
+          // Unlike the older wrappers above, Node's boxed BigInt/Symbol
+          // rendering intentionally observes a constructor's current
+          // @@hasInstance result. A false or throwing hook selects its generic
+          // object shape, but must not intercept the internal-slot probe.
+          return tryInstanceOf(v, BigInt)
+            ? "[BigInt: " + render(boxed.value, depth) + "]"
+            : "Object [BigInt] {}";
+        }
       }
-      if (v instanceof Symbol) {
+      if (functionHasInstance(Symbol, v)) {
         boxed = tryApplyIntrinsic(symbolToString, v);
-        if (boxed) return "[Symbol: " + boxed.value + "]";
+        if (boxed) {
+          return tryInstanceOf(v, Symbol)
+            ? "[Symbol: " + boxed.value + "]"
+            : "Object [Symbol] {}";
+        }
       }
 
       if (depth < 0) return Array.isArray(v) ? "[Array]" : "[Object]";
