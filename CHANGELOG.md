@@ -1,3 +1,10 @@
+## [0.4.8](https://github.com/pmatos/jsse/compare/v0.4.7...v0.4.8) (2026-07-24)
+
+
+### Bug Fixes
+
+* **interpreter:** deepen the String-exotic index predicate into string_exotic_index ([#383](https://github.com/pmatos/jsse/issues/383)) ([e334585](https://github.com/pmatos/jsse/commit/e334585e42812c0d919ed578b78b541ed0a6a8b4))
+
 ## [0.4.7](https://github.com/pmatos/jsse/compare/v0.4.6...v0.4.7) (2026-07-24)
 
 
