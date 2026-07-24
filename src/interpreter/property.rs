@@ -1002,13 +1002,10 @@ impl Interpreter {
                     if key.as_property_key_str() == Some("length") {
                         return Ok(false);
                     }
-                    if let Some(key_str) = key.as_property_key_str()
-                        && let Ok(idx) = key_str.parse::<usize>()
+                    if crate::interpreter::types::string_exotic_index(key, s.code_units.len())
+                        .is_some()
                     {
-                        let char_len = s.to_string().chars().count();
-                        if idx < char_len {
-                            return Ok(false);
-                        }
+                        return Ok(false);
                     }
                 }
             }

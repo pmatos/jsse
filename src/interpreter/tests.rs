@@ -2037,6 +2037,102 @@ mod string_to_number_seam_tests {
     }
 }
 
+/// §10.4.3 String-exotic objects expose an own indexed character property only
+/// when the key is the CanonicalNumericIndexString of an in-range integer.
+/// These exercise the public seams (member read, `in`, GetOwnPropertyDescriptor,
+/// DefineProperty, delete, Reflect) that all route through `string_exotic_index`.
+/// Expected values are node's (spec-conformant) results as known-good literals.
+mod string_exotic_index_seam_tests {
+    use super::*;
+
+    #[test]
+    fn non_canonical_index_keys_are_not_own_string_properties() {
+        // "01"/"+1"/"1.0" are not CanonicalNumericIndexStrings, so they name no
+        // own character property of the string; only "1" does.
+        let interp = run_script(
+            r#"
+            var s = "abc";
+            var o = Object("abc");
+            var report = [
+                String(s["01"]),
+                String(s["+1"]),
+                String(s["1.0"]),
+                String(s["1"]),
+                String(o["01"]),
+                ("01" in o),
+                ("1" in o),
+                (Object.getOwnPropertyDescriptor(o, "01") === undefined),
+                Object.keys(o).join(",")
+            ].join("|");
+            "#,
+        );
+        assert_eq!(
+            global_string(&interp, "report"),
+            "undefined|undefined|undefined|b|undefined|false|true|true|0,1,2"
+        );
+    }
+
+    #[test]
+    fn define_property_on_non_canonical_index_is_allowed() {
+        // "01" is an ordinary property key, so defineProperty must succeed and
+        // the value must read back (the string-index redefinition guard must
+        // not fire for a look-alike key).
+        let interp = run_script(
+            r#"
+            var o = Object("abc");
+            Object.defineProperty(o, "01", {
+                value: "z", writable: true, configurable: true, enumerable: true
+            });
+            // [[Set]] of a look-alike key must also store an ordinary property
+            // (the non-writable string-index guard must not fire for "+2").
+            var p = Object("abc");
+            p["+2"] = "w";
+            var report = String(o["01"]) + "|" + String(p["+2"]);
+            "#,
+        );
+        assert_eq!(global_string(&interp, "report"), "z|w");
+    }
+
+    #[test]
+    fn delete_distinguishes_canonical_indices_from_look_alikes() {
+        // Own indices are non-configurable (delete -> false); look-alikes are
+        // ordinary absent properties (delete -> true). Indexing is by UTF-16
+        // code unit, so both halves of a non-BMP code point are in range.
+        let interp = run_script(
+            r#"
+            var report = [
+                delete Object("abc")["01"],
+                delete Object("abc")[1],
+                Reflect.deleteProperty(Object("abc"), "1"),
+                Reflect.deleteProperty(Object("abc"), "01"),
+                Reflect.deleteProperty(Object("\u{1F4A9}"), "1"),
+                Reflect.deleteProperty(Object("\u{1F4A9}"), "0")
+            ].join(",");
+            "#,
+        );
+        assert_eq!(
+            global_string(&interp, "report"),
+            "true,false,false,true,false,false"
+        );
+    }
+
+    #[test]
+    fn strict_delete_of_own_string_index_throws_but_look_alike_succeeds() {
+        // Index 1 is a non-configurable own property, so strict-mode delete
+        // throws a TypeError; "01" is deletable and returns true.
+        let interp = run_script(
+            r#"
+            "use strict";
+            var deleted01 = delete Object("abc")["01"];
+            var threw = false;
+            try { delete Object("abc")[1]; } catch (e) { threw = (e instanceof TypeError); }
+            var report = String(deleted01) + "|" + String(threw);
+            "#,
+        );
+        assert_eq!(global_string(&interp, "report"), "true|true");
+    }
+}
+
 /// Node host-compat "syscall floor" (issue #229). These exercise the ON-path
 /// (`enable_node_host`); the OFF-path 0-regression guarantee is covered by the
 /// full test262 run, which never enables the floor.

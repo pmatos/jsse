@@ -801,7 +801,11 @@ impl Interpreter {
                                 && obj_b.class_name == "String"
                             {
                                 let is_exotic = key.eq_str("length")
-                                    || key.parse::<usize>().is_ok_and(|i| i < s.code_units.len());
+                                    || crate::interpreter::types::string_exotic_index(
+                                        &key,
+                                        s.code_units.len(),
+                                    )
+                                    .is_some();
                                 if is_exotic {
                                     drop(obj_b);
                                     if is_strict {
@@ -1428,14 +1432,10 @@ impl Interpreter {
             JsValue::String(s) => {
                 if name.eq_str("length") {
                     Completion::Normal(JsValue::Number(s.len() as f64))
-                } else if let Ok(idx) = name.parse::<usize>() {
-                    if idx < s.code_units.len() {
-                        Completion::Normal(JsValue::String(JsString::from_vec(vec![
-                            s.code_units[idx],
-                        ])))
-                    } else {
-                        Completion::Normal(JsValue::Undefined)
-                    }
+                } else if let Some(idx) =
+                    crate::interpreter::types::string_exotic_index(&name, s.code_units.len())
+                {
+                    Completion::Normal(JsValue::String(JsString::from_vec(vec![s.code_units[idx]])))
                 } else if let Some(sp_id) = self.realm().string_prototype {
                     Completion::Normal(self.get_property_on_id(sp_id, &name))
                 } else {
