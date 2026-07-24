@@ -515,7 +515,7 @@ impl Interpreter {
             Expression::Function(f) => {
                 let closure_env = if let Some(ref name) = f.name {
                     let func_env = Rc::new(RefCell::new(Environment {
-                        bindings: HashMap::new(),
+                        bindings: Default::default(),
                         parent: Some(env.clone()),
                         strict: env.borrow().strict || f.body_is_strict,
                         is_function_scope: false,
