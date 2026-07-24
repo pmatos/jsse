@@ -619,6 +619,47 @@ eq(
   );
 })();
 (function () {
+  var originalCall = Function.prototype.call;
+  var formatted;
+  try {
+    Function.prototype.call = function () {
+      throw new Error("patched Function call used");
+    };
+    formatted = util.format("%s", { a: 1 });
+  } finally {
+    Function.prototype.call = originalCall;
+  }
+  eq(
+    formatted,
+    "{ a: 1 }",
+    "%s classification ignores patched Function.prototype.call"
+  );
+})();
+(function () {
+  var proxy = new Proxy(
+    {},
+    {
+      get: function (target, key) {
+        if (key === "toString") {
+          return function () {
+            return "PROXY STRING";
+          };
+        }
+        if (key === Symbol.toPrimitive) return undefined;
+        return target[key];
+      },
+      getPrototypeOf: function () {
+        throw new Error("proxy getPrototypeOf trap called");
+      },
+    }
+  );
+  var formatted = util.format("%s", proxy);
+  truthy(
+    formatted === "PROXY STRING" || formatted === "Proxy({})",
+    "%s handles a throwing Proxy prototype walk"
+  );
+})();
+(function () {
   class Array {
     toString() {
       return "USER ARRAY";

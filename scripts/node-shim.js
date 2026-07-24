@@ -338,11 +338,13 @@
     }
     return names;
   })();
-  var objectHasOwnProperty = objectConstructor.prototype.hasOwnProperty;
+  var objectHasOwnProperty = functionCall.bind(
+    objectConstructor.prototype.hasOwnProperty
+  );
   var symbolToPrimitive = symbolConstructor.toPrimitive;
 
   function hasOwnProperty(value, key) {
-    return objectHasOwnProperty.call(value, key);
+    return objectHasOwnProperty(value, key);
   }
 
   function returnFalse() {
@@ -369,13 +371,19 @@
     }
 
     var pointer = value;
-    do {
-      pointer = objectGetPrototypeOf(pointer);
-    } while (
-      pointer !== null &&
-      !hasOwnToString(pointer, "toString") &&
-      !hasOwnToPrimitive(pointer, symbolToPrimitive)
-    );
+    try {
+      do {
+        pointer = objectGetPrototypeOf(pointer);
+      } while (
+        pointer !== null &&
+        !hasOwnToString(pointer, "toString") &&
+        !hasOwnToPrimitive(pointer, symbolToPrimitive)
+      );
+    } catch (e) {
+      // Node can unwrap proxies without invoking their prototype traps. The
+      // pure-JS shim cannot, so a failed owner walk uses ordinary coercion.
+      return false;
+    }
 
     // A callable hook visible through a Proxy get trap may not have an owner in
     // the reported prototype chain. Node can unwrap proxies internally; the
