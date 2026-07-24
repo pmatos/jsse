@@ -43,18 +43,88 @@
   // internals — a bottomless pit); it only needs to be correct on depth,
   // cycles, and the common types.
   function quoteString(s) {
+    s = stringConstructor(s);
     return (
       "'" +
-      String(s)
-        .replace(/\\/g, "\\\\")
-        .replace(/'/g, "\\'")
-        .replace(/\n/g, "\\n") +
+      stringReplace(
+        stringReplace(stringReplace(s, /\\/g, "\\\\"), /'/g, "\\'"),
+        /\n/g,
+        "\\n"
+      ) +
       "'"
     );
   }
 
   function isIdentifierKey(k) {
-    return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k);
+    return regexpTest(/^[A-Za-z_$][A-Za-z0-9_$]*$/, k);
+  }
+
+  // Capture uncurried intrinsics before bundled library code runs. Node's
+  // formatter reads built-in internal slots rather than user-overridable
+  // prototype methods.
+  var functionCall = Function.prototype.call;
+  var arrayConstructor = Array;
+  var bigintConstructor = BigInt;
+  var booleanConstructor = Boolean;
+  var dateConstructor = Date;
+  var errorConstructor = Error;
+  var numberConstructor = Number;
+  var objectConstructor = Object;
+  var regexpConstructor = RegExp;
+  var stringConstructor = String;
+  var symbolConstructor = Symbol;
+  var functionHasInstance = functionCall.bind(
+    Function.prototype[symbolConstructor.hasInstance]
+  );
+  var arrayIndexOf = functionCall.bind(arrayConstructor.prototype.indexOf);
+  var arrayIsArray = arrayConstructor.isArray;
+  var arrayJoin = functionCall.bind(arrayConstructor.prototype.join);
+  var objectGetOwnPropertyDescriptor =
+    objectConstructor.getOwnPropertyDescriptor;
+  var objectGetPrototypeOf = objectConstructor.getPrototypeOf;
+  var objectIs = objectConstructor.is;
+  var objectKeys = objectConstructor.keys;
+  var objectToString = functionCall.bind(objectConstructor.prototype.toString);
+  var numberIsNaN = numberConstructor.isNaN;
+  var dateGetTime = functionCall.bind(dateConstructor.prototype.getTime);
+  var dateToISOString = functionCall.bind(
+    dateConstructor.prototype.toISOString
+  );
+  var errorToString = functionCall.bind(errorConstructor.prototype.toString);
+  var regexpGetSource = functionCall.bind(
+    objectGetOwnPropertyDescriptor(regexpConstructor.prototype, "source").get
+  );
+  var regexpToString = functionCall.bind(
+    regexpConstructor.prototype.toString
+  );
+  var regexpTest = functionCall.bind(regexpConstructor.prototype.test);
+  var numberValueOf = functionCall.bind(numberConstructor.prototype.valueOf);
+  var stringValueOf = functionCall.bind(stringConstructor.prototype.valueOf);
+  var booleanValueOf = functionCall.bind(
+    booleanConstructor.prototype.valueOf
+  );
+  var bigintValueOf = functionCall.bind(bigintConstructor.prototype.valueOf);
+  var symbolToString = functionCall.bind(
+    symbolConstructor.prototype.toString
+  );
+  var stringReplace = functionCall.bind(stringConstructor.prototype.replace);
+
+  function tryApplyIntrinsic(intrinsic, value) {
+    try {
+      return { value: intrinsic(value) };
+    } catch (e) {
+      // `instanceof` also accepts objects that merely inherit a built-in
+      // prototype. Only a genuine instance has the corresponding internal slot.
+      return null;
+    }
+  }
+
+  function tryInstanceOf(value, constructor) {
+    try {
+      return value instanceof constructor;
+    } catch (e) {
+      return false;
+    }
   }
 
   function inspect(value, opts) {
@@ -67,35 +137,86 @@
       if (v === null) return "null";
       if (t === "undefined") return "undefined";
       if (t === "string") return quoteString(v);
-      if (t === "number") return Object.is(v, -0) ? "-0" : String(v);
-      if (t === "bigint") return String(v) + "n";
-      if (t === "boolean") return String(v);
+      if (t === "number") return objectIs(v, -0) ? "-0" : stringConstructor(v);
+      if (t === "bigint") return stringConstructor(v) + "n";
+      if (t === "boolean") return stringConstructor(v);
       if (t === "symbol") return v.toString();
       if (t === "function") {
         return "[Function" + (v.name ? ": " + v.name : " (anonymous)") + "]";
       }
 
       // Objects.
-      if (seen.indexOf(v) !== -1) return "[Circular *1]";
-      if (v instanceof Error) {
-        return v.stack ? String(v.stack) : String(v.name) + ": " + String(v.message);
+      if (arrayIndexOf(seen, v) !== -1) return "[Circular *1]";
+      if (functionHasInstance(errorConstructor, v)) {
+        var stack;
+        try {
+          stack = v.stack;
+        } catch (e) {
+          // Node ignores a throwing stack getter and renders the intrinsic
+          // Error string as a stackless error.
+        }
+        if (stack) return stringConstructor(stack);
+        try {
+          return "[" + errorToString(v) + "]";
+        } catch (e) {
+          return objectToString(v);
+        }
       }
-      if (v instanceof RegExp) return String(v);
-      if (v instanceof Date) {
-        return isNaN(v.getTime()) ? "Invalid Date" : v.toISOString();
+      var boxed;
+      if (functionHasInstance(regexpConstructor, v)) {
+        boxed = tryApplyIntrinsic(regexpGetSource, v);
+        if (boxed) return regexpToString(v);
+      }
+      if (functionHasInstance(dateConstructor, v)) {
+        boxed = tryApplyIntrinsic(dateGetTime, v);
+        if (boxed) {
+          return numberIsNaN(boxed.value) ? "Invalid Date" : dateToISOString(v);
+        }
+      }
+      if (functionHasInstance(numberConstructor, v)) {
+        boxed = tryApplyIntrinsic(numberValueOf, v);
+        if (boxed) return "[Number: " + render(boxed.value, depth) + "]";
+      }
+      if (functionHasInstance(stringConstructor, v)) {
+        boxed = tryApplyIntrinsic(stringValueOf, v);
+        if (boxed) return "[String: " + render(boxed.value, depth) + "]";
+      }
+      if (functionHasInstance(booleanConstructor, v)) {
+        boxed = tryApplyIntrinsic(booleanValueOf, v);
+        if (boxed) return "[Boolean: " + render(boxed.value, depth) + "]";
+      }
+      if (functionHasInstance(bigintConstructor, v)) {
+        boxed = tryApplyIntrinsic(bigintValueOf, v);
+        if (boxed) {
+          // Unlike the older wrappers above, Node's boxed BigInt/Symbol
+          // rendering intentionally observes a constructor's current
+          // @@hasInstance result. A false or throwing hook selects its generic
+          // object shape, but must not intercept the internal-slot probe.
+          return tryInstanceOf(v, bigintConstructor)
+            ? "[BigInt: " + render(boxed.value, depth) + "]"
+            : "Object [BigInt] {}";
+        }
+      }
+      if (functionHasInstance(symbolConstructor, v)) {
+        boxed = tryApplyIntrinsic(symbolToString, v);
+        if (boxed) {
+          return tryInstanceOf(v, symbolConstructor)
+            ? "[Symbol: " + boxed.value + "]"
+            : "Object [Symbol] {}";
+        }
       }
 
-      if (depth < 0) return Array.isArray(v) ? "[Array]" : "[Object]";
+      if (depth < 0) return arrayIsArray(v) ? "[Array]" : "[Object]";
 
       seen.push(v);
       var out;
       try {
-        if (Array.isArray(v)) {
+        if (arrayIsArray(v)) {
           var items = [];
           for (var i = 0; i < v.length; i++) items.push(renderMember(v, i, depth));
-          out = items.length ? "[ " + items.join(", ") + " ]" : "[]";
+          out = items.length ? "[ " + arrayJoin(items, ", ") + " ]" : "[]";
         } else {
-          var keys = Object.keys(v);
+          var keys = objectKeys(v);
           var parts = [];
           for (var j = 0; j < keys.length; j++) {
             var k = keys[j];
@@ -104,7 +225,7 @@
           }
           var ctorName = constructorName(v);
           out = parts.length
-            ? ctorName + "{ " + parts.join(", ") + " }"
+            ? ctorName + "{ " + arrayJoin(parts, ", ") + " }"
             : ctorName + "{}";
         }
       } finally {
@@ -119,7 +240,7 @@
     // cannot make a diagnostic print throw/mutate under jsse where it would not
     // under Node.
     function renderMember(container, key, depth) {
-      var desc = Object.getOwnPropertyDescriptor(container, key);
+      var desc = objectGetOwnPropertyDescriptor(container, key);
       if (desc && (desc.get || desc.set)) {
         return desc.get ? (desc.set ? "[Getter/Setter]" : "[Getter]") : "[Setter]";
       }
@@ -133,13 +254,13 @@
     function constructorName(v) {
       try {
         var ctor;
-        var own = Object.getOwnPropertyDescriptor(v, "constructor");
+        var own = objectGetOwnPropertyDescriptor(v, "constructor");
         if (own) {
           if (!own.get && !own.set) ctor = own.value;
         } else {
-          var proto = Object.getPrototypeOf(v);
+          var proto = objectGetPrototypeOf(v);
           var pd = proto
-            ? Object.getOwnPropertyDescriptor(proto, "constructor")
+            ? objectGetOwnPropertyDescriptor(proto, "constructor")
             : null;
           if (pd && !pd.get && !pd.set) ctor = pd.value;
         }
@@ -156,6 +277,127 @@
   //
   // Node's printf-style formatter. The %s %d %i %f %j %c %% specifiers are
   // deterministic and matched exactly; %o/%O defer to the best-effort inspect.
+  // Node creates this set from globalThis while internal/util/inspect is
+  // bootstrapping. By the time user code runs, Node and jsse have both added
+  // more globals, but those late names are deliberately absent from Node's
+  // classifier. Keep the Node 26.5.0 bootstrap membership explicit so jsse-only
+  // globals (for example ShadowRealm) cannot change %s dispatch.
+  var builtInObjectNames = (function () {
+    var names = Object.create(null);
+    var nodeBootstrapNames = [
+      "Object",
+      "Function",
+      "Array",
+      "Number",
+      "Infinity",
+      "NaN",
+      "Boolean",
+      "String",
+      "Symbol",
+      "Date",
+      "Promise",
+      "RegExp",
+      "Error",
+      "AggregateError",
+      "EvalError",
+      "RangeError",
+      "ReferenceError",
+      "SyntaxError",
+      "TypeError",
+      "URIError",
+      "JSON",
+      "Math",
+      "Intl",
+      "ArrayBuffer",
+      "Atomics",
+      "Uint8Array",
+      "Int8Array",
+      "Uint16Array",
+      "Int16Array",
+      "Uint32Array",
+      "Int32Array",
+      "BigUint64Array",
+      "BigInt64Array",
+      "Uint8ClampedArray",
+      "Float32Array",
+      "Float64Array",
+      "DataView",
+      "Map",
+      "BigInt",
+      "Set",
+      "Iterator",
+      "WeakMap",
+      "WeakSet",
+      "Proxy",
+      "Reflect",
+      "FinalizationRegistry",
+      "WeakRef",
+    ];
+    for (var i = 0; i < nodeBootstrapNames.length; i++) {
+      names[nodeBootstrapNames[i]] = true;
+    }
+    return names;
+  })();
+  var objectHasOwnProperty = functionCall.bind(
+    objectConstructor.prototype.hasOwnProperty
+  );
+  var symbolToPrimitive = symbolConstructor.toPrimitive;
+
+  function hasOwnProperty(value, key) {
+    return objectHasOwnProperty(value, key);
+  }
+
+  function returnFalse() {
+    return false;
+  }
+
+  // Match Node's hasBuiltInToString classification. A bundled library's
+  // prototype method is user-defined even when inherited, while coercion hooks
+  // owned by a built-in prototype route through inspect.
+  function hasBuiltInToString(value) {
+    var hasOwnToString = hasOwnProperty;
+    var hasOwnToPrimitive = hasOwnProperty;
+
+    if (typeof value.toString !== "function") {
+      if (typeof value[symbolToPrimitive] !== "function") return true;
+      if (hasOwnProperty(value, symbolToPrimitive)) return false;
+      hasOwnToString = returnFalse;
+    } else if (hasOwnProperty(value, "toString")) {
+      return false;
+    } else if (typeof value[symbolToPrimitive] !== "function") {
+      hasOwnToPrimitive = returnFalse;
+    } else if (hasOwnProperty(value, symbolToPrimitive)) {
+      return false;
+    }
+
+    var pointer = value;
+    try {
+      do {
+        pointer = objectGetPrototypeOf(pointer);
+      } while (
+        pointer !== null &&
+        !hasOwnToString(pointer, "toString") &&
+        !hasOwnToPrimitive(pointer, symbolToPrimitive)
+      );
+    } catch (e) {
+      // Node can unwrap proxies without invoking their prototype traps. The
+      // pure-JS shim cannot, so a failed owner walk uses ordinary coercion.
+      return false;
+    }
+
+    // A callable hook visible through a Proxy get trap may not have an owner in
+    // the reported prototype chain. Node can unwrap proxies internally; the
+    // pure-JS shim cannot, so treat that hook as user-defined.
+    if (pointer === null) return false;
+
+    var descriptor = objectGetOwnPropertyDescriptor(pointer, "constructor");
+    return (
+      descriptor !== undefined &&
+      typeof descriptor.value === "function" &&
+      builtInObjectNames[descriptor.value.name] === true
+    );
+  }
+
   function convS(v) {
     var t = typeof v;
     if (t === "string") return v;
@@ -166,12 +408,7 @@
     if (t === "boolean") return String(v);
     if (t === "symbol") return v.toString();
     if (t === "function") return inspect(v, { depth: 0 });
-    // Object: String() when it defines its own toString, else inspect (Node
-    // uses inspect with depth 0 here).
-    if (typeof v.toString === "function" && v.toString !== Object.prototype.toString) {
-      return String(v);
-    }
-    return inspect(v, { depth: 0 });
+    return hasBuiltInToString(v) ? inspect(v, { depth: 0 }) : String(v);
   }
 
   function convD(v) {

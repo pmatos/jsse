@@ -130,12 +130,14 @@ and on **Node**, and requires both to exit 0 and emit byte-identical stdout.
 Node is the oracle for the deterministic surfaces — the `util.format` specifiers
 (`%s %d %i %f %j %c %%`), byte-accurate `process.stdout.write`, and the
 `console.count`/`group`/`assert` output shapes are asserted exactly. The
-byte-exact `%s` guarantee covers primitives and objects with a user-defined
-`toString`; `%s`/`%o`/`%O` of plain objects and arrays route through
-`util.inspect`, which is intentionally best-effort (depth, cycles, common types)
-— it does not invoke getters, but it is only smoke-tested structurally and never
-byte-compared against Node. (Fully Node-accurate `%s` object dispatch is tracked
-separately.)
+byte-exact `%s` guarantee covers primitives and objects whose coercion hooks
+Node classifies as user-defined. The shim carries Node's bootstrap built-in-name
+set explicitly, because later Node globals and jsse-only globals are not members
+of that classifier. Objects with built-in coercion hooks (including plain
+objects and arrays) route through `util.inspect`; the dispatch matches Node,
+while the resulting inspection is intentionally best-effort (depth, cycles,
+common types) — it does not invoke getters, but it is only smoke-tested
+structurally and never generally byte-compared against Node.
 
 ## Shared test-runner harness (`node-test-harness.js`)
 
