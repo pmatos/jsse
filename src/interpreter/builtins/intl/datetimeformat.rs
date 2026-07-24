@@ -1,7 +1,8 @@
 use super::super::super::*;
+use super::super::temporal::canonicalize_iana_tz;
 use crate::interpreter::helpers::{
-    date_from_time, hour_from_time, min_from_time, month_from_time, ms_from_time, now_ms,
-    sec_from_time, week_day, year_from_time,
+    date_from_time, hour_from_time, min_from_time, month_from_time, ms_from_time,
+    named_time_zone_offset_ms, now_ms, sec_from_time, week_day, year_from_time,
 };
 
 fn extract_unicode_extension(locale: &str, key: &str) -> Option<String> {
@@ -202,7 +203,6 @@ fn tz_offset_ms(tz: &str, epoch_ms: f64) -> f64 {
         return total_min as f64 * 60_000.0;
     }
 
-    use chrono::{Offset, TimeZone, Utc};
     use chrono_tz::Tz;
 
     let canonical = canonicalize_timezone(tz);
@@ -212,13 +212,10 @@ fn tz_offset_ms(tz: &str, epoch_ms: f64) -> f64 {
         tz.to_string()
     };
 
-    if let Ok(tz_parsed) = tz_str.parse::<Tz>() {
-        let epoch_secs = (epoch_ms / 1000.0).floor() as i64;
-        let nanos = ((epoch_ms % 1000.0) * 1_000_000.0).abs() as u32;
-        if let Some(dt) = Utc.timestamp_opt(epoch_secs, nanos).single() {
-            let offset = dt.with_timezone(&tz_parsed).offset().fix();
-            return offset.local_minus_utc() as f64 * 1000.0;
-        }
+    if let Ok(tz_parsed) = tz_str.parse::<Tz>()
+        && let Some(offset_ms) = named_time_zone_offset_ms(tz_parsed, epoch_ms)
+    {
+        return offset_ms;
     }
 
     // Fallback to static lookup
@@ -6329,7 +6326,7 @@ impl Interpreter {
                             canonicalize_timezone(&tz)
                         }
                     } else {
-                        "UTC".to_string()
+                        canonicalize_iana_tz(&system_time_zone_identifier())
                     };
 
                 // Step 36: Table 7 component options (in table order)

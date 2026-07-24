@@ -1,0 +1,73 @@
+use std::process::Command;
+
+fn assert_tz_environment_controls_the_system_time_zone(tz: &str) {
+    let output = Command::new(env!("CARGO_BIN_EXE_jsse"))
+        .env("TZ", tz)
+        .args([
+            "-e",
+            r#"
+console.log(new Intl.DateTimeFormat().resolvedOptions().timeZone);
+console.log(Temporal.Now.timeZoneId());
+console.log(new Date("2024-01-15T12:00:00Z").getTimezoneOffset());
+console.log(new Date("2024-07-15T12:00:00Z").getTimezoneOffset());
+console.log(new Date(2024, 0, 15, 12).toISOString());
+console.log(new Date(2024, 2, 10, 2, 30).toISOString());
+console.log(new Date(2024, 10, 3, 1, 30).toISOString());
+console.log((new Date(2023, 4, 6) - new Date(2023, 0, 1)) / 3600000);
+console.log(new Date(2100, 6, 15, 12).toISOString());
+console.log(new Date(275760, 8, 12, 20).toISOString());
+console.log(new Date(8640000000000000).getTimezoneOffset());
+var maxDateParts = new Intl.DateTimeFormat("en-US", {
+  hour: "numeric",
+  timeZoneName: "shortOffset"
+}).formatToParts(new Date(8640000000000000));
+console.log(maxDateParts.find(function(part) { return part.type === "hour"; }).value);
+console.log(maxDateParts.find(function(part) { return part.type === "timeZoneName"; }).value);
+console.log(new Date(-271821, 3, 20, 20).toISOString());
+console.log(new Date(-8640000000000000).getTimezoneOffset() !== 0);
+"#,
+        ])
+        .output()
+        .expect("failed to run jsse");
+
+    assert!(
+        output.status.success(),
+        "jsse failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8(output.stdout).expect("jsse stdout was not UTF-8"),
+        concat!(
+            "America/New_York\n",
+            "America/New_York\n",
+            "300\n",
+            "240\n",
+            "2024-01-15T17:00:00.000Z\n",
+            "2024-03-10T07:30:00.000Z\n",
+            "2024-11-03T05:30:00.000Z\n",
+            "2999\n",
+            "2100-07-15T16:00:00.000Z\n",
+            "+275760-09-13T00:00:00.000Z\n",
+            "240\n",
+            "8\n",
+            "GMT-4\n",
+            "-271821-04-21T00:56:02.000Z\n",
+            "true\n",
+        )
+    );
+}
+
+#[test]
+fn tz_environment_controls_the_system_time_zone_and_date_offsets() {
+    assert_tz_environment_controls_the_system_time_zone("America/New_York");
+}
+
+#[test]
+fn posix_tz_environment_controls_the_system_time_zone_and_date_offsets() {
+    assert_tz_environment_controls_the_system_time_zone(":America/New_York");
+}
+
+#[test]
+fn iana_link_tz_environment_uses_the_primary_time_zone_identifier() {
+    assert_tz_environment_controls_the_system_time_zone("US/Eastern");
+}
