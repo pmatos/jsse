@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct GeneratorStateMachine {
+pub(crate) struct GeneratorStateMachine {
     pub states: Vec<GeneratorState>,
     pub local_vars: Vec<LocalVariable>,
     pub params: Vec<Pattern>,
@@ -15,14 +15,14 @@ pub struct GeneratorStateMachine {
 
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct GeneratorState {
+pub(crate) struct GeneratorState {
     pub id: usize,
     pub body: Body,
     pub terminator: StateTerminator,
 }
 
 #[derive(Debug, Clone)]
-pub enum StateTerminator {
+pub(crate) enum StateTerminator {
     Yield {
         value: Option<Expression>,
         is_delegate: bool,
@@ -166,24 +166,24 @@ fn clear_terminator_ic_sites(t: &mut StateTerminator) {
 }
 
 #[derive(Debug, Clone)]
-pub struct CatchInfo {
+pub(crate) struct CatchInfo {
     pub state: usize,
     pub param: Option<Pattern>,
 }
 
 #[derive(Debug, Clone)]
-pub struct SwitchCaseTarget {
+pub(crate) struct SwitchCaseTarget {
     pub test: Expression,
     pub state: usize,
 }
 
 #[derive(Debug, Clone)]
-pub struct SentValueBinding {
+pub(crate) struct SentValueBinding {
     pub kind: SentValueBindingKind,
 }
 
 #[derive(Debug, Clone)]
-pub enum SentValueBindingKind {
+pub(crate) enum SentValueBindingKind {
     Variable(String),
     Pattern(Pattern),
     #[allow(dead_code)]
@@ -288,11 +288,14 @@ impl TransformContext {
     }
 }
 
-pub fn transform_generator(body: &[Statement], params: &[Pattern]) -> GeneratorStateMachine {
+pub(crate) fn transform_generator(body: &[Statement], params: &[Pattern]) -> GeneratorStateMachine {
     transform_generator_inner(body, params, false)
 }
 
-pub fn transform_async_generator(body: &[Statement], params: &[Pattern]) -> GeneratorStateMachine {
+pub(crate) fn transform_async_generator(
+    body: &[Statement],
+    params: &[Pattern],
+) -> GeneratorStateMachine {
     transform_generator_inner(body, params, true)
 }
 
@@ -2094,7 +2097,10 @@ fn transform_labeled_statement(
     ctx.current_state_id = after_labeled;
 }
 
-pub fn transform_async_function(body: &[Statement], params: &[Pattern]) -> GeneratorStateMachine {
+pub(crate) fn transform_async_function(
+    body: &[Statement],
+    params: &[Pattern],
+) -> GeneratorStateMachine {
     let rewritten = rewrite_stmts_await_to_yield(body);
     let mut machine = transform_generator_inner_opts(&rewritten, params, true, true);
     rewrite_terminators_yield_to_await(&mut machine);

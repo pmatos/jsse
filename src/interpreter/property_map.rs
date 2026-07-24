@@ -16,7 +16,7 @@ const INLINE_CAP: usize = 4;
 // once the inline buffer overflows. Spill is one-way; deletes never collapse
 // back to inline. Iteration order is unspecified — ordered iteration must
 // continue to go through `JsObjectData.property_order`.
-pub struct PropertyMap {
+pub(crate) struct PropertyMap {
     inner: PropertyMapInner,
 }
 
@@ -34,13 +34,13 @@ enum PropertyMapInner {
 }
 
 impl PropertyMap {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             inner: PropertyMapInner::Inline(SmallVec::new()),
         }
     }
 
-    pub fn contains_key<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> bool {
+    pub(crate) fn contains_key<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> bool {
         match &self.inner {
             PropertyMapInner::Inline(v) => v
                 .iter()
@@ -49,7 +49,7 @@ impl PropertyMap {
         }
     }
 
-    pub fn get<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<&PropertyDescriptor> {
+    pub(crate) fn get<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<&PropertyDescriptor> {
         match &self.inner {
             PropertyMapInner::Inline(v) => v
                 .iter()
@@ -59,7 +59,7 @@ impl PropertyMap {
         }
     }
 
-    pub fn get_mut<K: PropertyKeyLike + ?Sized>(
+    pub(crate) fn get_mut<K: PropertyKeyLike + ?Sized>(
         &mut self,
         key: &K,
     ) -> Option<&mut PropertyDescriptor> {
@@ -72,7 +72,7 @@ impl PropertyMap {
         }
     }
 
-    pub fn insert(
+    pub(crate) fn insert(
         &mut self,
         key: JsPropertyKey,
         value: PropertyDescriptor,
@@ -102,7 +102,10 @@ impl PropertyMap {
         }
     }
 
-    pub fn remove<K: PropertyKeyLike + ?Sized>(&mut self, key: &K) -> Option<PropertyDescriptor> {
+    pub(crate) fn remove<K: PropertyKeyLike + ?Sized>(
+        &mut self,
+        key: &K,
+    ) -> Option<PropertyDescriptor> {
         match &mut self.inner {
             PropertyMapInner::Inline(v) => {
                 let pos = v
@@ -114,7 +117,7 @@ impl PropertyMap {
         }
     }
 
-    pub fn iter(&self) -> PropertyMapIter<'_> {
+    pub(crate) fn iter(&self) -> PropertyMapIter<'_> {
         let inner = match &self.inner {
             PropertyMapInner::Inline(v) => PropertyMapIterInner::Inline(v.iter()),
             PropertyMapInner::Spilled(m) => PropertyMapIterInner::Spilled(m.iter()),
@@ -122,11 +125,11 @@ impl PropertyMap {
         PropertyMapIter { inner }
     }
 
-    pub fn keys(&self) -> impl Iterator<Item = &JsPropertyKey> {
+    pub(crate) fn keys(&self) -> impl Iterator<Item = &JsPropertyKey> {
         self.iter().map(|(k, _)| k)
     }
 
-    pub fn values(&self) -> impl Iterator<Item = &PropertyDescriptor> {
+    pub(crate) fn values(&self) -> impl Iterator<Item = &PropertyDescriptor> {
         self.iter().map(|(_, v)| v)
     }
 }
@@ -137,7 +140,7 @@ impl Default for PropertyMap {
     }
 }
 
-pub struct PropertyMapIter<'a> {
+pub(crate) struct PropertyMapIter<'a> {
     inner: PropertyMapIterInner<'a>,
 }
 

@@ -17,7 +17,7 @@ enum PrivateNameKind {
 }
 
 #[derive(Debug)]
-pub struct ParseError {
+pub(crate) struct ParseError {
     pub message: String,
 }
 
@@ -33,7 +33,7 @@ impl From<LexError> for ParseError {
     }
 }
 
-pub struct Parser<'a> {
+pub(crate) struct Parser<'a> {
     source: &'a str,
     source_text_source: Rc<str>,
     lexer: Lexer<'a>,
@@ -81,7 +81,7 @@ pub struct Parser<'a> {
 const MAX_PARSE_DEPTH: u32 = 4_000;
 
 impl<'a> Parser<'a> {
-    pub fn new(source: &'a str) -> Result<Self, ParseError> {
+    pub(crate) fn new(source: &'a str) -> Result<Self, ParseError> {
         let mut lexer = Lexer::new(source);
         let mut had_lt = false;
         let current = loop {
@@ -225,31 +225,31 @@ impl<'a> Parser<'a> {
         Some(SourceText::new(self.source_text_source.clone(), start, end))
     }
 
-    pub fn set_strict(&mut self, strict: bool) {
+    pub(crate) fn set_strict(&mut self, strict: bool) {
         self.strict = strict;
         self.lexer.strict = strict;
     }
 
-    pub fn set_eval_in_class_with_names(&mut self, names: HashSet<String>) {
+    pub(crate) fn set_eval_in_class_with_names(&mut self, names: HashSet<String>) {
         self.private_name_scopes.push((names, Vec::new()));
     }
 
-    pub fn set_eval_in_field_initializer(&mut self) {
+    pub(crate) fn set_eval_in_field_initializer(&mut self) {
         self.in_field_initializer_eval = true;
         self.allow_super_property = true;
         self.in_function += 1;
         self.in_non_arrow_function += 1;
     }
 
-    pub fn set_eval_new_target_allowed(&mut self) {
+    pub(crate) fn set_eval_new_target_allowed(&mut self) {
         self.eval_new_target_allowed = true;
     }
 
-    pub fn set_eval_allow_super_property(&mut self) {
+    pub(crate) fn set_eval_allow_super_property(&mut self) {
         self.allow_super_property = true;
     }
 
-    pub fn set_eval_allow_super_call(&mut self) {
+    pub(crate) fn set_eval_allow_super_call(&mut self) {
         self.allow_super_call = true;
     }
 
@@ -278,7 +278,7 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
-    pub fn validate_eval_private_names(&mut self) -> Result<(), ParseError> {
+    pub(crate) fn validate_eval_private_names(&mut self) -> Result<(), ParseError> {
         while !self.private_name_scopes.is_empty() {
             self.pop_private_scope()?;
         }
@@ -1068,7 +1068,7 @@ impl<'a> Parser<'a> {
         )
     }
 
-    pub fn parse_program(&mut self) -> Result<Program, ParseError> {
+    pub(crate) fn parse_program(&mut self) -> Result<Program, ParseError> {
         let mut body = Vec::new();
         let mut in_directive_prologue = true;
         let mut body_is_strict = false;
@@ -1152,7 +1152,7 @@ impl<'a> Parser<'a> {
         Ok(program)
     }
 
-    pub fn parse_program_as_module(&mut self) -> Result<Program, ParseError> {
+    pub(crate) fn parse_program_as_module(&mut self) -> Result<Program, ParseError> {
         self.is_module = true;
         self.lexer.is_module = true;
         self.set_strict(true);

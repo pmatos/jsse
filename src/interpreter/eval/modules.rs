@@ -170,7 +170,7 @@ impl Interpreter {
     }
 
     /// IsSymbolLikeNamespaceKey(P, O): true if P is a Symbol, or deferred + "then"
-    pub fn is_symbol_like_namespace_key<K: PropertyKeyLike + ?Sized>(
+    pub(crate) fn is_symbol_like_namespace_key<K: PropertyKeyLike + ?Sized>(
         key: &K,
         deferred: bool,
     ) -> bool {
