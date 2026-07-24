@@ -136,6 +136,33 @@ eq(
 );
 eq(util.format("%s", /re/g), "/re/g", "%s RegExp uses inspect");
 (function () {
+  var originalDate = globalThis.Date;
+  var originalRegExp = globalThis.RegExp;
+  var date = new originalDate(0);
+  var regexp = new originalRegExp("re", "g");
+  var formattedDate;
+  var formattedRegExp;
+  try {
+    globalThis.Date = function Date() {};
+    globalThis.RegExp = function RegExp() {};
+    formattedDate = util.format("%s", date);
+    formattedRegExp = util.format("%s", regexp);
+  } finally {
+    globalThis.Date = originalDate;
+    globalThis.RegExp = originalRegExp;
+  }
+  eq(
+    formattedDate,
+    "1970-01-01T00:00:00.000Z",
+    "%s Date ignores a replaced global constructor"
+  );
+  eq(
+    formattedRegExp,
+    "/re/g",
+    "%s RegExp ignores a replaced global constructor"
+  );
+})();
+(function () {
   var original = Object.getOwnPropertyDescriptor(
     RegExp,
     Symbol.hasInstance
@@ -547,6 +574,49 @@ eq(
     Object.getPrototypeOf = originalGetPrototypeOf;
     Object.getOwnPropertyDescriptor = originalGetOwnPropertyDescriptor;
   }
+})();
+(function () {
+  var originalIsArray = Array.isArray;
+  var originalIndexOf = Array.prototype.indexOf;
+  var originalJoin = Array.prototype.join;
+  var originalTest = RegExp.prototype.test;
+  var originalReplace = String.prototype.replace;
+  var originalIs = Object.is;
+  var originalKeys = Object.keys;
+  var formattedArray;
+  var formattedObject;
+  var fail = function () {
+    throw new Error("patched inspect helper called");
+  };
+  try {
+    Array.isArray = fail;
+    Array.prototype.indexOf = fail;
+    Array.prototype.join = fail;
+    Object.is = fail;
+    Object.keys = fail;
+    RegExp.prototype.test = fail;
+    String.prototype.replace = fail;
+    formattedArray = util.format("%s", ["x", -0]);
+    formattedObject = util.format("%s", { "not-key": 1 });
+  } finally {
+    Array.isArray = originalIsArray;
+    Array.prototype.indexOf = originalIndexOf;
+    Array.prototype.join = originalJoin;
+    Object.is = originalIs;
+    Object.keys = originalKeys;
+    RegExp.prototype.test = originalTest;
+    String.prototype.replace = originalReplace;
+  }
+  eq(
+    formattedArray,
+    "[ 'x', -0 ]",
+    "%s array ignores patched inspect helpers"
+  );
+  eq(
+    formattedObject,
+    "{ 'not-key': 1 }",
+    "%s object ignores patched inspect helpers"
+  );
 })();
 (function () {
   class Array {

@@ -43,42 +43,71 @@
   // internals — a bottomless pit); it only needs to be correct on depth,
   // cycles, and the common types.
   function quoteString(s) {
+    s = stringConstructor(s);
     return (
       "'" +
-      String(s)
-        .replace(/\\/g, "\\\\")
-        .replace(/'/g, "\\'")
-        .replace(/\n/g, "\\n") +
+      stringReplace(
+        stringReplace(stringReplace(s, /\\/g, "\\\\"), /'/g, "\\'"),
+        /\n/g,
+        "\\n"
+      ) +
       "'"
     );
   }
 
   function isIdentifierKey(k) {
-    return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(k);
+    return regexpTest(/^[A-Za-z_$][A-Za-z0-9_$]*$/, k);
   }
 
   // Capture uncurried intrinsics before bundled library code runs. Node's
   // formatter reads built-in internal slots rather than user-overridable
   // prototype methods.
   var functionCall = Function.prototype.call;
+  var arrayConstructor = Array;
+  var bigintConstructor = BigInt;
+  var booleanConstructor = Boolean;
+  var dateConstructor = Date;
+  var errorConstructor = Error;
+  var numberConstructor = Number;
+  var objectConstructor = Object;
+  var regexpConstructor = RegExp;
+  var stringConstructor = String;
+  var symbolConstructor = Symbol;
   var functionHasInstance = functionCall.bind(
-    Function.prototype[Symbol.hasInstance]
+    Function.prototype[symbolConstructor.hasInstance]
   );
-  var objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
-  var objectGetPrototypeOf = Object.getPrototypeOf;
-  var objectToString = functionCall.bind(Object.prototype.toString);
-  var dateGetTime = functionCall.bind(Date.prototype.getTime);
-  var dateToISOString = functionCall.bind(Date.prototype.toISOString);
-  var errorToString = functionCall.bind(Error.prototype.toString);
+  var arrayIndexOf = functionCall.bind(arrayConstructor.prototype.indexOf);
+  var arrayIsArray = arrayConstructor.isArray;
+  var arrayJoin = functionCall.bind(arrayConstructor.prototype.join);
+  var objectGetOwnPropertyDescriptor =
+    objectConstructor.getOwnPropertyDescriptor;
+  var objectGetPrototypeOf = objectConstructor.getPrototypeOf;
+  var objectIs = objectConstructor.is;
+  var objectKeys = objectConstructor.keys;
+  var objectToString = functionCall.bind(objectConstructor.prototype.toString);
+  var numberIsNaN = numberConstructor.isNaN;
+  var dateGetTime = functionCall.bind(dateConstructor.prototype.getTime);
+  var dateToISOString = functionCall.bind(
+    dateConstructor.prototype.toISOString
+  );
+  var errorToString = functionCall.bind(errorConstructor.prototype.toString);
   var regexpGetSource = functionCall.bind(
-    objectGetOwnPropertyDescriptor(RegExp.prototype, "source").get
+    objectGetOwnPropertyDescriptor(regexpConstructor.prototype, "source").get
   );
-  var regexpToString = functionCall.bind(RegExp.prototype.toString);
-  var numberValueOf = functionCall.bind(Number.prototype.valueOf);
-  var stringValueOf = functionCall.bind(String.prototype.valueOf);
-  var booleanValueOf = functionCall.bind(Boolean.prototype.valueOf);
-  var bigintValueOf = functionCall.bind(BigInt.prototype.valueOf);
-  var symbolToString = functionCall.bind(Symbol.prototype.toString);
+  var regexpToString = functionCall.bind(
+    regexpConstructor.prototype.toString
+  );
+  var regexpTest = functionCall.bind(regexpConstructor.prototype.test);
+  var numberValueOf = functionCall.bind(numberConstructor.prototype.valueOf);
+  var stringValueOf = functionCall.bind(stringConstructor.prototype.valueOf);
+  var booleanValueOf = functionCall.bind(
+    booleanConstructor.prototype.valueOf
+  );
+  var bigintValueOf = functionCall.bind(bigintConstructor.prototype.valueOf);
+  var symbolToString = functionCall.bind(
+    symbolConstructor.prototype.toString
+  );
+  var stringReplace = functionCall.bind(stringConstructor.prototype.replace);
 
   function tryApplyIntrinsic(intrinsic, value) {
     try {
@@ -108,17 +137,17 @@
       if (v === null) return "null";
       if (t === "undefined") return "undefined";
       if (t === "string") return quoteString(v);
-      if (t === "number") return Object.is(v, -0) ? "-0" : String(v);
-      if (t === "bigint") return String(v) + "n";
-      if (t === "boolean") return String(v);
+      if (t === "number") return objectIs(v, -0) ? "-0" : stringConstructor(v);
+      if (t === "bigint") return stringConstructor(v) + "n";
+      if (t === "boolean") return stringConstructor(v);
       if (t === "symbol") return v.toString();
       if (t === "function") {
         return "[Function" + (v.name ? ": " + v.name : " (anonymous)") + "]";
       }
 
       // Objects.
-      if (seen.indexOf(v) !== -1) return "[Circular *1]";
-      if (functionHasInstance(Error, v)) {
+      if (arrayIndexOf(seen, v) !== -1) return "[Circular *1]";
+      if (functionHasInstance(errorConstructor, v)) {
         var stack;
         try {
           stack = v.stack;
@@ -126,7 +155,7 @@
           // Node ignores a throwing stack getter and renders the intrinsic
           // Error string as a stackless error.
         }
-        if (stack) return String(stack);
+        if (stack) return stringConstructor(stack);
         try {
           return "[" + errorToString(v) + "]";
         } catch (e) {
@@ -134,60 +163,60 @@
         }
       }
       var boxed;
-      if (functionHasInstance(RegExp, v)) {
+      if (functionHasInstance(regexpConstructor, v)) {
         boxed = tryApplyIntrinsic(regexpGetSource, v);
         if (boxed) return regexpToString(v);
       }
-      if (functionHasInstance(Date, v)) {
+      if (functionHasInstance(dateConstructor, v)) {
         boxed = tryApplyIntrinsic(dateGetTime, v);
         if (boxed) {
-          return isNaN(boxed.value) ? "Invalid Date" : dateToISOString(v);
+          return numberIsNaN(boxed.value) ? "Invalid Date" : dateToISOString(v);
         }
       }
-      if (functionHasInstance(Number, v)) {
+      if (functionHasInstance(numberConstructor, v)) {
         boxed = tryApplyIntrinsic(numberValueOf, v);
         if (boxed) return "[Number: " + render(boxed.value, depth) + "]";
       }
-      if (functionHasInstance(String, v)) {
+      if (functionHasInstance(stringConstructor, v)) {
         boxed = tryApplyIntrinsic(stringValueOf, v);
         if (boxed) return "[String: " + render(boxed.value, depth) + "]";
       }
-      if (functionHasInstance(Boolean, v)) {
+      if (functionHasInstance(booleanConstructor, v)) {
         boxed = tryApplyIntrinsic(booleanValueOf, v);
         if (boxed) return "[Boolean: " + render(boxed.value, depth) + "]";
       }
-      if (functionHasInstance(BigInt, v)) {
+      if (functionHasInstance(bigintConstructor, v)) {
         boxed = tryApplyIntrinsic(bigintValueOf, v);
         if (boxed) {
           // Unlike the older wrappers above, Node's boxed BigInt/Symbol
           // rendering intentionally observes a constructor's current
           // @@hasInstance result. A false or throwing hook selects its generic
           // object shape, but must not intercept the internal-slot probe.
-          return tryInstanceOf(v, BigInt)
+          return tryInstanceOf(v, bigintConstructor)
             ? "[BigInt: " + render(boxed.value, depth) + "]"
             : "Object [BigInt] {}";
         }
       }
-      if (functionHasInstance(Symbol, v)) {
+      if (functionHasInstance(symbolConstructor, v)) {
         boxed = tryApplyIntrinsic(symbolToString, v);
         if (boxed) {
-          return tryInstanceOf(v, Symbol)
+          return tryInstanceOf(v, symbolConstructor)
             ? "[Symbol: " + boxed.value + "]"
             : "Object [Symbol] {}";
         }
       }
 
-      if (depth < 0) return Array.isArray(v) ? "[Array]" : "[Object]";
+      if (depth < 0) return arrayIsArray(v) ? "[Array]" : "[Object]";
 
       seen.push(v);
       var out;
       try {
-        if (Array.isArray(v)) {
+        if (arrayIsArray(v)) {
           var items = [];
           for (var i = 0; i < v.length; i++) items.push(renderMember(v, i, depth));
-          out = items.length ? "[ " + items.join(", ") + " ]" : "[]";
+          out = items.length ? "[ " + arrayJoin(items, ", ") + " ]" : "[]";
         } else {
-          var keys = Object.keys(v);
+          var keys = objectKeys(v);
           var parts = [];
           for (var j = 0; j < keys.length; j++) {
             var k = keys[j];
@@ -196,7 +225,7 @@
           }
           var ctorName = constructorName(v);
           out = parts.length
-            ? ctorName + "{ " + parts.join(", ") + " }"
+            ? ctorName + "{ " + arrayJoin(parts, ", ") + " }"
             : ctorName + "{}";
         }
       } finally {
@@ -309,8 +338,8 @@
     }
     return names;
   })();
-  var objectHasOwnProperty = Object.prototype.hasOwnProperty;
-  var symbolToPrimitive = Symbol.toPrimitive;
+  var objectHasOwnProperty = objectConstructor.prototype.hasOwnProperty;
+  var symbolToPrimitive = symbolConstructor.toPrimitive;
 
   function hasOwnProperty(value, key) {
     return objectHasOwnProperty.call(value, key);
