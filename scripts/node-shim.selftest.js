@@ -358,6 +358,31 @@ eq(
     }
   }
 })();
+(function () {
+  var originalToString = Error.prototype.toString;
+  var stackReads = 0;
+  var error = new Error("throwing stack sentinel");
+  Object.defineProperty(error, "stack", {
+    configurable: true,
+    get: function () {
+      stackReads++;
+      throw new Error("stack getter called");
+    },
+  });
+  try {
+    Error.prototype.toString = function () {
+      throw new Error("patched Error toString called");
+    };
+    eq(
+      util.format("%s", error),
+      "[Error: throwing stack sentinel]",
+      "%s Error ignores throwing stack and patched toString"
+    );
+    eq(stackReads, 1, "%s Error reads a stack getter once");
+  } finally {
+    Error.prototype.toString = originalToString;
+  }
+})();
 eq(
   util.format("%s", Object.create(Number.prototype)),
   "Number {}",

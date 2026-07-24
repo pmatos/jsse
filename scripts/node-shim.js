@@ -66,8 +66,10 @@
   );
   var objectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
   var objectGetPrototypeOf = Object.getPrototypeOf;
+  var objectToString = functionCall.bind(Object.prototype.toString);
   var dateGetTime = functionCall.bind(Date.prototype.getTime);
   var dateToISOString = functionCall.bind(Date.prototype.toISOString);
+  var errorToString = functionCall.bind(Error.prototype.toString);
   var regexpGetSource = functionCall.bind(
     objectGetOwnPropertyDescriptor(RegExp.prototype, "source").get
   );
@@ -117,7 +119,19 @@
       // Objects.
       if (seen.indexOf(v) !== -1) return "[Circular *1]";
       if (functionHasInstance(Error, v)) {
-        return v.stack ? String(v.stack) : String(v.name) + ": " + String(v.message);
+        var stack;
+        try {
+          stack = v.stack;
+        } catch (e) {
+          // Node ignores a throwing stack getter and renders the intrinsic
+          // Error string as a stackless error.
+        }
+        if (stack) return String(stack);
+        try {
+          return "[" + errorToString(v) + "]";
+        } catch (e) {
+          return objectToString(v);
+        }
       }
       var boxed;
       if (functionHasInstance(RegExp, v)) {
