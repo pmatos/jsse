@@ -6765,6 +6765,22 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(true));
                         }
                     }
+                    // String exotic [[Delete]] (§10.4.3): "length" and own
+                    // character indices are non-configurable.
+                    {
+                        let b = obj.borrow();
+                        if b.class_name == "String"
+                            && let Some(JsValue::String(ref s)) = b.primitive_value
+                            && (key.as_str() == Some("length")
+                                || crate::interpreter::types::string_exotic_index(
+                                    &key,
+                                    s.code_units.len(),
+                                )
+                                .is_some())
+                        {
+                            return Completion::Normal(JsValue::Boolean(false));
+                        }
+                    }
                     let mut obj_mut = obj.borrow_mut();
                     if let Some(desc) = obj_mut.properties.get(&key)
                         && desc.configurable == Some(false)

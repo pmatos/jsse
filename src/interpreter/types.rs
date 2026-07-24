@@ -2073,9 +2073,7 @@ impl JsObjectData {
             if key == "length" {
                 return Some(JsValue::Number(units.len() as f64));
             }
-            if let Ok(idx) = key.parse::<usize>()
-                && idx < units.len()
-            {
+            if let Some(idx) = string_exotic_index(key, units.len()) {
                 return Some(JsValue::String(crate::types::JsString::from_vec(vec![
                     units[idx],
                 ])));
@@ -2150,10 +2148,7 @@ impl JsObjectData {
                     set: None,
                 });
             }
-            if let Some(key_str) = key.as_property_key_str()
-                && let Ok(idx) = key_str.parse::<usize>()
-                && idx < units.len()
-            {
+            if let Some(idx) = string_exotic_index(key, units.len()) {
                 return Some(PropertyDescriptor {
                     value: Some(JsValue::String(crate::types::JsString::from_vec(vec![
                         units[idx],
@@ -2263,10 +2258,7 @@ impl JsObjectData {
                     false,
                 ));
             }
-            if let Some(key_str) = key.as_property_key_str()
-                && let Ok(idx) = key_str.parse::<usize>()
-                && idx < s.code_units.len()
-            {
+            if let Some(idx) = string_exotic_index(key, s.code_units.len()) {
                 return Some(PropertyDescriptor::data(
                     JsValue::String(JsString::from_vec(vec![s.code_units[idx]])),
                     false,
@@ -2307,11 +2299,7 @@ impl JsObjectData {
             if key.as_property_key_str() == Some("length") {
                 return true;
             }
-            if let Some(key_str) = key.as_property_key_str()
-                && let Ok(idx) = key_str.parse::<usize>()
-            {
-                return idx < s.code_units.len();
-            }
+            return string_exotic_index(key, s.code_units.len()).is_some();
         }
         false
     }
@@ -2330,8 +2318,7 @@ impl JsObjectData {
         // String exotic §10.4.3.3 [[DefineOwnProperty]]: reject changes to character index properties
         if self.class_name == "String"
             && let Some(JsValue::String(ref s)) = self.primitive_value
-            && let Ok(idx) = key.parse::<usize>()
-            && idx < s.code_units.len()
+            && let Some(idx) = string_exotic_index(&key, s.code_units.len())
         {
             // String index property: {value: char, writable: false, enumerable: true, configurable: false}
             // Only allow if desc is compatible (no changes to value, not setting writable/configurable)
@@ -2886,10 +2873,7 @@ impl JsObjectData {
             if let Some(JsValue::String(ref s)) = self.primitive_value
                 && self.class_name == "String"
                 && (key.as_property_key_str() == Some("length")
-                    || key
-                        .as_property_key_str()
-                        .and_then(|k| k.parse::<usize>().ok())
-                        .is_some_and(|i| i < s.code_units.len()))
+                    || string_exotic_index(key, s.code_units.len()).is_some())
             {
                 return false;
             }
@@ -3079,10 +3063,7 @@ impl JsObjectData {
                     set: None,
                 });
             }
-            if let Some(key_str) = key.as_property_key_str()
-                && let Ok(idx) = key_str.parse::<usize>()
-                && idx < units.len()
-            {
+            if let Some(idx) = string_exotic_index(key, units.len()) {
                 return Some(PropertyDescriptor {
                     value: Some(JsValue::String(crate::types::JsString::from_vec(vec![
                         units[idx],
@@ -3218,6 +3199,40 @@ pub(crate) fn canonical_numeric_index_string<K: crate::types::PropertyKeyLike + 
     } else {
         None
     }
+}
+
+/// §10.4.3 String-exotic own indexed-property test (the index branch of
+/// StringGetOwnProperty).
+///
+/// Returns `Some(i)` when `key` is the CanonicalNumericIndexString of an
+/// integral index `i` with `0 <= i < len` — i.e. `key` names an own indexed
+/// character property of a String value whose UTF-16 length is `len`. Returns
+/// `None` for non-canonical spellings (`"01"`, `"+1"`, `"1.0"`), `-0`,
+/// negative, non-integral, or non-finite indices, and indices `>= len`.
+///
+/// This concentrates the one canonical predicate so every String-exotic MOP
+/// operation ([[Get]], [[GetOwnProperty]], [[HasProperty]],
+/// [[DefineOwnProperty]], [[Set]], [[Delete]]) agrees, instead of each caller
+/// reaching for `str::parse::<usize>()`, which wrongly accepts a leading `+`
+/// and leading zeros. `len` must be the string's UTF-16 code-unit length.
+pub(crate) fn string_exotic_index<K: crate::types::PropertyKeyLike + ?Sized>(
+    key: &K,
+    len: usize,
+) -> Option<usize> {
+    let n = canonical_numeric_index_string(key)?;
+    // IsIntegralNumber(index) is false, or index is -0𝔽 -> not an own index.
+    if !n.is_finite() || n.fract() != 0.0 {
+        return None;
+    }
+    if n == 0.0 && n.is_sign_negative() {
+        return None;
+    }
+    // index < 0 or len <= index -> not an own index. Range-check before the
+    // cast so a huge finite index can never saturate into a valid `usize`.
+    if n < 0.0 || n >= len as f64 {
+        return None;
+    }
+    Some(n as usize)
 }
 
 pub(crate) fn typed_array_length(ta: &TypedArrayInfo) -> usize {
@@ -4048,5 +4063,67 @@ mod property_bag_tests {
         assert!(obj.remove_property("a").is_some());
         assert!(obj.remove_property("a").is_none());
         assert!(keys(&obj).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod string_exotic_index_tests {
+    use super::string_exotic_index;
+
+    // §10.4.3 StringGetOwnProperty own-index predicate. Expected values are the
+    // ECMAScript truth table (CanonicalNumericIndexString + IsIntegralNumber +
+    // -0 + range), cross-checked against node.
+    #[test]
+    fn canonical_in_range_indices_resolve() {
+        assert_eq!(string_exotic_index("0", 3), Some(0));
+        assert_eq!(string_exotic_index("1", 3), Some(1));
+        assert_eq!(string_exotic_index("2", 3), Some(2));
+    }
+
+    #[test]
+    fn out_of_range_is_none() {
+        assert_eq!(string_exotic_index("3", 3), None);
+        assert_eq!(string_exotic_index("0", 0), None);
+        assert_eq!(string_exotic_index("9999999999", 3), None);
+    }
+
+    #[test]
+    fn non_canonical_spellings_are_none() {
+        // Round-trippable ToString(ToNumber(key)) != key -> not a canonical index.
+        assert_eq!(string_exotic_index("01", 3), None);
+        assert_eq!(string_exotic_index("00", 3), None);
+        assert_eq!(string_exotic_index("+1", 3), None);
+        assert_eq!(string_exotic_index("1.0", 3), None);
+        assert_eq!(string_exotic_index(" 1", 3), None);
+        assert_eq!(string_exotic_index("1 ", 3), None);
+        assert_eq!(string_exotic_index("1e0", 3), None);
+        assert_eq!(string_exotic_index("0x1", 3), None);
+        assert_eq!(string_exotic_index("", 3), None);
+    }
+
+    #[test]
+    fn non_integral_canonical_numbers_are_none() {
+        assert_eq!(string_exotic_index("1.5", 3), None);
+        assert_eq!(string_exotic_index("0.5", 3), None);
+    }
+
+    #[test]
+    fn negative_and_negative_zero_are_none() {
+        assert_eq!(string_exotic_index("-1", 3), None);
+        // CanonicalNumericIndexString("-0") is -0f; StringGetOwnProperty rejects it.
+        assert_eq!(string_exotic_index("-0", 3), None);
+    }
+
+    #[test]
+    fn non_finite_canonical_words_are_none() {
+        // "Infinity"/"NaN" round-trip through ToString but are not integral indices.
+        assert_eq!(string_exotic_index("Infinity", 3), None);
+        assert_eq!(string_exotic_index("-Infinity", 3), None);
+        assert_eq!(string_exotic_index("NaN", 3), None);
+    }
+
+    #[test]
+    fn length_word_is_not_an_index() {
+        assert_eq!(string_exotic_index("length", 3), None);
     }
 }
