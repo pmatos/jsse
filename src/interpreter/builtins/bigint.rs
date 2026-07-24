@@ -2,7 +2,7 @@ use super::super::*;
 
 /// Convert an f64 integer value to a BigInt, handling the full range of
 /// IEEE 754 double-precision values (not just the i64 range).
-pub fn f64_to_bigint(n: f64) -> num_bigint::BigInt {
+pub(crate) fn f64_to_bigint(n: f64) -> num_bigint::BigInt {
     if n == 0.0 {
         return num_bigint::BigInt::from(0);
     }

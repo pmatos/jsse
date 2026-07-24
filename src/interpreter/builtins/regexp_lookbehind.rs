@@ -7,7 +7,7 @@ use std::collections::HashMap;
 /// reverse order, so a later group captures before an earlier group.
 
 #[derive(Debug, Clone)]
-pub struct LookbehindInfo {
+pub(super) struct LookbehindInfo {
     pub positive: bool,
     pub content: String,
     /// Whether this lookbehind is at the end of the pattern (suffix position).
@@ -23,7 +23,7 @@ pub struct LookbehindInfo {
 }
 
 #[derive(Debug, Clone)]
-pub enum LbAtom {
+pub(super) enum LbAtom {
     Literal(char),
     CharClass(Vec<(char, char)>, bool),
     Dot(bool),
@@ -50,7 +50,7 @@ pub enum LbAtom {
 }
 
 #[derive(Debug, Clone)]
-pub enum AnchorKind {
+pub(super) enum AnchorKind {
     Start,
     End,
     WordBoundary,
@@ -58,7 +58,7 @@ pub enum AnchorKind {
 }
 
 #[derive(Debug, Clone)]
-pub struct LbFlags {
+pub(super) struct LbFlags {
     pub ignore_case: bool,
     pub multiline: bool,
     pub dot_all: bool,
@@ -72,7 +72,7 @@ fn is_line_terminator(c: char) -> bool {
 // Pattern parser
 // ============================================================================
 
-pub fn parse_lb_atoms(pattern: &str, flags: &LbFlags, capture_offset: u32) -> Vec<LbAtom> {
+pub(super) fn parse_lb_atoms(pattern: &str, flags: &LbFlags, capture_offset: u32) -> Vec<LbAtom> {
     let chars: Vec<char> = pattern.chars().collect();
     let mut gc = capture_offset;
     let (atoms, _) = parse_seq(&chars, 0, &mut gc, flags);
@@ -395,7 +395,7 @@ fn maybe_quantify(chars: &[char], atom: LbAtom, i: usize) -> (LbAtom, usize) {
 
 /// Match atoms right-to-left from `end_pos`. Returns start position if successful.
 /// Captures are in char-index space (not byte offsets).
-pub fn match_rtl(
+pub(super) fn match_rtl(
     atoms: &[LbAtom],
     input: &[char],
     end_pos: usize,
@@ -1329,7 +1329,7 @@ fn is_suffix_position(chars: &[char], pos: usize) -> bool {
     true
 }
 
-pub fn extract_lookbehinds(source: &str) -> (Vec<LookbehindInfo>, String) {
+pub(super) fn extract_lookbehinds(source: &str) -> (Vec<LookbehindInfo>, String) {
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
     let mut lookbehinds = Vec::new();
@@ -1463,7 +1463,7 @@ pub fn extract_lookbehinds(source: &str) -> (Vec<LookbehindInfo>, String) {
 
 /// Extract the remaining pattern (after stripping all lookbehinds) without
 /// marker groups. Returns (lookbehinds, remaining_pattern).
-pub fn extract_lookbehinds_remaining(source: &str) -> (Vec<LookbehindInfo>, String) {
+pub(super) fn extract_lookbehinds_remaining(source: &str) -> (Vec<LookbehindInfo>, String) {
     let chars: Vec<char> = source.chars().collect();
     let len = chars.len();
     let mut lookbehinds = Vec::new();
@@ -1543,7 +1543,7 @@ pub fn extract_lookbehinds_remaining(source: &str) -> (Vec<LookbehindInfo>, Stri
 // Integration: match with custom lookbehind
 // ============================================================================
 
-pub fn match_with_lookbehind(
+pub(super) fn match_with_lookbehind(
     outer_regex: &fancy_regex::Regex,
     lookbehinds: &[LookbehindInfo],
     text: &str,
@@ -1707,7 +1707,7 @@ pub fn match_with_lookbehind(
 /// Match pattern where lookbehind captures are referenced by external backrefs.
 /// Iterates positions, runs RTL lookbehind at each, substitutes capture values
 /// as literals into the remaining pattern, and tries to match.
-pub fn match_with_lookbehind_no_backtrack(
+pub(super) fn match_with_lookbehind_no_backtrack(
     lookbehinds: &[LookbehindInfo],
     remaining_source: &str,
     flags_str: &str,
@@ -1894,7 +1894,7 @@ fn regex_escape_for_js(s: &str) -> String {
 /// which means fancy-regex might backtrack into the lookbehind (violating spec).
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
-pub struct LookbehindVerifyInfo {
+pub(super) struct LookbehindVerifyInfo {
     pub positive: bool,
     pub content: String,
     /// Global capture group numbers that are inside this lookbehind

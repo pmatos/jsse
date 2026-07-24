@@ -10,12 +10,12 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 
-pub struct AgentBroadcastMsg {
+pub(crate) struct AgentBroadcastMsg {
     pub sab_shared: Arc<types::SharedBufferInner>,
 }
 
 mod types;
-pub use types::*;
+pub(crate) use types::*;
 
 mod helpers;
 pub(crate) use helpers::*;
@@ -78,7 +78,7 @@ pub(crate) struct HoistAnalysis {
     _body: Rc<Vec<Statement>>,
 }
 
-pub struct Interpreter {
+pub(crate) struct Interpreter {
     pub(crate) realms: Vec<Realm>,
     pub(crate) current_realm_id: usize,
     objects: object_arena::ObjectArena,
@@ -306,7 +306,7 @@ pub(crate) enum AsyncGenRequestKind {
     Throw,
 }
 
-pub struct LoadedModule {
+pub(crate) struct LoadedModule {
     pub path: PathBuf,
     pub env: EnvRef,
     pub exports: HashMap<String, JsValue>,
@@ -334,7 +334,7 @@ pub struct LoadedModule {
 }
 
 impl Interpreter {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let global = Environment::new(None);
 
         {
@@ -1860,7 +1860,7 @@ impl Interpreter {
         JsValue::String(exact_key.to_js_string())
     }
 
-    pub fn run(&mut self, program: &Program) -> Completion {
+    pub(crate) fn run(&mut self, program: &Program) -> Completion {
         self.gc_safepoint();
         let result = match program.source_type {
             SourceType::Script => {
@@ -1882,7 +1882,7 @@ impl Interpreter {
         result
     }
 
-    pub fn run_with_path(&mut self, program: &Program, path: &Path) -> Completion {
+    pub(crate) fn run_with_path(&mut self, program: &Program, path: &Path) -> Completion {
         self.gc_safepoint();
         match program.source_type {
             SourceType::Script => {
@@ -5181,7 +5181,7 @@ impl Interpreter {
         }
     }
 
-    pub fn format_value(&self, val: &JsValue) -> String {
+    pub(crate) fn format_value(&self, val: &JsValue) -> String {
         match val {
             JsValue::Object(o) => {
                 if self.get_object_cell(o.id).is_some() {
