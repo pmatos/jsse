@@ -7064,18 +7064,22 @@ fn build_regex_ex(
     source: &str,
     flags: &str,
 ) -> Result<(CompiledRegex, DupGroupMap, Vec<String>), String> {
+    build_regex_ex_with_nullable_state(source, flags, true)
+}
+
+fn build_regex_ex_with_nullable_state(
+    source: &str,
+    flags: &str,
+    stateful_positive_minimum: bool,
+) -> Result<(CompiledRegex, DupGroupMap, Vec<String>), String> {
     let original_source = source;
-    let mut rewrite = fix_nullable_quantifiers(original_source, true);
-    let mut tr =
+    let rewrite = fix_nullable_quantifiers(original_source, stateful_positive_minimum);
+    let tr =
         translate_js_pattern_ex_with_sentinels(&rewrite.source, flags, &rewrite.sentinel_names)?;
     if tr.needs_bytes_mode && !rewrite.sentinel_names.is_empty() {
-        rewrite = fix_nullable_quantifiers(original_source, false);
-        tr = translate_js_pattern_ex_with_sentinels(
-            &rewrite.source,
-            flags,
-            &rewrite.sentinel_names,
-        )?;
+        return build_regex_ex_with_nullable_state(original_source, flags, false);
     }
+    let retry_without_sentinels = stateful_positive_minimum && !rewrite.sentinel_names.is_empty();
     let source = rewrite.source;
     let dup_map = tr.dup_group_map;
     let name_order = tr.group_name_order;
@@ -7118,6 +7122,9 @@ fn build_regex_ex(
                     try_build_custom_lookbehind(&source, flags, dup_map.clone(), name_order.clone())
             {
                 return Ok(result);
+            }
+            if retry_without_sentinels {
+                return build_regex_ex_with_nullable_state(original_source, flags, false);
             }
             regex::Regex::new(&tr.pattern)
                 .map(|r| (CompiledRegex::Standard(r), dup_map, name_order))

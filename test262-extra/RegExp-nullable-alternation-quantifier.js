@@ -121,6 +121,18 @@ var twoToThree = /(a*|d){2,3}/.exec("d");
 assert.sameValue(twoToThree[0], "d");
 assert.sameValue(twoToThree[1], "d");
 
+// Sentinel expansion near fancy-regex's recursion limit must either compile
+// successfully or fall back to the pre-stateful rewrite. The effective
+// backend limit also shrinks with enclosing group depth, so it cannot be
+// represented by one fixed minimum cap.
+var belowBackendDepthLimit = /(a*|d){62,63}/.exec("d");
+assert.sameValue(belowBackendDepthLimit[0], "d");
+assert.sameValue(belowBackendDepthLimit[1], "d");
+assert.sameValue(/(a*|d){63,64}/.exec("")[0], "");
+assert.sameValue(/(a*|d){63,}/.exec("")[0], "");
+assert.sameValue(/(a*|d){64,}/.exec("")[0], "");
+assert.sameValue(/(?:(a*|d){62,})/.exec("")[0], "");
+
 // An exact quantifier has no post-minimum iteration. Its left nullable branch
 // therefore remains the correct winner.
 var exactlyTwo = /(a*|d){2}/.exec("d");

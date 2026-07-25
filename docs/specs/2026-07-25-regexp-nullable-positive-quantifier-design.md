@@ -42,7 +42,10 @@ Sentinel expansion is capped at 64 mandatory iterations. Larger minima retain
 the existing fallback behavior instead of expanding source proportional to an
 attacker-controlled quantifier bound. This preserves compilation behavior for
 large valid quantifiers without introducing a source-size or compile-time
-denial of service.
+denial of service. The effective fancy-regex nesting limit also depends on the
+surrounding pattern depth, so a stateful expansion that fails backend
+compilation is retried with the same non-stateful fallback rather than relying
+on the fixed source-growth cap as a compile-depth guarantee.
 
 The sentinels use names with the existing `__jsse_qi` internal prefix. Their
 definitions are appended in a `(?(DEFINE)...)` block after the translated
@@ -93,7 +96,8 @@ leaving their positive-minimum priority gap unchanged.
 - multiple independently affected quantified groups;
 - nested entry state isolation; and
 - all-lazy and mixed-greediness jointly optional branches; and
-- Annex B identity escapes whose text resembles internal sentinel syntax.
+- Annex B identity escapes whose text resembles internal sentinel syntax; and
+- stateful-setter compilation at flat and nested backend-depth boundaries.
 
 Validation runs the RegExp-focused test262 directory, the custom suites, and
 the full test262 regression comparison before publishing.
