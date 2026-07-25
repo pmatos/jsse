@@ -1,3 +1,10 @@
+## [0.4.9](https://github.com/pmatos/jsse/compare/v0.4.8...v0.4.9) (2026-07-25)
+
+
+### Performance Improvements
+
+* **interpreter:** use FxHashMap for environment bindings ([#389](https://github.com/pmatos/jsse/issues/389)) ([05cddd3](https://github.com/pmatos/jsse/commit/05cddd375643d9c49fe7ebba0f4d1358b55eefb0))
+
 ## [0.4.8](https://github.com/pmatos/jsse/compare/v0.4.7...v0.4.8) (2026-07-24)
 
 
