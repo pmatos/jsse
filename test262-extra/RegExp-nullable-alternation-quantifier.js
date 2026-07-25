@@ -96,3 +96,84 @@ assert.sameValue(/(a{0,0}|dc??)*/.exec("dc")[0], "d");
 var m2 = /(a{0}|(dc)??)*/.exec("dc");
 assert.sameValue(m2[0], "dc");
 assert.sameValue(m2[1], "dc");
+
+// --- Positive-minimum outer quantifiers (jsse#378) ---
+// The first `min` iterations may match empty. Once `min` reaches zero, another
+// empty iteration must fail and backtrack into a consuming sibling before the
+// outer continuation is accepted.
+var plus = /(a*|dc??)+/.exec("dc");
+assert.sameValue(plus[0], "d");
+assert.sameValue(plus[1], "d");
+
+// The last consuming iteration still owns the capture; rewriting `X+` as
+// `X X*` would incorrectly leave the mandatory copy's capture in a new slot.
+var plusLast = /(a*|dc??)+/.exec("aaadc");
+assert.sameValue(plusLast[0], "aaad");
+assert.sameValue(plusLast[1], "d");
+
+// More than one mandatory empty iteration is permitted for `{n,}` and bounded
+// `{n,m}` forms. The consuming sibling is tried only in the optional
+// post-minimum iteration.
+var atLeastTwo = /(a*|d){2,}/.exec("d");
+assert.sameValue(atLeastTwo[0], "d");
+assert.sameValue(atLeastTwo[1], "d");
+var twoToThree = /(a*|d){2,3}/.exec("d");
+assert.sameValue(twoToThree[0], "d");
+assert.sameValue(twoToThree[1], "d");
+
+// An exact quantifier has no post-minimum iteration. Its left nullable branch
+// therefore remains the correct winner.
+var exactlyTwo = /(a*|d){2}/.exec("d");
+assert.sameValue(exactlyTwo[0], "");
+assert.sameValue(exactlyTwo[1], "");
+
+// If consuming the sibling makes the sequel fail, RepeatMatcher must still
+// backtrack to the mandatory empty iteration and try the continuation there.
+var continuationFallback = /(a*|d)+d/.exec("d");
+assert.sameValue(continuationFallback[0], "d");
+assert.sameValue(continuationFallback[1], "");
+
+// Inner capture numbering and last-iteration values must remain unchanged.
+var innerCaptures = /((a)*|(dc)??)+/.exec("dc");
+assert.sameValue(innerCaptures[0], "dc");
+assert.sameValue(innerCaptures[1], "dc");
+assert.sameValue(innerCaptures[2], undefined);
+assert.sameValue(innerCaptures[3], "dc");
+
+// Internal iteration state is defined after all JavaScript captures, so later
+// numeric slots and backreferences retain their source-level numbering.
+var laterBackref = /(a*|d)+(e)\2/.exec("dee");
+assert.sameValue(laterBackref[0], "dee");
+assert.sameValue(laterBackref[1], "d");
+assert.sameValue(laterBackref[2], "e");
+var namedBackref = /(?<x>a*|d)+\k<x>/.exec("dd");
+assert.sameValue(namedBackref[0], "dd");
+assert.sameValue(namedBackref.groups.x, "d");
+
+// A lazy outer quantifier still accepts its mandatory empty match when the
+// continuation succeeds, and consumes a sibling only when the continuation
+// forces another iteration.
+assert.sameValue(/(a*|d)+?/.exec("d")[0], "");
+var lazyInnerAndOuter = /(a*?|d)+?/.exec("a");
+assert.sameValue(lazyInnerAndOuter[0], "");
+assert.sameValue(lazyInnerAndOuter[1], "");
+var lazyForced = /(a*|d)+?c/.exec("dc");
+assert.sameValue(lazyForced[0], "dc");
+assert.sameValue(lazyForced[1], "d");
+
+// The positive-minimum treatment also covers the residual nullable shapes
+// handled for `*`: bare empty, exact-zero, and jointly-optional branches.
+assert.sameValue(/(|d)+/.exec("d")[0], "d");
+assert.sameValue(/(a{0}|d)+/.exec("d")[0], "d");
+assert.sameValue(/(a?b?|d)+/.exec("d")[0], "d");
+
+// Separate positive-minimum groups keep independent iteration state. Either
+// group may legitimately finish with only its mandatory empty iteration.
+var sequentialOne = /^(a*|d)+(b*|e)+/.exec("d");
+assert.sameValue(sequentialOne[0], "d");
+assert.sameValue(sequentialOne[1], "d");
+assert.sameValue(sequentialOne[2], "");
+var sequentialBoth = /^(a*|d)+(b*|e)+/.exec("de");
+assert.sameValue(sequentialBoth[0], "de");
+assert.sameValue(sequentialBoth[1], "d");
+assert.sameValue(sequentialBoth[2], "e");
