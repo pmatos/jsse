@@ -661,7 +661,9 @@ impl Realm {
 }
 
 pub(crate) struct Environment {
-    pub(crate) bindings: FxHashMap<String, Binding>,
+    // Binding names come from script source. Keep randomized hashing here so
+    // deterministic collision sets cannot flood declaration and lookup paths.
+    pub(crate) bindings: HashMap<String, Binding>,
     pub(crate) parent: Option<EnvRef>,
     pub strict: bool,
     pub(crate) is_function_scope: bool,
@@ -682,7 +684,7 @@ pub(crate) struct Environment {
     pub(crate) is_simple_catch_scope: bool,
     pub(crate) is_derived_constructor_scope: bool,
     // §9.1.1.5.5 CreateImportBinding: indirect bindings for module imports
-    pub(crate) indirect_bindings: Option<FxHashMap<String, (EnvRef, String)>>,
+    pub(crate) indirect_bindings: Option<HashMap<String, (EnvRef, String)>>,
     // Module path for import.meta resolution (§16.2.1.5.2 GetActiveScriptOrModule)
     pub(crate) module_path: Option<std::path::PathBuf>,
 }
@@ -757,7 +759,7 @@ impl Environment {
     pub(crate) fn new(parent: Option<EnvRef>) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: FxHashMap::default(),
+            bindings: HashMap::new(),
             parent,
             strict,
             is_function_scope: false,
@@ -788,7 +790,7 @@ impl Environment {
     ) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: FxHashMap::with_capacity_and_hasher(binding_capacity, Default::default()),
+            bindings: HashMap::with_capacity(binding_capacity),
             parent,
             strict,
             is_function_scope: true,
@@ -882,9 +884,7 @@ impl Environment {
         source_env: EnvRef,
         source_name: String,
     ) {
-        let map = self
-            .indirect_bindings
-            .get_or_insert_with(FxHashMap::default);
+        let map = self.indirect_bindings.get_or_insert_with(HashMap::new);
         map.insert(local_name.to_string(), (source_env, source_name));
     }
 
