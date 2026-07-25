@@ -150,6 +150,22 @@ var namedBackref = /(?<x>a*|d)+\k<x>/.exec("dd");
 assert.sameValue(namedBackref[0], "dd");
 assert.sameValue(namedBackref.groups.x, "d");
 
+// Internal positive-quantifier state must not change Annex B parsing. In a
+// non-Unicode pattern with no source-level named captures, `\k` and `\g` are
+// identity escapes even when their following text resembles an internal
+// sentinel name.
+var legacyNamedEscape = /(a*|d)+\k<x>/.exec("dk<x>");
+assert.sameValue(legacyNamedEscape[0], "dk<x>");
+assert.sameValue(legacyNamedEscape[1], "d");
+assert.sameValue(
+  /\g<__jsse_qi_nq0_1>/.test("g<__jsse_qi_nq0_1>"),
+  true,
+);
+var legacyInternalLookingEscape =
+  /(a*|d)+\g<__jsse_qi_nq0_1>/.exec("dg<__jsse_qi_nq0_1>");
+assert.sameValue(legacyInternalLookingEscape[0], "dg<__jsse_qi_nq0_1>");
+assert.sameValue(legacyInternalLookingEscape[1], "d");
+
 // A lazy outer quantifier still accepts its mandatory empty match when the
 // continuation succeeds, and consumes a sibling only when the continuation
 // forces another iteration.

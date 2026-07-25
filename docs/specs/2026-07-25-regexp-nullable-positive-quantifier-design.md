@@ -50,6 +50,11 @@ JavaScript pattern, while the repeated group invokes them with fancy-regex
 subroutine calls. Defining the groups after all JavaScript groups keeps numeric
 capture and backreference indices unchanged. Existing internal-capture cleanup
 removes the sentinel slots before constructing the JavaScript match result.
+The rewrite also returns the exact generated-name set to the translation pass:
+only names in that provenance set are recognized as backend conditionals or
+subroutine calls. Internal definitions are excluded when deciding whether the
+source contains a named capture, so they cannot disable Annex B identity-escape
+handling for source `\k` or `\g` escapes.
 
 The rewrite forces the fancy-regex path because the standard Rust regex engine
 does not support the internal conditionals.
@@ -87,7 +92,8 @@ leaving their positive-minimum priority gap unchanged.
 - lazy outer quantifiers; and
 - multiple independently affected quantified groups;
 - nested entry state isolation; and
-- all-lazy and mixed-greediness jointly optional branches.
+- all-lazy and mixed-greediness jointly optional branches; and
+- Annex B identity escapes whose text resembles internal sentinel syntax.
 
 Validation runs the RegExp-focused test262 directory, the custom suites, and
 the full test262 regression comparison before publishing.

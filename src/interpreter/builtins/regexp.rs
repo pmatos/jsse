@@ -1465,9 +1465,14 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
     translate_js_pattern_ex(source, flags).map(|r| r.pattern)
 }
 
-fn nq_internal_condition_header_end(chars: &[char], start: usize) -> Option<usize> {
+fn nq_internal_condition_header_end(
+    chars: &[char],
+    start: usize,
+    sentinel_names: &HashSet<String>,
+) -> Option<usize> {
     let len = chars.len();
-    if start + 10 <= len
+    if !sentinel_names.is_empty()
+        && start + 10 <= len
         && chars[start..start + 10] == ['(', '?', '(', 'D', 'E', 'F', 'I', 'N', 'E', ')']
     {
         return Some(start + 10);
@@ -1488,10 +1493,14 @@ fn nq_internal_condition_header_end(chars: &[char], start: usize) -> Option<usiz
         return None;
     }
     let name: String = chars[start + 4..name_end].iter().collect();
-    name.starts_with("__jsse_qi_nq").then_some(name_end + 2)
+    sentinel_names.contains(&name).then_some(name_end + 2)
 }
 
-fn nq_internal_subroutine_end(chars: &[char], start: usize) -> Option<usize> {
+fn nq_internal_subroutine_end(
+    chars: &[char],
+    start: usize,
+    sentinel_names: &HashSet<String>,
+) -> Option<usize> {
     let len = chars.len();
     if start + 4 >= len
         || chars[start] != '\\'
@@ -1508,7 +1517,7 @@ fn nq_internal_subroutine_end(chars: &[char], start: usize) -> Option<usize> {
         return None;
     }
     let name: String = chars[start + 3..name_end].iter().collect();
-    name.starts_with("__jsse_qi_nq").then_some(name_end + 1)
+    sentinel_names.contains(&name).then_some(name_end + 1)
 }
 
 /// Find the closing ')' matching the '(' at position `open` in `chars`.
@@ -1925,6 +1934,14 @@ pub(super) fn translate_js_pattern_ex(
     source: &str,
     flags: &str,
 ) -> Result<TranslationResult, String> {
+    translate_js_pattern_ex_with_sentinels(source, flags, &HashSet::new())
+}
+
+fn translate_js_pattern_ex_with_sentinels(
+    source: &str,
+    flags: &str,
+    sentinel_names: &HashSet<String>,
+) -> Result<TranslationResult, String> {
     let mut result = String::new();
     if flags.contains('i') {
         result.push_str("(?i)");
@@ -1972,7 +1989,10 @@ pub(super) fn translate_js_pattern_ex(
         let mut j = 0;
         let mut in_cc = false;
         while j < len {
-            if !in_cc && let Some(header_end) = nq_internal_condition_header_end(&chars, j) {
+            if !in_cc
+                && let Some(header_end) =
+                    nq_internal_condition_header_end(&chars, j, sentinel_names)
+            {
                 j = header_end;
                 continue;
             }
@@ -1998,7 +2018,7 @@ pub(super) fn translate_js_pattern_ex(
                                     name_end += 1;
                                 }
                                 let name: String = chars[j + 3..name_end].iter().collect();
-                                if !name.starts_with("__jsse_qi_nq") {
+                                if !sentinel_names.contains(&name) {
                                     count += 1; // JavaScript named group
                                 }
                             }
@@ -2127,6 +2147,9 @@ pub(super) fn translate_js_pattern_ex(
     // When any named groups exist, fancy_regex requires ALL backreferences to
     // use named syntax. We auto-name unnamed capturing groups with a special
     // prefix so we can use named backreferences throughout.
+    let has_source_named_groups = all_group_names
+        .iter()
+        .any(|name| !sentinel_names.contains(name));
     let has_named_groups = !all_group_names.is_empty();
     // Track how many times we've seen each duplicated name during translation
     let mut dup_seen_count: HashMap<String, u32> = HashMap::new();
@@ -2137,7 +2160,9 @@ pub(super) fn translate_js_pattern_ex(
     while i < len {
         let c = chars[i];
 
-        if !in_char_class && let Some(header_end) = nq_internal_condition_header_end(&chars, i) {
+        if !in_char_class
+            && let Some(header_end) = nq_internal_condition_header_end(&chars, i, sentinel_names)
+        {
             dotall_stack.push(None);
             multiline_stack.push(None);
             icase_stack.push(None);
@@ -2150,7 +2175,9 @@ pub(super) fn translate_js_pattern_ex(
             i = header_end;
             continue;
         }
-        if !in_char_class && let Some(subroutine_end) = nq_internal_subroutine_end(&chars, i) {
+        if !in_char_class
+            && let Some(subroutine_end) = nq_internal_subroutine_end(&chars, i, sentinel_names)
+        {
             result.extend(chars[i..subroutine_end].iter());
             i = subroutine_end;
             continue;
@@ -2250,7 +2277,7 @@ pub(super) fn translate_js_pattern_ex(
             match next {
                 // Named backreference: \k<name> → (?P=name) or alternation for duplicates
                 'k' if !in_char_class && i + 2 < len && chars[i + 2] == '<' => {
-                    if !unicode && all_group_names.is_empty() {
+                    if !unicode && !has_source_named_groups {
                         // Annex B: \k without named groups is identity escape
                         if non_unicode_icase(icase) {
                             push_case_fold_guarded(&mut result, 'k', false);
@@ -5963,6 +5990,11 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
 ///   (jsse#378).
 const NQ_MAX_ITERATION_SENTINELS: usize = 64;
 
+struct NullableQuantifierRewrite {
+    source: String,
+    sentinel_names: HashSet<String>,
+}
+
 struct NqOuterQuantifier {
     min: usize,
     max: Option<usize>,
@@ -6053,9 +6085,15 @@ fn nq_iteration_names(source: &str, state_id: &mut usize, min: usize) -> Vec<Str
     }
 }
 
-fn fix_nullable_quantifiers(source: &str, stateful_positive_minimum: bool) -> String {
+fn fix_nullable_quantifiers(
+    source: &str,
+    stateful_positive_minimum: bool,
+) -> NullableQuantifierRewrite {
     if !source.contains('|') && !source.contains("??") && !source.contains("*?") {
-        return source.to_string();
+        return NullableQuantifierRewrite {
+            source: source.to_string(),
+            sentinel_names: HashSet::new(),
+        };
     }
 
     let chars: Vec<char> = source.chars().collect();
@@ -6181,7 +6219,10 @@ fn fix_nullable_quantifiers(source: &str, stateful_positive_minimum: bool) -> St
         && span_replace.is_empty()
         && sentinel_names.is_empty()
     {
-        return source.to_string();
+        return NullableQuantifierRewrite {
+            source: source.to_string(),
+            sentinel_names: HashSet::new(),
+        };
     }
     let mut result = String::with_capacity(len);
     let mut i = 0;
@@ -6209,12 +6250,15 @@ fn fix_nullable_quantifiers(source: &str, stateful_positive_minimum: bool) -> St
     }
     if !sentinel_names.is_empty() {
         result.push_str("(?(DEFINE)");
-        for name in sentinel_names {
+        for name in &sentinel_names {
             result.push_str(&format!("(?<{name}>)"));
         }
         result.push(')');
     }
-    result
+    NullableQuantifierRewrite {
+        source: result,
+        sentinel_names: sentinel_names.into_iter().collect(),
+    }
 }
 
 /// Process a full set of top-level alternation branches: for each nullable
@@ -7021,12 +7065,18 @@ fn build_regex_ex(
     flags: &str,
 ) -> Result<(CompiledRegex, DupGroupMap, Vec<String>), String> {
     let original_source = source;
-    let mut source = fix_nullable_quantifiers(original_source, true);
-    let mut tr = translate_js_pattern_ex(&source, flags)?;
-    if tr.needs_bytes_mode && source.contains("(?(DEFINE)(?<__jsse_qi_nq") {
-        source = fix_nullable_quantifiers(original_source, false);
-        tr = translate_js_pattern_ex(&source, flags)?;
+    let mut rewrite = fix_nullable_quantifiers(original_source, true);
+    let mut tr =
+        translate_js_pattern_ex_with_sentinels(&rewrite.source, flags, &rewrite.sentinel_names)?;
+    if tr.needs_bytes_mode && !rewrite.sentinel_names.is_empty() {
+        rewrite = fix_nullable_quantifiers(original_source, false);
+        tr = translate_js_pattern_ex_with_sentinels(
+            &rewrite.source,
+            flags,
+            &rewrite.sentinel_names,
+        )?;
     }
+    let source = rewrite.source;
     let dup_map = tr.dup_group_map;
     let name_order = tr.group_name_order;
 
