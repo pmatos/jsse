@@ -96,3 +96,148 @@ assert.sameValue(/(a{0,0}|dc??)*/.exec("dc")[0], "d");
 var m2 = /(a{0}|(dc)??)*/.exec("dc");
 assert.sameValue(m2[0], "dc");
 assert.sameValue(m2[1], "dc");
+
+// --- Positive-minimum outer quantifiers (jsse#378) ---
+// The first `min` iterations may match empty. Once `min` reaches zero, another
+// empty iteration must fail and backtrack into a consuming sibling before the
+// outer continuation is accepted.
+var plus = /(a*|dc??)+/.exec("dc");
+assert.sameValue(plus[0], "d");
+assert.sameValue(plus[1], "d");
+
+// The last consuming iteration still owns the capture; rewriting `X+` as
+// `X X*` would incorrectly leave the mandatory copy's capture in a new slot.
+var plusLast = /(a*|dc??)+/.exec("aaadc");
+assert.sameValue(plusLast[0], "aaad");
+assert.sameValue(plusLast[1], "d");
+
+// More than one mandatory empty iteration is permitted for `{n,}` and bounded
+// `{n,m}` forms. The consuming sibling is tried only in the optional
+// post-minimum iteration.
+var atLeastTwo = /(a*|d){2,}/.exec("d");
+assert.sameValue(atLeastTwo[0], "d");
+assert.sameValue(atLeastTwo[1], "d");
+var twoToThree = /(a*|d){2,3}/.exec("d");
+assert.sameValue(twoToThree[0], "d");
+assert.sameValue(twoToThree[1], "d");
+
+// Sentinel expansion near fancy-regex's recursion limit must either compile
+// successfully or fall back to the pre-stateful rewrite. The effective
+// backend limit also shrinks with enclosing group depth, so it cannot be
+// represented by one fixed minimum cap.
+var belowBackendDepthLimit = /(a*|d){62,63}/.exec("d");
+assert.sameValue(belowBackendDepthLimit[0], "d");
+assert.sameValue(belowBackendDepthLimit[1], "d");
+assert.sameValue(/(a*|d){63,64}/.exec("")[0], "");
+assert.sameValue(/(a*|d){63,}/.exec("")[0], "");
+assert.sameValue(/(a*|d){64,}/.exec("")[0], "");
+assert.sameValue(/(?:(a*|d){62,})/.exec("")[0], "");
+
+// An exact quantifier has no post-minimum iteration. Its left nullable branch
+// therefore remains the correct winner.
+var exactlyTwo = /(a*|d){2}/.exec("d");
+assert.sameValue(exactlyTwo[0], "");
+assert.sameValue(exactlyTwo[1], "");
+
+// If consuming the sibling makes the sequel fail, RepeatMatcher must still
+// backtrack to the mandatory empty iteration and try the continuation there.
+var continuationFallback = /(a*|d)+d/.exec("d");
+assert.sameValue(continuationFallback[0], "d");
+assert.sameValue(continuationFallback[1], "");
+
+// Inner capture numbering and last-iteration values must remain unchanged.
+var innerCaptures = /((a)*|(dc)??)+/.exec("dc");
+assert.sameValue(innerCaptures[0], "dc");
+assert.sameValue(innerCaptures[1], "dc");
+assert.sameValue(innerCaptures[2], undefined);
+assert.sameValue(innerCaptures[3], "dc");
+
+// Internal iteration state is defined after all JavaScript captures, so later
+// numeric slots and backreferences retain their source-level numbering.
+var laterBackref = /(a*|d)+(e)\2/.exec("dee");
+assert.sameValue(laterBackref[0], "dee");
+assert.sameValue(laterBackref[1], "d");
+assert.sameValue(laterBackref[2], "e");
+var namedBackref = /(?<x>a*|d)+\k<x>/.exec("dd");
+assert.sameValue(namedBackref[0], "dd");
+assert.sameValue(namedBackref.groups.x, "d");
+
+// Internal positive-quantifier state must not change Annex B parsing. In a
+// non-Unicode pattern with no source-level named captures, `\k` and `\g` are
+// identity escapes even when their following text resembles an internal
+// sentinel name.
+var legacyNamedEscape = /(a*|d)+\k<x>/.exec("dk<x>");
+assert.sameValue(legacyNamedEscape[0], "dk<x>");
+assert.sameValue(legacyNamedEscape[1], "d");
+assert.sameValue(
+  /\g<__jsse_qi_nq0_1>/.test("g<__jsse_qi_nq0_1>"),
+  true,
+);
+var legacyInternalLookingEscape =
+  /(a*|d)+\g<__jsse_qi_nq0_1>/.exec("dg<__jsse_qi_nq0_1>");
+assert.sameValue(legacyInternalLookingEscape[0], "dg<__jsse_qi_nq0_1>");
+assert.sameValue(legacyInternalLookingEscape[1], "d");
+
+// A lazy outer quantifier still accepts its mandatory empty match when the
+// continuation succeeds, and consumes a sibling only when the continuation
+// forces another iteration.
+assert.sameValue(/(a*|d)+?/.exec("d")[0], "");
+var lazyInnerAndOuter = /(a*?|d)+?/.exec("a");
+assert.sameValue(lazyInnerAndOuter[0], "");
+assert.sameValue(lazyInnerAndOuter[1], "");
+var lazyForced = /(a*|d)+?c/.exec("dc");
+assert.sameValue(lazyForced[0], "dc");
+assert.sameValue(lazyForced[1], "d");
+
+// The positive-minimum treatment also covers the residual nullable shapes
+// handled for `*`: bare empty, exact-zero, and jointly-optional branches.
+assert.sameValue(/(|d)+/.exec("d")[0], "d");
+assert.sameValue(/(a{0}|d)+/.exec("d")[0], "d");
+assert.sameValue(/(a?b?|d)+/.exec("d")[0], "d");
+
+// Separate positive-minimum groups keep independent iteration state. Either
+// group may legitimately finish with only its mandatory empty iteration.
+var sequentialOne = /^(a*|d)+(b*|e)+/.exec("d");
+assert.sameValue(sequentialOne[0], "d");
+assert.sameValue(sequentialOne[1], "d");
+assert.sameValue(sequentialOne[2], "");
+var sequentialBoth = /^(a*|d)+(b*|e)+/.exec("de");
+assert.sameValue(sequentialBoth[0], "de");
+assert.sameValue(sequentialBoth[1], "d");
+assert.sameValue(sequentialBoth[2], "e");
+
+// A nested positive-minimum quantifier starts a fresh mandatory-iteration
+// budget each time its containing atom is entered. Internal state from the
+// first outer iteration must not reject the second iteration's required empty
+// match.
+var nestedPositive = /((a*|b)+c)+/.exec("cc");
+assert.sameValue(nestedPositive[0], "cc");
+assert.sameValue(nestedPositive[1], "c");
+assert.sameValue(nestedPositive[2], "");
+
+// If every atom in a jointly optional branch is lazy, its all-empty path is
+// preferred during a mandatory iteration. Separating the empty path from the
+// consuming expansion must preserve that original choice priority.
+var lazyJointOptional = /(a??b??|d)+?/.exec("a");
+assert.sameValue(lazyJointOptional[0], "");
+assert.sameValue(lazyJointOptional[1], "");
+
+// With mixed greediness, the empty leaf can sit between consuming choices:
+// `a??b?` prefers consuming `b` but skips both before backtracking to `a`,
+// while `a?b??` has the opposite ordering.
+assert.sameValue(/(a??b?|d)+?/.exec("a")[0], "");
+assert.sameValue(/(a??b?|d)+?/.exec("b")[0], "b");
+assert.sameValue(/(a?b??|d)+?/.exec("a")[0], "a");
+assert.sameValue(/(a?b??|d)+?/.exec("b")[0], "");
+
+// The no-progress rewrite is for unbounded repetition. A bounded min-zero
+// quantifier cannot add another iteration after an empty choice to recover
+// skipped input, so stripping its inner laziness changes both the match and
+// capture. These forms force the inner atom to consume while retaining its
+// lazy marker.
+var boundedOptional = /(a*?)?/.exec("aa");
+assert.sameValue(boundedOptional[0], "a");
+assert.sameValue(boundedOptional[1], "a");
+var boundedTwo = /(a*?){0,2}/.exec("aaa");
+assert.sameValue(boundedTwo[0], "aa");
+assert.sameValue(boundedTwo[1], "a");
