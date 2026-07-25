@@ -48,15 +48,19 @@ impl Interpreter {
     ) -> Result<(), JsValue> {
         let mut current = env.clone();
         loop {
-            // Inspect this frame without mutating; capture the next action.
+            // A declarative local write needs no re-entrant object operation,
+            // so update it while this single map probe is live. Global writes
+            // still defer mutation until after the mirrored object write.
             let action = {
-                let e = current.borrow();
+                let mut e = current.borrow_mut();
                 if e.is_indirect_binding(name) {
                     return Err(JsValue::String(JsString::from_str(
                         "Assignment to constant variable.",
                     )));
                 }
-                if let Some(binding) = e.bindings.get(name) {
+                let strict = e.strict;
+                let global_object_id = e.global_object_id;
+                if let Some(binding) = e.bindings.get_mut(name) {
                     if !binding.initialized
                         && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
                     {
@@ -73,25 +77,27 @@ impl Interpreter {
                         || binding.kind == BindingKind::ImmutableValue)
                         && binding.initialized
                     {
-                        if e.strict {
+                        if strict {
                             return Err(JsValue::String(JsString::from_str(
                                 "Assignment to constant variable.",
                             )));
                         }
                         return Ok(());
                     }
-                    let mirror = if binding.kind == BindingKind::Var {
-                        e.global_object_id
+                    if global_object_id.is_none() {
+                        binding.value = value;
+                        binding.initialized = true;
+                        return Ok(());
+                    }
+                    let mirror_gid = if binding.kind == BindingKind::Var {
+                        global_object_id
                     } else {
                         None
                     };
-                    EnvSetAction::WriteBinding {
-                        mirror_gid: mirror,
-                        strict: e.strict,
-                    }
+                    EnvSetAction::WriteBinding { mirror_gid, strict }
                 } else if e.parent.is_some() {
                     EnvSetAction::Recurse(e.parent.clone().unwrap())
-                } else if let Some(gid) = e.global_object_id {
+                } else if let Some(gid) = global_object_id {
                     EnvSetAction::ImplicitGlobal { gid }
                 } else {
                     EnvSetAction::CreateBinding
