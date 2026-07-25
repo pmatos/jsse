@@ -27,6 +27,18 @@ fn run_script(source: &str) -> Interpreter {
     interp
 }
 
+fn run_script_as_blocking_agent(source: &str) -> Interpreter {
+    let program = parse_program(source);
+    let mut interp = Interpreter::new();
+    interp.can_block = true;
+    let result = interp.run(&program);
+    assert!(
+        matches!(result, Completion::Normal(_) | Completion::Empty),
+        "unexpected completion: {result:?}"
+    );
+    interp
+}
+
 fn run_with_path(source: &str, path: &Path) -> Interpreter {
     let program = parse_program(source);
     let mut interp = Interpreter::new();
@@ -66,6 +78,16 @@ fn global_number(interp: &Interpreter, name: &str) -> f64 {
     {
         JsValue::Number(n) => n,
         other => panic!("expected global number for {name}, got {other:?}"),
+    }
+}
+
+fn global_object_id(interp: &Interpreter, name: &str) -> u64 {
+    match interp
+        .get_global_var_ref(name)
+        .unwrap_or(JsValue::Undefined)
+    {
+        JsValue::Object(o) => o.id,
+        other => panic!("expected global object for {name}, got {other:?}"),
     }
 }
 
@@ -855,6 +877,107 @@ fn shared_array_buffer_atomics_smoke() {
     assert_eq!(global_string(&interp, "result"), "7");
 }
 
+// -- Atomics / SharedArrayBuffer edge cases (issue #25) ----------------------------
+// Deterministic, single-threaded coverage of Atomics plumbing that test262 mostly
+// exercises only through the real multi-agent $262.agent harness. Cross-thread
+// wake-up itself is deliberately NOT tested here (timing-dependent, and already
+// exercised by test262's own agent tests) — these instead lock down the branch
+// logic directly, setting `can_block` on the interpreter rather than spawning a
+// real OS thread.
+
+#[test]
+fn atomics_wait_on_matching_value_throws_on_non_blocking_main_agent() {
+    let interp = run_script(
+        r#"
+        var result = "";
+        var sab = new SharedArrayBuffer(4);
+        var view = new Int32Array(sab);
+        try {
+            Atomics.wait(view, 0, 0);
+            result = "no-throw";
+        } catch (e) {
+            result = e.constructor.name;
+        }
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "TypeError");
+}
+
+#[test]
+fn atomics_wait_value_mismatch_returns_not_equal_without_blocking() {
+    let start = std::time::Instant::now();
+    let interp = run_script(
+        r#"
+        var sab = new SharedArrayBuffer(4);
+        var view = new Int32Array(sab);
+        var result = Atomics.wait(view, 0, 1, Infinity);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "not-equal");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "a value mismatch must return immediately, never touching the wait/notify blocking path"
+    );
+}
+
+#[test]
+fn atomics_wait_zero_timeout_on_blocking_agent_returns_timed_out_immediately() {
+    let start = std::time::Instant::now();
+    let interp = run_script_as_blocking_agent(
+        r#"
+        var sab = new SharedArrayBuffer(4);
+        var view = new Int32Array(sab);
+        var result = Atomics.wait(view, 0, 0, 0);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "timed-out");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "a zero timeout must never register a waiter or actually block"
+    );
+}
+
+#[test]
+fn atomics_notify_on_non_shared_buffer_returns_zero_without_throwing() {
+    let interp = run_script(
+        r#"
+        var view = new Int32Array(new ArrayBuffer(4));
+        var result = Atomics.notify(view, 0);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "result"), 0.0);
+}
+
+#[test]
+fn atomics_notify_on_shared_buffer_with_no_waiters_returns_zero() {
+    let interp = run_script(
+        r#"
+        var sab = new SharedArrayBuffer(4);
+        var view = new Int32Array(sab);
+        var result = Atomics.notify(view, 0);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "result"), 0.0);
+}
+
+#[test]
+fn atomics_add_on_non_integer_typed_array_throws_type_error() {
+    let interp = run_script(
+        r#"
+        var result = "";
+        var sab = new SharedArrayBuffer(8);
+        var view = new Float64Array(sab);
+        try {
+            Atomics.add(view, 0, 1);
+            result = "no-throw";
+        } catch (e) {
+            result = e.constructor.name;
+        }
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "TypeError");
+}
+
 #[test]
 fn typed_array_clamps_assigned_values() {
     let interp = run_script(
@@ -866,6 +989,160 @@ fn typed_array_clamps_assigned_values() {
         "#,
     );
     assert_eq!(global_string(&interp, "result"), "255");
+}
+
+// -- Resizable ArrayBuffer / growable SharedArrayBuffer invariants (issue #25) -----
+// Whitebox checks on the length-tracking bookkeeping in types.rs. A bug here is a
+// Rust panic or an out-of-bounds slice access, not just a wrong JS-visible value, so
+// these need direct Rust coverage rather than relying on test262 alone.
+
+#[test]
+fn length_tracking_view_recomputes_length_after_resizable_buffer_grows() {
+    let interp = run_script(
+        r#"
+        var buf = new ArrayBuffer(4, { maxByteLength: 16 });
+        var view = new Int32Array(buf);
+        buf.resize(16);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    assert!(
+        ta.is_length_tracking,
+        "omitted length over a resizable buffer must be length-tracking"
+    );
+    assert_eq!(
+        typed_array_length(ta),
+        4,
+        "length must recompute to the grown buffer's element count"
+    );
+    assert!(!is_typed_array_out_of_bounds(ta));
+}
+
+#[test]
+fn length_tracking_view_with_offset_goes_out_of_bounds_after_shrink_below_offset() {
+    let interp = run_script(
+        r#"
+        var buf = new ArrayBuffer(16, { maxByteLength: 16 });
+        var view = new Int32Array(buf, 8);
+        buf.resize(4);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    assert!(
+        is_typed_array_out_of_bounds(ta),
+        "byte_offset (8) now exceeds the shrunk buffer length (4)"
+    );
+    assert_eq!(
+        typed_array_length(ta),
+        0,
+        "an out-of-bounds length-tracking view must saturate to zero, not underflow"
+    );
+}
+
+#[test]
+fn length_tracking_view_recomputes_length_after_growable_shared_buffer_grows() {
+    let interp = run_script(
+        r#"
+        var sab = new SharedArrayBuffer(4, { maxByteLength: 16 });
+        var view = new Int32Array(sab);
+        sab.grow(16);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    assert!(ta.is_length_tracking);
+    assert_eq!(typed_array_length(ta), 4);
+    assert!(!is_typed_array_out_of_bounds(ta));
+}
+
+#[test]
+fn explicit_length_view_over_resizable_buffer_is_not_fixed_length() {
+    let interp = run_script(
+        r#"
+        var buf = new ArrayBuffer(16, { maxByteLength: 16 });
+        var view = new Int32Array(buf, 0, 2);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    let buf_obj = interp.get_object(global_object_id(&interp, "buf")).unwrap();
+    let buf_ref = buf_obj.borrow();
+    assert!(
+        !is_typed_array_fixed_length(ta, &buf_ref),
+        "an explicit-length view over a resizable (non-shared) buffer can still go \
+         out-of-bounds if the buffer shrinks, so it is not IsTypedArrayFixedLength"
+    );
+}
+
+#[test]
+fn explicit_length_view_over_growable_shared_buffer_is_fixed_length() {
+    let interp = run_script(
+        r#"
+        var sab = new SharedArrayBuffer(16, { maxByteLength: 16 });
+        var view = new Int32Array(sab, 0, 2);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    let buf_obj = interp.get_object(global_object_id(&interp, "sab")).unwrap();
+    let buf_ref = buf_obj.borrow();
+    assert!(
+        is_typed_array_fixed_length(ta, &buf_ref),
+        "a growable SharedArrayBuffer can only grow, never shrink, so an explicit-length \
+         view over it stays IsTypedArrayFixedLength"
+    );
+}
+
+#[test]
+fn is_valid_integer_index_rejects_stale_and_malformed_indices() {
+    let interp = run_script(
+        r#"
+        var buf = new ArrayBuffer(16, { maxByteLength: 16 });
+        var view = new Int32Array(buf);
+        buf.resize(8);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    assert!(
+        is_valid_integer_index(ta, 1.0),
+        "index 1 is still within the shrunk length (2)"
+    );
+    assert!(
+        !is_valid_integer_index(ta, 3.0),
+        "index 3 was valid before the shrink but must be rejected now"
+    );
+    assert!(!is_valid_integer_index(ta, f64::NAN));
+    assert!(!is_valid_integer_index(ta, f64::INFINITY));
+    assert!(
+        !is_valid_integer_index(ta, -0.0),
+        "-0 is not a valid integer index"
+    );
+    assert!(!is_valid_integer_index(ta, -1.0));
+    assert!(
+        !is_valid_integer_index(ta, 1.5),
+        "non-integer index must be rejected"
+    );
 }
 
 /// Regression test for PR 1b.2 (#105): prototype chain survives GC.
