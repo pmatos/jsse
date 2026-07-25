@@ -1426,6 +1426,8 @@ impl Interpreter {
         base_val: &JsValue,
         name: &K,
     ) -> Completion {
+        // §6.2.5.5 GetValue permits eliding the transient primitive wrapper,
+        // but its prototype [[Get]] must still receive the primitive itself.
         let name = name.to_js_property_key();
         match base_val {
             JsValue::Object(o) => self.get_object_property(o.id, &name, base_val),
@@ -1437,35 +1439,35 @@ impl Interpreter {
                 {
                     Completion::Normal(JsValue::String(JsString::from_vec(vec![s.code_units[idx]])))
                 } else if let Some(sp_id) = self.realm().string_prototype {
-                    Completion::Normal(self.get_property_on_id(sp_id, &name))
+                    self.get_object_property(sp_id, &name, base_val)
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Number(_) => {
                 if let Some(np_id) = self.realm().number_prototype {
-                    Completion::Normal(self.get_property_on_id(np_id, &name))
+                    self.get_object_property(np_id, &name, base_val)
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Boolean(_) => {
                 if let Some(bp_id) = self.realm().boolean_prototype {
-                    Completion::Normal(self.get_property_on_id(bp_id, &name))
+                    self.get_object_property(bp_id, &name, base_val)
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Symbol(_) => {
                 if let Some(sp_id) = self.realm().symbol_prototype {
-                    Completion::Normal(self.get_property_on_id(sp_id, &name))
+                    self.get_object_property(sp_id, &name, base_val)
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::BigInt(_) => {
                 if let Some(bp_id) = self.realm().bigint_prototype {
-                    Completion::Normal(self.get_property_on_id(bp_id, &name))
+                    self.get_object_property(bp_id, &name, base_val)
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
