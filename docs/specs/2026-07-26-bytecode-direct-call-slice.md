@@ -95,7 +95,8 @@ immediately unsafe: the callee and earlier arguments remain pending while
 later arguments can call arbitrary JavaScript and collect, and all operands
 must remain live throughout the callee's execution.
 
-The VM now mirrors every object-valued operand-stack entry into
+The VM now mirrors every object-valued operand-stack entry into its dedicated
+`gc_bytecode_roots` stack, which the collector scans alongside
 `gc_temp_roots`:
 
 - pushing a value roots it;
@@ -105,14 +106,19 @@ The VM now mirrors every object-valued operand-stack entry into
 - call operands retain their roots after removal from the operand vector,
   across the complete nested `call_function`, and are released in reverse
   stack order after it returns;
-- a frame marker around each `run_chunk` truncates any roots on every normal
-  or abrupt exit.
+- a frame marker around each `run_chunk` truncates bytecode roots on every
+  normal or abrupt exit.
 
 This is a lifetime invariant rather than a scan before only the `Call` opcode.
 It protects a callee or earlier argument while a later nested call runs, and
 also protects older pending expression operands while name resolution or
 coercion invokes user code. Numeric mandreel operands take only the cheap
 non-object branch and add no root entries.
+
+Keeping operand roots separate is also an ownership invariant. Native callees
+such as host timers may intentionally leave callback roots in
+`gc_temp_roots`; bytecode-frame cleanup must not truncate those persistent
+roots.
 
 ## Tail calls
 
@@ -147,6 +153,7 @@ Bytecode unit/end-to-end coverage verifies:
 - compiled caller to compiled callee;
 - compiled caller to AST-fallback callee;
 - native calls;
+- persistent callback roots installed by native callees;
 - calls in a numeric loop;
 - `with`-environment receiver preservation;
 - strict direct-return recursion beyond the normal soft call-depth limit;

@@ -1079,6 +1079,56 @@ fn direct_native_call_takes_bytecode_path() {
 }
 
 #[test]
+fn direct_native_call_preserves_persistent_callback_root() {
+    use crate::parser::Parser;
+
+    let source = "\
+        function makeCallback() { return function() {}; } \
+        function schedule(callback) { return setTimeout(callback, 0); }";
+    let mut parser = Parser::new(source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+    assert!(matches!(
+        interp.run(&program),
+        Completion::Normal(_) | Completion::Empty
+    ));
+
+    let make_callback = interp
+        .get_global_var_ref("makeCallback")
+        .expect("makeCallback binding");
+    let callback = match interp.call_function(&make_callback, &JsValue::Undefined, &[]) {
+        Completion::Normal(value) => value,
+        other => panic!("makeCallback failed: {other:?}"),
+    };
+    let JsValue::Object(callback_object) = callback.clone() else {
+        panic!("makeCallback must return a function object");
+    };
+    let schedule = interp
+        .get_global_var_ref("schedule")
+        .expect("schedule binding");
+    assert!(matches!(
+        interp.call_function(&schedule, &JsValue::Undefined, &[callback]),
+        Completion::Normal(_)
+    ));
+    assert!(
+        interp.bytecode_chunks_executed >= 1,
+        "schedule must execute through bytecode"
+    );
+    assert!(
+        interp.gc_bytecode_roots.is_empty(),
+        "bytecode operand roots must be released with the frame"
+    );
+
+    interp.gc.request();
+    interp.gc_safepoint();
+    assert!(
+        interp.get_object_cell(callback_object.id).is_some(),
+        "setTimeout's persistent callback root must survive the bytecode frame"
+    );
+}
+
+#[test]
 fn loop_with_direct_calls_takes_bytecode_path() {
     assert_parity_number(
         "\

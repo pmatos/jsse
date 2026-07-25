@@ -32,14 +32,31 @@ fn root_operand_stack(interp: &mut Interpreter, stack: &[JsValue]) -> usize {
     frame
 }
 
+fn root_stack_value(interp: &mut Interpreter, value: &JsValue) {
+    if let JsValue::Object(object) = value {
+        interp.gc_bytecode_roots.push(object.id);
+    }
+}
+
+fn unroot_stack_value(interp: &mut Interpreter, value: &JsValue) {
+    if let JsValue::Object(object) = value
+        && let Some(pos) = interp
+            .gc_bytecode_roots
+            .iter()
+            .rposition(|&id| id == object.id)
+    {
+        interp.gc_bytecode_roots.remove(pos);
+    }
+}
+
 fn push_value(interp: &mut Interpreter, stack: &mut Vec<JsValue>, value: JsValue) {
-    interp.gc_root_value(&value);
+    root_stack_value(interp, &value);
     stack.push(value);
 }
 
 fn pop_value(interp: &mut Interpreter, stack: &mut Vec<JsValue>, context: &'static str) -> JsValue {
     let value = stack.pop().unwrap_or_else(|| panic!("{context}"));
-    interp.gc_unroot_value(&value);
+    unroot_stack_value(interp, &value);
     value
 }
 
@@ -58,10 +75,10 @@ fn release_call_operands(
     args: &[JsValue],
 ) {
     for arg in args.iter().rev() {
-        interp.gc_unroot_value(arg);
+        unroot_stack_value(interp, arg);
     }
-    interp.gc_unroot_value(this_value);
-    interp.gc_unroot_value(callee);
+    unroot_stack_value(interp, this_value);
+    unroot_stack_value(interp, callee);
 }
 
 fn member_get(interp: &mut Interpreter, base: &JsValue, name: &str) -> Completion {
@@ -147,9 +164,9 @@ pub(crate) fn run_chunk(
     env: &EnvRef,
     this_value: JsValue,
 ) -> Completion {
-    let gc_frame = interp.gc_root_frame();
+    let gc_frame = interp.gc_bytecode_roots.len();
     let result = run_chunk_inner(interp, chunk, env, this_value);
-    interp.gc_unroot_frame(gc_frame);
+    interp.gc_bytecode_roots.truncate(gc_frame);
     result
 }
 
@@ -274,7 +291,7 @@ fn run_chunk_inner(
                 let result = member_get(interp, &base, &name);
                 interp.gc_unroot_frame(gc_frame);
                 match result {
-                    Completion::Normal(v) => stack.push(v),
+                    Completion::Normal(v) => push_value(interp, &mut stack, v),
                     abrupt => return abrupt,
                 }
             }
@@ -285,7 +302,7 @@ fn run_chunk_inner(
                 let result = member_get_computed(interp, &base, &key_val);
                 interp.gc_unroot_frame(gc_frame);
                 match result {
-                    Completion::Normal(v) => stack.push(v),
+                    Completion::Normal(v) => push_value(interp, &mut stack, v),
                     abrupt => return abrupt,
                 }
             }
@@ -300,7 +317,7 @@ fn run_chunk_inner(
                 let result = member_set(interp, base, &name, rhs.clone(), strict);
                 interp.gc_unroot_frame(gc_frame);
                 match result {
-                    Ok(()) => stack.push(rhs),
+                    Ok(()) => push_value(interp, &mut stack, rhs),
                     Err(e) => return Completion::Throw(e),
                 }
             }
@@ -313,7 +330,7 @@ fn run_chunk_inner(
                 let result = member_set_computed(interp, base, &key_val, rhs.clone(), strict);
                 interp.gc_unroot_frame(gc_frame);
                 match result {
-                    Ok(()) => stack.push(rhs),
+                    Ok(()) => push_value(interp, &mut stack, rhs),
                     Err(e) => return Completion::Throw(e),
                 }
             }
@@ -352,7 +369,7 @@ fn run_chunk_inner(
                         args,
                     };
                 }
-                // The operands remain in gc_temp_roots for the complete
+                // The operands remain in gc_bytecode_roots for the complete
                 // nested invocation even though they have been removed from
                 // the operand Vec. A callee can execute arbitrary JS and hit
                 // any number of safepoints before returning.
@@ -414,8 +431,8 @@ fn run_chunk_inner(
                     _ => unreachable!(),
                 };
                 let result = interp.eval_binary(bop, &l, &r);
-                interp.gc_unroot_value(&r);
-                interp.gc_unroot_value(&l);
+                unroot_stack_value(interp, &r);
+                unroot_stack_value(interp, &l);
                 match result {
                     Completion::Normal(v) => push_value(interp, &mut stack, v),
                     abrupt => return abrupt,
@@ -431,7 +448,7 @@ fn run_chunk_inner(
                     _ => unreachable!(),
                 };
                 let result = interp.eval_unary(uop, &v);
-                interp.gc_unroot_value(&v);
+                unroot_stack_value(interp, &v);
                 match result {
                     Completion::Normal(r) => push_value(interp, &mut stack, r),
                     abrupt => return abrupt,
