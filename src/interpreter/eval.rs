@@ -4369,7 +4369,7 @@ impl Interpreter {
     }
 
     /// Set a property on an already-evaluated object+key pair (strict controls TypeError on failure).
-    fn set_object_with_key<K: PropertyKeyLike + ?Sized>(
+    pub(super) fn set_object_with_key<K: PropertyKeyLike + ?Sized>(
         &mut self,
         obj_val: JsValue,
         key: &K,

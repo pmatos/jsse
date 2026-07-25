@@ -1,8 +1,8 @@
 use super::chunk::{Chunk, Constant};
 use super::op::Op;
 use crate::ast::{
-    AssignOp, BinaryOp, Expression, ForInit, Literal, LogicalOp, Pattern, Statement, UnaryOp,
-    UpdateOp, VarKind, VariableDeclaration,
+    AssignOp, BinaryOp, Expression, ForInit, Literal, LogicalOp, MemberProperty, Pattern,
+    Statement, UnaryOp, UpdateOp, VarKind, VariableDeclaration,
 };
 
 #[derive(Debug)]
@@ -241,26 +241,48 @@ impl Compiler {
                 }
                 Ok(())
             }
-            Expression::Assign(op, target, value) => {
-                let Expression::Identifier(name) = target.as_ref() else {
-                    return Err(CompileError::Unsupported("assign target"));
-                };
-                let idx = self.add_name(name)?;
-                self.emit_resolve_name(idx);
-                if *op == AssignOp::Assign {
-                    self.compile_expr(value)?;
-                } else {
-                    self.emit(Op::LoadResolvedName);
-                    self.emit_u16(idx);
-                    self.push_n(1);
-                    self.compile_expr(value)?;
-                    self.emit(Self::compound_binary_op(*op)?);
-                    self.pop_n(2);
-                    self.push_n(1);
+            Expression::Assign(op, target, value) => match target.as_ref() {
+                Expression::Identifier(name) => {
+                    let idx = self.add_name(name)?;
+                    self.emit_resolve_name(idx);
+                    if *op == AssignOp::Assign {
+                        self.compile_expr(value)?;
+                    } else {
+                        self.emit(Op::LoadResolvedName);
+                        self.emit_u16(idx);
+                        self.push_n(1);
+                        self.compile_expr(value)?;
+                        self.emit(Self::compound_binary_op(*op)?);
+                        self.pop_n(2);
+                        self.push_n(1);
+                    }
+                    self.emit_store_resolved_name(idx);
+                    Ok(())
                 }
-                self.emit_store_resolved_name(idx);
-                Ok(())
-            }
+                Expression::Member(obj, prop, _) if *op == AssignOp::Assign => match prop {
+                    MemberProperty::Dot(name) => {
+                        self.compile_expr(obj)?;
+                        let idx = self.add_name(name)?;
+                        self.compile_expr(value)?;
+                        self.emit(Op::SetProp);
+                        self.emit_u16(idx);
+                        self.pop_n(2);
+                        self.push_n(1);
+                        Ok(())
+                    }
+                    MemberProperty::Computed(key) => {
+                        self.compile_expr(obj)?;
+                        self.compile_expr(key)?;
+                        self.compile_expr(value)?;
+                        self.emit(Op::SetElement);
+                        self.pop_n(3);
+                        self.push_n(1);
+                        Ok(())
+                    }
+                    MemberProperty::Private(_) => Err(CompileError::Unsupported("private field")),
+                },
+                _ => Err(CompileError::Unsupported("assign target")),
+            },
             Expression::Update(op, prefix, target) => {
                 let Expression::Identifier(name) = target.as_ref() else {
                     return Err(CompileError::Unsupported("update target"));
@@ -327,6 +349,25 @@ impl Compiler {
                 self.push_n(1);
                 Ok(())
             }
+            Expression::Member(obj, prop, _site_id) => match prop {
+                MemberProperty::Dot(name) => {
+                    self.compile_expr(obj)?;
+                    let idx = self.add_name(name)?;
+                    self.emit(Op::GetProp);
+                    self.emit_u16(idx);
+                    // Stack height unchanged: pop base, push value.
+                    Ok(())
+                }
+                MemberProperty::Computed(key) => {
+                    self.compile_expr(obj)?;
+                    self.compile_expr(key)?;
+                    self.emit(Op::GetElement);
+                    self.pop_n(2);
+                    self.push_n(1);
+                    Ok(())
+                }
+                MemberProperty::Private(_) => Err(CompileError::Unsupported("private field")),
+            },
             _ => Err(CompileError::Unsupported("expression")),
         }
     }
