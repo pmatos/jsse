@@ -6,12 +6,12 @@
 //! `Rc<RefCell<JsObjectData>>` representation without asking the system
 //! allocator for every object. Logical ids may be reused as soon as GC clears
 //! a slot; physical blocks are reused only after the last temporary handle to
-//! the old object is dropped.
+//! the old object is dropped. Collector metadata lives beside each physical
+//! allocation so the nursery keeps the same stable object ids and handles.
 
 use super::types::JsObjectData;
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::mem::MaybeUninit;
-use std::ops::Deref;
 use std::ptr::{self, NonNull};
 use std::rc::Rc;
 
@@ -20,17 +20,25 @@ pub(crate) const CHUNK_SIZE: usize = 1024;
 type Slot = Option<ObjectHandle>;
 type Chunk = Box<[Slot; CHUNK_SIZE]>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Generation {
+    Young,
+    Old,
+    Dead,
+}
+
 /// Owned pointer to arena-allocated object data.
 ///
 /// This intentionally exposes only the subset of `Rc` used for JS objects:
-/// clone an owned handle and dereference it to the existing `RefCell` API.
-/// The pointer is stable because [`ObjectStorage`] never moves its chunks.
+/// clone an owned handle and borrow the payload through the existing API.
+/// Mutable borrows form the conservative old-to-young write barrier. The
+/// pointer is stable because [`ObjectStorage`] never moves its chunks.
 pub(crate) struct ObjectHandle {
     allocation: NonNull<ObjectAllocation>,
 }
 
 impl ObjectHandle {
-    fn new(storage: &Rc<ObjectStorage>, data: JsObjectData) -> Self {
+    fn new(storage: &Rc<ObjectStorage>, id: u64, data: JsObjectData) -> Self {
         let allocation = storage.take_block();
         // SAFETY: `take_block` returns an aligned, currently uninitialized
         // block owned by `storage`. No handle can reference it until this
@@ -38,11 +46,117 @@ impl ObjectHandle {
         unsafe {
             allocation.as_ptr().write(ObjectAllocation {
                 strong: Cell::new(1),
+                id,
+                generation: Cell::new(Generation::Young),
+                nursery_age: Cell::new(0),
+                young_mark: Cell::new(false),
+                remembered: Cell::new(false),
                 storage: Rc::clone(storage),
                 value: RefCell::new(data),
             });
         }
         Self { allocation }
+    }
+
+    #[inline(always)]
+    fn allocation(&self) -> &ObjectAllocation {
+        // SAFETY: a live handle contributes to `strong`, so the allocation is
+        // initialized for the lifetime of the handle.
+        unsafe { self.allocation.as_ref() }
+    }
+
+    #[inline(always)]
+    pub(crate) fn borrow(&self) -> Ref<'_, JsObjectData> {
+        self.allocation().value.borrow()
+    }
+
+    #[inline(always)]
+    pub(crate) fn borrow_mut(&self) -> RefMut<'_, JsObjectData> {
+        self.remember_if_old();
+        self.allocation().value.borrow_mut()
+    }
+
+    #[inline(always)]
+    pub(crate) fn borrow_untracked(&self) -> Ref<'_, JsObjectData> {
+        self.allocation().value.borrow()
+    }
+
+    #[inline(always)]
+    pub(crate) fn borrow_mut_untracked(&self) -> RefMut<'_, JsObjectData> {
+        self.allocation().value.borrow_mut()
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_young(&self) -> bool {
+        self.allocation().generation.get() == Generation::Young
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_old(&self) -> bool {
+        self.allocation().generation.get() == Generation::Old
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_young_marked(&self) -> bool {
+        self.allocation().young_mark.get()
+    }
+
+    /// Mark a nursery object, returning true only for its first admission to
+    /// the minor collector's worklist.
+    #[inline(always)]
+    pub(crate) fn mark_young(&self) -> bool {
+        self.is_young() && !self.allocation().young_mark.replace(true)
+    }
+
+    #[inline(always)]
+    pub(crate) fn clear_young_mark(&self) {
+        self.allocation().young_mark.set(false);
+    }
+
+    /// Age one nursery survivor. Returns true when it reaches promotion age.
+    pub(crate) fn age_survivor(&self, promotion_age: u8) -> bool {
+        debug_assert!(self.is_young());
+        let age = self.allocation().nursery_age.get().saturating_add(1);
+        self.allocation().nursery_age.set(age);
+        age >= promotion_age
+    }
+
+    /// Promote a survivor and conservatively scan it at the next minor GC.
+    pub(crate) fn promote(&self) {
+        self.allocation().generation.set(Generation::Old);
+        self.allocation().nursery_age.set(0);
+        self.allocation().young_mark.set(false);
+        self.remember_if_old();
+    }
+
+    /// Tenure a full-collection survivor. A major collection leaves no young
+    /// objects, so it does not need to enter the remembered set.
+    pub(crate) fn tenure_after_major(&self) {
+        self.allocation().generation.set(Generation::Old);
+        self.allocation().nursery_age.set(0);
+        self.allocation().young_mark.set(false);
+        self.allocation().remembered.set(false);
+    }
+
+    pub(crate) fn remember_if_old(&self) {
+        let allocation = self.allocation();
+        if self.is_old() && !allocation.remembered.replace(true) {
+            allocation
+                .storage
+                .remembered_ids
+                .borrow_mut()
+                .push(allocation.id);
+        }
+    }
+
+    fn clear_remembered(&self) {
+        self.allocation().remembered.set(false);
+    }
+
+    fn retire(&self) {
+        self.allocation().generation.set(Generation::Dead);
+        self.allocation().young_mark.set(false);
+        self.allocation().remembered.set(false);
     }
 
     #[cold]
@@ -68,7 +182,7 @@ impl Clone for ObjectHandle {
     fn clone(&self) -> Self {
         // SAFETY: every live handle contributes one to `strong`, which keeps
         // this initialized allocation and its storage alive.
-        let allocation = unsafe { self.allocation.as_ref() };
+        let allocation = self.allocation();
         let strong = allocation
             .strong
             .get()
@@ -81,29 +195,11 @@ impl Clone for ObjectHandle {
     }
 }
 
-impl Deref for ObjectHandle {
-    type Target = RefCell<JsObjectData>;
-
-    #[inline(always)]
-    fn deref(&self) -> &Self::Target {
-        // SAFETY: a live handle keeps the allocation initialized and the
-        // embedded storage reference keeps its backing chunk allocated.
-        &unsafe { self.allocation.as_ref() }.value
-    }
-}
-
-impl AsRef<RefCell<JsObjectData>> for ObjectHandle {
-    #[inline(always)]
-    fn as_ref(&self) -> &RefCell<JsObjectData> {
-        self
-    }
-}
-
 impl Drop for ObjectHandle {
     #[inline(always)]
     fn drop(&mut self) {
         // SAFETY: `self` owns one strong reference, so the allocation is live.
-        let allocation = unsafe { self.allocation.as_ref() };
+        let allocation = self.allocation();
         let strong = allocation.strong.get();
         debug_assert!(strong > 0, "ObjectHandle strong count underflow");
         if strong > 1 {
@@ -118,6 +214,11 @@ impl Drop for ObjectHandle {
 
 struct ObjectAllocation {
     strong: Cell<usize>,
+    id: u64,
+    generation: Cell<Generation>,
+    nursery_age: Cell<u8>,
+    young_mark: Cell<bool>,
+    remembered: Cell<bool>,
     storage: Rc<ObjectStorage>,
     value: RefCell<JsObjectData>,
 }
@@ -129,6 +230,7 @@ struct ObjectAllocation {
 struct ObjectStorage {
     state: RefCell<ObjectStorageState>,
     recycle_blocks: Cell<bool>,
+    remembered_ids: RefCell<Vec<u64>>,
 }
 
 struct ObjectStorageState {
@@ -146,6 +248,7 @@ impl ObjectStorage {
                 next_block: 0,
             }),
             recycle_blocks: Cell::new(true),
+            remembered_ids: RefCell::new(Vec::new()),
         }
     }
 
@@ -184,6 +287,7 @@ pub(crate) struct ObjectArena {
     next_slot: u64,
     live_count: usize,
     storage: Rc<ObjectStorage>,
+    nursery: Vec<u64>,
 }
 
 impl ObjectArena {
@@ -194,13 +298,13 @@ impl ObjectArena {
             next_slot: 0,
             live_count: 0,
             storage: Rc::new(ObjectStorage::new()),
+            nursery: Vec::new(),
         }
     }
 
     /// Allocate a slot for `data`. Writes `data.id = Some(id)` before placing
     /// it in the physical arena. Returns `(id, was_reuse)` so callers can
-    /// adjust GC pressure accounting (a reused logical slot is cheaper than a
-    /// fresh chunk growth).
+    /// distinguish logical slot reuse from fresh chunk growth.
     pub(crate) fn alloc(&mut self, mut data: JsObjectData) -> (u64, bool) {
         let (id, was_reuse) = if let Some(idx) = self.free_list.pop() {
             (idx, true)
@@ -213,9 +317,10 @@ impl ObjectArena {
             (idx, false)
         };
         data.id = Some(id);
-        let handle = ObjectHandle::new(&self.storage, data);
+        let handle = ObjectHandle::new(&self.storage, id, data);
         self.set_slot(id, Some(handle));
         self.live_count += 1;
+        self.nursery.push(id);
         (id, was_reuse)
     }
 
@@ -227,17 +332,15 @@ impl ObjectArena {
         self.slot_at(id).and_then(|s| s.clone())
     }
 
-    /// Borrow the slot's `RefCell` if live, else `None`. Lifetime is
-    /// tied to `&self`; callers must drop the borrow before any
-    /// `&mut self` call.
+    /// Borrow the slot's handle if live, else `None`. Lifetime is tied to
+    /// `&self`; callers must drop payload borrows before any `&mut self` call.
     #[allow(dead_code)] // get_cell isn't yet hot; get_cell_expect is
-    pub(crate) fn get_cell(&self, id: u64) -> Option<&RefCell<JsObjectData>> {
-        self.slot_at(id)
-            .and_then(|s| s.as_ref().map(ObjectHandle::as_ref))
+    pub(crate) fn get_cell(&self, id: u64) -> Option<&ObjectHandle> {
+        self.slot_at(id).and_then(Option::as_ref)
     }
 
     /// Like `get_cell`, but panics for dead ids.
-    pub(crate) fn get_cell_expect(&self, id: u64) -> &RefCell<JsObjectData> {
+    pub(crate) fn get_cell_expect(&self, id: u64) -> &ObjectHandle {
         self.get_cell(id).expect("dead object id")
     }
 
@@ -248,9 +351,55 @@ impl ObjectArena {
             self.slot_at(id).is_some_and(|s| s.is_some()),
             "ObjectArena::free called on dead id {id}"
         );
+        if let Some(handle) = self.get_cell(id) {
+            handle.retire();
+        }
         self.set_slot(id, None);
         self.free_list.push(id);
         self.live_count -= 1;
+    }
+
+    /// Take the current nursery so the collector can rebuild it from
+    /// survivors without retaining dead or promoted ids.
+    pub(crate) fn take_nursery(&mut self) -> Vec<u64> {
+        std::mem::take(&mut self.nursery)
+    }
+
+    pub(crate) fn replace_nursery(&mut self, nursery: Vec<u64>) {
+        debug_assert!(
+            nursery
+                .iter()
+                .all(|&id| self.get_cell(id).is_some_and(ObjectHandle::is_young))
+        );
+        self.nursery = nursery;
+    }
+
+    /// Drain the remembered set and reset its membership bits. Objects that
+    /// still contain young edges are explicitly re-enqueued by the collector.
+    pub(crate) fn take_remembered(&self) -> Vec<u64> {
+        let ids = std::mem::take(&mut *self.storage.remembered_ids.borrow_mut());
+        for &id in &ids {
+            if let Some(handle) = self.get_cell(id) {
+                handle.clear_remembered();
+            }
+        }
+        ids
+    }
+
+    pub(crate) fn remembered_len(&self) -> usize {
+        self.storage.remembered_ids.borrow().len()
+    }
+
+    /// A major collection tenures every survivor and starts with empty
+    /// nursery/remembered sets.
+    pub(crate) fn reset_generations_after_major(&mut self) {
+        self.nursery.clear();
+        let remembered = std::mem::take(&mut *self.storage.remembered_ids.borrow_mut());
+        for id in remembered {
+            if let Some(handle) = self.get_cell(id) {
+                handle.clear_remembered();
+            }
+        }
     }
 
     /// Number of currently-occupied slots.
@@ -354,6 +503,33 @@ mod tests {
         let (fresh, was_reuse) = arena.alloc(JsObjectData::new());
         assert_eq!(fresh, second + 1);
         assert!(!was_reuse);
+    }
+
+    #[test]
+    fn mutable_borrow_remembers_old_object_once() {
+        let mut arena = ObjectArena::new();
+        let (id, _) = arena.alloc(JsObjectData::new());
+        let handle = arena.get_cell_expect(id);
+        handle.promote();
+
+        // Promotion itself schedules one conservative scan.
+        assert_eq!(arena.take_remembered(), vec![id]);
+        handle.borrow_mut().extensible = false;
+        handle.borrow_mut().extensible = true;
+        assert_eq!(arena.take_remembered(), vec![id]);
+        assert!(arena.take_remembered().is_empty());
+    }
+
+    #[test]
+    fn immutable_borrow_does_not_trigger_write_barrier() {
+        let mut arena = ObjectArena::new();
+        let (id, _) = arena.alloc(JsObjectData::new());
+        let handle = arena.get_cell_expect(id);
+        handle.promote();
+        arena.take_remembered();
+
+        assert!(handle.borrow().extensible);
+        assert!(arena.take_remembered().is_empty());
     }
 
     #[test]

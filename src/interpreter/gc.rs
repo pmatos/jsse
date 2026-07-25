@@ -1,5 +1,7 @@
 use super::*;
 
+const GC_SATURATED_MAJOR_NURSERIES: usize = 1;
+
 /// Allocation-pressure pacing for the garbage collector.
 ///
 /// Owns the accounting that decides *when* to collect: how many objects and
@@ -9,50 +11,73 @@ use super::*;
 /// purely the "should we collect now?" heuristic, exercised through the small
 /// interface below rather than by poking counters on the interpreter.
 pub(crate) struct GcPacer {
-    /// Object allocations since the last collection (count-based trigger).
-    alloc_count: usize,
-    /// Heap + off-heap bytes charged since the last collection (byte trigger).
-    bytes_since_gc: usize,
+    /// Object allocations currently charged to the nursery.
+    nursery_alloc_count: usize,
+    /// Approximate bytes currently charged to the nursery.
+    nursery_bytes: usize,
+    /// Heap + off-heap allocation debt since the last major collection.
+    major_bytes_since_gc: usize,
     /// Live off-heap bytes currently tracked (e.g. ArrayBuffer backing stores).
     external_bytes: usize,
-    /// Adaptive byte budget; exceeding it requests a collection.
-    threshold_bytes: usize,
-    /// A collection has been requested and not yet performed.
-    requested: bool,
+    /// Adaptive major byte budget; exceeding it requests a full collection.
+    major_threshold_bytes: usize,
+    /// A minor collection has been requested and not yet performed.
+    minor_requested: bool,
+    /// A full collection has been requested and not yet performed.
+    major_requested: bool,
+    /// Dense mutation or high survival made routine minor collection
+    /// counterproductive. Run a major after the next nursery budget.
+    minor_suppressed: bool,
+    /// Consecutive minor collections in which at least 90% of the nursery
+    /// survived. Two saturated minors switch back to major pacing.
+    high_survival_minors: u8,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CollectionKind {
+    Minor,
+    Major,
 }
 
 impl GcPacer {
     pub(crate) fn new() -> Self {
         GcPacer {
-            alloc_count: 0,
-            bytes_since_gc: 0,
+            nursery_alloc_count: 0,
+            nursery_bytes: 0,
+            major_bytes_since_gc: 0,
             external_bytes: 0,
-            threshold_bytes: GC_INITIAL_THRESHOLD_BYTES,
-            requested: false,
+            major_threshold_bytes: GC_INITIAL_THRESHOLD_BYTES,
+            minor_requested: false,
+            major_requested: false,
+            minor_suppressed: false,
+            high_survival_minors: 0,
         }
     }
 
-    /// Charge one object allocation. `reused` is true when the slot came from
-    /// the arena free-list, which costs half of a fresh allocation.
-    pub(crate) fn charge_object(&mut self, reused: bool) {
-        self.alloc_count += 1;
-        let cost = if reused {
-            GC_OBJECT_OVERHEAD / 2
-        } else {
-            GC_OBJECT_OVERHEAD
-        };
-        self.bytes_since_gc += cost;
-        if self.alloc_count >= GC_THRESHOLD || self.bytes_since_gc >= self.threshold_bytes {
-            self.requested = true;
+    /// Charge one object allocation. Reused logical slots still hold a full
+    /// live payload and therefore carry full major-collection pressure.
+    pub(crate) fn charge_object(&mut self, _reused: bool) {
+        self.nursery_alloc_count += 1;
+        self.nursery_bytes += GC_OBJECT_OVERHEAD;
+        self.major_bytes_since_gc += GC_OBJECT_OVERHEAD;
+        let probe_threshold =
+            GC_NURSERY_THRESHOLD_BYTES.saturating_mul(GC_SATURATED_MAJOR_NURSERIES);
+        if self.minor_suppressed && self.nursery_bytes >= probe_threshold {
+            self.major_requested = true;
+        } else if !self.minor_suppressed && self.nursery_bytes >= GC_NURSERY_THRESHOLD_BYTES {
+            self.minor_requested = true;
+        }
+        if self.major_bytes_since_gc >= self.major_threshold_bytes {
+            self.major_requested = true;
         }
     }
 
     /// Charge newly tracked off-heap bytes against the budget.
     pub(crate) fn track_external(&mut self, bytes: usize) {
         self.external_bytes += bytes;
-        self.bytes_since_gc += bytes;
-        if self.bytes_since_gc >= self.threshold_bytes {
-            self.requested = true;
+        self.major_bytes_since_gc += bytes;
+        if self.major_bytes_since_gc >= self.major_threshold_bytes {
+            self.major_requested = true;
         }
     }
 
@@ -63,42 +88,76 @@ impl GcPacer {
 
     /// Force a collection at the next safepoint.
     pub(crate) fn request(&mut self) {
-        self.requested = true;
+        self.major_requested = true;
     }
 
-    /// Consume a pending request at a safepoint. Returns true when a collection
-    /// should run, resetting the per-cycle object counter as it does.
-    pub(crate) fn begin_collection(&mut self) -> bool {
-        if !self.requested {
-            return false;
+    #[cfg(test)]
+    pub(crate) fn request_minor(&mut self) {
+        self.minor_requested = true;
+    }
+
+    /// Consume the highest-priority pending request at a safepoint.
+    pub(crate) fn begin_collection(&mut self) -> Option<CollectionKind> {
+        if self.major_requested {
+            self.major_requested = false;
+            self.minor_requested = false;
+            Some(CollectionKind::Major)
+        } else if self.minor_requested {
+            self.minor_requested = false;
+            Some(CollectionKind::Minor)
+        } else {
+            None
         }
-        self.requested = false;
-        self.alloc_count = 0;
-        true
     }
 
-    /// Re-pace after a collection: grow the next byte budget from the surviving
-    /// live set and reset the per-cycle byte counter. `live_object_count` is the
-    /// number of heap objects that survived the sweep.
-    pub(crate) fn end_collection(&mut self, live_object_count: usize) {
+    pub(crate) fn end_minor_collection(&mut self, survived: usize, examined: usize) {
+        self.nursery_alloc_count = 0;
+        self.nursery_bytes = 0;
+        if examined > 0 && survived.saturating_mul(10) >= examined.saturating_mul(9) {
+            self.high_survival_minors = self.high_survival_minors.saturating_add(1);
+            if self.high_survival_minors >= 2 {
+                self.minor_suppressed = true;
+            }
+        } else {
+            self.high_survival_minors = 0;
+        }
+    }
+
+    /// Pause minor collection after an unproductive scavenge. Nursery objects
+    /// remain allocated until the next budget requests a major collection.
+    pub(crate) fn suppress_minor_temporarily(&mut self) {
+        self.minor_requested = false;
+        self.minor_suppressed = true;
+        self.nursery_alloc_count = 0;
+        self.nursery_bytes = 0;
+    }
+
+    /// Re-pace after a full collection: grow the next byte budget from the
+    /// surviving live set and reset both allocation cycles.
+    pub(crate) fn end_major_collection(&mut self, live_object_count: usize) {
         let live_bytes = live_object_count * GC_OBJECT_OVERHEAD + self.external_bytes;
-        self.threshold_bytes = std::cmp::max(GC_MIN_THRESHOLD_BYTES, live_bytes * GC_GROWTH_FACTOR);
-        self.bytes_since_gc = 0;
+        let growth_debt = live_bytes.saturating_mul(GC_GROWTH_FACTOR.saturating_sub(1));
+        self.major_threshold_bytes = std::cmp::max(GC_MAJOR_MIN_THRESHOLD_BYTES, growth_debt);
+        self.major_bytes_since_gc = 0;
+        self.nursery_alloc_count = 0;
+        self.nursery_bytes = 0;
+        self.minor_suppressed = false;
+        self.high_survival_minors = 0;
     }
 
     #[cfg(test)]
     pub(crate) fn is_requested(&self) -> bool {
-        self.requested
+        self.minor_requested || self.major_requested
     }
 
     #[cfg(test)]
     pub(crate) fn alloc_count(&self) -> usize {
-        self.alloc_count
+        self.nursery_alloc_count
     }
 
     #[cfg(test)]
     pub(crate) fn bytes_since_gc(&self) -> usize {
-        self.bytes_since_gc
+        self.major_bytes_since_gc
     }
 
     #[cfg(test)]
@@ -108,7 +167,7 @@ impl GcPacer {
 
     #[cfg(test)]
     pub(crate) fn threshold_bytes(&self) -> usize {
-        self.threshold_bytes
+        self.major_threshold_bytes
     }
 }
 
@@ -129,6 +188,26 @@ impl Interpreter {
 
     pub(crate) fn gc_untrack_external_bytes(&mut self, bytes: usize) {
         self.gc.release_external(bytes);
+    }
+
+    /// Precise barrier for mutation seams that know the value being stored.
+    ///
+    /// A primitive or old value cannot introduce an old-to-young edge, so
+    /// these hot paths may use `borrow_mut_untracked` after this check. Other
+    /// mutable borrows retain the conservative object-level barrier.
+    pub(crate) fn gc_write_barrier_value(
+        &self,
+        owner: &crate::interpreter::object_arena::ObjectHandle,
+        value: &JsValue,
+    ) {
+        if let JsValue::Object(object) = value
+            && self
+                .objects
+                .get_cell(object.id)
+                .is_some_and(crate::interpreter::object_arena::ObjectHandle::is_young)
+        {
+            owner.remember_if_old();
+        }
     }
 
     fn enqueue_unmarked<I>(candidates: I, worklist: &mut Vec<u64>, marks: &mut [bool])
@@ -163,113 +242,376 @@ impl Interpreter {
     }
 
     pub(crate) fn gc_safepoint(&mut self) {
-        if !self.gc.begin_collection() {
-            return;
+        match self.gc.begin_collection() {
+            Some(CollectionKind::Minor) => self.gc_collect_minor(),
+            Some(CollectionKind::Major) => self.gc_collect_major(),
+            None => {}
         }
-        let obj_count = self.objects.capacity() as usize;
-        // Reuse the mark bitmap buffer across collections to avoid per-GC
-        // allocation churn. clear()+resize(_, false) yields an all-false buffer
-        // (invariant required by mark/sweep) while keeping the backing capacity.
-        let mut marks = std::mem::take(&mut self.gc_marks);
-        marks.clear();
-        marks.resize(obj_count, false);
+    }
 
-        // Collect roots from all realms
-        let mut worklist: Vec<u64> = Vec::new();
+    fn collect_gc_roots(&self) -> (Vec<u64>, HashSet<usize>) {
+        let mut roots = Vec::new();
         let mut seen_envs = HashSet::new();
+
         for realm in &self.realms {
-            realm.collect_roots(&mut worklist, &mut seen_envs);
+            realm.collect_roots(&mut roots, &mut seen_envs);
         }
         if let Some(JsValue::Object(o)) = &self.new_target {
-            worklist.push(o.id);
+            roots.push(o.id);
         }
-        // Root from module environments (not reachable from global_env)
+        // Module environments are not necessarily reachable from global_env.
         for module in self.module_registry.values() {
             let m = module.borrow();
-            Self::collect_env_roots(&m.env, &mut worklist, &mut seen_envs);
+            Self::collect_env_roots(&m.env, &mut roots, &mut seen_envs);
             for val in m.exports.values() {
-                Self::collect_value_roots(val, &mut worklist);
+                Self::collect_value_roots(val, &mut roots);
             }
             if let Some(ms) = &m.module_source {
-                Self::collect_value_roots(ms, &mut worklist);
+                Self::collect_value_roots(ms, &mut roots);
             }
             if let Some((promise, resolve, reject)) = &m.top_level_capability {
-                Self::collect_value_roots(promise, &mut worklist);
-                Self::collect_value_roots(resolve, &mut worklist);
-                Self::collect_value_roots(reject, &mut worklist);
+                Self::collect_value_roots(promise, &mut roots);
+                Self::collect_value_roots(resolve, &mut roots);
+                Self::collect_value_roots(reject, &mut roots);
             }
         }
         for module in self.synthetic_module_registry.values() {
             let m = module.borrow();
-            Self::collect_env_roots(&m.env, &mut worklist, &mut seen_envs);
+            Self::collect_env_roots(&m.env, &mut roots, &mut seen_envs);
             for val in m.exports.values() {
-                Self::collect_value_roots(val, &mut worklist);
+                Self::collect_value_roots(val, &mut roots);
             }
             if let Some(ms) = &m.module_source {
-                Self::collect_value_roots(ms, &mut worklist);
+                Self::collect_value_roots(ms, &mut roots);
             }
         }
-        // Trace active call stack environments
         for env in &self.call_stack_envs {
-            Self::collect_env_roots(env, &mut worklist, &mut seen_envs);
+            Self::collect_env_roots(env, &mut roots, &mut seen_envs);
         }
         for frame in &self.call_stack_frames {
             if frame.func_obj_id != 0 {
-                worklist.push(frame.func_obj_id);
+                roots.push(frame.func_obj_id);
             }
             match &frame.arguments {
                 CallFrameArguments::None => {}
                 CallFrameArguments::Materialized(arguments) => {
-                    Self::collect_value_roots(arguments, &mut worklist);
+                    Self::collect_value_roots(arguments, &mut roots);
                 }
                 CallFrameArguments::Deferred { args, func_env, .. } => {
                     for argument in args.values() {
-                        Self::collect_value_roots(argument, &mut worklist);
+                        Self::collect_value_roots(argument, &mut roots);
                     }
-                    Self::collect_env_roots(func_env, &mut worklist, &mut seen_envs);
+                    Self::collect_env_roots(func_env, &mut roots, &mut seen_envs);
                 }
             }
         }
-        // Temporary roots (iterators, etc.)
-        worklist.extend_from_slice(&self.gc_temp_roots);
-        // Root values captured in pending microtask closures
-        for roots in self.scheduler.iter_microtask_roots() {
-            for val in roots {
-                Self::collect_value_roots(val, &mut worklist);
+        roots.extend_from_slice(&self.gc_temp_roots);
+        for microtask_roots in self.scheduler.iter_microtask_roots() {
+            for val in microtask_roots {
+                Self::collect_value_roots(val, &mut roots);
             }
         }
-        // Iterators pending close when a generator yields during destructuring
         for val in &self.pending_iter_close {
-            Self::collect_value_roots(val, &mut worklist);
+            Self::collect_value_roots(val, &mut roots);
         }
         for iters in self.generator_inline_iters.values() {
             for val in iters {
-                Self::collect_value_roots(val, &mut worklist);
+                Self::collect_value_roots(val, &mut roots);
             }
         }
         for val in self.iterator_next_cache.values() {
-            Self::collect_value_roots(val, &mut worklist);
+            Self::collect_value_roots(val, &mut roots);
         }
         for afs in self.scheduler.iter_async_function_states() {
-            Self::collect_env_roots(&afs.func_env, &mut worklist, &mut seen_envs);
-            Self::collect_value_roots(&afs.resolve_fn, &mut worklist);
-            Self::collect_value_roots(&afs.reject_fn, &mut worklist);
+            Self::collect_env_roots(&afs.func_env, &mut roots, &mut seen_envs);
+            Self::collect_value_roots(&afs.resolve_fn, &mut roots);
+            Self::collect_value_roots(&afs.reject_fn, &mut roots);
             if let Some(ref v) = afs.pending_return {
-                Self::collect_value_roots(v, &mut worklist);
+                Self::collect_value_roots(v, &mut roots);
             }
             if let Some(ref v) = afs.saved_finally_exception {
-                Self::collect_value_roots(v, &mut worklist);
+                Self::collect_value_roots(v, &mut roots);
             }
             if let Some(ref env) = afs.for_of_iter_env {
-                Self::collect_env_roots(env, &mut worklist, &mut seen_envs);
+                Self::collect_env_roots(env, &mut roots, &mut seen_envs);
             }
         }
+
+        (roots, seen_envs)
+    }
+
+    fn enqueue_young<I>(&self, candidates: I, worklist: &mut Vec<u64>)
+    where
+        I: IntoIterator<Item = u64>,
+    {
+        for id in candidates {
+            if self
+                .objects
+                .get_cell(id)
+                .is_some_and(crate::interpreter::object_arena::ObjectHandle::mark_young)
+            {
+                worklist.push(id);
+            }
+        }
+    }
+
+    fn trace_young_worklist(
+        &self,
+        worklist: &mut Vec<u64>,
+        seen_envs: &mut HashSet<usize>,
+        weak_containers: &mut Vec<u64>,
+    ) {
+        let mut children = Vec::new();
+        while let Some(id) = worklist.pop() {
+            let Some(handle) = self.objects.get_cell(id) else {
+                continue;
+            };
+            let obj = handle.borrow_untracked();
+            if obj.class_name == "WeakMap" || obj.class_name == "WeakSet" {
+                weak_containers.push(id);
+            }
+            children.clear();
+            Self::trace_object_fields(&obj, &mut children, seen_envs);
+            drop(obj);
+            self.enqueue_young(children.drain(..), worklist);
+        }
+    }
+
+    fn object_requires_persistent_minor_scan(obj: &JsObjectData) -> bool {
+        let has_closure_env = matches!(obj.callable, Some(JsFunction::User { .. }));
+        has_closure_env
+            || matches!(
+                obj.kind,
+                ObjectKind::Iterator(_) | ObjectKind::Arguments(_) | ObjectKind::ModuleNamespace(_)
+            )
+    }
+
+    fn object_has_young_weak_edge(&self, obj: &JsObjectData) -> bool {
+        if obj.class_name == "WeakMap" {
+            obj.map_data().is_some_and(|entries| {
+                entries.iter().flatten().any(|(key, value)| {
+                    [key, value].iter().any(|candidate| {
+                        let JsValue::Object(object) = candidate else {
+                            return false;
+                        };
+                        self.objects
+                            .get_cell(object.id)
+                            .is_some_and(|handle| handle.is_young())
+                    })
+                })
+            })
+        } else if obj.class_name == "WeakSet" {
+            obj.set_data().is_some_and(|entries| {
+                entries.iter().flatten().any(|value| {
+                    let JsValue::Object(object) = value else {
+                        return false;
+                    };
+                    self.objects
+                        .get_cell(object.id)
+                        .is_some_and(|handle| handle.is_young())
+                })
+            })
+        } else {
+            false
+        }
+    }
+
+    fn minor_value_is_live(&self, id: u64) -> bool {
+        self.objects
+            .get_cell(id)
+            .is_some_and(|handle| handle.is_old() || handle.is_young_marked())
+    }
+
+    fn remembered_set_is_dense_counts(live: usize, remembered: usize) -> bool {
+        live >= GC_NURSERY_THRESHOLD_BYTES / GC_OBJECT_OVERHEAD
+            && remembered.saturating_mul(4) >= live.saturating_mul(3)
+    }
+
+    fn remembered_set_is_dense(&self) -> bool {
+        Self::remembered_set_is_dense_counts(
+            self.objects.live_count(),
+            self.objects.remembered_len(),
+        )
+    }
+
+    fn gc_collect_minor(&mut self) {
+        // A coarse object barrier can become as expensive as a full trace on
+        // mutation-heavy live sets. Preserve the old adaptive major pacing
+        // instead of repeatedly running counterproductive near-major minors.
+        if self.remembered_set_is_dense() {
+            self.gc.suppress_minor_temporarily();
+            return;
+        }
+
+        let (roots, mut seen_envs) = self.collect_gc_roots();
+        let remembered = self.objects.take_remembered();
+        let mut worklist = Vec::new();
+        let mut weak_containers = Vec::new();
+        let mut children = Vec::new();
+
+        // Old roots are already known to survive a minor collection. Only
+        // young roots and old objects admitted by the write barrier need work.
+        self.enqueue_young(roots, &mut worklist);
+        for id in remembered {
+            let Some(handle) = self.objects.get_cell(id) else {
+                continue;
+            };
+            if !handle.is_old() {
+                continue;
+            }
+            let obj = handle.borrow_untracked();
+            if obj.class_name == "WeakMap" || obj.class_name == "WeakSet" {
+                weak_containers.push(id);
+            }
+            children.clear();
+            Self::trace_object_fields(&obj, &mut children, &mut seen_envs);
+            let retain = Self::object_requires_persistent_minor_scan(&obj)
+                || self.object_has_young_weak_edge(&obj)
+                || children.iter().any(|&child| {
+                    self.objects
+                        .get_cell(child)
+                        .is_some_and(|child_handle| child_handle.is_young())
+                });
+            drop(obj);
+            self.enqueue_young(children.drain(..), &mut worklist);
+            if retain {
+                handle.remember_if_old();
+            }
+        }
+        self.trace_young_worklist(&mut worklist, &mut seen_envs, &mut weak_containers);
+
+        // Minor ephemeron fixpoint. Old keys are conservatively live until a
+        // major collection; young keys must be marked through a strong path.
+        loop {
+            let mut new_marks = false;
+            weak_containers.sort_unstable();
+            weak_containers.dedup();
+            for &id in &weak_containers {
+                let Some(handle) = self.objects.get_cell(id) else {
+                    continue;
+                };
+                if handle.is_young() && !handle.is_young_marked() {
+                    continue;
+                }
+                let obj = handle.borrow_untracked();
+                if obj.class_name != "WeakMap" {
+                    continue;
+                }
+                if let Some(entries) = obj.map_data() {
+                    for entry in entries.iter().flatten() {
+                        if let JsValue::Object(key_obj) = &entry.0
+                            && self.minor_value_is_live(key_obj.id)
+                            && let JsValue::Object(value_obj) = &entry.1
+                            && self
+                                .objects
+                                .get_cell(value_obj.id)
+                                .is_some_and(|value_handle| value_handle.mark_young())
+                        {
+                            worklist.push(value_obj.id);
+                            new_marks = true;
+                        }
+                    }
+                }
+            }
+            self.trace_young_worklist(&mut worklist, &mut seen_envs, &mut weak_containers);
+            if !new_marks {
+                break;
+            }
+        }
+
+        // Remove weak entries whose young key/member did not survive. Old
+        // values are never reclaimed by this collection.
+        weak_containers.sort_unstable();
+        weak_containers.dedup();
+        for id in weak_containers {
+            let Some(handle) = self.objects.get_cell(id) else {
+                continue;
+            };
+            if handle.is_young() && !handle.is_young_marked() {
+                continue;
+            }
+            let mut obj = handle.borrow_mut_untracked();
+            if obj.class_name == "WeakMap" {
+                if let Some(entries) = obj.map_data_mut() {
+                    for entry in entries.iter_mut() {
+                        let dead = matches!(
+                            entry,
+                            Some((JsValue::Object(key), _)) if !self.minor_value_is_live(key.id)
+                        );
+                        if dead {
+                            *entry = None;
+                        }
+                    }
+                }
+            } else if obj.class_name == "WeakSet"
+                && let Some(entries) = obj.set_data_mut()
+            {
+                for entry in entries.iter_mut() {
+                    let dead = matches!(
+                        entry,
+                        Some(JsValue::Object(value)) if !self.minor_value_is_live(value.id)
+                    );
+                    if dead {
+                        *entry = None;
+                    }
+                }
+            }
+        }
+
+        let nursery = self.objects.take_nursery();
+        let examined = nursery.len();
+        let mut survived = 0;
+        let mut survivors = Vec::with_capacity(examined);
+        for id in nursery {
+            let Some(handle) = self.objects.get(id) else {
+                continue;
+            };
+            if !handle.is_young_marked() {
+                self.free_gc_object(id);
+            } else {
+                survived += 1;
+                if handle.age_survivor(GC_PROMOTION_AGE) {
+                    handle.promote();
+                } else {
+                    handle.clear_young_mark();
+                    survivors.push(id);
+                }
+            }
+        }
+        self.objects.replace_nursery(survivors);
+        self.gc.end_minor_collection(survived, examined);
+    }
+
+    fn free_gc_object(&mut self, id: u64) {
+        if let Some(handle) = self.objects.get_cell(id) {
+            let obj = handle.borrow_untracked();
+            if let Some(buf_data) = obj.arraybuffer_data()
+                && let BufferData::Owned(ref data) = *buf_data.borrow()
+            {
+                self.gc.release_external(data.len());
+            }
+        }
+        self.objects.free(id);
+        self.function_realm_map.remove(&id);
+        self.iterator_next_cache.remove(&id);
+        self.generator_inline_iters.remove(&id);
+    }
+
+    fn gc_collect_major(&mut self) {
+        let obj_count = self.objects.capacity() as usize;
+        // Reuse the mark bitmap buffer across collections to avoid per-GC
+        // allocation churn. clear()+resize(_, false) yields an all-false buffer
+        // while keeping the backing capacity.
+        let mut marks = std::mem::take(&mut self.gc_marks);
+        marks.clear();
+        marks.resize(obj_count, false);
+
+        let (roots, mut seen_envs) = self.collect_gc_roots();
 
         // Mark each object when it is enqueued, not when it is popped. Shared
         // environments and prototypes can expose the same object through many
         // edges; admitting each id once keeps the worklist linear in the live
         // object graph instead of filling it with duplicate entries.
-        let roots = worklist;
         let mut worklist = Vec::with_capacity(roots.len());
         Self::enqueue_unmarked(roots, &mut worklist, &mut marks);
         self.trace_mark_worklist(&mut worklist, &mut marks, &mut seen_envs);
@@ -285,7 +627,7 @@ impl Interpreter {
                     Some(rc) => rc,
                     None => continue,
                 };
-                let obj = obj_rc.borrow();
+                let obj = obj_rc.borrow_untracked();
                 if obj.class_name != "WeakMap" {
                     continue;
                 }
@@ -321,23 +663,9 @@ impl Interpreter {
             let id = i as u64;
             let live = self.objects.slot_at(id).is_some_and(|s| s.is_some());
             if !mark && live {
-                if let Some(obj_rc) = self.objects.get(id) {
-                    let obj = obj_rc.borrow();
-                    if let Some(buf_data) = obj.arraybuffer_data()
-                        && let BufferData::Owned(ref v) = *buf_data.borrow()
-                    {
-                        self.gc.release_external(v.len());
-                    }
-                }
-                self.objects.free(id);
-                self.function_realm_map.remove(&id);
-                self.iterator_next_cache.remove(&id);
-                self.generator_inline_iters.remove(&id);
+                self.free_gc_object(id);
             }
         }
-        // Adaptive threshold: scale next GC budget from live heap size
-        let live_count = self.objects.live_count();
-        self.gc.end_collection(live_count);
         // Post-sweep: clear dead weak entries
         for i in 0..obj_count {
             if !marks[i] {
@@ -347,7 +675,8 @@ impl Interpreter {
                 Some(rc) => rc,
                 None => continue,
             };
-            let mut obj = obj_rc.borrow_mut();
+            obj_rc.tenure_after_major();
+            let mut obj = obj_rc.borrow_mut_untracked();
             if obj.class_name == "WeakMap" {
                 if let Some(entries) = obj.map_data_mut() {
                     for entry in entries.iter_mut() {
@@ -378,6 +707,9 @@ impl Interpreter {
                 }
             }
         }
+        self.objects.reset_generations_after_major();
+        let live_count = self.objects.live_count();
+        self.gc.end_major_collection(live_count);
         // Return the buffer to the interpreter so its capacity is reused next GC.
         self.gc_marks = marks;
     }
@@ -804,26 +1136,24 @@ mod tests {
     fn fresh_pacer_requests_no_collection() {
         let mut pacer = GcPacer::new();
         assert!(!pacer.is_requested());
-        assert!(!pacer.begin_collection());
+        assert_eq!(pacer.begin_collection(), None);
     }
 
     #[test]
-    fn object_count_threshold_requests_collection() {
-        // Reused slots cost GC_OBJECT_OVERHEAD/2 (256B) each, so 4096 of them
-        // total 1 MiB — below the 2 MiB initial byte budget. The request here
-        // can only come from the object-count trigger, not byte pressure.
+    fn nursery_threshold_requests_minor_collection() {
         let mut pacer = GcPacer::new();
-        for _ in 0..GC_THRESHOLD - 1 {
+        // Raise the major threshold so only nursery pressure can fire.
+        pacer.end_major_collection(100_000);
+        let nursery_objects = GC_NURSERY_THRESHOLD_BYTES / GC_OBJECT_OVERHEAD;
+        for _ in 0..nursery_objects - 1 {
             pacer.charge_object(true);
         }
-        assert!(
-            !pacer.is_requested(),
-            "not yet at the object-count threshold"
-        );
+        assert!(!pacer.is_requested(), "not yet at the nursery threshold");
         pacer.charge_object(true);
-        assert!(
-            pacer.is_requested(),
-            "reaching GC_THRESHOLD requests a collection"
+        assert_eq!(
+            pacer.begin_collection(),
+            Some(CollectionKind::Minor),
+            "reaching the nursery threshold requests a minor collection"
         );
     }
 
@@ -849,7 +1179,7 @@ mod tests {
         let mut pacer = GcPacer::new();
         pacer.request();
         assert!(pacer.is_requested());
-        assert!(pacer.begin_collection());
+        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
     }
 
     #[test]
@@ -862,52 +1192,317 @@ mod tests {
     }
 
     #[test]
-    fn begin_collection_consumes_request_and_resets_count() {
+    fn minor_collection_resets_nursery_count_when_finished() {
         let mut pacer = GcPacer::new();
-        for _ in 0..GC_THRESHOLD {
+        pacer.end_major_collection(100_000);
+        let nursery_objects = GC_NURSERY_THRESHOLD_BYTES / GC_OBJECT_OVERHEAD;
+        for _ in 0..nursery_objects {
             pacer.charge_object(true);
         }
         assert!(pacer.is_requested());
-        assert!(pacer.begin_collection(), "the pending request is honored");
+        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Minor));
+        assert_eq!(pacer.alloc_count(), nursery_objects);
+        pacer.end_minor_collection(0, nursery_objects);
         assert_eq!(
             pacer.alloc_count(),
             0,
-            "the per-cycle object counter resets"
+            "the nursery allocation counter resets"
         );
         assert!(!pacer.is_requested());
         assert!(
-            !pacer.begin_collection(),
+            pacer.begin_collection().is_none(),
             "the request is consumed, not repeated"
         );
     }
 
     #[test]
-    fn end_collection_grows_threshold_from_live_set() {
-        // Empty live set floors at GC_MIN_THRESHOLD_BYTES (256 KiB = 262144).
+    fn end_major_collection_grows_threshold_from_live_set() {
+        // Empty live sets use the 8 MiB major floor.
         let mut pacer = GcPacer::new();
-        pacer.end_collection(0);
-        assert_eq!(pacer.threshold_bytes(), 262_144);
+        pacer.end_major_collection(0);
+        assert_eq!(pacer.threshold_bytes(), 8_388_608);
 
-        // 1000 live objects × 512B overhead × 2 growth = 1_024_000.
+        // Growth factor 2 permits one additional live-set worth of debt:
+        // 100,000 live objects × 512B overhead = 51,200,000.
         let mut pacer = GcPacer::new();
-        pacer.end_collection(1000);
-        assert_eq!(pacer.threshold_bytes(), 1_024_000);
+        pacer.end_major_collection(100_000);
+        assert_eq!(pacer.threshold_bytes(), 51_200_000);
 
         // Tracked off-heap bytes feed the live-set estimate:
-        // (0 objects + 1_000_000 external) × 2 growth = 2_000_000.
+        // (0 objects + 10,000,000 external) × one live-set debt = 10,000,000.
         let mut pacer = GcPacer::new();
-        pacer.track_external(1_000_000);
-        pacer.end_collection(0);
-        assert_eq!(pacer.threshold_bytes(), 2_000_000);
+        pacer.track_external(10_000_000);
+        pacer.end_major_collection(0);
+        assert_eq!(pacer.threshold_bytes(), 10_000_000);
     }
 
     #[test]
-    fn end_collection_resets_byte_counter() {
+    fn end_major_collection_resets_byte_counter() {
         let mut pacer = GcPacer::new();
         pacer.track_external(GC_INITIAL_THRESHOLD_BYTES);
         assert_eq!(pacer.bytes_since_gc(), GC_INITIAL_THRESHOLD_BYTES);
         pacer.begin_collection();
-        pacer.end_collection(0);
+        pacer.end_major_collection(0);
         assert_eq!(pacer.bytes_since_gc(), 0);
+    }
+
+    #[test]
+    fn major_request_takes_priority_over_minor_request() {
+        let mut pacer = GcPacer::new();
+        pacer.request_minor();
+        pacer.request();
+        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
+        assert_eq!(pacer.begin_collection(), None);
+    }
+
+    #[test]
+    fn suppressing_minor_collection_preserves_debt_and_requests_major() {
+        let mut pacer = GcPacer::new();
+        pacer.end_major_collection(100_000);
+        let nursery_objects = GC_NURSERY_THRESHOLD_BYTES / GC_OBJECT_OVERHEAD;
+        for _ in 0..nursery_objects {
+            pacer.charge_object(true);
+        }
+        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Minor));
+        let debt = pacer.bytes_since_gc();
+
+        pacer.suppress_minor_temporarily();
+        assert_eq!(pacer.alloc_count(), 0);
+        for _ in 0..nursery_objects - 1 {
+            pacer.charge_object(true);
+        }
+        assert_eq!(pacer.begin_collection(), None);
+        pacer.charge_object(true);
+
+        assert!(pacer.bytes_since_gc() > debt);
+        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
+    }
+
+    #[test]
+    fn repeated_high_nursery_survival_suppresses_minors_until_major() {
+        let mut pacer = GcPacer::new();
+        pacer.end_major_collection(100_000);
+
+        pacer.end_minor_collection(90, 100);
+        assert!(!pacer.minor_suppressed);
+        pacer.end_minor_collection(99, 100);
+        assert!(pacer.minor_suppressed);
+
+        for _ in 0..GC_NURSERY_THRESHOLD_BYTES / GC_OBJECT_OVERHEAD {
+            pacer.charge_object(true);
+        }
+        assert_eq!(pacer.begin_collection(), Some(CollectionKind::Major));
+
+        pacer.end_major_collection(100_000);
+        assert!(!pacer.minor_suppressed);
+        assert_eq!(pacer.high_survival_minors, 0);
+    }
+
+    #[test]
+    fn dense_remembered_set_requires_a_large_near_major_scan() {
+        assert!(!Interpreter::remembered_set_is_dense_counts(8_191, 8_191));
+        assert!(!Interpreter::remembered_set_is_dense_counts(10_000, 7_499));
+        assert!(Interpreter::remembered_set_is_dense_counts(10_000, 7_500));
+    }
+
+    fn tenure_initial_heap(interp: &mut Interpreter) {
+        interp.gc.request();
+        interp.gc_safepoint();
+    }
+
+    #[test]
+    fn precise_write_barrier_remembers_only_young_object_values() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let owner = interp.alloc_object(JsObjectData::new());
+        interp.gc_temp_roots.push(owner);
+        interp.gc.request();
+        interp.gc_safepoint();
+
+        let young = interp.alloc_object(JsObjectData::new());
+        let owner_handle = interp.objects.get(owner).unwrap();
+        assert!(owner_handle.is_old());
+        assert!(interp.objects.take_remembered().is_empty());
+
+        interp.gc_write_barrier_value(&owner_handle, &JsValue::Number(1.0));
+        interp.gc_write_barrier_value(&owner_handle, &obj(owner));
+        assert!(interp.objects.take_remembered().is_empty());
+
+        interp.gc_write_barrier_value(&owner_handle, &obj(young));
+        assert_eq!(interp.objects.take_remembered(), vec![owner]);
+    }
+
+    #[test]
+    fn explicit_major_collection_tenures_a_reachable_nursery_object() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let survivor = interp.alloc_object(JsObjectData::new());
+        interp.gc_temp_roots.push(survivor);
+        assert!(interp.objects.get_cell_expect(survivor).is_young());
+
+        interp.gc.request();
+        interp.gc_safepoint();
+
+        assert!(interp.objects.get_cell_expect(survivor).is_old());
+    }
+
+    #[test]
+    fn minor_collection_reclaims_unreachable_young_object() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let dead = interp.alloc_object(JsObjectData::new());
+
+        interp.gc.request_minor();
+        interp.gc_safepoint();
+
+        assert!(interp.objects.get_cell(dead).is_none());
+    }
+
+    #[test]
+    fn remembered_old_object_keeps_young_child_alive() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let parent = interp.alloc_object(JsObjectData::new());
+        interp.gc_temp_roots.push(parent);
+        interp.gc.request();
+        interp.gc_safepoint();
+        assert!(interp.objects.get_cell_expect(parent).is_old());
+
+        let child = interp.alloc_object(JsObjectData::new());
+        interp
+            .objects
+            .get_cell_expect(parent)
+            .borrow_mut()
+            .insert_value("child".to_string(), obj(child));
+        interp.gc.request_minor();
+        interp.gc_safepoint();
+
+        assert!(interp.objects.get_cell(child).is_some());
+    }
+
+    #[test]
+    fn nursery_survivor_promotes_after_two_minor_collections() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let survivor = interp.alloc_object(JsObjectData::new());
+        interp.gc_temp_roots.push(survivor);
+
+        interp.gc.request_minor();
+        interp.gc_safepoint();
+        assert!(interp.objects.get_cell_expect(survivor).is_young());
+
+        interp.gc.request_minor();
+        interp.gc_safepoint();
+        assert!(interp.objects.get_cell_expect(survivor).is_old());
+    }
+
+    #[test]
+    fn promoted_parent_is_remembered_until_its_young_child_promotes() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+        let parent = interp.alloc_object(JsObjectData::new());
+        interp.gc_temp_roots.push(parent);
+
+        interp.gc.request_minor();
+        interp.gc_safepoint();
+
+        let child = interp.alloc_object(JsObjectData::new());
+        interp
+            .objects
+            .get_cell_expect(parent)
+            .borrow_mut()
+            .insert_value("child".to_string(), obj(child));
+        interp.gc.request_minor();
+        interp.gc_safepoint();
+        assert!(interp.objects.get_cell_expect(parent).is_old());
+        assert!(interp.objects.get_cell_expect(child).is_young());
+
+        interp.gc.request_minor();
+        interp.gc_safepoint();
+        assert!(
+            interp.objects.get_cell(child).is_some(),
+            "promotion must retain the old-to-young edge"
+        );
+    }
+
+    #[test]
+    fn old_weakmap_keeps_a_young_value_only_while_its_key_is_live() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+
+        let mut weak_map_data = JsObjectData::new();
+        weak_map_data.class_name = "WeakMap".to_string();
+        weak_map_data.kind = ObjectKind::Map(Vec::new());
+        let weak_map = interp.alloc_object(weak_map_data);
+        interp.gc_temp_roots.push(weak_map);
+        interp.gc.request();
+        interp.gc_safepoint();
+
+        let key = interp.alloc_object(JsObjectData::new());
+        let value = interp.alloc_object(JsObjectData::new());
+        interp.gc_temp_roots.push(key);
+        interp
+            .objects
+            .get_cell_expect(weak_map)
+            .borrow_mut()
+            .map_data_mut()
+            .unwrap()
+            .push(Some((obj(key), obj(value))));
+
+        interp.gc.request_minor();
+        interp.gc_safepoint();
+        assert!(interp.objects.get_cell(value).is_some());
+
+        interp.gc_temp_roots.retain(|&id| id != key);
+        interp.gc.request_minor();
+        interp.gc_safepoint();
+        assert!(interp.objects.get_cell(key).is_none());
+        assert!(interp.objects.get_cell(value).is_none());
+        assert!(
+            interp
+                .objects
+                .get_cell_expect(weak_map)
+                .borrow()
+                .map_data()
+                .unwrap()[0]
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn old_weakset_drops_an_unreachable_young_member() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+
+        let mut weak_set_data = JsObjectData::new();
+        weak_set_data.class_name = "WeakSet".to_string();
+        weak_set_data.kind = ObjectKind::Set(Vec::new());
+        let weak_set = interp.alloc_object(weak_set_data);
+        interp.gc_temp_roots.push(weak_set);
+        interp.gc.request();
+        interp.gc_safepoint();
+
+        let member = interp.alloc_object(JsObjectData::new());
+        interp
+            .objects
+            .get_cell_expect(weak_set)
+            .borrow_mut()
+            .set_data_mut()
+            .unwrap()
+            .push(Some(obj(member)));
+
+        interp.gc.request_minor();
+        interp.gc_safepoint();
+
+        assert!(interp.objects.get_cell(member).is_none());
+        assert!(
+            interp
+                .objects
+                .get_cell_expect(weak_set)
+                .borrow()
+                .set_data()
+                .unwrap()[0]
+                .is_none()
+        );
     }
 }

@@ -58,7 +58,7 @@ fn length_of_array_like(interp: &mut Interpreter, o: &JsValue) -> Result<usize, 
     Ok(len.min(9007199254740991.0) as usize)
 }
 
-fn get_obj<'a>(interp: &'a Interpreter, o: &JsValue) -> Option<&'a RefCell<JsObjectData>> {
+fn get_obj<'a>(interp: &'a Interpreter, o: &JsValue) -> Option<&'a ObjectHandle> {
     if let JsValue::Object(obj_ref) = o {
         interp.get_object_cell(obj_ref.id)
     } else {
@@ -190,7 +190,8 @@ fn obj_set_throw(
                     "Cannot add property {key}, object is not extensible"
                 )));
             }
-            cell.borrow_mut().set_property_value(key, value);
+            interp.gc_write_barrier_value(cell, &value);
+            cell.borrow_mut_untracked().set_property_value(key, value);
         }
     }
     Ok(())
@@ -263,7 +264,8 @@ pub(crate) fn create_data_property_or_throw<K: PropertyKeyLike + ?Sized>(
                 return Err(interp.create_type_error(&format!("Cannot redefine property: {key}")));
             }
             let cell = interp.get_object_cell_expect(obj_ref.id);
-            let mut borrow = cell.borrow_mut();
+            interp.gc_write_barrier_value(cell, &value);
+            let mut borrow = cell.borrow_mut_untracked();
             if let Some(elems) = borrow.array_elements_mut()
                 && let Ok(idx) = key.parse::<usize>()
             {
@@ -706,7 +708,7 @@ fn from_async_store_arraylike_and_continue(
 
 fn obj_delete(interp: &mut Interpreter, o: &JsValue, key: &str) {
     if let Some(cell) = get_obj(interp, o) {
-        let mut borrow = cell.borrow_mut();
+        let mut borrow = cell.borrow_mut_untracked();
         borrow.remove_property(key);
         if let Some(elems) = borrow.array_elements_mut()
             && let Ok(idx) = key.parse::<usize>()
@@ -754,7 +756,7 @@ fn obj_delete_throw(interp: &mut Interpreter, o: &JsValue, key: &str) -> Result<
 
 fn set_length(interp: &mut Interpreter, o: &JsValue, len: usize) {
     if let Some(cell) = get_obj(interp, o) {
-        let mut borrow = cell.borrow_mut();
+        let mut borrow = cell.borrow_mut_untracked();
         if let Some(elems) = borrow.array_elements_mut()
             && len <= elems.len()
         {
@@ -793,7 +795,7 @@ fn set_length_throw(interp: &mut Interpreter, o: &JsValue, len: usize) -> Result
             return Err(interp.create_type_error("Cannot assign to read only property 'length'"));
         }
         if let Some(cell) = get_obj(interp, o) {
-            let mut borrow = cell.borrow_mut();
+            let mut borrow = cell.borrow_mut_untracked();
             if let Some(elems) = borrow.array_elements_mut()
                 && len <= elems.len()
             {
@@ -1018,7 +1020,10 @@ impl Interpreter {
                 if fast_ok && !has_undefined_arg && !inherited {
                     let new_len = len + args.len();
                     {
-                        let mut b = cell.borrow_mut();
+                        for arg in args {
+                            interp.gc_write_barrier_value(&cell, arg);
+                        }
+                        let mut b = cell.borrow_mut_untracked();
                         let elements = b.array_elements_mut().unwrap();
                         elements.reserve(args.len());
                         for arg in args {

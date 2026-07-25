@@ -4,14 +4,13 @@
 
 JSSE's collector runs a complete mark and sweep whenever allocation pressure
 requests a collection. Its adaptive threshold controls collection frequency,
-but every collection still traces the complete live object graph. A profiled
-one-iteration `ai-astar` run attributes 49.0% of CPU samples directly to
-`trace_mark_worklist` and another 10.4% to `gc_safepoint`. The same baseline
-averages 20.296 seconds per iteration while retaining about 1.0 GiB.
+but every collection still traces the complete live object graph. On the
+current arena-backed baseline, `ai-astar` still averages about 1.52 seconds per
+iteration while retaining about 1.0 GiB.
 
-The arena gives objects stable numeric IDs and exposes stable `Rc`-owned cells.
-A nursery must preserve those identities, the existing temporary-root
-contract, and the ephemeron behavior used by WeakMap and WeakSet.
+The arena gives objects stable numeric IDs and exposes stable owned handles. A
+nursery must preserve those identities, the existing temporary-root contract,
+and the ephemeron behavior used by WeakMap and WeakSet.
 
 ## Approaches Considered
 
@@ -22,9 +21,9 @@ contract, and the ephemeron behavior used by WeakMap and WeakSet.
    the selected approach.
 2. Add a copying nursery and rewrite every reference when survivors move. This
    has excellent allocation locality, but JSSE's object IDs and independently
-   cloned `Rc` cells are observable throughout the interpreter. Rewriting all
-   IDs, caches, environments, scheduler state, and native captures would be a
-   much larger and riskier representation change.
+   cloned handles are used throughout the interpreter. Rewriting all IDs,
+   caches, environments, scheduler state, and native captures would be a much
+   larger and riskier representation change.
 3. Sweep only recently allocated arena slots without a write barrier. This is
    small, but cannot distinguish unreachable young objects from objects stored
    in an old object's property or internal slot. Scanning every old object to
@@ -32,11 +31,13 @@ contract, and the ephemeron behavior used by WeakMap and WeakSet.
 
 ## Design
 
-Wrap each arena object's `RefCell` in an object cell that owns collector-only
-metadata: generation, nursery age, and remembered-set membership. Mutable
-borrows of an old object form the write barrier and enqueue its stable ID once.
-The wrapper preserves the existing `borrow` and `borrow_mut` usage pattern, so
-all direct mutations of properties and internal slots pass through the barrier.
+Store collector-only metadata beside each arena payload in `ObjectAllocation`:
+generation, nursery age, mark state, and remembered-set membership. Mutable
+borrows of an old object form a conservative write barrier and enqueue its
+stable ID once. Hot property, array, and collection writes use a precise
+value-aware barrier before an untracked mutable borrow, avoiding remembered-set
+pollution when a mutation only stores a primitive or old object. Other direct
+mutations retain the conservative barrier.
 
 Some object kinds expose mutable environments through reference-counted
 handles: user functions, iterators, arguments objects, and module namespaces.
@@ -64,11 +65,18 @@ minor collection.
 Full collections retain the current complete mark, ephemeron, weak cleanup,
 and sweep algorithm. Explicit `$262.gc()` requests a full collection. Major
 allocation debt is tracked separately from the nursery and is not reset by a
-minor collection. After a full collection, the next major budget grows from
-the live set as before, with a 16 MiB floor so small heaps receive several
-nursery collections between full collections. External ArrayBuffer pressure
-continues to count toward the major budget, and backing-store bytes are
-released whether their owner dies in a minor or full collection.
+minor collection. After a full collection, the next major budget permits one
+additional live-set worth of allocation debt, with an 8 MiB floor. External
+ArrayBuffer pressure continues to count toward the major budget, and
+backing-store bytes are released whether their owner dies in a minor or full
+collection.
+
+Two consecutive minors with at least 90% survival suppress further scavenges;
+the next 4 MiB allocation budget requests a major collection instead. The same
+fallback applies when the remembered set covers at least 75% of a heap with
+8,192 or more live objects. These guards keep a mutation-heavy or
+survivor-heavy workload from turning minor collection into repeated near-major
+traces.
 
 ## Specification Semantics
 
@@ -85,6 +93,6 @@ Add unit coverage for nursery allocation, promotion, remembered-set
 deduplication, old-to-young retention, unreachable-young reclamation, minor and
 major pacing, and explicit full collection. Run the existing custom GC tests,
 the WeakMap and WeakSet test262 areas, and the full test262 suite. Rebuild in
-release mode and repeat the identical two-iteration `ai-astar` measurement;
-the change must materially reduce collection CPU and wall time without raising
-peak memory beyond the existing run.
+release mode and compare identical multi-iteration `ai-astar` and `hash-map`
+runs against the same `origin/main` build, recording both wall time and peak
+resident memory.
