@@ -48,6 +48,9 @@ pub(crate) enum Op {
     SetProp = 44,
     GetElement = 45,
     SetElement = 46,
+    LoadCalleeName = 47,
+    Call = 48,
+    ReturnCall = 49,
 }
 
 impl Op {
@@ -100,6 +103,9 @@ impl Op {
             44 => Some(Op::SetProp),
             45 => Some(Op::GetElement),
             46 => Some(Op::SetElement),
+            47 => Some(Op::LoadCalleeName),
+            48 => Some(Op::Call),
+            49 => Some(Op::ReturnCall),
             _ => None,
         }
     }

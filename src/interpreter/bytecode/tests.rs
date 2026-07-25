@@ -1032,3 +1032,214 @@ fn loop_with_break_falls_back_to_tree_walker() {
     assert_eq!(count, 0, "break lowering is not part of this slice");
     assert!(matches!(value, JsValue::Number(n) if n == 1.0));
 }
+
+// ----- direct identifier calls -----
+
+#[test]
+fn direct_call_compiles_caller_and_compilable_callee() {
+    let source = "\
+        function addOne(value) { return value + 1; } \
+        var __r = (function(value) { return addOne(value); })(41);";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(
+        bytecode_count >= 2,
+        "caller and callee must both execute bytecode"
+    );
+    assert!(matches!(ast, JsValue::Number(n) if n == 42.0));
+    assert!(matches!(bytecode, JsValue::Number(n) if n == 42.0));
+}
+
+#[test]
+fn direct_call_bridges_to_ineligible_callee() {
+    let source = "\
+        function readObject(value) { var box = { value: value }; return box.value; } \
+        var __r = (function(value) { return readObject(value); })(37);";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert_eq!(
+        bytecode_count, 1,
+        "only the caller should compile; the object/member callee must fall back"
+    );
+    assert!(matches!(ast, JsValue::Number(n) if n == 37.0));
+    assert!(matches!(bytecode, JsValue::Number(n) if n == 37.0));
+}
+
+#[test]
+fn direct_native_call_takes_bytecode_path() {
+    let source = "var __r = (function(value) { return parseInt(value); })('42');";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert_eq!(bytecode_count, 1, "native callee has no bytecode Body");
+    assert!(matches!(ast, JsValue::Number(n) if n == 42.0));
+    assert!(matches!(bytecode, JsValue::Number(n) if n == 42.0));
+}
+
+#[test]
+fn loop_with_direct_calls_takes_bytecode_path() {
+    assert_parity_number(
+        "\
+            function addOne(value) { return value + 1; } \
+            var __r = (function(limit) { \
+                var sum = 0; \
+                for (var i = 0; i < limit; i++) { sum += addOne(i); } \
+                return sum; \
+            })(5);",
+        15.0,
+    );
+}
+
+#[test]
+fn direct_call_preserves_with_base_as_this_value() {
+    let source = "\
+        var scope = { \
+            value: 40, \
+            invoke: function(value) { return this.value + value; } \
+        }; \
+        var runner; \
+        with (scope) { runner = function() { return invoke(2); }; } \
+        var __r = runner();";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "runner must execute through bytecode");
+    assert!(matches!(ast, JsValue::Number(n) if n == 42.0));
+    assert!(matches!(bytecode, JsValue::Number(n) if n == 42.0));
+}
+
+#[test]
+fn pending_argument_survives_gc_during_later_call_argument() {
+    let source = "\
+        var collect = $262.gc; \
+        var observed = 0; \
+        function makeValue() { return { marker: 42 }; } \
+        function consume(value, ignored) { observed = value.marker; } \
+        function run() { consume(makeValue(), collect()); } \
+        run(); \
+        var __r = observed;";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "run must execute through bytecode");
+    assert!(matches!(ast, JsValue::Number(n) if n == 42.0));
+    assert!(matches!(bytecode, JsValue::Number(n) if n == 42.0));
+}
+
+#[test]
+fn pending_with_getter_callee_survives_gc_during_argument() {
+    let source = "\
+        var collect = $262.gc; \
+        var observed = 0; \
+        var scope; \
+        scope = { \
+            get invoke() { \
+                return function(ignored) { observed = this === scope ? 17 : -1; }; \
+            } \
+        }; \
+        var runner; \
+        with (scope) { runner = function() { invoke(collect()); }; } \
+        runner(); \
+        var __r = observed;";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "runner must execute through bytecode");
+    assert!(matches!(ast, JsValue::Number(n) if n == 17.0));
+    assert!(matches!(bytecode, JsValue::Number(n) if n == 17.0));
+}
+
+#[test]
+fn strict_direct_return_call_preserves_tail_calls() {
+    let source = "\
+        function recur(count) { \
+            'use strict'; \
+            if (count === 0) return 42; \
+            return recur(count - 1); \
+        } \
+        var __r = recur(2000);";
+    let (value, bytecode_count) = eval_with_mode(source, true);
+    assert!(
+        bytecode_count >= 2001,
+        "every recursive dispatch must execute bytecode"
+    );
+    assert!(matches!(value, JsValue::Number(n) if n == 42.0));
+}
+
+#[test]
+fn non_callable_direct_call_throws_via_bytecode() {
+    let source = "\
+        var value = 1; \
+        var __r = false; \
+        function run() { return value(); } \
+        try { run(); } catch (error) { __r = error instanceof TypeError; }";
+    let (value, bytecode_count) = eval_with_mode(source, true);
+    assert!(bytecode_count >= 1, "run must execute through bytecode");
+    assert!(matches!(value, JsValue::Boolean(true)));
+}
+
+#[test]
+fn direct_eval_and_spread_calls_remain_ineligible() {
+    use super::compiler::CompileError;
+    use crate::ast::CallSiteId;
+
+    let direct_eval = vec![Statement::Expression(Expression::Call(
+        Box::new(Expression::Identifier("eval".to_string())),
+        vec![Expression::Literal(Literal::String(
+            "var x = 1".encode_utf16().collect(),
+        ))],
+        CallSiteId::UNASSIGNED,
+    ))];
+    assert!(matches!(
+        compile_body(&direct_eval),
+        Err(CompileError::Unsupported(_))
+    ));
+
+    let spread = vec![Statement::Expression(Expression::Call(
+        Box::new(Expression::Identifier("f".to_string())),
+        vec![Expression::Spread(Box::new(Expression::Identifier(
+            "args".to_string(),
+        )))],
+        CallSiteId::UNASSIGNED,
+    ))];
+    assert!(matches!(
+        compile_body(&spread),
+        Err(CompileError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn member_calls_and_nested_tail_positions_remain_ineligible() {
+    use super::compiler::CompileError;
+    use crate::ast::{CallSiteId, LogicalOp, MemberProperty, PropSiteId};
+
+    let member_call = vec![Statement::Expression(Expression::Call(
+        Box::new(Expression::Member(
+            Box::new(Expression::Identifier("object".to_string())),
+            MemberProperty::Dot("method".to_string()),
+            PropSiteId::UNASSIGNED,
+        )),
+        vec![],
+        CallSiteId::UNASSIGNED,
+    ))];
+    assert!(matches!(
+        compile_body(&member_call),
+        Err(CompileError::Unsupported(_))
+    ));
+
+    let nested_tail_call = Expression::Logical(
+        LogicalOp::And,
+        Box::new(Expression::Identifier("condition".to_string())),
+        Box::new(Expression::Call(
+            Box::new(Expression::Identifier("f".to_string())),
+            vec![],
+            CallSiteId::UNASSIGNED,
+        )),
+    );
+    assert!(matches!(
+        compile_body(&[Statement::Return(Some(nested_tail_call))]),
+        Err(CompileError::Unsupported(_))
+    ));
+}

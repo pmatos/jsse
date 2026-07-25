@@ -32,6 +32,38 @@ fn root_operand_stack(interp: &mut Interpreter, stack: &[JsValue]) -> usize {
     frame
 }
 
+fn push_value(interp: &mut Interpreter, stack: &mut Vec<JsValue>, value: JsValue) {
+    interp.gc_root_value(&value);
+    stack.push(value);
+}
+
+fn pop_value(interp: &mut Interpreter, stack: &mut Vec<JsValue>, context: &'static str) -> JsValue {
+    let value = stack.pop().unwrap_or_else(|| panic!("{context}"));
+    interp.gc_unroot_value(&value);
+    value
+}
+
+fn take_call_operands(stack: &mut Vec<JsValue>, argc: usize) -> (JsValue, JsValue, Vec<JsValue>) {
+    assert!(stack.len() >= argc + 2, "stack underflow on call operands");
+    let args = stack.split_off(stack.len() - argc);
+    let this_value = stack.pop().expect("stack underflow on call this");
+    let callee = stack.pop().expect("stack underflow on call callee");
+    (callee, this_value, args)
+}
+
+fn release_call_operands(
+    interp: &mut Interpreter,
+    callee: &JsValue,
+    this_value: &JsValue,
+    args: &[JsValue],
+) {
+    for arg in args.iter().rev() {
+        interp.gc_unroot_value(arg);
+    }
+    interp.gc_unroot_value(this_value);
+    interp.gc_unroot_value(callee);
+}
+
 fn member_get(interp: &mut Interpreter, base: &JsValue, name: &str) -> Completion {
     if matches!(base, JsValue::Undefined | JsValue::Null) {
         let err = interp.create_type_error(&format!(
@@ -113,6 +145,18 @@ pub(crate) fn run_chunk(
     interp: &mut Interpreter,
     chunk: &Chunk,
     env: &EnvRef,
+    this_value: JsValue,
+) -> Completion {
+    let gc_frame = interp.gc_root_frame();
+    let result = run_chunk_inner(interp, chunk, env, this_value);
+    interp.gc_unroot_frame(gc_frame);
+    result
+}
+
+fn run_chunk_inner(
+    interp: &mut Interpreter,
+    chunk: &Chunk,
+    env: &EnvRef,
     _this: JsValue,
 ) -> Completion {
     interp.bytecode_chunks_executed += 1;
@@ -135,7 +179,7 @@ pub(crate) fn run_chunk(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let v = chunk.constants[idx as usize].to_value();
-                stack.push(v);
+                push_value(interp, &mut stack, v);
             }
             Op::LoadName => {
                 let idx = decode_u16(chunk, pc);
@@ -143,9 +187,30 @@ pub(crate) fn run_chunk(
                 let name = chunk.names[idx as usize].clone();
                 let strict = env.borrow().strict;
                 match interp.resolve_identifier(&name, env, strict) {
-                    Completion::Normal(v) => stack.push(v),
+                    Completion::Normal(v) => push_value(interp, &mut stack, v),
                     abrupt => return abrupt,
                 }
+            }
+            Op::LoadCalleeName => {
+                let idx = decode_u16(chunk, pc);
+                pc += 2;
+                let name = &chunk.names[idx as usize];
+                let id_ref = match interp.resolve_identifier_ref(name, env) {
+                    Ok(id_ref) => id_ref,
+                    Err(error) => return Completion::Throw(error),
+                };
+                let callee = match interp.get_identifier_value_by_ref(name, &id_ref, env) {
+                    Completion::Normal(value) => value,
+                    abrupt => return abrupt,
+                };
+                let this_value = match id_ref {
+                    IdentifierRef::WithObject(id) => JsValue::Object(crate::types::JsObject { id }),
+                    IdentifierRef::Unresolvable | IdentifierRef::SpecificEnv(_) => {
+                        JsValue::Undefined
+                    }
+                };
+                push_value(interp, &mut stack, callee);
+                push_value(interp, &mut stack, this_value);
             }
             Op::ResolveName => {
                 let idx = decode_u16(chunk, pc);
@@ -164,7 +229,7 @@ pub(crate) fn run_chunk(
                     .last()
                     .expect("reference stack underflow on LoadResolvedName");
                 match interp.get_identifier_value_by_ref(name, id_ref, env) {
-                    Completion::Normal(value) => stack.push(value),
+                    Completion::Normal(value) => push_value(interp, &mut stack, value),
                     abrupt => return abrupt,
                 }
             }
@@ -196,7 +261,7 @@ pub(crate) fn run_chunk(
                 };
                 let name = &chunk.names[idx as usize];
                 match interp.eval_identifier_update(op, prefix, name, env) {
-                    Completion::Normal(value) => stack.push(value),
+                    Completion::Normal(value) => push_value(interp, &mut stack, value),
                     abrupt => return abrupt,
                 }
             }
@@ -253,23 +318,55 @@ pub(crate) fn run_chunk(
                 }
             }
             Op::LoadUndefined => {
-                stack.push(JsValue::Undefined);
+                push_value(interp, &mut stack, JsValue::Undefined);
             }
             Op::LoadTrue => {
-                stack.push(JsValue::Boolean(true));
+                push_value(interp, &mut stack, JsValue::Boolean(true));
             }
             Op::LoadFalse => {
-                stack.push(JsValue::Boolean(false));
+                push_value(interp, &mut stack, JsValue::Boolean(false));
             }
             Op::LoadNull => {
-                stack.push(JsValue::Null);
+                push_value(interp, &mut stack, JsValue::Null);
             }
             Op::Return => {
-                let v = stack.pop().unwrap_or(JsValue::Undefined);
+                let v = if stack.is_empty() {
+                    JsValue::Undefined
+                } else {
+                    pop_value(interp, &mut stack, "stack underflow on Return")
+                };
                 return Completion::Return(v);
             }
             Op::ReturnUndefined => {
                 return Completion::Return(JsValue::Undefined);
+            }
+            Op::Call | Op::ReturnCall => {
+                let argc = decode_u16(chunk, pc) as usize;
+                pc += 2;
+                let (callee, this_value, args) = take_call_operands(&mut stack, argc);
+                if op == Op::ReturnCall && env.borrow().strict {
+                    release_call_operands(interp, &callee, &this_value, &args);
+                    return Completion::TailCall {
+                        func: callee,
+                        this: this_value,
+                        args,
+                    };
+                }
+                // The operands remain in gc_temp_roots for the complete
+                // nested invocation even though they have been removed from
+                // the operand Vec. A callee can execute arbitrary JS and hit
+                // any number of safepoints before returning.
+                let result = interp.call_function(&callee, &this_value, &args);
+                release_call_operands(interp, &callee, &this_value, &args);
+                match result {
+                    Completion::Normal(value) | Completion::Return(value) => {
+                        push_value(interp, &mut stack, value);
+                    }
+                    Completion::Empty => {
+                        push_value(interp, &mut stack, JsValue::Undefined);
+                    }
+                    abrupt => return abrupt,
+                }
             }
             Op::Add
             | Op::Sub
@@ -316,8 +413,11 @@ pub(crate) fn run_chunk(
                     Op::UShr => BinaryOp::URShift,
                     _ => unreachable!(),
                 };
-                match interp.eval_binary(bop, &l, &r) {
-                    Completion::Normal(v) => stack.push(v),
+                let result = interp.eval_binary(bop, &l, &r);
+                interp.gc_unroot_value(&r);
+                interp.gc_unroot_value(&l);
+                match result {
+                    Completion::Normal(v) => push_value(interp, &mut stack, v),
                     abrupt => return abrupt,
                 }
             }
@@ -330,13 +430,15 @@ pub(crate) fn run_chunk(
                     Op::BitNot => UnaryOp::BitNot,
                     _ => unreachable!(),
                 };
-                match interp.eval_unary(uop, &v) {
-                    Completion::Normal(r) => stack.push(r),
+                let result = interp.eval_unary(uop, &v);
+                interp.gc_unroot_value(&v);
+                match result {
+                    Completion::Normal(r) => push_value(interp, &mut stack, r),
                     abrupt => return abrupt,
                 }
             }
             Op::Pop => {
-                stack.pop().expect("stack underflow on Pop");
+                pop_value(interp, &mut stack, "stack underflow on Pop");
             }
             Op::Jump => {
                 let offset = decode_i16(chunk, pc) as i32;
@@ -350,7 +452,7 @@ pub(crate) fn run_chunk(
             Op::JumpIfFalse => {
                 let offset = decode_i16(chunk, pc) as i32;
                 pc += 2;
-                let v = stack.pop().expect("stack underflow on JumpIfFalse");
+                let v = pop_value(interp, &mut stack, "stack underflow on JumpIfFalse");
                 if !interp.to_boolean_val(&v) {
                     pc = (pc as i32 + offset) as usize;
                 }
@@ -358,7 +460,7 @@ pub(crate) fn run_chunk(
             Op::JumpIfTrue => {
                 let offset = decode_i16(chunk, pc) as i32;
                 pc += 2;
-                let v = stack.pop().expect("stack underflow on JumpIfTrue");
+                let v = pop_value(interp, &mut stack, "stack underflow on JumpIfTrue");
                 if interp.to_boolean_val(&v) {
                     pc = (pc as i32 + offset) as usize;
                 }
