@@ -1617,25 +1617,7 @@ impl Interpreter {
         let temporal_id = temporal_obj_id;
 
         // @@toStringTag = "Temporal"
-        {
-            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Temporal"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            self.get_object_cell_expect(temporal_obj_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(temporal_obj_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(temporal_obj_id, "Temporal");
 
         self.setup_temporal_duration(temporal_obj_id);
         self.setup_temporal_instant(temporal_obj_id);
@@ -2843,9 +2825,7 @@ pub(super) fn to_temporal_time_zone_identifier(
     arg: &JsValue,
 ) -> Result<String, Completion> {
     match arg {
-        JsValue::Undefined => {
-            Ok(iana_time_zone::get_timezone().unwrap_or_else(|_| "UTC".to_string()))
-        }
+        JsValue::Undefined => Ok(canonicalize_iana_tz(&system_time_zone_identifier())),
         JsValue::String(s) => {
             let s_str = s.to_string();
             match parse_temporal_time_zone_string(&s_str) {

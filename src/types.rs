@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
-pub enum JsValue {
+pub(crate) enum JsValue {
     Undefined,
     Null,
     Boolean(bool),
@@ -23,7 +23,7 @@ pub enum JsValue {
 // Consumers land in follow-up #69 NaN-box migration PRs.
 #[allow(dead_code)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
-pub enum ValueKind {
+pub(crate) enum ValueKind {
     Undefined,
     Null,
     Boolean,
@@ -37,38 +37,38 @@ pub enum ValueKind {
 // UTF-16 code unit string per spec §6.1.4
 // Uses Arc<Vec<u16>> so cloning (e.g. env.get) is O(1).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct JsString {
+pub(crate) struct JsString {
     pub code_units: Arc<Vec<u16>>,
 }
 
 impl JsString {
-    pub fn from_str(s: &str) -> Self {
+    pub(crate) fn from_str(s: &str) -> Self {
         Self {
             code_units: Arc::new(s.encode_utf16().collect()),
         }
     }
 
-    pub fn from_vec(v: Vec<u16>) -> Self {
+    pub(crate) fn from_vec(v: Vec<u16>) -> Self {
         Self {
             code_units: Arc::new(v),
         }
     }
 
-    pub fn is_empty(&self) -> bool {
+    pub(crate) fn is_empty(&self) -> bool {
         self.code_units.is_empty()
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.code_units.len()
     }
 
-    pub fn to_rust_string(&self) -> String {
+    pub(crate) fn to_rust_string(&self) -> String {
         String::from_utf16_lossy(&self.code_units)
     }
 
     /// Get mutable access to code_units, cloning only if shared.
     /// Take ownership of the inner Vec (clones if shared).
-    pub fn into_vec(self) -> Vec<u16> {
+    pub(crate) fn into_vec(self) -> Vec<u16> {
         Arc::try_unwrap(self.code_units).unwrap_or_else(|arc| (*arc).clone())
     }
 }
@@ -88,25 +88,25 @@ impl fmt::Display for JsString {
 /// carry a leading byte that canonical WTF-8 can never produce, keeping their
 /// identity disjoint from every possible String key.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct JsPropertyKey {
+pub(crate) struct JsPropertyKey {
     bytes: Arc<[u8]>,
 }
 
 const SYMBOL_PROPERTY_KEY_SIGIL: u8 = 0xFF;
 
-pub enum JsPropertyKeyParseError<E> {
+pub(crate) enum JsPropertyKeyParseError<E> {
     IllFormedUtf16,
     Value(E),
 }
 
 impl JsPropertyKey {
-    pub fn from_str(s: &str) -> Self {
+    pub(crate) fn from_str(s: &str) -> Self {
         Self {
             bytes: Arc::from(s.as_bytes()),
         }
     }
 
-    pub fn from_js_string(s: &JsString) -> Self {
+    pub(crate) fn from_js_string(s: &JsString) -> Self {
         let units = &s.code_units;
         let mut bytes = Vec::with_capacity(units.len() * 3);
         let mut i = 0;
@@ -157,18 +157,18 @@ impl JsPropertyKey {
         Self::from_symbol_encoding(format!("Symbol(Symbol.{name})"))
     }
 
-    pub fn as_bytes(&self) -> &[u8] {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
         &self.bytes
     }
 
-    pub fn as_str(&self) -> Option<&str> {
+    pub(crate) fn as_str(&self) -> Option<&str> {
         if self.is_symbol() {
             return None;
         }
         std::str::from_utf8(&self.bytes).ok()
     }
 
-    pub fn is_symbol(&self) -> bool {
+    pub(crate) fn is_symbol(&self) -> bool {
         self.bytes.first() == Some(&SYMBOL_PROPERTY_KEY_SIGIL)
     }
 
@@ -177,11 +177,11 @@ impl JsPropertyKey {
             .then(|| std::str::from_utf8(&self.bytes[1..]).expect("Symbol encoding is UTF-8"))
     }
 
-    pub fn eq_str(&self, other: &str) -> bool {
+    pub(crate) fn eq_str(&self, other: &str) -> bool {
         self.bytes.as_ref() == other.as_bytes()
     }
 
-    pub fn parse<T: FromStr>(&self) -> Result<T, JsPropertyKeyParseError<T::Err>> {
+    pub(crate) fn parse<T: FromStr>(&self) -> Result<T, JsPropertyKeyParseError<T::Err>> {
         let text = self
             .as_str()
             .ok_or(JsPropertyKeyParseError::IllFormedUtf16)?;
@@ -193,7 +193,7 @@ impl JsPropertyKey {
         Arc::ptr_eq(&self.bytes, &other.bytes)
     }
 
-    pub fn to_js_string(&self) -> JsString {
+    pub(crate) fn to_js_string(&self) -> JsString {
         let bytes = if self.is_symbol() {
             &self.bytes[1..]
         } else {
@@ -266,7 +266,7 @@ impl fmt::Display for JsPropertyKey {
     }
 }
 
-pub trait PropertyKeyLike {
+pub(crate) trait PropertyKeyLike {
     fn as_property_key_bytes(&self) -> &[u8];
 
     fn as_property_key_str(&self) -> Option<&str> {
@@ -333,7 +333,7 @@ impl<T: PropertyKeyLike + ?Sized> PropertyKeyLike for &T {
 }
 
 #[derive(Clone, Debug)]
-pub struct JsSymbol {
+pub(crate) struct JsSymbol {
     pub id: u64,
     pub description: Option<JsString>,
 }
@@ -343,7 +343,7 @@ impl JsSymbol {
     /// Well-known symbols (description starts with "Symbol.") use a stable format
     /// without id, so bootstrap lookups can construct the same key directly.
     /// User-created symbols include the unique id to avoid collisions.
-    pub fn to_property_key(&self) -> JsPropertyKey {
+    pub(crate) fn to_property_key(&self) -> JsPropertyKey {
         let encoding = match &self.description {
             Some(desc) if desc.to_string().starts_with("Symbol.") => {
                 format!("Symbol({})", desc)
@@ -356,13 +356,13 @@ impl JsSymbol {
 }
 
 #[derive(Clone, Debug)]
-pub struct JsBigInt {
+pub(crate) struct JsBigInt {
     pub value: num_bigint::BigInt,
 }
 
 // Placeholder — full object model comes in Phase 5
 #[derive(Clone, Debug)]
-pub struct JsObject {
+pub(crate) struct JsObject {
     pub id: u64,
 }
 
@@ -373,39 +373,39 @@ pub struct JsObject {
 // Consumers land in follow-up #69 NaN-box migration PRs.
 #[allow(dead_code)]
 impl JsValue {
-    pub const UNDEFINED: JsValue = JsValue::Undefined;
-    pub const NULL: JsValue = JsValue::Null;
-    pub const TRUE: JsValue = JsValue::Boolean(true);
-    pub const FALSE: JsValue = JsValue::Boolean(false);
+    pub(crate) const UNDEFINED: JsValue = JsValue::Undefined;
+    pub(crate) const NULL: JsValue = JsValue::Null;
+    pub(crate) const TRUE: JsValue = JsValue::Boolean(true);
+    pub(crate) const FALSE: JsValue = JsValue::Boolean(false);
 
-    pub fn boolean(b: bool) -> Self {
+    pub(crate) fn boolean(b: bool) -> Self {
         JsValue::Boolean(b)
     }
 
     /// Construct a Number value. NaN canonicalisation lands here in Phase 3
     /// (issue #69) — for now this is a thin wrapper.
-    pub fn number(n: f64) -> Self {
+    pub(crate) fn number(n: f64) -> Self {
         JsValue::Number(n)
     }
 
-    pub fn string(s: JsString) -> Self {
+    pub(crate) fn string(s: JsString) -> Self {
         JsValue::String(s)
     }
 
     /// Sugar for `JsValue::string(JsString::from_str(s))`.
-    pub fn from_str(s: &str) -> Self {
+    pub(crate) fn from_str(s: &str) -> Self {
         JsValue::String(JsString::from_str(s))
     }
 
-    pub fn symbol(s: JsSymbol) -> Self {
+    pub(crate) fn symbol(s: JsSymbol) -> Self {
         JsValue::Symbol(s)
     }
 
-    pub fn bigint(b: JsBigInt) -> Self {
+    pub(crate) fn bigint(b: JsBigInt) -> Self {
         JsValue::BigInt(b)
     }
 
-    pub fn object(id: u64) -> Self {
+    pub(crate) fn object(id: u64) -> Self {
         JsValue::Object(JsObject { id })
     }
 
@@ -417,21 +417,21 @@ impl JsValue {
     // `&JsString` are unsound (no Rust-level borrowee exists), so the
     // `with_*` form is the only zero-refcount-bump path.
 
-    pub fn as_boolean(&self) -> Option<bool> {
+    pub(crate) fn as_boolean(&self) -> Option<bool> {
         match self {
             JsValue::Boolean(b) => Some(*b),
             _ => None,
         }
     }
 
-    pub fn as_number(&self) -> Option<f64> {
+    pub(crate) fn as_number(&self) -> Option<f64> {
         match self {
             JsValue::Number(n) => Some(*n),
             _ => None,
         }
     }
 
-    pub fn as_object_id(&self) -> Option<u64> {
+    pub(crate) fn as_object_id(&self) -> Option<u64> {
         match self {
             JsValue::Object(o) => Some(o.id),
             _ => None,
@@ -440,56 +440,56 @@ impl JsValue {
 
     /// Cloning accessor — under the future NaN-box this becomes an Arc
     /// refcount bump, so it stays O(1).
-    pub fn as_string(&self) -> Option<JsString> {
+    pub(crate) fn as_string(&self) -> Option<JsString> {
         match self {
             JsValue::String(s) => Some(s.clone()),
             _ => None,
         }
     }
 
-    pub fn as_symbol(&self) -> Option<JsSymbol> {
+    pub(crate) fn as_symbol(&self) -> Option<JsSymbol> {
         match self {
             JsValue::Symbol(s) => Some(s.clone()),
             _ => None,
         }
     }
 
-    pub fn as_bigint(&self) -> Option<JsBigInt> {
+    pub(crate) fn as_bigint(&self) -> Option<JsBigInt> {
         match self {
             JsValue::BigInt(b) => Some(b.clone()),
             _ => None,
         }
     }
 
-    pub fn with_string<R>(&self, f: impl FnOnce(&[u16]) -> R) -> Option<R> {
+    pub(crate) fn with_string<R>(&self, f: impl FnOnce(&[u16]) -> R) -> Option<R> {
         match self {
             JsValue::String(s) => Some(f(&s.code_units)),
             _ => None,
         }
     }
 
-    pub fn with_symbol<R>(&self, f: impl FnOnce(&JsSymbol) -> R) -> Option<R> {
+    pub(crate) fn with_symbol<R>(&self, f: impl FnOnce(&JsSymbol) -> R) -> Option<R> {
         match self {
             JsValue::Symbol(s) => Some(f(s)),
             _ => None,
         }
     }
 
-    pub fn with_bigint<R>(&self, f: impl FnOnce(&num_bigint::BigInt) -> R) -> Option<R> {
+    pub(crate) fn with_bigint<R>(&self, f: impl FnOnce(&num_bigint::BigInt) -> R) -> Option<R> {
         match self {
             JsValue::BigInt(b) => Some(f(&b.value)),
             _ => None,
         }
     }
 
-    pub fn into_string(self) -> Option<JsString> {
+    pub(crate) fn into_string(self) -> Option<JsString> {
         match self {
             JsValue::String(s) => Some(s),
             _ => None,
         }
     }
 
-    pub fn into_bigint(self) -> Option<JsBigInt> {
+    pub(crate) fn into_bigint(self) -> Option<JsBigInt> {
         match self {
             JsValue::BigInt(b) => Some(b),
             _ => None,
@@ -497,7 +497,7 @@ impl JsValue {
     }
 
     /// Eight-way value tag for exhaustive dispatch. See `ValueKind`.
-    pub fn discriminant(&self) -> ValueKind {
+    pub(crate) fn discriminant(&self) -> ValueKind {
         match self {
             JsValue::Undefined => ValueKind::Undefined,
             JsValue::Null => ValueKind::Null,
@@ -511,62 +511,62 @@ impl JsValue {
     }
 
     /// Alias for `discriminant()` — the canonical `ValueKind` accessor.
-    pub fn kind(&self) -> ValueKind {
+    pub(crate) fn kind(&self) -> ValueKind {
         self.discriminant()
     }
 
-    pub fn is_object(&self) -> bool {
+    pub(crate) fn is_object(&self) -> bool {
         matches!(self, JsValue::Object(_))
     }
 }
 
 // §6.1.6.1 — Number type operations
 impl JsValue {
-    pub fn is_undefined(&self) -> bool {
+    pub(crate) fn is_undefined(&self) -> bool {
         matches!(self, JsValue::Undefined)
     }
 
-    pub fn is_null(&self) -> bool {
+    pub(crate) fn is_null(&self) -> bool {
         matches!(self, JsValue::Null)
     }
 
-    pub fn is_boolean(&self) -> bool {
+    pub(crate) fn is_boolean(&self) -> bool {
         matches!(self, JsValue::Boolean(_))
     }
 
-    pub fn is_number(&self) -> bool {
+    pub(crate) fn is_number(&self) -> bool {
         matches!(self, JsValue::Number(_))
     }
 
-    pub fn is_string(&self) -> bool {
+    pub(crate) fn is_string(&self) -> bool {
         matches!(self, JsValue::String(_))
     }
 
-    pub fn is_symbol(&self) -> bool {
+    pub(crate) fn is_symbol(&self) -> bool {
         matches!(self, JsValue::Symbol(_))
     }
 
-    pub fn is_bigint(&self) -> bool {
+    pub(crate) fn is_bigint(&self) -> bool {
         matches!(self, JsValue::BigInt(_))
     }
 
-    pub fn is_nullish(&self) -> bool {
+    pub(crate) fn is_nullish(&self) -> bool {
         matches!(self, JsValue::Undefined | JsValue::Null)
     }
 }
 
 // §6.1.6.1 Number type operations
-pub mod number_ops {
-    pub fn unary_minus(x: f64) -> f64 {
+pub(crate) mod number_ops {
+    pub(crate) fn unary_minus(x: f64) -> f64 {
         if x.is_nan() { f64::NAN } else { -x }
     }
 
-    pub fn bitwise_not(x: f64) -> f64 {
+    pub(crate) fn bitwise_not(x: f64) -> f64 {
         let n = to_int32(x);
         f64::from(!n)
     }
 
-    pub fn exponentiate(base: f64, exp: f64) -> f64 {
+    pub(crate) fn exponentiate(base: f64, exp: f64) -> f64 {
         // §6.1.6.1.4 step 3: if exponent is NaN, return NaN
         if exp.is_nan() {
             return f64::NAN;
@@ -578,49 +578,49 @@ pub mod number_ops {
         base.powf(exp)
     }
 
-    pub fn multiply(x: f64, y: f64) -> f64 {
+    pub(crate) fn multiply(x: f64, y: f64) -> f64 {
         x * y
     }
 
-    pub fn divide(x: f64, y: f64) -> f64 {
+    pub(crate) fn divide(x: f64, y: f64) -> f64 {
         x / y
     }
 
-    pub fn remainder(x: f64, y: f64) -> f64 {
+    pub(crate) fn remainder(x: f64, y: f64) -> f64 {
         // IEEE 754 remainder
         x % y
     }
 
-    pub fn add(x: f64, y: f64) -> f64 {
+    pub(crate) fn add(x: f64, y: f64) -> f64 {
         x + y
     }
 
-    pub fn subtract(x: f64, y: f64) -> f64 {
+    pub(crate) fn subtract(x: f64, y: f64) -> f64 {
         x - y
     }
 
-    pub fn left_shift(x: f64, y: f64) -> f64 {
+    pub(crate) fn left_shift(x: f64, y: f64) -> f64 {
         let lnum = to_int32(x);
         let rnum = to_uint32(y);
         let shift = rnum & 0x1F;
         f64::from(lnum.wrapping_shl(shift))
     }
 
-    pub fn signed_right_shift(x: f64, y: f64) -> f64 {
+    pub(crate) fn signed_right_shift(x: f64, y: f64) -> f64 {
         let lnum = to_int32(x);
         let rnum = to_uint32(y);
         let shift = rnum & 0x1F;
         f64::from(lnum.wrapping_shr(shift))
     }
 
-    pub fn unsigned_right_shift(x: f64, y: f64) -> f64 {
+    pub(crate) fn unsigned_right_shift(x: f64, y: f64) -> f64 {
         let lnum = to_uint32(x);
         let rnum = to_uint32(y);
         let shift = rnum & 0x1F;
         lnum.wrapping_shr(shift) as f64
     }
 
-    pub fn less_than(x: f64, y: f64) -> Option<bool> {
+    pub(crate) fn less_than(x: f64, y: f64) -> Option<bool> {
         if x.is_nan() || y.is_nan() {
             None // undefined
         } else {
@@ -628,14 +628,14 @@ pub mod number_ops {
         }
     }
 
-    pub fn equal(x: f64, y: f64) -> bool {
+    pub(crate) fn equal(x: f64, y: f64) -> bool {
         if x.is_nan() || y.is_nan() {
             return false;
         }
         x == y
     }
 
-    pub fn same_value(x: f64, y: f64) -> bool {
+    pub(crate) fn same_value(x: f64, y: f64) -> bool {
         if x.is_nan() && y.is_nan() {
             return true;
         }
@@ -645,19 +645,19 @@ pub mod number_ops {
         x == y
     }
 
-    pub fn bitwise_and(x: f64, y: f64) -> f64 {
+    pub(crate) fn bitwise_and(x: f64, y: f64) -> f64 {
         f64::from(to_int32(x) & to_int32(y))
     }
 
-    pub fn bitwise_xor(x: f64, y: f64) -> f64 {
+    pub(crate) fn bitwise_xor(x: f64, y: f64) -> f64 {
         f64::from(to_int32(x) ^ to_int32(y))
     }
 
-    pub fn bitwise_or(x: f64, y: f64) -> f64 {
+    pub(crate) fn bitwise_or(x: f64, y: f64) -> f64 {
         f64::from(to_int32(x) | to_int32(y))
     }
 
-    pub fn to_string(x: f64) -> String {
+    pub(crate) fn to_string(x: f64) -> String {
         if x.is_nan() {
             return "NaN".to_string();
         }
@@ -675,7 +675,7 @@ pub mod number_ops {
     // §7.1.7 ToUint32 — reduce the truncated real value modulo 2^32. The modular
     // step is done in f64 (exact for integer-valued doubles) so it stays correct
     // for magnitudes beyond the i64 range, where an `as i64` cast would saturate.
-    pub fn to_uint32(x: f64) -> u32 {
+    pub(crate) fn to_uint32(x: f64) -> u32 {
         if !x.is_finite() || x == 0.0 {
             return 0;
         }
@@ -690,26 +690,26 @@ pub mod number_ops {
     }
 
     // §7.1.6 ToInt32 — the same int32bit as ToUint32, reinterpreted as signed.
-    pub fn to_int32(x: f64) -> i32 {
+    pub(crate) fn to_int32(x: f64) -> i32 {
         to_uint32(x) as i32
     }
 }
 
 // §6.1.6.2 BigInt type operations
-pub mod bigint_ops {
+pub(crate) mod bigint_ops {
     use num_bigint::BigInt;
 
-    pub fn unary_minus(x: &BigInt) -> BigInt {
+    pub(crate) fn unary_minus(x: &BigInt) -> BigInt {
         -x
     }
 
-    pub fn bitwise_not(x: &BigInt) -> BigInt {
+    pub(crate) fn bitwise_not(x: &BigInt) -> BigInt {
         // ~x = -(x + 1) for arbitrary precision
         let result: BigInt = x + 1;
         -result
     }
 
-    pub fn exponentiate(base: &BigInt, exp: &BigInt) -> Result<BigInt, &'static str> {
+    pub(crate) fn exponentiate(base: &BigInt, exp: &BigInt) -> Result<BigInt, &'static str> {
         use num_bigint::Sign;
         if exp.sign() == Sign::Minus {
             return Err("BigInt exponent must be non-negative");
@@ -718,33 +718,33 @@ pub mod bigint_ops {
         Ok(base.pow(exp_u32))
     }
 
-    pub fn multiply(x: &BigInt, y: &BigInt) -> BigInt {
+    pub(crate) fn multiply(x: &BigInt, y: &BigInt) -> BigInt {
         x * y
     }
 
-    pub fn divide(x: &BigInt, y: &BigInt) -> Result<BigInt, &'static str> {
+    pub(crate) fn divide(x: &BigInt, y: &BigInt) -> Result<BigInt, &'static str> {
         if y.sign() == num_bigint::Sign::NoSign {
             return Err("Division by zero");
         }
         Ok(x / y)
     }
 
-    pub fn remainder(x: &BigInt, y: &BigInt) -> Result<BigInt, &'static str> {
+    pub(crate) fn remainder(x: &BigInt, y: &BigInt) -> Result<BigInt, &'static str> {
         if y.sign() == num_bigint::Sign::NoSign {
             return Err("Division by zero");
         }
         Ok(x % y)
     }
 
-    pub fn add(x: &BigInt, y: &BigInt) -> BigInt {
+    pub(crate) fn add(x: &BigInt, y: &BigInt) -> BigInt {
         x + y
     }
 
-    pub fn subtract(x: &BigInt, y: &BigInt) -> BigInt {
+    pub(crate) fn subtract(x: &BigInt, y: &BigInt) -> BigInt {
         x - y
     }
 
-    pub fn left_shift(x: &BigInt, y: &BigInt) -> BigInt {
+    pub(crate) fn left_shift(x: &BigInt, y: &BigInt) -> BigInt {
         let shift: i64 = y.try_into().unwrap_or(0);
         if shift >= 0 {
             x << (shift as u64)
@@ -753,7 +753,7 @@ pub mod bigint_ops {
         }
     }
 
-    pub fn signed_right_shift(x: &BigInt, y: &BigInt) -> BigInt {
+    pub(crate) fn signed_right_shift(x: &BigInt, y: &BigInt) -> BigInt {
         let shift: i64 = y.try_into().unwrap_or(0);
         if shift >= 0 {
             x >> (shift as u64)
@@ -762,23 +762,23 @@ pub mod bigint_ops {
         }
     }
 
-    pub fn less_than(x: &BigInt, y: &BigInt) -> Option<bool> {
+    pub(crate) fn less_than(x: &BigInt, y: &BigInt) -> Option<bool> {
         Some(x < y)
     }
 
-    pub fn equal(x: &BigInt, y: &BigInt) -> bool {
+    pub(crate) fn equal(x: &BigInt, y: &BigInt) -> bool {
         x == y
     }
 
-    pub fn bitwise_and(x: &BigInt, y: &BigInt) -> BigInt {
+    pub(crate) fn bitwise_and(x: &BigInt, y: &BigInt) -> BigInt {
         x & y
     }
 
-    pub fn bitwise_xor(x: &BigInt, y: &BigInt) -> BigInt {
+    pub(crate) fn bitwise_xor(x: &BigInt, y: &BigInt) -> BigInt {
         x ^ y
     }
 
-    pub fn bitwise_or(x: &BigInt, y: &BigInt) -> BigInt {
+    pub(crate) fn bitwise_or(x: &BigInt, y: &BigInt) -> BigInt {
         x | y
     }
 }

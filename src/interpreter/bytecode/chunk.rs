@@ -21,5 +21,7 @@ pub(crate) struct Chunk {
     pub(crate) code: Vec<u8>,
     pub(crate) constants: Vec<Constant>,
     pub(crate) names: Vec<Rc<str>>,
+    pub(crate) var_names: Vec<u16>,
     pub(crate) max_stack: u16,
+    pub(crate) max_refs: u16,
 }

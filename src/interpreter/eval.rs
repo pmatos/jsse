@@ -340,6 +340,19 @@ impl Interpreter {
         }
         self.eval_depth.set(depth + 1);
         let _depth_guard = EvalDepthGuard(std::rc::Rc::clone(&self.eval_depth));
+
+        // A call is only ever in tail position if it is (recursively) the
+        // return statement's own expression: `return`, through a Conditional's
+        // taken branch, a Logical's short-circuited right operand, or a
+        // Sequence's last element (mirrors expr_may_contain_tail_call below).
+        // Capture the ambient eligibility once and clear it by default so
+        // *every* other sub-expression (operands, elements, computed keys,
+        // arguments, ...) evaluates as non-tail unless one of those few arms
+        // explicitly restores it right before its own recursive dispatch —
+        // this makes "not a tail position" the default instead of something
+        // each arm has to remember to establish.
+        let tail = self.in_tail_position;
+        self.in_tail_position = false;
         match expr {
             Expression::Literal(lit) => Completion::Normal(self.eval_literal(lit)),
             Expression::Identifier(name) => {
@@ -473,27 +486,28 @@ impl Interpreter {
                 }
                 result
             }
-            Expression::Logical(op, left, right) => self.eval_logical(*op, left, right, env),
+            Expression::Logical(op, left, right) => {
+                self.in_tail_position = tail;
+                self.eval_logical(*op, left, right, env)
+            }
             Expression::Update(op, prefix, arg) => self.eval_update(*op, *prefix, arg, env),
             Expression::Assign(op, left, right) => self.eval_assign(*op, left, right, env),
             Expression::Conditional(test, cons, alt) => {
-                let saved_tail = self.in_tail_position;
-                self.in_tail_position = false;
                 let test_val = match self.eval_expr(test, env) {
                     Completion::Normal(v) => v,
-                    other => {
-                        self.in_tail_position = saved_tail;
-                        return other;
-                    }
+                    other => return other,
                 };
-                self.in_tail_position = saved_tail;
+                self.in_tail_position = tail;
                 if self.to_boolean_val(&test_val) {
                     self.eval_expr(cons, env)
                 } else {
                     self.eval_expr(alt, env)
                 }
             }
-            Expression::Call(callee, args, site_id) => self.eval_call(callee, args, env, *site_id),
+            Expression::Call(callee, args, site_id) => {
+                self.in_tail_position = tail;
+                self.eval_call(callee, args, env, *site_id)
+            }
             Expression::New(callee, args, site_id) => self.eval_new(callee, args, env, *site_id),
             Expression::Member(obj, prop, site_id) => self.eval_member(obj, prop, env, *site_id),
             Expression::Array(elements, _) => self.eval_array_literal(elements, env),
@@ -501,7 +515,7 @@ impl Interpreter {
             Expression::Function(f) => {
                 let closure_env = if let Some(ref name) = f.name {
                     let func_env = Rc::new(RefCell::new(Environment {
-                        bindings: HashMap::new(),
+                        bindings: Default::default(),
                         parent: Some(env.clone()),
                         strict: env.borrow().strict || f.body_is_strict,
                         is_function_scope: false,
@@ -787,7 +801,11 @@ impl Interpreter {
                                 && obj_b.class_name == "String"
                             {
                                 let is_exotic = key.eq_str("length")
-                                    || key.parse::<usize>().is_ok_and(|i| i < s.code_units.len());
+                                    || crate::interpreter::types::string_exotic_index(
+                                        &key,
+                                        s.code_units.len(),
+                                    )
+                                    .is_some();
                                 if is_exotic {
                                     drop(obj_b);
                                     if is_strict {
@@ -904,11 +922,10 @@ impl Interpreter {
                 }
             },
             Expression::Sequence(exprs) | Expression::Comma(exprs) => {
-                let saved_tail = self.in_tail_position;
                 let last_idx = exprs.len().saturating_sub(1);
                 let mut result = JsValue::Undefined;
                 for (i, e) in exprs.iter().enumerate() {
-                    self.in_tail_position = if i == last_idx { saved_tail } else { false };
+                    self.in_tail_position = if i == last_idx { tail } else { false };
                     match self.eval_expr(e, env) {
                         Completion::Normal(v) => result = v,
                         other => return other,
@@ -1322,8 +1339,6 @@ impl Interpreter {
                 self.eval_optional_chain_tail_with_base_this(&base_val, &base_this, prop, env)
             }
             Expression::TaggedTemplate(tag_expr, tmpl) => {
-                let saved_tail = self.in_tail_position;
-                self.in_tail_position = false;
                 let (func_val, this_val) = match tag_expr.as_ref() {
                     Expression::Member(obj_expr, prop, _) => {
                         let obj_val = match self.eval_expr(obj_expr, env) {
@@ -1391,7 +1406,7 @@ impl Interpreter {
                     }
                 }
 
-                if saved_tail {
+                if tail {
                     self.gc_unroot_frame(gc_frame);
                     return Completion::TailCall {
                         func: func_val,
@@ -1411,50 +1426,48 @@ impl Interpreter {
         base_val: &JsValue,
         name: &K,
     ) -> Completion {
+        // §6.2.5.5 GetValue permits eliding the transient primitive wrapper,
+        // but its prototype [[Get]] must still receive the primitive itself.
         let name = name.to_js_property_key();
         match base_val {
             JsValue::Object(o) => self.get_object_property(o.id, &name, base_val),
             JsValue::String(s) => {
                 if name.eq_str("length") {
                     Completion::Normal(JsValue::Number(s.len() as f64))
-                } else if let Ok(idx) = name.parse::<usize>() {
-                    if idx < s.code_units.len() {
-                        Completion::Normal(JsValue::String(JsString::from_vec(vec![
-                            s.code_units[idx],
-                        ])))
-                    } else {
-                        Completion::Normal(JsValue::Undefined)
-                    }
+                } else if let Some(idx) =
+                    crate::interpreter::types::string_exotic_index(&name, s.code_units.len())
+                {
+                    Completion::Normal(JsValue::String(JsString::from_vec(vec![s.code_units[idx]])))
                 } else if let Some(sp_id) = self.realm().string_prototype {
-                    Completion::Normal(self.get_property_on_id(sp_id, &name))
+                    self.get_object_property(sp_id, &name, base_val)
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Number(_) => {
                 if let Some(np_id) = self.realm().number_prototype {
-                    Completion::Normal(self.get_property_on_id(np_id, &name))
+                    self.get_object_property(np_id, &name, base_val)
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Boolean(_) => {
                 if let Some(bp_id) = self.realm().boolean_prototype {
-                    Completion::Normal(self.get_property_on_id(bp_id, &name))
+                    self.get_object_property(bp_id, &name, base_val)
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::Symbol(_) => {
                 if let Some(sp_id) = self.realm().symbol_prototype {
-                    Completion::Normal(self.get_property_on_id(sp_id, &name))
+                    self.get_object_property(sp_id, &name, base_val)
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
             }
             JsValue::BigInt(_) => {
                 if let Some(bp_id) = self.realm().bigint_prototype {
-                    Completion::Normal(self.get_property_on_id(bp_id, &name))
+                    self.get_object_property(bp_id, &name, base_val)
                 } else {
                     Completion::Normal(JsValue::Undefined)
                 }
@@ -2497,6 +2510,102 @@ impl Interpreter {
         }
     }
 
+    pub(super) fn get_identifier_value_by_ref(
+        &mut self,
+        name: &str,
+        id_ref: &IdentifierRef,
+        env: &EnvRef,
+    ) -> Completion {
+        let strict = env.borrow().strict;
+        match id_ref {
+            IdentifierRef::WithObject(obj_id) => self.with_get_binding_value(*obj_id, name, strict),
+            IdentifierRef::Unresolvable => {
+                Completion::Throw(self.create_reference_error(&format!("{name} is not defined")))
+            }
+            IdentifierRef::SpecificEnv(specific_env) => {
+                let (indirect, has_binding) = {
+                    let specific = specific_env.borrow();
+                    (
+                        specific.resolve_indirect_binding(name),
+                        specific.bindings.contains_key(name),
+                    )
+                };
+                if let Some(resolved) = indirect {
+                    match resolved {
+                        Some(value) => Completion::Normal(value),
+                        None => Completion::Throw(self.create_reference_error(&format!(
+                            "Cannot access '{name}' before initialization"
+                        ))),
+                    }
+                } else if has_binding {
+                    match self.env_get(specific_env, name) {
+                        Some(value) => Completion::Normal(value),
+                        None => Completion::Throw(self.create_reference_error(&format!(
+                            "Cannot access '{name}' before initialization"
+                        ))),
+                    }
+                } else if let Some(result) = self.resolve_global_getter(name, specific_env) {
+                    result
+                } else {
+                    Completion::Throw(
+                        self.create_reference_error(&format!("{name} is not defined")),
+                    )
+                }
+            }
+        }
+    }
+
+    pub(super) fn eval_identifier_update(
+        &mut self,
+        op: UpdateOp,
+        prefix: bool,
+        name: &str,
+        env: &EnvRef,
+    ) -> Completion {
+        // Fast path: identifier is a Number in the local scope chain (no with/module)
+        {
+            let env_borrow = env.borrow();
+            if env_borrow.with_object.is_none()
+                && let Some(binding) = env_borrow.bindings.get(name)
+                && binding.initialized
+                && binding.kind != BindingKind::Const
+                && binding.kind != BindingKind::FunctionName
+                && binding.kind != BindingKind::ImmutableValue
+                && let JsValue::Number(n) = &binding.value
+            {
+                let old_num = *n;
+                let new_num = match op {
+                    UpdateOp::Increment => old_num + 1.0,
+                    UpdateOp::Decrement => old_num - 1.0,
+                };
+                let new_val = JsValue::Number(new_num);
+                drop(env_borrow);
+                if let Err(e) = self.env_set(env, name, new_val) {
+                    return Completion::Throw(e);
+                }
+                return Completion::Normal(JsValue::Number(if prefix { new_num } else { old_num }));
+            }
+        }
+
+        let id_ref = match self.resolve_identifier_ref(name, env) {
+            Ok(r) => r,
+            Err(e) => return Completion::Throw(e),
+        };
+        let raw_val = match self.get_identifier_value_by_ref(name, &id_ref, env) {
+            Completion::Normal(v) => v,
+            other => return other,
+        };
+        let (old_val, new_val) = match self.apply_update_numeric(&raw_val, op) {
+            Ok(pair) => pair,
+            Err(e) => return Completion::Throw(e),
+        };
+        match self.put_value_by_ref(name, new_val.clone(), &id_ref, env) {
+            Completion::Normal(_) => {}
+            other => return other,
+        }
+        Completion::Normal(if prefix { new_val } else { old_val })
+    }
+
     fn eval_update(
         &mut self,
         op: UpdateOp,
@@ -2505,79 +2614,7 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         if let Expression::Identifier(name) = arg {
-            // Fast path: identifier is a Number in the local scope chain (no with/module)
-            {
-                let env_borrow = env.borrow();
-                if env_borrow.with_object.is_none()
-                    && let Some(binding) = env_borrow.bindings.get(name)
-                    && binding.initialized
-                    && binding.kind != BindingKind::Const
-                    && binding.kind != BindingKind::FunctionName
-                    && binding.kind != BindingKind::ImmutableValue
-                    && let JsValue::Number(n) = &binding.value
-                {
-                    let old_num = *n;
-                    let new_num = match op {
-                        UpdateOp::Increment => old_num + 1.0,
-                        UpdateOp::Decrement => old_num - 1.0,
-                    };
-                    let new_val = JsValue::Number(new_num);
-                    drop(env_borrow);
-                    if let Err(e) = self.env_set(env, name, new_val) {
-                        return Completion::Throw(e);
-                    }
-                    return Completion::Normal(JsValue::Number(if prefix {
-                        new_num
-                    } else {
-                        old_num
-                    }));
-                }
-            }
-
-            let strict = env.borrow().strict;
-            let id_ref = match self.resolve_identifier_ref(name, env) {
-                Ok(r) => r,
-                Err(e) => return Completion::Throw(e),
-            };
-            let raw_val = match &id_ref {
-                IdentifierRef::WithObject(obj_id) => {
-                    match self.with_get_binding_value(*obj_id, name, strict) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    }
-                }
-                IdentifierRef::Unresolvable => {
-                    return Completion::Throw(
-                        self.create_reference_error(&format!("{name} is not defined")),
-                    );
-                }
-                IdentifierRef::SpecificEnv(_) => {
-                    if let Some(result) = self.resolve_global_getter(name, env) {
-                        match result {
-                            Completion::Normal(v) => v,
-                            other => return other,
-                        }
-                    } else {
-                        match self.env_get(env, name) {
-                            Some(v) => v,
-                            None => {
-                                let err =
-                                    self.create_reference_error(&format!("{name} is not defined"));
-                                return Completion::Throw(err);
-                            }
-                        }
-                    }
-                }
-            };
-            let (old_val, new_val) = match self.apply_update_numeric(&raw_val, op) {
-                Ok(pair) => pair,
-                Err(e) => return Completion::Throw(e),
-            };
-            match self.put_value_by_ref(name, new_val.clone(), &id_ref, env) {
-                Completion::Normal(_) => {}
-                other => return other,
-            }
-            Completion::Normal(if prefix { new_val } else { old_val })
+            self.eval_identifier_update(op, prefix, name, env)
         } else if let Expression::Member(obj_expr, prop, _) = arg {
             // §13.3.7.1: super[expr]++ — special evaluation order
             if matches!(obj_expr.as_ref(), Expression::Super)
@@ -4340,7 +4377,7 @@ impl Interpreter {
         strict: bool,
     ) -> Result<(), JsValue> {
         let key = key.to_js_property_key();
-        // Auto-box primitives for property access
+        // Auto-box primitives for property access.
         let obj_val = if !matches!(obj_val, JsValue::Object(_)) {
             match self.to_object(&obj_val) {
                 Completion::Normal(v) => v,
@@ -4351,154 +4388,51 @@ impl Interpreter {
             obj_val
         };
 
-        if let JsValue::Object(ref o) = obj_val
-            && let Some(obj) = self.get_object(o.id)
-        {
-            // Proxy set trap
-            if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
-                let receiver = obj_val.clone();
-                {
-                    let success = self.proxy_set(o.id, &key, val, &receiver)?;
-                    if !success && strict {
-                        return Err(self.create_type_error(&format!(
-                            "Cannot assign to read only property '{key}'"
-                        )));
-                    }
-                    return Ok(());
-                }
-            }
-            // Module namespace exotic: [[Set]] always returns false
-            if obj.borrow().module_namespace().is_some() {
-                if strict {
-                    return Err(self.create_type_error(&format!(
-                        "Cannot assign to read only property '{key}' of module namespace"
-                    )));
-                }
-                return Ok(());
-            }
-            // Check for setter
-            let desc = self.get_property_descriptor_on_id(o.id, &key);
-            if let Some(ref d) = desc
-                && let Some(ref setter) = d.set
-                && !matches!(setter, JsValue::Undefined)
-            {
-                let setter = setter.clone();
-                let this = obj_val.clone();
-                return match self.call_function(&setter, &this, &[val]) {
-                    Completion::Normal(_) => Ok(()),
-                    Completion::Throw(e) => Err(e),
-                    _ => Ok(()),
-                };
-            }
-            if desc
-                .as_ref()
-                .map(|d| d.is_accessor_descriptor())
-                .unwrap_or(false)
-            {
-                if strict {
-                    return Err(self.create_type_error(&format!(
-                        "Cannot set property '{key}' which has only a getter"
-                    )));
-                }
-                return Ok(());
-            }
-            // TypedArray [[Set]]
-            let is_ta = obj.borrow().typed_array_info().is_some();
-            if is_ta && let Some(index) = canonical_numeric_index_string(&key) {
-                let is_bigint = obj
-                    .borrow()
-                    .typed_array_info()
-                    .map(|ta| ta.kind.is_bigint())
-                    .unwrap_or(false);
-                let num_val = if is_bigint {
-                    self.to_bigint_value(&val)?
-                } else {
-                    JsValue::Number(self.to_number_value(&val)?)
-                };
-                let obj_ref = obj.borrow();
-                let ta = obj_ref.typed_array_info().unwrap();
-                if is_valid_integer_index(ta, index) {
-                    let ta_clone = ta.clone();
-                    drop(obj_ref);
-                    typed_array_set_index(&ta_clone, index as usize, &num_val);
-                }
-                return Ok(());
-            }
-            // OrdinarySet (§10.1.9.2): if no own property, walk prototype chain
-            if !obj.borrow().has_own_property(&key) {
-                let mut proto_opt = obj.borrow().prototype_id;
-                while let Some(proto_rc) = proto_opt {
-                    let proto_id = proto_rc;
-                    // TypedArray [[Set]] §10.4.5.5: canonical numeric index in TA prototype
-                    {
-                        let proto_borrow = self.get_object_cell_expect(proto_rc).borrow();
-                        if let Some(ta) = proto_borrow.typed_array_info()
-                            && let Some(index) = canonical_numeric_index_string(&key)
-                            && !is_valid_integer_index(ta, index)
-                        {
-                            // Not a valid integer index: TypedArray [[Set]] returns true silently
-                            return Ok(());
-                        }
-                        // Valid index: fall through to data descriptor path below
-                    }
-                    if self.get_proxy_info(proto_id).is_some() {
-                        let receiver = obj_val.clone();
-                        {
-                            let success = self.proxy_set(proto_id, &key, val, &receiver)?;
-                            if !success && strict {
-                                return Err(self.create_type_error(&format!(
-                                    "Cannot assign to read only property '{key}'"
-                                )));
-                            }
-                            return Ok(());
-                        }
-                    }
-                    let proto_id = proto_rc;
-                    let inherited = self.get_property_descriptor_on_id(proto_id, &key);
-                    if let Some(ref inherited_desc) = inherited {
-                        if inherited_desc.is_data_descriptor() {
-                            if inherited_desc.writable == Some(false) {
-                                if strict {
-                                    return Err(self.create_type_error(&format!(
-                                        "Cannot assign to read only property '{key}'"
-                                    )));
-                                }
-                                return Ok(());
-                            }
-                            break;
-                        }
-                        if inherited_desc.is_accessor_descriptor() {
-                            if let Some(ref setter) = inherited_desc.set
-                                && !matches!(setter, JsValue::Undefined)
-                            {
-                                let setter = setter.clone();
-                                let this = obj_val.clone();
-                                return match self.call_function(&setter, &this, &[val]) {
-                                    Completion::Normal(_) => Ok(()),
-                                    Completion::Throw(e) => Err(e),
-                                    _ => Ok(()),
-                                };
-                            }
-                            if strict {
-                                return Err(self.create_type_error(&format!(
-                                    "Cannot set property '{key}' which has only a getter"
-                                )));
-                            }
-                            return Ok(());
-                        }
-                        break;
-                    }
-                    proto_opt = self.get_object_cell_expect(proto_rc).borrow().prototype_id;
-                }
-            }
-            let success = obj.borrow_mut().set_property_value(&key, val);
-            if !success && strict {
-                return Err(
-                    self.create_type_error(&format!("Cannot assign to read only property '{key}'"))
-                );
-            }
+        let JsValue::Object(ref o) = obj_val else {
+            return Ok(());
+        };
+        let obj_id = o.id;
+        // Delegate to the canonical [[Set]] entry point: proxy `set` trap,
+        // module-namespace reject, TypedArray integer-index set, accessor
+        // setters, and the OrdinarySet prototype-chain walk all live in
+        // `property.rs`. The receiver is the object itself, matching this
+        // assignment path's PutValue semantics.
+        let receiver = obj_val.clone();
+        let success = self.set_object_property(obj_id, &key, val, &receiver)?;
+        if !success && strict {
+            return Err(self.read_only_assignment_error(obj_id, &key));
         }
         Ok(())
+    }
+
+    /// Builds the strict-mode TypeError for a rejected [[Set]] on `obj_id`,
+    /// preserving the diagnostic distinctions this assignment path historically
+    /// produced: a module-namespace target, a getter-only accessor (own or
+    /// inherited), or a plain read-only data property. Descriptor re-inspection
+    /// is skipped when a proxy sits on the object or its prototype chain, so no
+    /// trap is re-invoked on the error path.
+    fn read_only_assignment_error(&mut self, obj_id: u64, key: &JsPropertyKey) -> JsValue {
+        let Some(cell) = self.get_object_cell(obj_id) else {
+            return self.create_type_error(&format!("Cannot assign to read only property '{key}'"));
+        };
+        let is_module_ns = cell.borrow().module_namespace().is_some();
+        let is_proxy = cell.borrow().is_proxy() || cell.borrow().is_proxy_revoked();
+        if is_module_ns {
+            return self.create_type_error(&format!(
+                "Cannot assign to read only property '{key}' of module namespace"
+            ));
+        }
+        if !is_proxy
+            && !self.has_proxy_in_prototype_chain(obj_id)
+            && self
+                .get_property_descriptor_on_id(obj_id, key)
+                .is_some_and(|d| d.is_accessor_descriptor())
+        {
+            return self.create_type_error(&format!(
+                "Cannot set property '{key}' which has only a getter"
+            ));
+        }
+        self.create_type_error(&format!("Cannot assign to read only property '{key}'"))
     }
 
     fn set_member_property(
@@ -12465,6 +12399,45 @@ impl Interpreter {
         Completion::Normal(promise)
     }
 
+    fn bind_function_parameters(
+        &mut self,
+        params: &[Pattern],
+        args: &[JsValue],
+        func_env: &EnvRef,
+        has_simple_params: bool,
+    ) -> Result<(), JsValue> {
+        if has_simple_params {
+            let mut env = func_env.borrow_mut();
+            for (index, param) in params.iter().enumerate() {
+                let Pattern::Identifier(name) = param else {
+                    unreachable!("simple parameter metadata must match the parameter list");
+                };
+                env.bindings.insert(
+                    name.clone(),
+                    Binding {
+                        value: args.get(index).cloned().unwrap_or(JsValue::Undefined),
+                        kind: BindingKind::Var,
+                        initialized: true,
+                        deletable: false,
+                    },
+                );
+            }
+            return Ok(());
+        }
+
+        for (index, param) in params.iter().enumerate() {
+            if let Pattern::Rest(inner) = param {
+                let rest = args.get(index..).unwrap_or(&[]).to_vec();
+                let rest_array = self.create_array(rest);
+                self.bind_pattern(inner, rest_array, BindingKind::Var, func_env)?;
+                break;
+            }
+            let value = args.get(index).cloned().unwrap_or(JsValue::Undefined);
+            self.bind_pattern(param, value, BindingKind::Var, func_env)?;
+        }
+        Ok(())
+    }
+
     pub(crate) fn call_function(
         &mut self,
         func_val: &JsValue,
@@ -12738,7 +12711,10 @@ impl Interpreter {
                         }
                         if is_async && is_generator {
                             // Create persistent function environment
-                            let func_env = Environment::new_function_scope(Some(closure.clone()));
+                            let func_env = Environment::new_function_scope_with_capacity(
+                                Some(closure.clone()),
+                                params.len().saturating_add(2),
+                            );
                             func_env.borrow_mut().strict = is_strict;
                             func_env.borrow_mut().bindings.insert(
                                 "this".to_string(),
@@ -12788,28 +12764,14 @@ impl Interpreter {
                                 func_env.borrow_mut().has_parameter_expressions = true;
                             }
                             // §14.5.10 step 1: FunctionDeclarationInstantiation (bind params)
-                            for (i, param) in params.iter().enumerate() {
-                                if let Pattern::Rest(inner) = param {
-                                    let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                                    let rest_arr = self.create_array(rest);
-                                    if let Err(e) = self.bind_pattern(
-                                        inner,
-                                        rest_arr,
-                                        BindingKind::Var,
-                                        &func_env,
-                                    ) {
-                                        self.current_realm_id = caller_realm;
-                                        return Completion::Throw(e);
-                                    }
-                                    break;
-                                }
-                                let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-                                if let Err(e) =
-                                    self.bind_pattern(param, val, BindingKind::Var, &func_env)
-                                {
-                                    self.current_realm_id = caller_realm;
-                                    return Completion::Throw(e);
-                                }
+                            if let Err(error) = self.bind_function_parameters(
+                                &params,
+                                args,
+                                &func_env,
+                                is_simple_ag,
+                            ) {
+                                self.current_realm_id = caller_realm;
+                                return Completion::Throw(error);
                             }
                             // §14.5.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
                             let gen_obj_id = self.create_object_id();
@@ -12917,7 +12879,10 @@ impl Interpreter {
                         }
                         if is_generator {
                             // Create persistent function environment
-                            let func_env = Environment::new_function_scope(Some(closure.clone()));
+                            let func_env = Environment::new_function_scope_with_capacity(
+                                Some(closure.clone()),
+                                params.len().saturating_add(2),
+                            );
                             let closure_strict = closure.borrow().strict;
                             func_env.borrow_mut().strict = is_strict;
                             // §10.2.1.2 OrdinaryCallBindThis: sloppy mode this coercion
@@ -12987,28 +12952,11 @@ impl Interpreter {
                                 func_env.borrow_mut().has_parameter_expressions = true;
                             }
                             // §14.4.10 step 1: FunctionDeclarationInstantiation (bind params)
-                            for (i, param) in params.iter().enumerate() {
-                                if let Pattern::Rest(inner) = param {
-                                    let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                                    let rest_arr = self.create_array(rest);
-                                    if let Err(e) = self.bind_pattern(
-                                        inner,
-                                        rest_arr,
-                                        BindingKind::Var,
-                                        &func_env,
-                                    ) {
-                                        self.current_realm_id = caller_realm;
-                                        return Completion::Throw(e);
-                                    }
-                                    break;
-                                }
-                                let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-                                if let Err(e) =
-                                    self.bind_pattern(param, val, BindingKind::Var, &func_env)
-                                {
-                                    self.current_realm_id = caller_realm;
-                                    return Completion::Throw(e);
-                                }
+                            if let Err(error) =
+                                self.bind_function_parameters(&params, args, &func_env, is_simple_g)
+                            {
+                                self.current_realm_id = caller_realm;
+                                return Completion::Throw(error);
                             }
                             // §14.4.10 step 2: OrdinaryCreateFromConstructor AFTER decl inst
                             let gen_obj_id = self.create_object_id();
@@ -13115,12 +13063,13 @@ impl Interpreter {
                             }));
                         }
                         let closure_strict = closure.borrow().strict;
-                        let func_env = Environment::new_function_scope(Some(closure));
+                        let func_env = self
+                            .acquire_function_environment(closure, params.len().saturating_add(2));
                         if is_arrow {
                             func_env.borrow_mut().is_arrow_scope = true;
                         }
                         let is_simple = has_simple_params;
-                        let mut call_frame_args = JsValue::Null;
+                        let mut call_frame_arguments = CallFrameArguments::None;
                         if !is_arrow {
                             if self.constructing_derived {
                                 // Derived constructor: this is in TDZ until super() is called
@@ -13165,12 +13114,7 @@ impl Interpreter {
                                 );
                             }
                             let env_strict = func_env.borrow().strict;
-                            // Sloppy non-arrow functions need a real arguments object even
-                            // when the body doesn't reference it, because Annex B
-                            // `Function.prototype.arguments` (§B.3.7) observes the active
-                            // call frame's arguments_obj.
-                            let needs_args = uses_arguments || (!is_strict && !env_strict);
-                            if needs_args {
+                            if uses_arguments {
                                 let use_mapped = is_simple && !is_strict && !env_strict;
                                 let param_names: Vec<String> = if use_mapped {
                                     params
@@ -13194,7 +13138,8 @@ impl Interpreter {
                                     mapped_env,
                                     &param_names,
                                 );
-                                call_frame_args = arguments_obj.clone();
+                                call_frame_arguments =
+                                    CallFrameArguments::Materialized(arguments_obj.clone());
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
                                 let _ = self.env_set(&func_env, "arguments", arguments_obj);
                                 if is_strict || !is_simple {
@@ -13202,6 +13147,13 @@ impl Interpreter {
                                 }
                             } else {
                                 func_env.borrow_mut().declare("arguments", BindingKind::Var);
+                                if !is_strict && !env_strict {
+                                    call_frame_arguments = CallFrameArguments::Deferred {
+                                        args: DeferredCallArguments::new(args),
+                                        func_env: func_env.clone(),
+                                        mapped: is_simple,
+                                    };
+                                }
                             }
                         }
                         // For arrows with non-simple params and "arguments" parameter,
@@ -13218,25 +13170,12 @@ impl Interpreter {
                             func_env.borrow_mut().has_parameter_expressions = true;
                         }
                         // Bind parameters (after this so default exprs can access this)
-                        for (i, param) in params.iter().enumerate() {
-                            if let Pattern::Rest(inner) = param {
-                                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                                let rest_arr = self.create_array(rest);
-                                if let Err(e) =
-                                    self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env)
-                                {
-                                    self.current_realm_id = caller_realm;
-                                    return Completion::Throw(e);
-                                }
-                                break;
-                            }
-                            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-                            if let Err(e) =
-                                self.bind_pattern(param, val, BindingKind::Var, &func_env)
-                            {
-                                self.current_realm_id = caller_realm;
-                                return Completion::Throw(e);
-                            }
+                        if let Err(error) =
+                            self.bind_function_parameters(&params, args, &func_env, is_simple)
+                        {
+                            self.current_realm_id = caller_realm;
+                            self.recycle_function_environment(func_env);
+                            return Completion::Throw(error);
                         }
                         let exec_env = if !is_simple {
                             let body_env = Environment::new_function_scope(Some(func_env.clone()));
@@ -13263,7 +13202,7 @@ impl Interpreter {
                         exec_env.borrow_mut().strict = is_strict;
                         self.call_stack_frames.push(CallFrame {
                             func_obj_id: o.id,
-                            arguments_obj: call_frame_args,
+                            arguments: call_frame_arguments,
                             is_eval: false,
                         });
                         self.call_stack_envs.push(exec_env.clone());
@@ -13279,6 +13218,8 @@ impl Interpreter {
                         let result = self.dispose_resources(&exec_env, result);
                         self.last_call_this_value = func_env.borrow().get("this");
                         self.current_realm_id = caller_realm;
+                        drop(exec_env);
+                        self.recycle_function_environment(func_env);
                         match result {
                             Completion::Return(v) => {
                                 self.last_call_had_explicit_return = true;
@@ -13720,7 +13661,7 @@ impl Interpreter {
         // Execute statements in lex_env
         self.call_stack_frames.push(CallFrame {
             func_obj_id: 0,
-            arguments_obj: JsValue::Null,
+            arguments: CallFrameArguments::None,
             is_eval: true,
         });
         self.call_stack_envs.push(lex_env.clone());
@@ -15711,7 +15652,10 @@ impl Interpreter {
         self.gc_root_value(&reject_fn);
 
         let closure_strict = closure.borrow().strict;
-        let func_env = Environment::new_function_scope(Some(closure));
+        let func_env = Environment::new_function_scope_with_capacity(
+            Some(closure),
+            params.len().saturating_add(2),
+        );
         if is_arrow {
             func_env.borrow_mut().is_arrow_scope = true;
         }
@@ -15786,34 +15730,18 @@ impl Interpreter {
                 func_env.borrow_mut().has_parameter_expressions = true;
             }
         }
-        for (i, param) in params.iter().enumerate() {
-            if let Pattern::Rest(inner) = param {
-                let rest: Vec<JsValue> = args.get(i..).unwrap_or(&[]).to_vec();
-                let rest_arr = self.create_array(rest);
-                if let Err(e) = self.bind_pattern(inner, rest_arr, BindingKind::Var, &func_env) {
-                    let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                    self.drain_microtasks();
-                    self.gc_unroot_frame(gc_frame);
-                    // A default-param expression may have called `__host_exit`
-                    // (issue #229): return abrupt so the caller unwinds.
-                    if self.pending_exit.is_some() {
-                        return Completion::Throw(JsValue::Undefined);
-                    }
-                    return Completion::Normal(promise);
-                }
-                break;
+        if let Err(error) =
+            self.bind_function_parameters(params, args, &func_env, has_simple_params)
+        {
+            let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[error]);
+            self.drain_microtasks();
+            self.gc_unroot_frame(gc_frame);
+            // A default-param expression may have called `__host_exit`
+            // (issue #229): return abrupt so the caller unwinds.
+            if self.pending_exit.is_some() {
+                return Completion::Throw(JsValue::Undefined);
             }
-            let val = args.get(i).cloned().unwrap_or(JsValue::Undefined);
-            if let Err(e) = self.bind_pattern(param, val, BindingKind::Var, &func_env) {
-                let _ = self.call_function(&reject_fn, &JsValue::Undefined, &[e]);
-                self.drain_microtasks();
-                self.gc_unroot_frame(gc_frame);
-                // See above: a default-param `__host_exit` must unwind abruptly.
-                if self.pending_exit.is_some() {
-                    return Completion::Throw(JsValue::Undefined);
-                }
-                return Completion::Normal(promise);
-            }
+            return Completion::Normal(promise);
         }
 
         func_env.borrow_mut().strict = is_strict;

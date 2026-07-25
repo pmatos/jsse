@@ -1465,6 +1465,61 @@ fn translate_js_pattern(source: &str, flags: &str) -> Result<String, String> {
     translate_js_pattern_ex(source, flags).map(|r| r.pattern)
 }
 
+fn nq_internal_condition_header_end(
+    chars: &[char],
+    start: usize,
+    sentinel_names: &HashSet<String>,
+) -> Option<usize> {
+    let len = chars.len();
+    if !sentinel_names.is_empty()
+        && start + 10 <= len
+        && chars[start..start + 10] == ['(', '?', '(', 'D', 'E', 'F', 'I', 'N', 'E', ')']
+    {
+        return Some(start + 10);
+    }
+    if start + 5 >= len
+        || chars[start] != '('
+        || chars[start + 1] != '?'
+        || chars[start + 2] != '('
+        || chars[start + 3] != '<'
+    {
+        return None;
+    }
+    let mut name_end = start + 4;
+    while name_end < len && chars[name_end] != '>' {
+        name_end += 1;
+    }
+    if name_end + 1 >= len || chars[name_end + 1] != ')' {
+        return None;
+    }
+    let name: String = chars[start + 4..name_end].iter().collect();
+    sentinel_names.contains(&name).then_some(name_end + 2)
+}
+
+fn nq_internal_subroutine_end(
+    chars: &[char],
+    start: usize,
+    sentinel_names: &HashSet<String>,
+) -> Option<usize> {
+    let len = chars.len();
+    if start + 4 >= len
+        || chars[start] != '\\'
+        || chars[start + 1] != 'g'
+        || chars[start + 2] != '<'
+    {
+        return None;
+    }
+    let mut name_end = start + 3;
+    while name_end < len && chars[name_end] != '>' {
+        name_end += 1;
+    }
+    if name_end >= len {
+        return None;
+    }
+    let name: String = chars[start + 3..name_end].iter().collect();
+    sentinel_names.contains(&name).then_some(name_end + 1)
+}
+
 /// Find the closing ')' matching the '(' at position `open` in `chars`.
 /// Returns None if not found.
 fn find_matching_close_paren(chars: &[char], open: usize) -> Option<usize> {
@@ -1879,6 +1934,14 @@ pub(super) fn translate_js_pattern_ex(
     source: &str,
     flags: &str,
 ) -> Result<TranslationResult, String> {
+    translate_js_pattern_ex_with_sentinels(source, flags, &HashSet::new())
+}
+
+fn translate_js_pattern_ex_with_sentinels(
+    source: &str,
+    flags: &str,
+    sentinel_names: &HashSet<String>,
+) -> Result<TranslationResult, String> {
     let mut result = String::new();
     if flags.contains('i') {
         result.push_str("(?i)");
@@ -1926,6 +1989,13 @@ pub(super) fn translate_js_pattern_ex(
         let mut j = 0;
         let mut in_cc = false;
         while j < len {
+            if !in_cc
+                && let Some(header_end) =
+                    nq_internal_condition_header_end(&chars, j, sentinel_names)
+            {
+                j = header_end;
+                continue;
+            }
             match chars[j] {
                 '[' if !in_cc => {
                     in_cc = true;
@@ -1943,7 +2013,14 @@ pub(super) fn translate_js_pattern_ex(
                             if j + 3 < len && (chars[j + 3] == '=' || chars[j + 3] == '!') {
                                 // lookbehind, not capturing
                             } else {
-                                count += 1; // named group
+                                let mut name_end = j + 3;
+                                while name_end < len && chars[name_end] != '>' {
+                                    name_end += 1;
+                                }
+                                let name: String = chars[j + 3..name_end].iter().collect();
+                                if !sentinel_names.contains(&name) {
+                                    count += 1; // JavaScript named group
+                                }
                             }
                         }
                         // (?:...), (?=...), (?!...) are non-capturing
@@ -2070,6 +2147,9 @@ pub(super) fn translate_js_pattern_ex(
     // When any named groups exist, fancy_regex requires ALL backreferences to
     // use named syntax. We auto-name unnamed capturing groups with a special
     // prefix so we can use named backreferences throughout.
+    let has_source_named_groups = all_group_names
+        .iter()
+        .any(|name| !sentinel_names.contains(name));
     let has_named_groups = !all_group_names.is_empty();
     // Track how many times we've seen each duplicated name during translation
     let mut dup_seen_count: HashMap<String, u32> = HashMap::new();
@@ -2079,6 +2159,29 @@ pub(super) fn translate_js_pattern_ex(
 
     while i < len {
         let c = chars[i];
+
+        if !in_char_class
+            && let Some(header_end) = nq_internal_condition_header_end(&chars, i, sentinel_names)
+        {
+            dotall_stack.push(None);
+            multiline_stack.push(None);
+            icase_stack.push(None);
+            group_is_capturing.push(false);
+            is_lookbehind_group.push(false);
+            is_lookahead_group.push(false);
+            group_result_start.push(None);
+            open_group_names.push(None);
+            result.extend(chars[i..header_end].iter());
+            i = header_end;
+            continue;
+        }
+        if !in_char_class
+            && let Some(subroutine_end) = nq_internal_subroutine_end(&chars, i, sentinel_names)
+        {
+            result.extend(chars[i..subroutine_end].iter());
+            i = subroutine_end;
+            continue;
+        }
 
         if c == '[' && !in_char_class {
             // An empty JS character class matches nothing, but it is a
@@ -2174,7 +2277,7 @@ pub(super) fn translate_js_pattern_ex(
             match next {
                 // Named backreference: \k<name> → (?P=name) or alternation for duplicates
                 'k' if !in_char_class && i + 2 < len && chars[i + 2] == '<' => {
-                    if !unicode && all_group_names.is_empty() {
+                    if !unicode && !has_source_named_groups {
                         // Annex B: \k without named groups is identity escape
                         if non_unicode_icase(icase) {
                             push_case_fold_guarded(&mut result, 'k', false);
@@ -2913,7 +3016,10 @@ pub(super) fn translate_js_pattern_ex(
             //   min == 0: remove the assertion entirely
             if was_lookahead && !unicode && i + 1 < len {
                 let qc = chars[i + 1];
-                let is_quant = qc == '*' || qc == '+' || qc == '?' || qc == '{';
+                let is_quant = qc == '*'
+                    || qc == '+'
+                    || qc == '?'
+                    || (qc == '{' && quantifier_brace_end(&chars, i + 1, len).is_some());
                 if is_quant {
                     let (min_is_zero, quant_end) = parse_quantifier_min(&chars, i + 1, len);
                     if min_is_zero {
@@ -3057,6 +3163,17 @@ pub(super) fn translate_js_pattern_ex(
                     );
                 }
             }
+            i += 1;
+            continue;
+        }
+
+        // Annex B: a '{' that doesn't open a valid quantifier is an ordinary
+        // literal character. fancy-regex is more lenient than ECMAScript here
+        // (e.g. it accepts `{,n}` as shorthand for `{0,n}`), so it must be
+        // escaped explicitly rather than passed through, or it and the
+        // characters after it get reinterpreted as a real quantifier.
+        if c == '{' && !in_char_class && quantifier_brace_end(&chars, i, len).is_none() {
+            push_escaped(&mut result, c);
             i += 1;
             continue;
         }
@@ -3246,7 +3363,7 @@ fn push_case_fold_guarded(result: &mut String, ch: char, in_char_class: bool) {
     }
 }
 
-fn resolve_class_escape(chars: &[char], i: &mut usize) -> Option<u32> {
+fn resolve_class_escape(chars: &[char], i: &mut usize, unicode: bool) -> Option<u32> {
     if *i >= chars.len() {
         return None;
     }
@@ -3315,7 +3432,7 @@ fn resolve_class_escape(chars: &[char], i: &mut usize) -> Option<u32> {
                     }
                 }
                 'd' | 'D' | 'w' | 'W' | 's' | 'S' | 'b' | 'B' => None,
-                'p' | 'P' => {
+                'p' | 'P' if unicode => {
                     if *i < chars.len() && chars[*i] == '{' {
                         *i += 1;
                         while *i < chars.len() && chars[*i] != '}' {
@@ -3867,6 +3984,35 @@ fn validate_v_flag_class_inner(
     err("Unterminated character class")
 }
 
+/// If `chars[open]` is `{` and it begins a syntactically valid quantifier body
+/// (`{n}`, `{n,}`, `{n,m}`, each requiring at least one leading digit per
+/// ECMA-262 QuantifierPrefix), returns the index just past the closing `}`.
+/// Otherwise returns `None`, meaning Annex B treats the brace as an ordinary
+/// literal character (`ExtendedPatternCharacter`) rather than a quantifier.
+fn quantifier_brace_end(chars: &[char], open: usize, len: usize) -> Option<usize> {
+    let mut j = open + 1;
+    let min_start = j;
+    while j < len && chars[j].is_ascii_digit() {
+        j += 1;
+    }
+    if j == min_start {
+        return None;
+    }
+    if j < len && chars[j] == '}' {
+        return Some(j + 1);
+    }
+    if j < len && chars[j] == ',' {
+        j += 1;
+        while j < len && chars[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j < len && chars[j] == '}' {
+            return Some(j + 1);
+        }
+    }
+    None
+}
+
 pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), String> {
     let unicode = flags.contains('u') || flags.contains('v');
     let v_flag = flags.contains('v');
@@ -4330,7 +4476,7 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
                     }
 
                     let save_i = i;
-                    let val = resolve_class_escape(&chars, &mut i);
+                    let val = resolve_class_escape(&chars, &mut i, unicode);
                     let is_class_esc = val.is_none()
                         && save_i < len
                         && chars[save_i] == '\\'
@@ -4465,25 +4611,11 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
                                 source
                             ));
                         }
-                        if qc == '{' {
-                            let mut j = i + 1;
-                            let mut is_quant = false;
-                            while j < len {
-                                if chars[j] == '}' {
-                                    is_quant = true;
-                                    break;
-                                }
-                                if !chars[j].is_ascii_digit() && chars[j] != ',' {
-                                    break;
-                                }
-                                j += 1;
-                            }
-                            if is_quant {
-                                return Err(format!(
-                                    "Invalid regular expression: /{}/ : Nothing to repeat",
-                                    source
-                                ));
-                            }
+                        if qc == '{' && quantifier_brace_end(&chars, i, len).is_some() {
+                            return Err(format!(
+                                "Invalid regular expression: /{}/ : Nothing to repeat",
+                                source
+                            ));
                         }
                     }
                     has_atom = false;
@@ -4510,30 +4642,16 @@ pub(crate) fn validate_js_pattern(source: &str, flags: &str) -> Result<(), Strin
         if c == '*' || c == '+' || c == '?' || c == '{' {
             if !has_atom {
                 // Check if '{' is really a quantifier
-                if c == '{' {
-                    let mut j = i + 1;
-                    let mut is_quant = false;
-                    while j < len {
-                        if chars[j] == '}' {
-                            is_quant = true;
-                            break;
-                        }
-                        if !chars[j].is_ascii_digit() && chars[j] != ',' {
-                            break;
-                        }
-                        j += 1;
+                if c == '{' && quantifier_brace_end(&chars, i, len).is_none() {
+                    if unicode {
+                        return Err(format!(
+                            "Invalid regular expression: /{}/ : Lone quantifier brackets",
+                            source
+                        ));
                     }
-                    if !is_quant {
-                        if unicode {
-                            return Err(format!(
-                                "Invalid regular expression: /{}/ : Lone quantifier brackets",
-                                source
-                            ));
-                        }
-                        has_atom = true;
-                        i += 1;
-                        continue;
-                    }
+                    has_atom = true;
+                    i += 1;
+                    continue;
                 }
                 return Err(format!(
                     "Invalid regular expression: /{}/ : Nothing to repeat",
@@ -4774,6 +4892,7 @@ pub(crate) struct CachedRegex {
     compiled: CompiledRegex,
     dup_map: DupGroupMap,
     name_order: Vec<String>,
+    total_groups: usize,
 }
 
 const REGEX_CACHE_MAX: usize = 256;
@@ -4792,6 +4911,7 @@ fn build_regex_cached(
         compiled,
         dup_map,
         name_order,
+        total_groups: count_capture_groups(source),
     });
     if interp.regexp_legacy.regex_cache.len() >= REGEX_CACHE_MAX {
         interp.regexp_legacy.regex_cache.clear();
@@ -5049,31 +5169,34 @@ fn build_quantified_parent_map(
         if chars[i] == ')' {
             if let Some(group_idx) = group_stack.pop() {
                 groups_info[group_idx].end_pos = i;
-                // Check if followed by a quantifier
+                // Check if followed by a quantifier. A '{' only counts if it
+                // genuinely opens one (Annex B literal forms like `{0,foo}`
+                // must not be mistaken for a real min-zero quantifier).
                 let next = i + 1;
-                if next < len
+                let is_quant = next < len
                     && (chars[next] == '*'
                         || chars[next] == '+'
                         || chars[next] == '?'
-                        || chars[next] == '{')
-                {
+                        || (chars[next] == '{'
+                            && quantifier_brace_end(&chars, next, len).is_some()));
+                if is_quant {
                     groups_info[group_idx].is_quantified = true;
                     let min_zero = match chars[next] {
                         '*' | '?' => true,
                         '{' => {
-                            // Parse {N,...} to check if N == 0
+                            // Already confirmed valid above; parse the leading
+                            // DecimalDigits to check if the minimum is 0.
                             let mut k = next + 1;
                             let ns = k;
                             while k < len && chars[k].is_ascii_digit() {
                                 k += 1;
                             }
-                            if k > ns {
-                                let n: u32 =
-                                    chars[ns..k].iter().collect::<String>().parse().unwrap_or(1);
-                                n == 0
-                            } else {
-                                false
-                            }
+                            chars[ns..k]
+                                .iter()
+                                .collect::<String>()
+                                .parse::<u32>()
+                                .unwrap_or(1)
+                                == 0
                         }
                         _ => false, // '+'
                     };
@@ -5829,12 +5952,170 @@ fn is_assertion_only_content(chars: &[char], start: usize, end: usize) -> bool {
 
 /// Per spec §22.2.2.6.1 step 2.b: when a nullable group body (one that can
 /// match the empty string) is quantified with `*` or `+`, an iteration that
-/// matches empty must fail.  fancy-regex stops the loop instead of
-/// backtracking, so we convert lazy min-0 quantifiers (`??`, `*?`) inside
-/// nullable bodies to greedy, forcing them to consume characters.
-fn fix_nullable_quantifiers(source: &str) -> String {
-    if !source.contains("??") && !source.contains("*?") {
-        return source.to_string();
+/// matches empty must fail. `regex`/fancy-regex stop the loop instead of
+/// backtracking, so:
+/// - a single-alternative nullable body has its lazy min-0 quantifiers
+///   (`??`, `*?`) converted to greedy, forcing them to consume characters
+///   (greedy sub-quantifiers already prefer to consume as much as possible,
+///   so this alone is enough — see nq_mark_lazy).
+/// - a multi-alternative (`|`) nullable body additionally needs each
+///   individually-nullable branch to be prevented from ever contributing a
+///   zero-width "success" that pre-empts a sibling branch able to consume at
+///   this position (e.g. `(a*|dc??)*` on "dc"). Branches that reduce to a
+///   single quantified atom (`a*`, `a?`, `a{0,n}`) are rewritten to forbid
+///   zero occurrences (`a+`, `a`, `a{1,n}`) — this only removes the
+///   discarded empty match, identical otherwise — while non-nullable sibling
+///   branches are left untouched (previously *all* branches were stripped of
+///   laziness regardless of nullability, which is wrong on its own; see
+///   jsse#370). A bare group atom with no quantifier of its own (`(a*)`) is
+///   nullable-checked and fixed by recursing into its own top-level
+///   alternation/sequence (jsse#373, nq_fix_branch's `(` case). A branch that
+///   can only ever match empty — a bare empty alternative (`(|a)*`), or a
+///   single atom with an exact-zero quantifier (`a{0}`, `a{0,0}`) — is
+///   spliced out of the alternation entirely (jsse#373, nq_branch_always_empty
+///   / nq_delete_branch) rather than bumped. Several jointly-optional atoms
+///   (`a?b?`, jointly nullable only because every atom is individually
+///   optional) are expanded into an alternation requiring the
+///   first-consuming atom to be present (jsse#373,
+///   nq_expand_joint_optional), e.g. `a?b?` -> `(?:ab?|b)`. The splice and
+///   expansion rewrites both bail out (falling back to the lazy-strip only,
+///   same as before jsse#373) whenever a capturing group is involved —
+///   deleting or duplicating one would silently renumber every later
+///   capture group.
+/// - positive-minimum outer quantifiers use internal iteration sentinels. A
+///   nullable branch keeps a gated empty path for the first `min` iterations,
+///   then only its consuming rewrite remains. The sentinels are defined after
+///   all JavaScript capture groups and stripped from the result, preserving
+///   numeric capture/backreference indices and last-iteration captures
+///   (jsse#378).
+const NQ_MAX_ITERATION_SENTINELS: usize = 64;
+
+struct NullableQuantifierRewrite {
+    source: String,
+    sentinel_names: HashSet<String>,
+}
+
+struct NqOuterQuantifier {
+    min: usize,
+    max: Option<usize>,
+}
+
+impl NqOuterQuantifier {
+    fn has_post_min_iteration(&self) -> bool {
+        self.max.is_none_or(|max| max > self.min)
+    }
+}
+
+fn nq_outer_quantifier(chars: &[char], pos: usize, end: usize) -> Option<NqOuterQuantifier> {
+    if pos >= end {
+        return None;
+    }
+    match chars[pos] {
+        '*' => Some(NqOuterQuantifier { min: 0, max: None }),
+        '+' => Some(NqOuterQuantifier { min: 1, max: None }),
+        '?' => Some(NqOuterQuantifier {
+            min: 0,
+            max: Some(1),
+        }),
+        '{' => {
+            let brace_end = quantifier_brace_end(chars, pos, end)?;
+            let comma = chars[pos + 1..brace_end - 1]
+                .iter()
+                .position(|&c| c == ',')
+                .map(|offset| pos + 1 + offset);
+            let min_end = comma.unwrap_or(brace_end - 1);
+            let min = chars[pos + 1..min_end]
+                .iter()
+                .collect::<String>()
+                .parse::<usize>()
+                .ok()?;
+            let max = match comma {
+                None => Some(min),
+                Some(comma_pos) if comma_pos + 1 == brace_end - 1 => None,
+                Some(comma_pos) => Some(
+                    chars[comma_pos + 1..brace_end - 1]
+                        .iter()
+                        .collect::<String>()
+                        .parse::<usize>()
+                        .ok()?,
+                ),
+            };
+            Some(NqOuterQuantifier { min, max })
+        }
+        _ => None,
+    }
+}
+
+fn nq_is_nested_in_repeated_group(chars: &[char], open_pos: usize, close_of: &[usize]) -> bool {
+    close_of
+        .iter()
+        .enumerate()
+        .any(|(ancestor_open, &ancestor_close)| {
+            ancestor_open < open_pos
+                && ancestor_close > open_pos
+                && nq_outer_quantifier(chars, ancestor_close + 1, chars.len())
+                    .is_some_and(|quantifier| quantifier.max.is_none_or(|max| max > 1))
+        })
+}
+
+fn nq_iteration_setter(names: &[String]) -> String {
+    let Some((name, rest)) = names.split_first() else {
+        return String::new();
+    };
+    format!(
+        "(?(<{name}>){rest_setter}|\\g<{name}>)",
+        rest_setter = nq_iteration_setter(rest)
+    )
+}
+
+fn nq_empty_gate(name: &str) -> String {
+    format!("(?(<{name}>)(?!)|)")
+}
+
+fn nq_iteration_names(source: &str, state_id: &mut usize, min: usize) -> Vec<String> {
+    loop {
+        let id = *state_id;
+        *state_id += 1;
+        let names: Vec<String> = (1..=min)
+            .map(|iteration| format!("__jsse_qi_nq{id}_{iteration}"))
+            .collect();
+        if names.iter().all(|name| !source.contains(name)) {
+            return names;
+        }
+    }
+}
+
+fn nq_has_source_backreference(chars: &[char]) -> bool {
+    let mut i = 0;
+    let mut in_cc = false;
+    while i < chars.len() {
+        match chars[i] {
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '\\' if !in_cc && i + 1 < chars.len() => {
+                if matches!(chars[i + 1], '1'..='9')
+                    || (chars[i + 1] == 'k' && i + 2 < chars.len() && chars[i + 2] == '<')
+                {
+                    return true;
+                }
+                i += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+fn fix_nullable_quantifiers(
+    source: &str,
+    stateful_positive_minimum: bool,
+) -> NullableQuantifierRewrite {
+    if !source.contains('|') && !source.contains("??") && !source.contains("*?") {
+        return NullableQuantifierRewrite {
+            source: source.to_string(),
+            sentinel_names: HashSet::new(),
+        };
     }
 
     let chars: Vec<char> = source.chars().collect();
@@ -5865,6 +6146,12 @@ fn fix_nullable_quantifiers(source: &str) -> String {
     }
 
     let mut remove = vec![false; len];
+    let mut replace: HashMap<usize, char> = HashMap::new();
+    let mut span_replace: HashMap<usize, (usize, String)> = HashMap::new();
+    let mut insert_at: Vec<Vec<String>> = vec![Vec::new(); len + 1];
+    let mut sentinel_names: Vec<String> = Vec::new();
+    let mut state_id = 0usize;
+    let has_source_backreference = nq_has_source_backreference(&chars);
 
     for open_pos in 0..len {
         if chars[open_pos] != '(' || close_of[open_pos] == 0 {
@@ -5872,7 +6159,10 @@ fn fix_nullable_quantifiers(source: &str) -> String {
         }
         let close = close_of[open_pos];
         let after = close + 1;
-        if after >= len || !matches!(chars[after], '*' | '+') {
+        let Some(outer_quantifier) = nq_outer_quantifier(&chars, after, len) else {
+            continue;
+        };
+        if !outer_quantifier.has_post_min_iteration() {
             continue;
         }
         // Find body start (skip group type prefix)
@@ -5880,21 +6170,734 @@ fn fix_nullable_quantifiers(source: &str) -> String {
         if body_start >= close {
             continue;
         }
-        if nq_is_nullable(&chars, body_start, close, &close_of) {
-            nq_mark_lazy(&chars, body_start, close, &close_of, &mut remove);
+
+        let branches = nq_split_branches(&chars, body_start, close);
+        if outer_quantifier.min > 0
+            && (!stateful_positive_minimum
+                || outer_quantifier.min > NQ_MAX_ITERATION_SENTINELS
+                || nq_is_nested_in_repeated_group(&chars, open_pos, &close_of)
+                || (has_source_backreference && nq_branch_has_capture(&chars, body_start, close)))
+        {
+            // Preserve the pre-jsse#378 `+` fallback when stateful conditions
+            // are unavailable (notably the byte matcher), the minimum would
+            // require attacker-controlled source expansion, or a containing
+            // repetition could enter this quantifier more than once, or an
+            // inner source capture is observable by a backreference. Backend
+            // captures cannot be unset between iterations, so sentinels would
+            // either leak their mandatory-iteration state into the next entry
+            // or compound the backend's stale-backreference limitation.
+            if chars[after] != '+' {
+                continue;
+            }
+            let mut gate_used = false;
+            nq_fix_branches(
+                &chars,
+                &branches,
+                &close_of,
+                false,
+                None,
+                &mut replace,
+                &mut remove,
+                &mut span_replace,
+                &mut insert_at,
+                &mut gate_used,
+            );
+            continue;
+        }
+        if outer_quantifier.min == 0 && outer_quantifier.max.is_none() && branches.len() == 1 {
+            // No top-level alternation: greedy sub-quantifiers already
+            // consume maximally, so only lazy ones need forcing.
+            if nq_is_nullable(&chars, body_start, close, &close_of) {
+                nq_mark_lazy(&chars, body_start, close, &close_of, &mut remove);
+            }
+            continue;
+        }
+
+        let iteration_names = if outer_quantifier.min == 0 {
+            Vec::new()
+        } else {
+            nq_iteration_names(source, &mut state_id, outer_quantifier.min)
+        };
+        let empty_gate = iteration_names.last().map(|name| nq_empty_gate(name));
+        let mut gate_used = false;
+        nq_fix_branches(
+            &chars,
+            &branches,
+            &close_of,
+            true,
+            empty_gate.as_deref(),
+            &mut replace,
+            &mut remove,
+            &mut span_replace,
+            &mut insert_at,
+            &mut gate_used,
+        );
+        if gate_used {
+            insert_at[body_start].insert(0, "(?:".to_string());
+            insert_at[close].push(")".to_string());
+            insert_at[close].push(nq_iteration_setter(&iteration_names));
+            sentinel_names.extend(iteration_names);
         }
     }
 
-    if !remove.iter().any(|&r| r) {
-        return source.to_string();
+    if !remove.iter().any(|&r| r)
+        && replace.is_empty()
+        && span_replace.is_empty()
+        && sentinel_names.is_empty()
+    {
+        return NullableQuantifierRewrite {
+            source: source.to_string(),
+            sentinel_names: HashSet::new(),
+        };
     }
     let mut result = String::with_capacity(len);
-    for i in 0..len {
-        if !remove[i] {
-            result.push(chars[i]);
+    let mut i = 0;
+    while i < len {
+        for text in &insert_at[i] {
+            result.push_str(text);
+        }
+        if let Some((send, text)) = span_replace.get(&i) {
+            result.push_str(text);
+            i = *send;
+            continue;
+        }
+        if remove[i] {
+            i += 1;
+            continue;
+        }
+        match replace.get(&i) {
+            Some(&c) => result.push(c),
+            None => result.push(chars[i]),
+        }
+        i += 1;
+    }
+    for text in &insert_at[len] {
+        result.push_str(text);
+    }
+    if !sentinel_names.is_empty() {
+        result.push_str("(?(DEFINE)");
+        for name in &sentinel_names {
+            result.push_str(&format!("(?<{name}>)"));
+        }
+        result.push(')');
+    }
+    NullableQuantifierRewrite {
+        source: result,
+        sentinel_names: sentinel_names.into_iter().collect(),
+    }
+}
+
+#[cfg(test)]
+mod nullable_quantifier_rewrite_tests {
+    use super::fix_nullable_quantifiers;
+
+    #[test]
+    fn bounded_min_zero_preserves_inner_laziness() {
+        assert_eq!(fix_nullable_quantifiers("(a*?)?", true).source, "(a+?)?");
+        assert_eq!(
+            fix_nullable_quantifiers("(a*?){0,2}", true).source,
+            "(a+?){0,2}"
+        );
+    }
+
+    #[test]
+    fn backreferenced_inner_captures_bypass_sentinels() {
+        let with_backreference = fix_nullable_quantifiers("^(a*|(d)){2,3}(e)\\2", true);
+        assert!(with_backreference.sentinel_names.is_empty());
+
+        let capture_only = fix_nullable_quantifiers("^(a*|(d)){2,3}(e)", true);
+        assert!(!capture_only.sentinel_names.is_empty());
+    }
+}
+
+/// Process a full set of top-level alternation branches: for each nullable
+/// branch, prevent it from ever contributing a zero-width "success" that
+/// pre-empts a sibling branch able to consume input at this position (spec
+/// §22.2.2.6.1 step 2.b). A branch that can only ever match empty — a bare
+/// empty alternative (`(|a)*`), or a single atom with an exact-zero
+/// quantifier (`a{0}`, `a{0,0}`) — is spliced out entirely (itself plus one
+/// adjacent `|`) rather than bumped, provided it contains no capturing group
+/// (splicing one out would silently renumber every later capture, jsse#373).
+/// Returns true if anything was touched.
+fn nq_fix_branches(
+    chars: &[char],
+    branches: &[(usize, usize)],
+    close_of: &[usize],
+    allow_bump: bool,
+    empty_gate: Option<&str>,
+    replace: &mut HashMap<usize, char>,
+    remove: &mut [bool],
+    span_replace: &mut HashMap<usize, (usize, String)>,
+    insert_at: &mut [Vec<String>],
+    gate_used: &mut bool,
+) -> bool {
+    let mut touched = false;
+    for (idx, &(bstart, bend)) in branches.iter().enumerate() {
+        if bstart >= bend {
+            // A bare empty alternative contains no capturing group by
+            // construction, so splicing it out is always capture-safe.
+            if let Some(gate) = empty_gate {
+                insert_at[bstart].push(gate.to_string());
+                *gate_used = true;
+                touched = true;
+            } else if allow_bump {
+                nq_delete_branch(branches, idx, remove);
+                touched = true;
+            }
+            continue;
+        }
+        if !nq_is_nullable(chars, bstart, bend, close_of) {
+            continue;
+        }
+        if allow_bump && nq_branch_always_empty(chars, bstart, bend, close_of) {
+            if let Some(gate) = empty_gate {
+                insert_at[bstart].push(format!("(?:{gate}(?:"));
+                insert_at[bend].push("))".to_string());
+                *gate_used = true;
+            } else if !nq_branch_has_capture(chars, bstart, bend) {
+                nq_delete_branch(branches, idx, remove);
+            } else {
+                continue;
+            }
+            touched = true;
+            continue;
+        }
+        if nq_fix_branch(
+            chars,
+            bstart,
+            bend,
+            close_of,
+            allow_bump,
+            empty_gate,
+            replace,
+            remove,
+            span_replace,
+            insert_at,
+            gate_used,
+        ) {
+            touched = true;
         }
     }
-    result
+    touched
+}
+
+/// Remove branch `idx`'s own text plus one adjacent `|`, splicing it out of
+/// its alternation entirely.
+fn nq_delete_branch(branches: &[(usize, usize)], idx: usize, remove: &mut [bool]) {
+    let (bstart, bend) = branches[idx];
+    remove[bstart..bend].fill(true);
+    if idx + 1 < branches.len() {
+        remove[bend] = true; // the `|` immediately after this branch
+    } else if idx > 0 {
+        remove[bstart - 1] = true; // the `|` immediately before this branch
+    }
+}
+
+/// Whether `chars[start..end]` can ONLY ever match the empty string — never
+/// anything else, regardless of input. True for a single atom with an
+/// exact-zero quantifier (`a{0}`, `a{0,0}`), or (recursively) a bare group
+/// with no quantifier of its own whose every top-level branch is itself
+/// always-empty. Callers must additionally confirm the caller already knows
+/// the span is nullable; this only distinguishes "always empty" from
+/// "sometimes empty, sometimes not" within that.
+fn nq_branch_always_empty(chars: &[char], start: usize, end: usize, close_of: &[usize]) -> bool {
+    if start >= end {
+        return true;
+    }
+    let atom_end = match chars[start] {
+        '\\' if start + 1 < end => start + 2,
+        '[' => {
+            let mut j = start + 1;
+            while j < end && chars[j] != ']' {
+                if chars[j] == '\\' && j + 1 < end {
+                    j += 1;
+                }
+                j += 1;
+            }
+            if j < end { j + 1 } else { j }
+        }
+        '(' => {
+            let close = close_of[start];
+            if close > 0 && close < end {
+                close + 1
+            } else {
+                end
+            }
+        }
+        _ => start + 1,
+    };
+    if let Some(q_end) = nq_exact_zero_quant_end(chars, atom_end, end)
+        && q_end == end
+    {
+        return true;
+    }
+    if chars[start] == '(' && atom_end == end {
+        let close = close_of[start];
+        if close > 0 {
+            let interior_start = nq_body_start(chars, start);
+            if interior_start < close {
+                return nq_split_branches(chars, interior_start, close)
+                    .into_iter()
+                    .all(|(bs, be)| nq_branch_always_empty(chars, bs, be, close_of));
+            }
+        }
+    }
+    false
+}
+
+/// If `chars[pos..end]` starts with an exact-zero quantifier (`{0}` or
+/// `{0,0}`, optionally lazy), return the position right after it.
+fn nq_exact_zero_quant_end(chars: &[char], pos: usize, end: usize) -> Option<usize> {
+    if pos >= end || chars[pos] != '{' {
+        return None;
+    }
+    let brace_end = quantifier_brace_end(chars, pos, end)?;
+    let digit_start = pos + 1;
+    let mut digit_end = digit_start;
+    while digit_end < brace_end && chars[digit_end].is_ascii_digit() {
+        digit_end += 1;
+    }
+    if digit_end == digit_start
+        || chars[digit_start..digit_end]
+            .iter()
+            .collect::<String>()
+            .parse::<u32>()
+            .unwrap_or(1)
+            != 0
+    {
+        return None;
+    }
+    let is_exact = digit_end == brace_end - 1;
+    let max_is_zero = !is_exact
+        && digit_end < brace_end
+        && chars[digit_end] == ','
+        && digit_end + 1 != brace_end - 1
+        && chars[digit_end + 1..brace_end - 1]
+            .iter()
+            .collect::<String>()
+            .parse::<u32>()
+            .unwrap_or(1)
+            == 0;
+    if !is_exact && !max_is_zero {
+        return None;
+    }
+    let mut q_end = brace_end;
+    if q_end < end && chars[q_end] == '?' {
+        q_end += 1;
+    }
+    Some(q_end)
+}
+
+/// Whether `chars[start..end]` contains a capturing group anywhere within it
+/// (including nested inside other groups). Non-capturing forms — `(?:...)`,
+/// lookaround assertions, and (deliberately, conservatively) any other
+/// `(?...)` form this engine doesn't specifically recognize as capturing —
+/// are excluded; a plain `(...)` or named `(?<name>...)` counts.
+fn nq_branch_has_capture(chars: &[char], start: usize, end: usize) -> bool {
+    let mut i = start;
+    let mut in_cc = false;
+    while i < end {
+        match chars[i] {
+            '\\' if !in_cc && i + 1 < end => {
+                i += 2;
+                continue;
+            }
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '(' if !in_cc && nq_group_is_capturing(chars, i) => return true,
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
+fn nq_group_is_capturing(chars: &[char], open: usize) -> bool {
+    let len = chars.len();
+    if open + 1 >= len || chars[open + 1] != '?' {
+        return true; // plain `(...)`
+    }
+    if open + 2 < len && chars[open + 2] == '<' {
+        // `(?<=...)`/`(?<!...)` are lookbehind assertions; `(?<name>...)` is
+        // a named CAPTURING group.
+        return !(open + 3 < len && matches!(chars[open + 3], '=' | '!'));
+    }
+    false // `(?:...)`, `(?=...)`, `(?!...)` — non-capturing
+}
+
+/// Apply the nullable-branch treatment to one alternation branch that is
+/// nullable but not unconditionally empty. Returns true if the branch was
+/// touched (bumped, fixed via recursion, or lazy-stripped).
+fn nq_fix_branch(
+    chars: &[char],
+    bstart: usize,
+    bend: usize,
+    close_of: &[usize],
+    allow_bump: bool,
+    empty_gate: Option<&str>,
+    replace: &mut HashMap<usize, char>,
+    remove: &mut [bool],
+    span_replace: &mut HashMap<usize, (usize, String)>,
+    insert_at: &mut [Vec<String>],
+    gate_used: &mut bool,
+) -> bool {
+    let empty_first = nq_bare_atom_quantifier_is_lazy(chars, bstart, bend, close_of);
+    if allow_bump && nq_bump_bare_atom_min(chars, bstart, bend, close_of, replace, remove) {
+        if let Some(gate) = empty_gate {
+            if empty_first {
+                insert_at[bstart].push(format!("(?:{gate}|"));
+                insert_at[bend].push(")".to_string());
+            } else {
+                insert_at[bstart].push("(?:".to_string());
+                insert_at[bend].push(format!("|{gate})"));
+            }
+            *gate_used = true;
+        }
+        return true;
+    }
+    // Several jointly-optional atoms (e.g. `a?b?`) rather than one — expand
+    // into an alternation that requires the first-consuming atom to be
+    // present (jsse#373), unless a capturing group is involved (splicing
+    // atoms across new branches would renumber captures).
+    if allow_bump
+        && !nq_branch_has_capture(chars, bstart, bend)
+        && let Some(text) = nq_expand_joint_optional(chars, bstart, bend, close_of, empty_gate)
+    {
+        *gate_used |= empty_gate.is_some();
+        span_replace.insert(bstart, (bend, text));
+        return true;
+    }
+    // Not a single quantified atom, but still nullable. If the branch is
+    // exactly one group with no quantifier of its own, the nullability came
+    // from the group's own interior (mirrors nq_is_nullable's `(` handling)
+    // — recurse the same per-branch treatment into it (jsse#373).
+    if allow_bump && chars[bstart] == '(' {
+        let close = close_of[bstart];
+        if close > 0 && close + 1 == bend {
+            let interior_start = nq_body_start(chars, bstart);
+            if interior_start < close {
+                let interior_branches = nq_split_branches(chars, interior_start, close);
+                if nq_fix_branches(
+                    chars,
+                    &interior_branches,
+                    close_of,
+                    allow_bump,
+                    empty_gate,
+                    replace,
+                    remove,
+                    span_replace,
+                    insert_at,
+                    gate_used,
+                ) {
+                    return true;
+                }
+            }
+        }
+    }
+    nq_mark_lazy(chars, bstart, bend, close_of, remove)
+}
+
+fn nq_bare_atom_quantifier_is_lazy(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    close_of: &[usize],
+) -> bool {
+    if start >= end {
+        return false;
+    }
+    let atom_end = match chars[start] {
+        '\\' if start + 1 < end => start + 2,
+        '[' => {
+            let mut j = start + 1;
+            while j < end && chars[j] != ']' {
+                if chars[j] == '\\' && j + 1 < end {
+                    j += 1;
+                }
+                j += 1;
+            }
+            if j < end { j + 1 } else { j }
+        }
+        '(' => {
+            let close = close_of[start];
+            if close > 0 && close < end {
+                close + 1
+            } else {
+                return false;
+            }
+        }
+        _ => start + 1,
+    };
+    if atom_end >= end {
+        return false;
+    }
+    let quantifier_end = match chars[atom_end] {
+        '?' | '*' | '+' => atom_end + 1,
+        '{' => match quantifier_brace_end(chars, atom_end, end) {
+            Some(end) => end,
+            None => return false,
+        },
+        _ => return false,
+    };
+    quantifier_end + 1 == end && chars[quantifier_end] == '?'
+}
+
+/// If `chars[start..end]` is a sequence of two or more atoms, each with its
+/// own min-0 quantifier (e.g. `a?b?`, `a*b?c{0,2}`), jointly nullable only
+/// because every atom is individually optional, build a replacement that
+/// requires the first-consuming atom to be present while leaving the rest as
+/// optional as before — e.g. `a?b?` -> `(?:ab?|b)`: atoms before the chosen
+/// one are dropped (matching them having occurred zero times), the chosen
+/// atom's own quantifier floor is bumped by one (reusing
+/// nq_bump_bare_atom_min), and atoms after it are left as-is. This preserves
+/// every non-empty match the sequence could produce (spec §22.2.2.6.1 step
+/// 2.b only discards the fully-empty iteration) while forbidding the
+/// all-absent case. Returns None if the span isn't this shape.
+fn nq_expand_joint_optional(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    close_of: &[usize],
+    empty_gate: Option<&str>,
+) -> Option<String> {
+    let mut atoms: Vec<(usize, usize)> = Vec::new();
+    let mut i = start;
+    while i < end {
+        let atom_end = match chars[i] {
+            '\\' if i + 1 < end => i + 2,
+            '[' => {
+                let mut j = i + 1;
+                while j < end && chars[j] != ']' {
+                    if chars[j] == '\\' && j + 1 < end {
+                        j += 1;
+                    }
+                    j += 1;
+                }
+                if j < end { j + 1 } else { j }
+            }
+            '(' => {
+                let close = close_of[i];
+                if close == 0 || close >= end {
+                    return None;
+                }
+                close + 1
+            }
+            '^' | '$' => return None, // zero-width assertions aren't quantifiable atoms here
+            _ => i + 1,
+        };
+        if !nq_has_min0(chars, atom_end, end) {
+            return None;
+        }
+        let quant_end = nq_skip_quant(chars, atom_end, end);
+        atoms.push((i, quant_end));
+        i = quant_end;
+    }
+    if atoms.len() < 2 {
+        return None; // single-atom case is nq_bump_bare_atom_min's job
+    }
+
+    let mut consuming_choices: Vec<(String, bool)> = Vec::with_capacity(atoms.len());
+    for (k, &(astart, aend)) in atoms.iter().enumerate() {
+        let mut a_replace: HashMap<usize, char> = HashMap::new();
+        let mut a_remove = vec![false; chars.len()];
+        if !nq_bump_bare_atom_min(chars, astart, aend, close_of, &mut a_replace, &mut a_remove) {
+            return None; // shouldn't happen — a min-0 quantifier was just confirmed
+        }
+        let mut piece = String::new();
+        for idx in astart..aend {
+            if a_remove[idx] {
+                continue;
+            }
+            piece.push(*a_replace.get(&idx).unwrap_or(&chars[idx]));
+        }
+        for &(bstart, bend) in &atoms[k + 1..] {
+            piece.extend(chars[bstart..bend].iter());
+        }
+        consuming_choices.push((
+            piece,
+            nq_bare_atom_quantifier_is_lazy(chars, astart, aend, close_of),
+        ));
+    }
+
+    // Each optional atom contributes a consume-vs-skip choice. Preserve that
+    // decision tree exactly: a greedy atom's consuming choice precedes the
+    // recursively expanded skip path, while a lazy atom's choice follows it.
+    // The gated all-skipped leaf therefore lands at its source priority,
+    // which may be first, last, or between consuming alternatives.
+    let mut branches = std::collections::VecDeque::with_capacity(
+        consuming_choices.len() + usize::from(empty_gate.is_some()),
+    );
+    if let Some(gate) = empty_gate {
+        branches.push_back(gate.to_string());
+    }
+    for (piece, lazy) in consuming_choices.into_iter().rev() {
+        if lazy {
+            branches.push_back(piece);
+        } else {
+            branches.push_front(piece);
+        }
+    }
+    Some(format!(
+        "(?:{})",
+        branches.into_iter().collect::<Vec<_>>().join("|")
+    ))
+}
+
+/// Split `chars[start..end]` into top-level alternative branches (spans),
+/// on `|` not nested inside `(...)`/`[...]` and not escaped.
+fn nq_split_branches(chars: &[char], start: usize, end: usize) -> Vec<(usize, usize)> {
+    let mut branches = Vec::new();
+    let mut branch_start = start;
+    let mut i = start;
+    let mut depth = 0i32;
+    let mut in_cc = false;
+    while i < end {
+        match chars[i] {
+            '\\' if i + 1 < end => {
+                i += 2;
+                continue;
+            }
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '(' if !in_cc => depth += 1,
+            ')' if !in_cc => depth -= 1,
+            '|' if !in_cc && depth == 0 => {
+                branches.push((branch_start, i));
+                branch_start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    branches.push((branch_start, end));
+    branches
+}
+
+/// If `chars[start..end]` is exactly one atom followed by a single min-0
+/// quantifier (`*`, `?`, or `{0,n}`, greedy or lazy) spanning to `end` with
+/// nothing else in the branch, rewrite that quantifier's lower bound to 1.
+/// This forbids the branch from ever matching empty while leaving every
+/// non-empty match it could produce untouched — exactly the iteration that
+/// spec §22.2.2.6.1 step 2.b would discard anyway. Returns false (no
+/// changes) if the branch isn't this exact bare-atom shape.
+fn nq_bump_bare_atom_min(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    close_of: &[usize],
+    replace: &mut HashMap<usize, char>,
+    remove: &mut [bool],
+) -> bool {
+    if start >= end {
+        return false;
+    }
+    let atom_end = match chars[start] {
+        '\\' if start + 1 < end => start + 2,
+        '[' => {
+            let mut j = start + 1;
+            while j < end && chars[j] != ']' {
+                if chars[j] == '\\' && j + 1 < end {
+                    j += 1;
+                }
+                j += 1;
+            }
+            if j < end { j + 1 } else { j }
+        }
+        '(' => {
+            let close = close_of[start];
+            if close > 0 && close < end {
+                close + 1
+            } else {
+                end
+            }
+        }
+        _ => start + 1,
+    };
+    if atom_end >= end {
+        return false;
+    }
+    match chars[atom_end] {
+        '*' => {
+            let mut q_end = atom_end + 1;
+            if q_end < end && chars[q_end] == '?' {
+                q_end += 1;
+            }
+            if q_end != end {
+                return false;
+            }
+            replace.insert(atom_end, '+');
+            true
+        }
+        '?' => {
+            let mut q_end = atom_end + 1;
+            let lazy = q_end < end && chars[q_end] == '?';
+            if lazy {
+                q_end += 1;
+            }
+            if q_end != end {
+                return false;
+            }
+            remove[atom_end] = true;
+            if lazy {
+                remove[atom_end + 1] = true;
+            }
+            true
+        }
+        '{' => {
+            let brace_end = match quantifier_brace_end(chars, atom_end, end) {
+                Some(e) => e,
+                None => return false,
+            };
+            let mut q_end = brace_end;
+            if q_end < end && chars[q_end] == '?' {
+                q_end += 1;
+            }
+            if q_end != end {
+                return false;
+            }
+            let digit_start = atom_end + 1;
+            let mut digit_end = digit_start;
+            while digit_end < brace_end && chars[digit_end].is_ascii_digit() {
+                digit_end += 1;
+            }
+            if digit_end == digit_start {
+                return false;
+            }
+            let min_val: u32 = chars[digit_start..digit_end]
+                .iter()
+                .collect::<String>()
+                .parse()
+                .unwrap_or(1);
+            if min_val != 0 {
+                return false;
+            }
+            // "}" right after the min digits means an exact-count {0} quantifier —
+            // always empty, no max to bump against; leave it to the lazy-strip fallback.
+            let max_is_zero = if digit_end < brace_end && chars[digit_end] == ',' {
+                let max_start = digit_end + 1;
+                let max_end = brace_end - 1; // position of the closing '}'
+                if max_start == max_end {
+                    false // "{0,}" — unbounded
+                } else {
+                    chars[max_start..max_end]
+                        .iter()
+                        .collect::<String>()
+                        .parse::<u32>()
+                        .unwrap_or(1)
+                        == 0
+                }
+            } else {
+                true
+            };
+            if max_is_zero {
+                return false;
+            }
+            remove[digit_start..digit_end - 1].fill(true);
+            replace.insert(digit_end - 1, '1');
+            true
+        }
+        _ => false,
+    }
 }
 
 fn nq_body_start(chars: &[char], open: usize) -> usize {
@@ -5923,15 +6926,20 @@ fn nq_body_start(chars: &[char], open: usize) -> usize {
 
 /// Check whether the regex segment chars[start..end] can match the empty string.
 fn nq_is_nullable(chars: &[char], start: usize, end: usize, close_of: &[usize]) -> bool {
+    // A top-level alternation is nullable iff any branch is (an empty branch
+    // is trivially nullable). Recurse per branch rather than short-circuiting
+    // on the first one — a later branch may be nullable even if an earlier
+    // one isn't.
+    let branches = nq_split_branches(chars, start, end);
+    if branches.len() > 1 {
+        return branches
+            .into_iter()
+            .any(|(bstart, bend)| bstart >= bend || nq_is_nullable(chars, bstart, bend, close_of));
+    }
+
     let mut i = start;
     while i < end {
         match chars[i] {
-            '|' => {
-                // Left alternative was all nullable (we got here without returning false).
-                // If ANY alternative is nullable, the whole alternation is nullable.
-                // Skip right side — it's nullable if left side was.
-                return true;
-            }
             '\\' if i + 1 < end => {
                 let atom_end = i + 2;
                 if !nq_has_min0(chars, atom_end, end) {
@@ -5959,7 +6967,19 @@ fn nq_is_nullable(chars: &[char], start: usize, end: usize, close_of: &[usize]) 
                     return false;
                 }
                 let atom_end = close + 1;
-                if !nq_has_min0(chars, atom_end, end) {
+                if nq_has_min0(chars, atom_end, end) {
+                    i = nq_skip_quant(chars, atom_end, end);
+                    continue;
+                }
+                // No min-0 quantifier directly on the group (possibly no
+                // quantifier at all, or one with a nonzero minimum). A single
+                // occurrence can still match empty if the group's own
+                // interior can — e.g. `(a*)`, or `(a*){2,3}` where each of
+                // the required occurrences may itself match empty.
+                let interior_start = nq_body_start(chars, i);
+                if interior_start >= close
+                    || !nq_is_nullable(chars, interior_start, close, close_of)
+                {
                     return false;
                 }
                 i = nq_skip_quant(chars, atom_end, end);
@@ -5986,8 +7006,25 @@ fn nq_has_min0(chars: &[char], pos: usize, end: usize) -> bool {
     match chars[pos] {
         '?' | '*' => true,
         '{' => {
-            // {0,...}
-            pos + 1 < end && chars[pos + 1] == '0'
+            // {0,...} — but only a genuinely valid quantifier; Annex B
+            // literal forms like `{0,foo}` are not quantifiers at all and
+            // must not make the preceding atom look nullable.
+            match quantifier_brace_end(chars, pos, end) {
+                Some(_) => {
+                    let mut j = pos + 1;
+                    let digit_start = j;
+                    while j < end && chars[j].is_ascii_digit() {
+                        j += 1;
+                    }
+                    chars[digit_start..j]
+                        .iter()
+                        .collect::<String>()
+                        .parse::<u32>()
+                        .unwrap_or(1)
+                        == 0
+                }
+                None => false,
+            }
         }
         _ => false,
     }
@@ -6022,7 +7059,14 @@ fn nq_skip_quant(chars: &[char], pos: usize, end: usize) -> usize {
 }
 
 /// Mark lazy modifiers (`?` after `?` or `*`) for removal in nullable bodies.
-fn nq_mark_lazy(chars: &[char], start: usize, end: usize, close_of: &[usize], remove: &mut [bool]) {
+fn nq_mark_lazy(
+    chars: &[char],
+    start: usize,
+    end: usize,
+    close_of: &[usize],
+    remove: &mut [bool],
+) -> bool {
+    let mut touched = false;
     let mut i = start;
     while i < end {
         let atom_end = match chars[i] {
@@ -6057,18 +7101,35 @@ fn nq_mark_lazy(chars: &[char], start: usize, end: usize, close_of: &[usize], re
             let lazy_pos = atom_end + 1;
             if lazy_pos < end && chars[lazy_pos] == '?' {
                 remove[lazy_pos] = true;
+                touched = true;
             }
         }
         i = nq_skip_quant(chars, atom_end, end);
     }
+    touched
 }
 
 fn build_regex_ex(
     source: &str,
     flags: &str,
 ) -> Result<(CompiledRegex, DupGroupMap, Vec<String>), String> {
-    let source = fix_nullable_quantifiers(source);
-    let tr = translate_js_pattern_ex(&source, flags)?;
+    build_regex_ex_with_nullable_state(source, flags, true)
+}
+
+fn build_regex_ex_with_nullable_state(
+    source: &str,
+    flags: &str,
+    stateful_positive_minimum: bool,
+) -> Result<(CompiledRegex, DupGroupMap, Vec<String>), String> {
+    let original_source = source;
+    let rewrite = fix_nullable_quantifiers(original_source, stateful_positive_minimum);
+    let tr =
+        translate_js_pattern_ex_with_sentinels(&rewrite.source, flags, &rewrite.sentinel_names)?;
+    if tr.needs_bytes_mode && !rewrite.sentinel_names.is_empty() {
+        return build_regex_ex_with_nullable_state(original_source, flags, false);
+    }
+    let retry_without_sentinels = stateful_positive_minimum && !rewrite.sentinel_names.is_empty();
+    let source = rewrite.source;
     let dup_map = tr.dup_group_map;
     let name_order = tr.group_name_order;
 
@@ -6110,6 +7171,9 @@ fn build_regex_ex(
                     try_build_custom_lookbehind(&source, flags, dup_map.clone(), name_order.clone())
             {
                 return Ok(result);
+            }
+            if retry_without_sentinels {
+                return build_regex_ex_with_nullable_state(original_source, flags, false);
             }
             regex::Regex::new(&tr.pattern)
                 .map(|r| (CompiledRegex::Standard(r), dup_map, name_order))
@@ -6213,6 +7277,16 @@ macro_rules! build_captures {
         }
         Some(RegexCaptures { groups, names })
     }};
+}
+
+fn ensure_capture_slots(caps: &mut RegexCaptures, total_groups: usize) {
+    let expected_len = total_groups + 1;
+    if caps.groups.len() < expected_len {
+        caps.groups.resize_with(expected_len, || None);
+    }
+    if caps.names.len() < expected_len {
+        caps.names.resize_with(expected_len, || None);
+    }
 }
 
 fn regex_captures_at(re: &CompiledRegex, text: &str, pos: usize) -> Option<RegexCaptures> {
@@ -6845,6 +7919,7 @@ fn regexp_exec_raw(
     clear_stale_dup_captures(&mut caps, &cached.dup_map);
     strip_renamed_qi_captures(&mut caps);
     reset_quantifier_inner_captures(&mut caps, source);
+    ensure_capture_slots(&mut caps, cached.total_groups);
     let dup_map = &cached.dup_map;
     let name_order = &cached.name_order;
 
@@ -6911,7 +7986,7 @@ fn regexp_exec_raw(
         }
     }
 
-    let has_named = caps.names.iter().any(|n| n.is_some());
+    let has_named = !name_order.is_empty();
     let resolved_named = if has_named {
         Some(resolve_named_group_matches(&caps, dup_map, name_order))
     } else {
@@ -7781,6 +8856,7 @@ impl Interpreter {
                         clear_stale_dup_captures(&mut caps, &cached.dup_map);
                         strip_renamed_qi_captures(&mut caps);
                         reset_quantifier_inner_captures(&mut caps, &source);
+                        ensure_capture_slots(&mut caps, cached.total_groups);
 
                         let full_match = caps.get(0).unwrap();
                         let matched = &full_match.text;
@@ -7810,7 +8886,7 @@ impl Interpreter {
                         }
 
                         // Named captures
-                        let has_named = caps.names.iter().any(|n| n.is_some());
+                        let has_named = !cached.name_order.is_empty();
                         let named_captures_obj = if has_named {
                             let groups_obj_id = interp.create_object_id();
                             interp
@@ -8823,7 +9899,8 @@ impl Interpreter {
                             interp.create_iter_result_object(JsValue::Undefined, true),
                         )
                     }
-                    Some(caps) => {
+                    Some(mut caps) => {
+                        ensure_capture_slots(&mut caps, count_capture_groups(&source));
                         let full = caps.get(0).unwrap();
                         let match_start = last_index + full.start;
                         let match_end = last_index + full.end;

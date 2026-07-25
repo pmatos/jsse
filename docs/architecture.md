@@ -1,6 +1,9 @@
 # JSSE Architecture Overview
 
-JSSE is a from-scratch JavaScript engine in Rust. The execution model is a direct AST-walking interpreter: source text is tokenized, parsed into an AST, and evaluated without a bytecode or JIT layer.
+JSSE is a from-scratch JavaScript engine in Rust. The default execution model is
+a direct AST-walking interpreter. An experimental `--bytecode` mode compiles
+eligible function Bodies to stack bytecode and conservatively falls back to the
+tree-walker for unsupported syntax.
 
 ## Pipeline
 
@@ -17,7 +20,7 @@ Source (.js file / -e string / REPL)
     src/ast.rs
         |
         v
-    src/interpreter/
+    src/interpreter/ -------- eligible function Body --------> bytecode VM
         |
         v
     stdout / exit code
@@ -68,7 +71,12 @@ The interpreter lives under `src/interpreter/` and is split across runtime subsy
 - `src/interpreter/types.rs`: runtime object, environment, and completion types
 - `src/interpreter/helpers.rs`: coercion, equality, JSON, date, and other shared helpers
 - `src/interpreter/gc.rs`: mark-and-sweep garbage collection
+- `src/interpreter/bytecode/`: opt-in compiler, Chunk format, and stack VM
 - `src/interpreter/builtins/`: built-in constructors, prototypes, and related runtime support
+
+The bytecode compiler has a whole-Body eligibility seam: compilation either
+produces a complete Chunk or marks that function object ineligible. It never
+mixes bytecode and AST evaluation within a single invocation.
 
 Key runtime responsibilities:
 

@@ -27887,7 +27887,7 @@ const BINARY_ASSIGNED: &[(u32, u32)] = &[
     (0x100000, 0x10FFFD),
 ];
 
-pub fn lookup_property(content: &str) -> Option<&'static [(u32, u32)]> {
+pub(crate) fn lookup_property(content: &str) -> Option<&'static [(u32, u32)]> {
     if let Some(eq_pos) = content.find('=') {
         let prop_name = &content[..eq_pos];
         let prop_value = &content[eq_pos + 1..];

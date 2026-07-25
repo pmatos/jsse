@@ -70,39 +70,80 @@ pub(crate) fn to_number(val: &JsValue) -> f64 {
     }
 }
 
+// §12 WhiteSpace | LineTerminator — the set trimmed from a StrNumericLiteral and
+// by String.prototype.trim / parseInt / parseFloat. Kept here, in the spec
+// conversions module, as the single canonical predicate every consumer shares.
+// (Distinct from Rust's `char::is_whitespace`, which adds U+0085 and omits U+FEFF.)
+pub(crate) fn is_ecma_whitespace(ch: char) -> bool {
+    matches!(
+        ch,
+        '\u{0009}'
+            | '\u{000A}'
+            | '\u{000B}'
+            | '\u{000C}'
+            | '\u{000D}'
+            | '\u{0020}'
+            | '\u{00A0}'
+            | '\u{FEFF}'
+            | '\u{1680}'
+            | '\u{2000}'
+            ..='\u{200A}' | '\u{2028}' | '\u{2029}' | '\u{202F}' | '\u{205F}' | '\u{3000}'
+    )
+}
+
+// Parse the digits of a §7.1.4.1 NonDecimalIntegerLiteral (0x / 0o / 0b) as an
+// exact integer, then convert it to f64 once. Parsing through the exact decimal
+// representation gives Rust's float parser the full mathematical value to round,
+// avoiding both fixed-width overflow and intermediate floating-point rounding.
+// Empty or invalid input → NaN.
+fn radix_digits_to_f64(digits: &str, radix: u32) -> f64 {
+    if digits.is_empty() || !digits.chars().all(|ch| ch.is_digit(radix)) {
+        return f64::NAN;
+    }
+    num_bigint::BigUint::parse_bytes(digits.as_bytes(), radix)
+        .and_then(|exact| exact.to_string().parse::<f64>().ok())
+        .unwrap_or(f64::NAN)
+}
+
 // §7.1.4.1.1 StringToNumber (uses §7.1.4.1.2 RoundMVResult via f64::parse)
 fn string_to_number(s: &JsString) -> f64 {
     let rust_str = s.to_rust_string();
-    // ECMA-262 §12.2 WhiteSpace includes <ZWNBSP> (U+FEFF), which Rust's
-    // char::is_whitespace omits (Unicode classifies it as Format, not White_Space).
-    let trimmed = rust_str.trim_matches(|c: char| c.is_whitespace() || c == '\u{FEFF}');
+    let trimmed = rust_str.trim_matches(is_ecma_whitespace);
     if trimmed.is_empty() {
         return 0.0;
     }
-    if trimmed.starts_with("0x") || trimmed.starts_with("0X") {
-        return i64::from_str_radix(&trimmed[2..], 16)
-            .map(|n| n as f64)
-            .unwrap_or(f64::NAN);
+    // NonDecimalIntegerLiteral: no sign is permitted, so a leading '+'/'-' keeps
+    // the string out of these branches and it falls through to StrDecimalLiteral.
+    if let Some(rest) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return radix_digits_to_f64(rest, 16);
     }
-    if trimmed.starts_with("0o") || trimmed.starts_with("0O") {
-        return i64::from_str_radix(&trimmed[2..], 8)
-            .map(|n| n as f64)
-            .unwrap_or(f64::NAN);
+    if let Some(rest) = trimmed
+        .strip_prefix("0o")
+        .or_else(|| trimmed.strip_prefix("0O"))
+    {
+        return radix_digits_to_f64(rest, 8);
     }
-    if trimmed.starts_with("0b") || trimmed.starts_with("0B") {
-        return i64::from_str_radix(&trimmed[2..], 2)
-            .map(|n| n as f64)
-            .unwrap_or(f64::NAN);
+    if let Some(rest) = trimmed
+        .strip_prefix("0b")
+        .or_else(|| trimmed.strip_prefix("0B"))
+    {
+        return radix_digits_to_f64(rest, 2);
     }
-    if trimmed == "Infinity" || trimmed == "+Infinity" {
-        return f64::INFINITY;
+    // StrDecimalLiteral: the only Infinity token is exactly "Infinity" (with an
+    // optional sign). Every other inf/nan spelling Rust's f64 parser would accept
+    // must be NaN, so reject them before handing off to `parse`.
+    match trimmed {
+        "Infinity" | "+Infinity" => return f64::INFINITY,
+        "-Infinity" => return f64::NEG_INFINITY,
+        _ => {}
     }
-    if trimmed == "-Infinity" {
-        return f64::NEG_INFINITY;
-    }
-    if trimmed.eq_ignore_ascii_case("infinity")
-        || trimmed.eq_ignore_ascii_case("+infinity")
-        || trimmed.eq_ignore_ascii_case("-infinity")
+    let unsigned = trimmed.strip_prefix(['+', '-']).unwrap_or(trimmed);
+    if unsigned.eq_ignore_ascii_case("inf")
+        || unsigned.eq_ignore_ascii_case("infinity")
+        || unsigned.eq_ignore_ascii_case("nan")
     {
         return f64::NAN;
     }
@@ -786,7 +827,7 @@ pub(crate) fn json_trim(s: &str) -> &str {
 pub(crate) type SourceTextMap = HashMap<(u64, JsPropertyKey), String>;
 
 pub(crate) fn json_parse_value(interp: &mut Interpreter, s: &str) -> Completion {
-    json_parse_value_inner(interp, s, None)
+    json_parse_value_inner(interp, s, None, s)
 }
 
 pub(crate) fn json_parse_value_with_source(
@@ -794,7 +835,7 @@ pub(crate) fn json_parse_value_with_source(
     s: &str,
 ) -> (Completion, SourceTextMap) {
     let mut source_map = SourceTextMap::default();
-    let result = json_parse_value_inner(interp, s, Some(&mut source_map));
+    let result = json_parse_value_inner(interp, s, Some(&mut source_map), s);
     (result, source_map)
 }
 
@@ -802,6 +843,7 @@ fn json_parse_value_inner(
     interp: &mut Interpreter,
     s: &str,
     mut source_map: Option<&mut SourceTextMap>,
+    root_source: &str,
 ) -> Completion {
     let s = json_trim(s);
     if s == "null" {
@@ -828,15 +870,14 @@ fn json_parse_value_inner(
     }
     if s.starts_with('[') && s.ends_with(']') {
         let inner = &s[1..s.len() - 1];
-        if json_has_invalid_comma(inner) {
-            let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
-            return Completion::Throw(err);
+        if let Some(token) = json_invalid_comma_token(inner, ']') {
+            return json_unexpected_token_error(interp, token, root_source);
         }
         let items = json_split_items(inner);
         let mut parsed_items: Vec<(JsValue, String)> = Vec::new();
         for item in &items {
             let trimmed_src = json_trim(item).to_string();
-            match json_parse_value_inner(interp, item, source_map.as_deref_mut()) {
+            match json_parse_value_inner(interp, item, source_map.as_deref_mut(), root_source) {
                 Completion::Normal(v) => parsed_items.push((v, trimmed_src)),
                 other => return other,
             }
@@ -857,9 +898,8 @@ fn json_parse_value_inner(
     }
     if s.starts_with('{') && s.ends_with('}') {
         let inner = &s[1..s.len() - 1];
-        if json_has_invalid_comma(inner) {
-            let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
-            return Completion::Throw(err);
+        if let Some(token) = json_invalid_comma_token(inner, '}') {
+            return json_unexpected_token_error(interp, token, root_source);
         }
         let pairs = json_split_items(inner);
         let obj_id = interp.create_object_id();
@@ -889,7 +929,7 @@ fn json_parse_value_inner(
                 return Completion::Throw(err);
             };
             let val_src = json_trim(val_str).to_string();
-            match json_parse_value_inner(interp, val_str, source_map.as_deref_mut()) {
+            match json_parse_value_inner(interp, val_str, source_map.as_deref_mut(), root_source) {
                 Completion::Normal(v) => {
                     if let Some(ref mut smap) = source_map
                         && is_json_primitive(&v)
@@ -906,8 +946,31 @@ fn json_parse_value_inner(
         }
         return Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }));
     }
+    if let Some(token) = s.chars().next() {
+        return json_unexpected_token_error(interp, token, root_source);
+    }
     let err = interp.create_error("SyntaxError", "Unexpected token in JSON");
     Completion::Throw(err)
+}
+
+fn json_unexpected_token_error(interp: &mut Interpreter, token: char, source: &str) -> Completion {
+    const MAX_SOURCE_CHARS: usize = 20;
+    const TRUNCATED_SOURCE_CHARS: usize = 10;
+
+    let (source, ellipsis) = if source.chars().nth(MAX_SOURCE_CHARS).is_some() {
+        let prefix_end = source
+            .char_indices()
+            .nth(TRUNCATED_SOURCE_CHARS)
+            .map_or(source.len(), |(index, _)| index);
+        (&source[..prefix_end], "...")
+    } else {
+        (source, "")
+    };
+    let message = format!(
+        "Unexpected token '{}', \"{}\"{} is not valid JSON",
+        token, source, ellipsis
+    );
+    Completion::Throw(interp.create_error("SyntaxError", &message))
 }
 
 pub(crate) fn is_json_primitive(val: &JsValue) -> bool {
@@ -1246,10 +1309,10 @@ fn json_is_valid_number(s: &str) -> bool {
     i == bytes.len()
 }
 
-fn json_has_invalid_comma(inner: &str) -> bool {
+fn json_invalid_comma_token(inner: &str, closing_token: char) -> Option<char> {
     let trimmed = json_trim(inner);
     if trimmed.is_empty() {
-        return false;
+        return None;
     }
     let mut depth = 0i32;
     let mut in_string = false;
@@ -1283,7 +1346,7 @@ fn json_has_invalid_comma(inner: &str) -> bool {
             }
             ',' if depth == 0 => {
                 if prev_was_comma {
-                    return true; // double comma or leading comma
+                    return Some(','); // double comma or leading comma
                 }
                 prev_was_comma = true;
             }
@@ -1293,7 +1356,16 @@ fn json_has_invalid_comma(inner: &str) -> bool {
             }
         }
     }
-    prev_was_comma // trailing comma
+    if !prev_was_comma {
+        return None;
+    }
+
+    let before_comma = trimmed.strip_suffix(',').map(json_trim).unwrap_or_default();
+    if closing_token == '}' && before_comma.ends_with(':') {
+        Some(',')
+    } else {
+        Some(closing_token)
+    }
 }
 
 pub(crate) fn json_split_items(s: &str) -> Vec<String> {
@@ -1515,18 +1587,166 @@ pub(crate) fn time_clip(time: f64) -> f64 {
     if t == 0.0 { 0.0_f64 } else { t }
 }
 
-pub(crate) fn local_tza() -> f64 {
-    use chrono::Local;
-    let now = Local::now();
-    now.offset().local_minus_utc() as f64 * 1000.0
+fn resolve_system_time_zone() -> chrono_tz::Tz {
+    let parse = |identifier: &str| {
+        let identifier = identifier.strip_prefix(':').unwrap_or(identifier);
+        identifier.parse::<chrono_tz::Tz>().ok().or_else(|| {
+            chrono_tz::TZ_VARIANTS
+                .iter()
+                .copied()
+                .find(|tz| tz.name().eq_ignore_ascii_case(identifier))
+        })
+    };
+
+    if let Some(tz) = std::env::var("TZ").ok().and_then(|tz| parse(&tz)) {
+        return tz;
+    }
+    if let Some(tz) = iana_time_zone::get_timezone()
+        .ok()
+        .and_then(|tz| parse(&tz))
+    {
+        return tz;
+    }
+    chrono_tz::UTC
+}
+
+fn system_time_zone() -> chrono_tz::Tz {
+    use std::sync::OnceLock;
+
+    static SYSTEM_TIME_ZONE: OnceLock<chrono_tz::Tz> = OnceLock::new();
+    *SYSTEM_TIME_ZONE.get_or_init(resolve_system_time_zone)
+}
+
+pub(crate) fn system_time_zone_identifier() -> String {
+    system_time_zone().name().to_string()
+}
+
+fn time_zone_datetime_from_time_value(t: f64) -> Option<chrono::NaiveDateTime> {
+    use chrono::Datelike;
+
+    if !t.is_finite() {
+        return None;
+    }
+    let epoch_ms = t.floor() as i64;
+    let epoch_secs = epoch_ms.div_euclid(1000);
+    let nanos = epoch_ms.rem_euclid(1000) as u32 * 1_000_000;
+    let direct = chrono::DateTime::from_timestamp(epoch_secs, nanos).map(|dt| dt.naive_utc());
+
+    // chrono-tz's generated transition tables include recurring rules through
+    // 2099. Beyond that they retain the final fixed offset, so project future
+    // dates onto the last complete 28-year calendar cycle instead.
+    if direct.as_ref().is_some_and(|dt| dt.year() <= 2099) {
+        return direct;
+    }
+
+    // A time before chrono's range also precedes every recorded IANA
+    // transition. Its earliest datetime therefore selects the zone's first
+    // historical offset.
+    if t.is_sign_negative() {
+        return Some(chrono::NaiveDateTime::MIN);
+    }
+
+    let year = year_from_time(t);
+    if !(i32::MIN as f64..=i32::MAX as f64).contains(&year) {
+        return None;
+    }
+    let year = year as i32;
+    let year_start_weekday = week_day(time_from_year(year as f64));
+    let days_in_target_year = days_in_year(year as f64);
+    let proxy_year = (2072..=2099).rev().find(|candidate| {
+        days_in_year(*candidate as f64) == days_in_target_year
+            && week_day(time_from_year(*candidate as f64)) == year_start_weekday
+    })?;
+
+    chrono::NaiveDate::from_ymd_opt(
+        proxy_year,
+        month_from_time(t) as u32 + 1,
+        date_from_time(t) as u32,
+    )?
+    .and_hms_milli_opt(
+        hour_from_time(t) as u32,
+        min_from_time(t) as u32,
+        sec_from_time(t) as u32,
+        ms_from_time(t) as u32,
+    )
+}
+
+pub(crate) fn named_time_zone_offset_ms(time_zone: chrono_tz::Tz, t: f64) -> Option<f64> {
+    use chrono::{Offset, TimeZone};
+
+    let utc = time_zone_datetime_from_time_value(t)?;
+    Some(
+        time_zone
+            .offset_from_utc_datetime(&utc)
+            .fix()
+            .local_minus_utc() as f64
+            * 1000.0,
+    )
+}
+
+pub(crate) fn local_tza(t: f64) -> f64 {
+    named_time_zone_offset_ms(system_time_zone(), t).unwrap_or(0.0)
 }
 
 pub(crate) fn local_time(t: f64) -> f64 {
-    t + local_tza()
+    t + local_tza(t)
 }
 
 pub(crate) fn utc_time(t: f64) -> f64 {
-    t - local_tza()
+    use chrono::{MappedLocalTime, Offset, TimeDelta, TimeZone};
+
+    let Some(local) = time_zone_datetime_from_time_value(t) else {
+        return t;
+    };
+    let tz = system_time_zone();
+    let offset = match tz.offset_from_local_datetime(&local) {
+        MappedLocalTime::Single(offset) => offset.fix().local_minus_utc(),
+        MappedLocalTime::Ambiguous(first, second) => {
+            // The larger offset maps the repeated local time to the earlier
+            // instant, matching possibleInstants[0] in UTC.
+            first
+                .fix()
+                .local_minus_utc()
+                .max(second.fix().local_minus_utc())
+        }
+        MappedLocalTime::None => {
+            let mut offset_before = None;
+            for minutes in 1..=2 * 24 * 60 {
+                let Some(probe) = local.checked_sub_signed(TimeDelta::minutes(minutes)) else {
+                    break;
+                };
+                match tz.offset_from_local_datetime(&probe) {
+                    MappedLocalTime::Single(offset) => {
+                        offset_before = Some(offset.fix().local_minus_utc());
+                        break;
+                    }
+                    MappedLocalTime::Ambiguous(first, second) => {
+                        // The smaller offset maps the repeated local time to
+                        // the later instant, the last possible instant before
+                        // a gap.
+                        offset_before = Some(
+                            first
+                                .fix()
+                                .local_minus_utc()
+                                .min(second.fix().local_minus_utc()),
+                        );
+                        break;
+                    }
+                    MappedLocalTime::None => {}
+                }
+            }
+            offset_before.unwrap_or(0)
+        }
+    };
+    t - offset as f64 * 1000.0
+}
+
+fn local_time_zone_abbreviation(t: f64) -> String {
+    use chrono::TimeZone;
+
+    time_zone_datetime_from_time_value(t)
+        .map(|dt| system_time_zone().offset_from_utc_datetime(&dt).to_string())
+        .unwrap_or_else(system_time_zone_identifier)
 }
 
 /// Shared final step of every `Date.prototype.set*` method: combine a day
@@ -1599,14 +1819,14 @@ pub(crate) fn format_date_string(t: f64) -> String {
     let min = min_from_time(lt);
     let s = sec_from_time(lt);
 
-    let offset_ms = local_tza();
+    let offset_ms = local_tza(t);
     let offset_min = (offset_ms / 60_000.0) as i32;
     let sign = if offset_min >= 0 { '+' } else { '-' };
     let abs_offset = offset_min.unsigned_abs();
     let oh = abs_offset / 60;
     let om = abs_offset % 60;
 
-    let tz_abbr = chrono::Local::now().format("%Z").to_string();
+    let tz_abbr = local_time_zone_abbreviation(t);
     format!(
         "{} {} {:02} {} {:02}:{:02}:{:02} GMT{}{:02}{:02} ({})",
         day_name(wd),
@@ -1697,14 +1917,14 @@ pub(crate) fn format_time_only_string(t: f64) -> String {
     let min = min_from_time(lt);
     let s = sec_from_time(lt);
 
-    let offset_ms = local_tza();
+    let offset_ms = local_tza(t);
     let offset_min = (offset_ms / 60_000.0) as i32;
     let sign = if offset_min >= 0 { '+' } else { '-' };
     let abs_offset = offset_min.unsigned_abs();
     let oh = abs_offset / 60;
     let om = abs_offset % 60;
 
-    let tz_abbr = chrono::Local::now().format("%Z").to_string();
+    let tz_abbr = local_time_zone_abbreviation(t);
     format!(
         "{:02}:{:02}:{:02} GMT{}{:02}{:02} ({})",
         h as i32, min as i32, s as i32, sign, oh, om, tz_abbr
@@ -2403,5 +2623,102 @@ mod make_date_clipped_tests {
         let v = make_date_clipped(0.0, 0.0, false);
         assert_eq!(v, 0.0);
         assert!(v.is_sign_positive());
+    }
+}
+
+#[cfg(test)]
+mod string_to_number_tests {
+    // §7.1.4.1 StringToNumber. Expected values below are the independent source
+    // of truth from ECMA-262 §12 (WhiteSpace) and §7.1.4.1 (StrNumericLiteral),
+    // cross-checked against node's `Number(...)`.
+    use super::string_to_number;
+    use crate::types::JsString;
+
+    fn n(s: &str) -> f64 {
+        string_to_number(&JsString::from_str(s))
+    }
+
+    #[test]
+    fn trims_exactly_the_ecmascript_whitespace_set() {
+        // In the ECMAScript StrWhiteSpace set (trimmed): must yield 1.
+        for ws in [
+            "\u{0009}", // TAB
+            "\u{000A}", // LF
+            "\u{000B}", // VT
+            "\u{000C}", // FF
+            "\u{000D}", // CR
+            "\u{0020}", // SP
+            "\u{00A0}", // NBSP
+            "\u{FEFF}", // ZWNBSP
+            "\u{1680}", // OGHAM SPACE MARK
+            "\u{2000}", // EN QUAD
+            "\u{200A}", // HAIR SPACE
+            "\u{2028}", // LINE SEPARATOR
+            "\u{2029}", // PARAGRAPH SEPARATOR
+            "\u{202F}", // NNBSP
+            "\u{205F}", // MMSP
+            "\u{3000}", // IDEOGRAPHIC SPACE
+        ] {
+            assert_eq!(
+                n(&format!("{ws}1{ws}")),
+                1.0,
+                "U+{:04X} must be trimmed",
+                ws.chars().next().unwrap() as u32
+            );
+        }
+        assert_eq!(n("\t\n\r 5 \t\n\r"), 5.0);
+    }
+
+    #[test]
+    fn does_not_trim_non_ecmascript_whitespace() {
+        // U+0085 NEL is in Rust's White_Space but NOT ECMAScript's set.
+        assert!(n("\u{0085}1").is_nan());
+        // U+200B ZERO WIDTH SPACE is not whitespace in either.
+        assert!(n("\u{200B}1").is_nan());
+    }
+
+    #[test]
+    fn infinity_is_case_sensitive_and_only_the_full_word() {
+        assert_eq!(n("Infinity"), f64::INFINITY);
+        assert_eq!(n("+Infinity"), f64::INFINITY);
+        assert_eq!(n("-Infinity"), f64::NEG_INFINITY);
+        // Every other inf/nan spelling Rust's float parser accepts must be NaN.
+        for s in [
+            "inf", "+inf", "-inf", "INF", "infinity", "INFINITY", "nan", "NaN", "NAN",
+        ] {
+            assert!(n(s).is_nan(), "Number({s:?}) must be NaN");
+        }
+    }
+
+    #[test]
+    fn non_decimal_integer_literals() {
+        assert_eq!(n("0x10"), 16.0);
+        assert_eq!(n("0X1F"), 31.0);
+        assert_eq!(n("0o17"), 15.0);
+        assert_eq!(n("0b101"), 5.0);
+        // Large hex must round to the nearest f64, not overflow to NaN.
+        assert_eq!(n("0x10000000000000000"), 2f64.powi(64));
+        // Convert the exact integer once: incremental f64 accumulation can
+        // double-round these values one ULP below their correct result.
+        assert_eq!(n("0x6269e107215582e"), 443_215_406_813_239_360.0);
+        assert_eq!(n("0x200000000000011"), 2f64.powi(57) + 32.0);
+        // Empty digits, bad digits, and a leading sign are all NaN.
+        for s in [
+            "0x", "0o", "0b", "0xG", "0o8", "0b2", "0x1_0", "0o1_0", "0b1_0", "+0x1", "-0x1",
+        ] {
+            assert!(n(s).is_nan(), "Number({s:?}) must be NaN");
+        }
+    }
+
+    #[test]
+    fn decimals_and_empty() {
+        assert_eq!(n(""), 0.0);
+        assert_eq!(n("   "), 0.0);
+        assert_eq!(n("  12.5  "), 12.5);
+        assert_eq!(n("1e3"), 1000.0);
+        assert_eq!(n(".5"), 0.5);
+        assert_eq!(n("5."), 5.0);
+        assert_eq!(n("-0"), 0.0);
+        assert!(n("-0").is_sign_negative());
     }
 }

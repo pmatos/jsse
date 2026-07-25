@@ -2,7 +2,7 @@ use super::super::*;
 
 /// Convert an f64 integer value to a BigInt, handling the full range of
 /// IEEE 754 double-precision values (not just the i64 range).
-pub fn f64_to_bigint(n: f64) -> num_bigint::BigInt {
+pub(crate) fn f64_to_bigint(n: f64) -> num_bigint::BigInt {
     if n == 0.0 {
         return num_bigint::BigInt::from(0);
     }
@@ -136,20 +136,7 @@ impl Interpreter {
         }
 
         // @@toStringTag
-        let tag_key = self
-            .get_symbol_key("toStringTag")
-            .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                tag_key,
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("BigInt")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(proto_id, "BigInt");
 
         // BigInt() — is a constructor but throws TypeError when called with new
         self.register_global_fn(

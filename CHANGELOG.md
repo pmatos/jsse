@@ -1,3 +1,119 @@
+## [0.4.10](https://github.com/pmatos/jsse/compare/v0.4.9...v0.4.10) (2026-07-25)
+
+
+### Bug Fixes
+
+* **interpreter:** invoke primitive optional-chain getters ([#394](https://github.com/pmatos/jsse/issues/394)) ([c29d70c](https://github.com/pmatos/jsse/commit/c29d70c269e7c0758722f197a78d1e921f6b0a57))
+* **interpreter:** randomize environment binding hashing ([#393](https://github.com/pmatos/jsse/issues/393)) ([1945998](https://github.com/pmatos/jsse/commit/1945998a95de45882282fb602e00e90e90fa2757))
+* **regexp:** honor nullable priority under positive quantifiers ([#395](https://github.com/pmatos/jsse/issues/395)) ([a903e16](https://github.com/pmatos/jsse/commit/a903e16e7a9aa69e009a2bece35896f6a9f4bbeb))
+
+
+### Performance Improvements
+
+* **interpreter:** collapse local binding writes to one lookup ([#396](https://github.com/pmatos/jsse/issues/396)) ([d34ae92](https://github.com/pmatos/jsse/commit/d34ae921db4203476747caf2f3b1d0729e62776f))
+
+## [0.4.9](https://github.com/pmatos/jsse/compare/v0.4.8...v0.4.9) (2026-07-25)
+
+
+### Performance Improvements
+
+* **interpreter:** use FxHashMap for environment bindings ([#389](https://github.com/pmatos/jsse/issues/389)) ([05cddd3](https://github.com/pmatos/jsse/commit/05cddd375643d9c49fe7ebba0f4d1358b55eefb0))
+
+## [0.4.8](https://github.com/pmatos/jsse/compare/v0.4.7...v0.4.8) (2026-07-24)
+
+
+### Bug Fixes
+
+* **interpreter:** deepen the String-exotic index predicate into string_exotic_index ([#383](https://github.com/pmatos/jsse/issues/383)) ([e334585](https://github.com/pmatos/jsse/commit/e334585e42812c0d919ed578b78b541ed0a6a8b4))
+
+## [0.4.7](https://github.com/pmatos/jsse/compare/v0.4.6...v0.4.7) (2026-07-24)
+
+
+### Bug Fixes
+
+* **date:** honor TZ as the system time zone ([#379](https://github.com/pmatos/jsse/issues/379)) ([2eb7009](https://github.com/pmatos/jsse/commit/2eb7009b98a3c54c181c495760164d3cede490b5))
+* **json:** include token context in parse errors ([#382](https://github.com/pmatos/jsse/issues/382)) ([3b6a03a](https://github.com/pmatos/jsse/commit/3b6a03a35ceed5bdbe9aa924ace6f83d18adf778))
+* **node-shim:** match Node %s object dispatch ([#380](https://github.com/pmatos/jsse/issues/380)) ([01537c0](https://github.com/pmatos/jsse/commit/01537c00cdae09f288ce1405af9cfd34dbc7717f))
+* **regexp:** preserve exact-zero capture slots ([#381](https://github.com/pmatos/jsse/issues/381)) ([c957b1c](https://github.com/pmatos/jsse/commit/c957b1cb42fc95c096b90494906878ae8d60ebe0))
+
+## [0.4.6](https://github.com/pmatos/jsse/compare/v0.4.5...v0.4.6) (2026-07-23)
+
+
+### Bug Fixes
+
+* **regexp:** close residual nullable-alternation gaps ([#376](https://github.com/pmatos/jsse/issues/376)) ([1d578bc](https://github.com/pmatos/jsse/commit/1d578bc4a2a3bd0676294ec663c0e629b67ddac8))
+
+## [0.4.5](https://github.com/pmatos/jsse/compare/v0.4.4...v0.4.5) (2026-07-23)
+
+
+### Bug Fixes
+
+* **interpreter:** clear tail-call eligibility by default in eval_expr ([#372](https://github.com/pmatos/jsse/issues/372)) ([716a5d0](https://github.com/pmatos/jsse/commit/716a5d06a08a7fa457a6fc06701291381cee9647))
+* **regexp:** scope nullable-quantifier rewrite to nullable alternation branches ([#374](https://github.com/pmatos/jsse/issues/374)) ([8aa5729](https://github.com/pmatos/jsse/commit/8aa5729604699b815d7c518dde00d54482ab9a5c))
+
+## [0.4.4](https://github.com/pmatos/jsse/compare/v0.4.3...v0.4.4) (2026-07-23)
+
+
+### Bug Fixes
+
+* **intl:** strip redundant script subtags in locale resolution ([#367](https://github.com/pmatos/jsse/issues/367)) ([687dbc1](https://github.com/pmatos/jsse/commit/687dbc1661943ddbca119abae98ede485b5c3e80))
+* **regexp:** treat non-quantifier { as Annex B literal ([#368](https://github.com/pmatos/jsse/issues/368)) ([a9b7f60](https://github.com/pmatos/jsse/commit/a9b7f607a5444ba4999dcb18e6c630b3ebf35956))
+
+## [0.4.3](https://github.com/pmatos/jsse/compare/v0.4.2...v0.4.3) (2026-07-23)
+
+
+### Bug Fixes
+
+* **interpreter:** guard boxing/error constructors against [[Call]] this-mutation ([#369](https://github.com/pmatos/jsse/issues/369)) ([a1f9351](https://github.com/pmatos/jsse/commit/a1f93516e93a47dbbb2b1df036ec451c286b147c))
+
+## [0.4.2](https://github.com/pmatos/jsse/compare/v0.4.1...v0.4.2) (2026-07-23)
+
+
+### Bug Fixes
+
+* **interpreter:** deepen StringToNumber; concentrate the WhiteSpace predicate ([96ac1b0](https://github.com/pmatos/jsse/commit/96ac1b08890d20039d7c10de321fa4990cd86388))
+* **interpreter:** round non-decimal strings exactly ([7f2a516](https://github.com/pmatos/jsse/commit/7f2a51683fe8cff27e0c05cef2582dfd8cc78514))
+
+## [0.4.1](https://github.com/pmatos/jsse/compare/v0.4.0...v0.4.1) (2026-07-22)
+
+
+### Bug Fixes
+
+* **regexp:** respect unicode mode for property escapes ([b19c344](https://github.com/pmatos/jsse/commit/b19c3443aea0ebb7537f6cc570fb5f8e3c0a997f))
+
+# [0.4.0](https://github.com/pmatos/jsse/compare/v0.3.0...v0.4.0) (2026-07-21)
+
+
+### Bug Fixes
+
+* **scripts:** compare both key sets in non-strict assert.deepEqual ([1d9175c](https://github.com/pmatos/jsse/commit/1d9175cf0ed865d28a9b13ea6752c4ce7a2ab469))
+
+
+### Features
+
+* **scripts:** add esprima Node-compat library harness ([#295](https://github.com/pmatos/jsse/issues/295)) ([f08883c](https://github.com/pmatos/jsse/commit/f08883c78d5594a8c2c605161bdf343e87ece886)), closes [#357](https://github.com/pmatos/jsse/issues/357) [#358](https://github.com/pmatos/jsse/issues/358) [#359](https://github.com/pmatos/jsse/issues/359)
+
+# [0.3.0](https://github.com/pmatos/jsse/compare/v0.2.1...v0.3.0) (2026-07-21)
+
+
+### Bug Fixes
+
+* **bytecode:** use HTMLDDA-aware truthiness in VM jump opcodes ([2618220](https://github.com/pmatos/jsse/commit/2618220391d666fec31d9803d304361aa40c65c0))
+
+
+### Features
+
+* **bytecode:** compile numeric loops ([b25a727](https://github.com/pmatos/jsse/commit/b25a727e39fa79e9543436ee2e38c0361a22cf80))
+
+## [0.2.1](https://github.com/pmatos/jsse/compare/v0.2.0...v0.2.1) (2026-07-21)
+
+
+### Performance Improvements
+
+* **gc:** arena-allocate JavaScript objects ([395799a](https://github.com/pmatos/jsse/commit/395799a7331ee794dd91df5e420a9df0187e6929))
+* **interpreter:** pool function call environments ([#73](https://github.com/pmatos/jsse/issues/73)) ([b7196d1](https://github.com/pmatos/jsse/commit/b7196d16e1313ddb64e1760690088180b7eda2af))
+* **runtime:** bound property-key intern cache ([#164](https://github.com/pmatos/jsse/issues/164)) ([87598cb](https://github.com/pmatos/jsse/commit/87598cba04ba73d77984da4bb6980d8517bce8ce))
+
 # [0.2.0](https://github.com/pmatos/jsse/compare/v0.1.1...v0.2.0) (2026-07-20)
 
 

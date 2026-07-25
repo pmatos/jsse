@@ -467,6 +467,7 @@ def run_single_test(
             cmd,
             timeout=timeout,
             capture_output=True,
+            env={**os.environ, "TZ": "UTC"},
             preexec_fn=adapter.setup_preexec,
         )
         duration = time.perf_counter() - t0

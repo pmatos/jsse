@@ -1214,17 +1214,7 @@ impl Interpreter {
             .insert_builtin("next".to_string(), arr_iter_next);
 
         // Set @@toStringTag
-        self.get_object_cell_expect(arr_iter_proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("Array Iterator")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(arr_iter_proto_id, "Array Iterator");
 
         self.realm_mut().array_iterator_prototype = Some(arr_iter_proto_id);
 
@@ -1308,17 +1298,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("next".to_string(), str_iter_next);
 
-        self.get_object_cell_expect(str_iter_proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("String Iterator")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(str_iter_proto_id, "String Iterator");
 
         self.realm_mut().string_iterator_prototype = Some(str_iter_proto_id);
     }
@@ -1482,17 +1462,7 @@ impl Interpreter {
                 );
         }
         // @@toStringTag
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("Iterator Helper")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(proto_id, "Iterator Helper");
 
         self.realm_mut().iterator_helper_prototype = Some(proto_id);
     }
@@ -3820,17 +3790,7 @@ impl Interpreter {
         // @@iterator is inherited from %IteratorPrototype%
 
         // Symbol.toStringTag
-        self.get_object_cell_expect(gen_proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("Generator")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(gen_proto_id, "Generator");
 
         self.realm_mut().generator_prototype = Some(gen_proto_id);
 
@@ -3867,17 +3827,7 @@ impl Interpreter {
             );
 
         // Symbol.toStringTag = "GeneratorFunction"
-        self.get_object_cell_expect(gf_proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("GeneratorFunction")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(gf_proto_id, "GeneratorFunction");
 
         // Set constructor on Generator.prototype pointing back to GeneratorFunction.prototype_id
         self.get_object_cell_expect(gen_proto_id)
@@ -4127,17 +4077,7 @@ impl Interpreter {
             );
 
         // Symbol.toStringTag
-        self.get_object_cell_expect(gen_proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("AsyncGenerator")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(gen_proto_id, "AsyncGenerator");
 
         self.realm_mut().async_generator_prototype = Some(gen_proto_id);
 
@@ -4159,17 +4099,7 @@ impl Interpreter {
                 ),
             );
         // Symbol.toStringTag
-        self.get_object_cell_expect(agf_proto_id)
-            .borrow_mut()
-            .insert_property(
-                JsPropertyKey::well_known_symbol("toStringTag"),
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("AsyncGeneratorFunction")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(agf_proto_id, "AsyncGeneratorFunction");
         // Set constructor on AsyncGenerator.prototype pointing back to AsyncGeneratorFunction.prototype_id
         self.get_object_cell_expect(gen_proto_id)
             .borrow_mut()

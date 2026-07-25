@@ -710,19 +710,7 @@ impl Interpreter {
         });
 
         // @@toStringTag
-        {
-            let tag = JsValue::String(JsString::from_str("Atomics"));
-            let sym_key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
-            let desc = PropertyDescriptor::data(tag, false, false, true);
-            self.get_object_cell_expect(atomics_obj_id)
-                .borrow_mut()
-                .property_order
-                .push(sym_key.clone());
-            self.get_object_cell_expect(atomics_obj_id)
-                .borrow_mut()
-                .properties
-                .insert(sym_key, desc);
-        }
+        self.define_to_string_tag(atomics_obj_id, "Atomics");
 
         let atomics_val = JsValue::Object(crate::types::JsObject { id: atomics_id });
         self.realm()

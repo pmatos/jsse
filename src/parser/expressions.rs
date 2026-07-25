@@ -29,7 +29,7 @@ fn validate_regexp_literal(pattern: &str, flags: &str) -> Result<(), ParseError>
 }
 
 impl<'a> Parser<'a> {
-    pub fn parse_expression(&mut self) -> Result<Expression, ParseError> {
+    pub(crate) fn parse_expression(&mut self) -> Result<Expression, ParseError> {
         let expr = self.parse_assignment_expression()?;
         if self.current == Token::Comma {
             let mut exprs = vec![expr];

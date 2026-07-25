@@ -25,7 +25,7 @@ pub(crate) fn fresh_shape_id() -> u64 {
 
 static NEXT_SAB_ID: AtomicU64 = AtomicU64::new(1);
 
-pub fn next_sab_id() -> u64 {
+pub(crate) fn next_sab_id() -> u64 {
     NEXT_SAB_ID.fetch_add(1, Ordering::Relaxed)
 }
 
@@ -48,14 +48,14 @@ fn new_math_random_state() -> u64 {
     process_seed ^ splitmix64_mix(realm_index)
 }
 
-pub struct SharedBufferInner {
+pub(crate) struct SharedBufferInner {
     words: RwLock<Vec<u64>>,
     len: AtomicUsize,
     pub id: u64,
 }
 
 impl SharedBufferInner {
-    pub fn new(data: Vec<u8>, id: u64) -> Self {
+    pub(crate) fn new(data: Vec<u8>, id: u64) -> Self {
         let len = data.len();
         let mut words = vec![0u64; len.div_ceil(8)];
         for (idx, byte) in data.into_iter().enumerate() {
@@ -70,7 +70,7 @@ impl SharedBufferInner {
         }
     }
 
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.len.load(Ordering::SeqCst)
     }
 
@@ -87,19 +87,19 @@ impl SharedBufferInner {
         &mut bytes[..len]
     }
 
-    pub fn with_read<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+    pub(crate) fn with_read<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
         let len = self.len();
         let guard = self.words.read().unwrap();
         f(Self::byte_slice(&guard, len))
     }
 
-    pub fn with_write<R>(&self, f: impl FnOnce(&mut [u8]) -> R) -> R {
+    pub(crate) fn with_write<R>(&self, f: impl FnOnce(&mut [u8]) -> R) -> R {
         let len = self.len();
         let mut guard = self.words.write().unwrap();
         f(Self::byte_slice_mut(&mut guard, len))
     }
 
-    pub fn resize(&self, new_len: usize, value: u8) {
+    pub(crate) fn resize(&self, new_len: usize, value: u8) {
         let old_len = self.len();
         let mut guard = self.words.write().unwrap();
         let new_words_len = new_len.div_ceil(8);
@@ -127,7 +127,7 @@ impl SharedBufferInner {
         self.len.store(new_len, Ordering::SeqCst);
     }
 
-    pub fn to_vec(&self) -> Vec<u8> {
+    pub(crate) fn to_vec(&self) -> Vec<u8> {
         self.with_read(|bytes| bytes.to_vec())
     }
 
@@ -156,27 +156,27 @@ impl std::fmt::Debug for SharedBufferInner {
 }
 
 #[derive(Debug)]
-pub enum BufferData {
+pub(crate) enum BufferData {
     Owned(Vec<u8>),
     Shared(Arc<SharedBufferInner>),
 }
 
 impl BufferData {
-    pub fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         match self {
             BufferData::Owned(v) => v.len(),
             BufferData::Shared(s) => s.len(),
         }
     }
 
-    pub fn resize(&mut self, new_len: usize, value: u8) {
+    pub(crate) fn resize(&mut self, new_len: usize, value: u8) {
         match self {
             BufferData::Owned(v) => v.resize(new_len, value),
             BufferData::Shared(s) => s.resize(new_len, value),
         }
     }
 
-    pub fn to_vec(&self) -> Vec<u8> {
+    pub(crate) fn to_vec(&self) -> Vec<u8> {
         match self {
             BufferData::Owned(v) => v.clone(),
             BufferData::Shared(s) => s.to_vec(),
@@ -184,26 +184,26 @@ impl BufferData {
     }
 
     #[allow(dead_code)]
-    pub fn is_shared(&self) -> bool {
+    pub(crate) fn is_shared(&self) -> bool {
         matches!(self, BufferData::Shared(_))
     }
 
     #[allow(dead_code)]
-    pub fn shared_inner(&self) -> Option<&Arc<SharedBufferInner>> {
+    pub(crate) fn shared_inner(&self) -> Option<&Arc<SharedBufferInner>> {
         match self {
             BufferData::Shared(s) => Some(s),
             _ => None,
         }
     }
 
-    pub fn with_read<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
+    pub(crate) fn with_read<R>(&self, f: impl FnOnce(&[u8]) -> R) -> R {
         match self {
             BufferData::Owned(v) => f(v),
             BufferData::Shared(s) => s.with_read(f),
         }
     }
 
-    pub fn with_write<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> R {
+    pub(crate) fn with_write<R>(&mut self, f: impl FnOnce(&mut [u8]) -> R) -> R {
         match self {
             BufferData::Owned(v) => f(v),
             BufferData::Shared(s) => s.with_write(f),
@@ -218,7 +218,7 @@ impl Clone for BufferData {
 }
 
 #[derive(Debug)]
-pub enum Completion {
+pub(crate) enum Completion {
     Normal(JsValue),
     Return(JsValue),
     Throw(JsValue),
@@ -277,7 +277,7 @@ pub(crate) struct GeneratorContext {
 }
 
 #[derive(Debug, Clone)]
-pub enum GeneratorExecutionState {
+pub(crate) enum GeneratorExecutionState {
     #[allow(dead_code)]
     SuspendedStart,
     SuspendedYield {
@@ -290,7 +290,7 @@ pub enum GeneratorExecutionState {
 }
 
 #[derive(Debug, Clone)]
-pub enum StateMachineExecutionState {
+pub(crate) enum StateMachineExecutionState {
     SuspendedStart,
     SuspendedAtState { state_id: usize },
     Executing,
@@ -298,7 +298,7 @@ pub enum StateMachineExecutionState {
 }
 
 #[derive(Debug, Clone)]
-pub struct TryContextInfo {
+pub(crate) struct TryContextInfo {
     pub catch_state: Option<usize>,
     pub finally_state: Option<usize>,
     pub _after_state: usize,
@@ -306,7 +306,7 @@ pub struct TryContextInfo {
     pub entered_finally: bool,
 }
 
-pub struct AsyncFunctionState {
+pub(crate) struct AsyncFunctionState {
     pub state_machine: Rc<GeneratorStateMachine>,
     pub func_env: EnvRef,
     pub is_strict: bool,
@@ -323,17 +323,17 @@ pub struct AsyncFunctionState {
 }
 
 #[derive(Debug, Clone)]
-pub struct DelegatedIteratorInfo {
+pub(crate) struct DelegatedIteratorInfo {
     pub iterator: JsValue,
     pub next_method: JsValue,
     pub resume_state: usize,
     pub sent_value_binding: Option<SentValueBinding>,
 }
 
-pub type EnvRef = Rc<RefCell<Environment>>;
+pub(crate) type EnvRef = Rc<RefCell<Environment>>;
 
 #[allow(clippy::type_complexity)]
-pub struct Realm {
+pub(crate) struct Realm {
     pub(crate) global_env: EnvRef,
     math_random_state: u64,
     pub(crate) global_object: Option<u64>,
@@ -660,7 +660,9 @@ impl Realm {
     }
 }
 
-pub struct Environment {
+pub(crate) struct Environment {
+    // Binding names come from script source. Keep randomized hashing here so
+    // deterministic collision sets cannot flood declaration and lookup paths.
     pub(crate) bindings: HashMap<String, Binding>,
     pub(crate) parent: Option<EnvRef>,
     pub strict: bool,
@@ -723,7 +725,7 @@ pub(crate) struct Binding {
 }
 
 impl Binding {
-    pub fn new(value: JsValue, kind: BindingKind, initialized: bool) -> Self {
+    pub(crate) fn new(value: JsValue, kind: BindingKind, initialized: bool) -> Self {
         Self {
             value,
             kind,
@@ -745,7 +747,7 @@ pub(crate) enum BindingKind {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum SetBindingCheck {
+pub(crate) enum SetBindingCheck {
     Ok,
     ConstAssign,
     FunctionNameAssign,
@@ -754,7 +756,7 @@ pub enum SetBindingCheck {
 }
 
 impl Environment {
-    pub fn new(parent: Option<EnvRef>) -> EnvRef {
+    pub(crate) fn new(parent: Option<EnvRef>) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
             bindings: HashMap::new(),
@@ -778,10 +780,17 @@ impl Environment {
         }))
     }
 
-    pub fn new_function_scope(parent: Option<EnvRef>) -> EnvRef {
+    pub(crate) fn new_function_scope(parent: Option<EnvRef>) -> EnvRef {
+        Self::new_function_scope_with_capacity(parent, 0)
+    }
+
+    pub(crate) fn new_function_scope_with_capacity(
+        parent: Option<EnvRef>,
+        binding_capacity: usize,
+    ) -> EnvRef {
         let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
         Rc::new(RefCell::new(Environment {
-            bindings: HashMap::new(),
+            bindings: HashMap::with_capacity(binding_capacity),
             parent,
             strict,
             is_function_scope: true,
@@ -802,7 +811,30 @@ impl Environment {
         }))
     }
 
-    pub fn find_module_path(env: &EnvRef) -> Option<std::path::PathBuf> {
+    pub(crate) fn reset_function_scope(&mut self, parent: Option<EnvRef>, binding_capacity: usize) {
+        let strict = parent.as_ref().is_some_and(|p| p.borrow().strict);
+        self.bindings.clear();
+        self.bindings.reserve(binding_capacity);
+        self.parent = parent;
+        self.strict = strict;
+        self.is_function_scope = true;
+        self.is_arrow_scope = false;
+        self.with_object = None;
+        self.dispose_stack = None;
+        self.global_object_id = None;
+        self.annexb_function_names = None;
+        self.class_private_names = None;
+        self.is_field_initializer = false;
+        self.arguments_immutable = false;
+        self.has_parameter_expressions = false;
+        self.has_simple_params = true;
+        self.is_simple_catch_scope = false;
+        self.is_derived_constructor_scope = false;
+        self.indirect_bindings = None;
+        self.module_path = None;
+    }
+
+    pub(crate) fn find_module_path(env: &EnvRef) -> Option<std::path::PathBuf> {
         if let Some(ref mp) = env.borrow().module_path {
             return Some(mp.clone());
         }
@@ -814,7 +846,7 @@ impl Environment {
 
     /// Find the nearest function scope (for var hoisting).
     /// Returns self if this is a function scope, otherwise traverses up.
-    pub fn find_var_scope(env: &EnvRef) -> EnvRef {
+    pub(crate) fn find_var_scope(env: &EnvRef) -> EnvRef {
         if env.borrow().is_function_scope || env.borrow().global_object_id.is_some() {
             return env.clone();
         }
@@ -824,7 +856,7 @@ impl Environment {
         env.clone()
     }
 
-    pub fn declare(&mut self, name: &str, kind: BindingKind) {
+    pub(crate) fn declare(&mut self, name: &str, kind: BindingKind) {
         self.bindings.insert(
             name.to_string(),
             Binding {
@@ -837,7 +869,7 @@ impl Environment {
     }
 
     /// §9.1.1.1.4 InitializeBinding — sets value and marks initialized (no TDZ check)
-    pub fn initialize_binding(&mut self, name: &str, value: JsValue) {
+    pub(crate) fn initialize_binding(&mut self, name: &str, value: JsValue) {
         if let Some(binding) = self.bindings.get_mut(name) {
             binding.value = value;
             binding.initialized = true;
@@ -846,18 +878,18 @@ impl Environment {
 
     /// §9.1.1.5.5 CreateImportBinding(N, M, N2)
     /// Creates an immutable indirect binding that references another module's environment.
-    pub fn create_import_binding(
+    pub(crate) fn create_import_binding(
         &mut self,
         local_name: &str,
         source_env: EnvRef,
         source_name: String,
     ) {
-        let map = self.indirect_bindings.get_or_insert_with(HashMap::default);
+        let map = self.indirect_bindings.get_or_insert_with(HashMap::new);
         map.insert(local_name.to_string(), (source_env, source_name));
     }
 
     /// Resolve an indirect binding, returning the current value from the source environment.
-    pub fn resolve_indirect_binding(&self, name: &str) -> Option<Option<JsValue>> {
+    pub(crate) fn resolve_indirect_binding(&self, name: &str) -> Option<Option<JsValue>> {
         if let Some(ref indirect) = self.indirect_bindings
             && let Some((source_env, source_name)) = indirect.get(name)
         {
@@ -886,13 +918,13 @@ impl Environment {
     }
 
     /// Check if name is an indirect binding.
-    pub fn is_indirect_binding(&self, name: &str) -> bool {
+    pub(crate) fn is_indirect_binding(&self, name: &str) -> bool {
         self.indirect_bindings
             .as_ref()
             .is_some_and(|m| m.contains_key(name))
     }
 
-    pub fn declare_deletable(&mut self, name: &str, kind: BindingKind) {
+    pub(crate) fn declare_deletable(&mut self, name: &str, kind: BindingKind) {
         self.bindings.insert(
             name.to_string(),
             Binding {
@@ -907,7 +939,7 @@ impl Environment {
     /// Bindings-only fallback for `Interpreter::env_declare_global_var` (used
     /// when the env has no `global_object_id`). The wrapper handles the
     /// global-object property side via the slab.
-    pub fn declare_global_var(&mut self, name: &str) {
+    pub(crate) fn declare_global_var(&mut self, name: &str) {
         if !self.bindings.contains_key(name) {
             self.declare(name, BindingKind::Var);
         }
@@ -915,7 +947,7 @@ impl Environment {
 
     /// Bindings-only fallback for
     /// `Interpreter::env_declare_global_var_configurable`.
-    pub fn declare_global_var_configurable(&mut self, name: &str) {
+    pub(crate) fn declare_global_var_configurable(&mut self, name: &str) {
         if !self.bindings.contains_key(name) {
             self.declare(name, BindingKind::Var);
         }
@@ -924,7 +956,7 @@ impl Environment {
     /// Bindings-only fallback for
     /// `Interpreter::env_declare_global_function_binding`. The wrapper sets the
     /// value mirror on the global object via the slab.
-    pub fn declare_global_function_binding(
+    pub(crate) fn declare_global_function_binding(
         &mut self,
         name: &str,
         value: JsValue,
@@ -939,7 +971,7 @@ impl Environment {
 
     /// Bindings-only set. Mirroring to the realm's global object lives in
     /// `Interpreter::env_set`. External callers should always use that wrapper.
-    pub fn set(&mut self, name: &str, value: JsValue) -> Result<(), JsValue> {
+    pub(crate) fn set(&mut self, name: &str, value: JsValue) -> Result<(), JsValue> {
         // Indirect bindings (module imports) are immutable
         if self.is_indirect_binding(name) {
             return Err(JsValue::String(JsString::from_str(
@@ -987,7 +1019,7 @@ impl Environment {
     /// Bindings-only get. Falls through to `None` at the chain root; the
     /// global-object fall-through lives in `Interpreter::env_get` /
     /// `env_get_ref`.
-    pub fn get(&self, name: &str) -> Option<JsValue> {
+    pub(crate) fn get(&self, name: &str) -> Option<JsValue> {
         // Check indirect bindings first (module imports)
         if let Some(resolved) = self.resolve_indirect_binding(name) {
             return resolved; // None = TDZ, Some(v) = value
@@ -1006,7 +1038,7 @@ impl Environment {
 
     /// Check if a binding exists but is uninitialized (in TDZ).
     /// Only checks the current environment, not parents.
-    pub fn is_in_tdz(&self, name: &str) -> bool {
+    pub(crate) fn is_in_tdz(&self, name: &str) -> bool {
         // Check indirect bindings first
         if let Some(resolved) = self.resolve_indirect_binding(name) {
             return resolved.is_none(); // None means TDZ
@@ -1020,7 +1052,7 @@ impl Environment {
 
     /// Bindings-only `has`. Global-object fall-through lives in
     /// `Interpreter::env_has`.
-    pub fn has(&self, name: &str) -> bool {
+    pub(crate) fn has(&self, name: &str) -> bool {
         if self.is_indirect_binding(name) || self.bindings.contains_key(name) {
             true
         } else if let Some(parent) = &self.parent {
@@ -1030,7 +1062,7 @@ impl Environment {
         }
     }
 
-    pub fn find_binding_env(env: &EnvRef, name: &str) -> Option<EnvRef> {
+    pub(crate) fn find_binding_env(env: &EnvRef, name: &str) -> Option<EnvRef> {
         let e = env.borrow();
         if e.is_indirect_binding(name) || e.bindings.contains_key(name) {
             return Some(env.clone());
@@ -1047,7 +1079,7 @@ impl Environment {
     }
 }
 
-pub enum JsFunction {
+pub(crate) enum JsFunction {
     User {
         name: Option<String>,
         params: Rc<Vec<Pattern>>,
@@ -1075,7 +1107,7 @@ pub enum JsFunction {
 }
 
 impl JsFunction {
-    pub fn native(
+    pub(crate) fn native(
         name: String,
         arity: usize,
         f: impl Fn(&mut super::Interpreter, &JsValue, &[JsValue]) -> Completion + 'static,
@@ -1083,7 +1115,7 @@ impl JsFunction {
         JsFunction::Native(name, arity, Rc::new(f), false)
     }
 
-    pub fn constructor(
+    pub(crate) fn constructor(
         name: String,
         arity: usize,
         f: impl Fn(&mut super::Interpreter, &JsValue, &[JsValue]) -> Completion + 'static,
@@ -1143,7 +1175,7 @@ impl std::fmt::Debug for JsFunction {
 }
 
 #[derive(Debug, Clone)]
-pub struct PropertyDescriptor {
+pub(crate) struct PropertyDescriptor {
     pub value: Option<JsValue>,
     pub writable: Option<bool>,
     pub get: Option<JsValue>,
@@ -1153,7 +1185,12 @@ pub struct PropertyDescriptor {
 }
 
 impl PropertyDescriptor {
-    pub fn data(value: JsValue, writable: bool, enumerable: bool, configurable: bool) -> Self {
+    pub(crate) fn data(
+        value: JsValue,
+        writable: bool,
+        enumerable: bool,
+        configurable: bool,
+    ) -> Self {
         Self {
             value: Some(value),
             writable: Some(writable),
@@ -1164,11 +1201,11 @@ impl PropertyDescriptor {
         }
     }
 
-    pub fn data_default(value: JsValue) -> Self {
+    pub(crate) fn data_default(value: JsValue) -> Self {
         Self::data(value, true, true, true)
     }
 
-    pub fn accessor(
+    pub(crate) fn accessor(
         get: Option<JsValue>,
         set: Option<JsValue>,
         enumerable: bool,
@@ -1184,17 +1221,17 @@ impl PropertyDescriptor {
         }
     }
 
-    pub fn is_data_descriptor(&self) -> bool {
+    pub(crate) fn is_data_descriptor(&self) -> bool {
         self.value.is_some() || self.writable.is_some()
     }
 
-    pub fn is_accessor_descriptor(&self) -> bool {
+    pub(crate) fn is_accessor_descriptor(&self) -> bool {
         self.get.is_some() || self.set.is_some()
     }
 }
 
 #[derive(Debug, Clone)]
-pub enum PrivateFieldDef {
+pub(crate) enum PrivateFieldDef {
     Field {
         name: String,
         initializer: Option<Expression>,
@@ -1212,7 +1249,7 @@ pub enum PrivateFieldDef {
 
 /// Unified ordered instance field definition (private or public), preserving source order.
 #[derive(Debug, Clone)]
-pub enum InstanceFieldDef {
+pub(crate) enum InstanceFieldDef {
     Private(PrivateFieldDef),
     Public(JsPropertyKey, Option<Expression>),
     /// Auto accessor backing storage initialization: (storage_slot_name, initializer)
@@ -1220,7 +1257,7 @@ pub enum InstanceFieldDef {
 }
 
 #[derive(Debug, Clone)]
-pub enum PrivateElement {
+pub(crate) enum PrivateElement {
     Field(JsValue),
     Method(JsValue),
     Accessor {
@@ -1230,14 +1267,14 @@ pub enum PrivateElement {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum IteratorKind {
+pub(crate) enum IteratorKind {
     Key,
     Value,
     KeyValue,
 }
 
 #[derive(Debug, Clone)]
-pub enum IteratorState {
+pub(crate) enum IteratorState {
     ArrayIterator {
         array_id: u64,
         index: usize,
@@ -1320,7 +1357,7 @@ pub enum IteratorState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum TypedArrayKind {
+pub(crate) enum TypedArrayKind {
     Int8,
     Uint8,
     Uint8Clamped,
@@ -1336,7 +1373,7 @@ pub enum TypedArrayKind {
 }
 
 impl TypedArrayKind {
-    pub fn bytes_per_element(&self) -> usize {
+    pub(crate) fn bytes_per_element(&self) -> usize {
         match self {
             TypedArrayKind::Int8 | TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => 1,
             TypedArrayKind::Int16 | TypedArrayKind::Uint16 | TypedArrayKind::Float16 => 2,
@@ -1345,7 +1382,7 @@ impl TypedArrayKind {
         }
     }
 
-    pub fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             TypedArrayKind::Int8 => "Int8Array",
             TypedArrayKind::Uint8 => "Uint8Array",
@@ -1362,13 +1399,13 @@ impl TypedArrayKind {
         }
     }
 
-    pub fn is_bigint(&self) -> bool {
+    pub(crate) fn is_bigint(&self) -> bool {
         matches!(self, TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct TypedArrayInfo {
+pub(crate) struct TypedArrayInfo {
     pub kind: TypedArrayKind,
     pub buffer: Rc<RefCell<BufferData>>,
     pub byte_offset: usize,
@@ -1382,7 +1419,7 @@ pub struct TypedArrayInfo {
 }
 
 #[derive(Debug, Clone)]
-pub struct DataViewInfo {
+pub(crate) struct DataViewInfo {
     pub buffer: Rc<RefCell<BufferData>>,
     pub byte_offset: usize,
     pub byte_length: usize,
@@ -1591,7 +1628,7 @@ pub(crate) enum TemporalData {
     },
 }
 
-pub struct JsObjectData {
+pub(crate) struct JsObjectData {
     /// Slab index of this object. Set exactly once by
     /// `Interpreter::alloc_object` at allocation time and never reassigned.
     pub id: Option<u64>,
@@ -1666,7 +1703,7 @@ pub(crate) struct ArrayBufferData {
 /// expressible only by convention — e.g. `default && !derived` was nonsense
 /// but compiled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ConstructorKind {
+pub(crate) enum ConstructorKind {
     /// A regular function — or the constructor slot is unused.
     Function,
     /// A base class constructor (`class C { ... }` without `extends`).
@@ -1912,27 +1949,27 @@ impl JsObjectData {
     );
 
     /// True iff this is an *active* (non-revoked) proxy. Preserves pre-bundling semantics.
-    pub fn is_proxy(&self) -> bool {
+    pub(crate) fn is_proxy(&self) -> bool {
         self.proxy().is_some_and(|p| !p.revoked)
     }
 
     /// True iff this object has been revoked.
-    pub fn is_proxy_revoked(&self) -> bool {
+    pub(crate) fn is_proxy_revoked(&self) -> bool {
         self.proxy().is_some_and(|p| p.revoked)
     }
 
     /// Target id for an active proxy, `None` otherwise (including revoked).
-    pub fn proxy_target_id(&self) -> Option<u64> {
+    pub(crate) fn proxy_target_id(&self) -> Option<u64> {
         self.proxy().and_then(|p| p.target_id)
     }
 
     /// True iff this object is a class constructor of any flavor.
-    pub fn is_class_constructor(&self) -> bool {
+    pub(crate) fn is_class_constructor(&self) -> bool {
         !matches!(self.constructor_kind, ConstructorKind::Function)
     }
 
     /// True iff this object is a derived class constructor (explicit or default).
-    pub fn is_derived_class_constructor(&self) -> bool {
+    pub(crate) fn is_derived_class_constructor(&self) -> bool {
         matches!(
             self.constructor_kind,
             ConstructorKind::DerivedClass | ConstructorKind::DefaultDerivedClass
@@ -1940,7 +1977,7 @@ impl JsObjectData {
     }
 
     /// True iff this is a synthesized default derived constructor.
-    pub fn is_default_derived_constructor(&self) -> bool {
+    pub(crate) fn is_default_derived_constructor(&self) -> bool {
         matches!(self.constructor_kind, ConstructorKind::DefaultDerivedClass)
     }
 
@@ -1987,27 +2024,27 @@ impl JsObjectData {
     }
 
     /// Backing bytes for an ArrayBuffer / SharedArrayBuffer.
-    pub fn arraybuffer_data(&self) -> Option<&Rc<RefCell<BufferData>>> {
+    pub(crate) fn arraybuffer_data(&self) -> Option<&Rc<RefCell<BufferData>>> {
         self.arraybuffer().map(|b| &b.data)
     }
 
     /// Detached cell for a regular ArrayBuffer. `None` for SAB or non-buffers.
-    pub fn arraybuffer_detached(&self) -> Option<&Rc<Cell<bool>>> {
+    pub(crate) fn arraybuffer_detached(&self) -> Option<&Rc<Cell<bool>>> {
         self.arraybuffer().and_then(|b| b.detached.as_ref())
     }
 
     /// Max byte length for a resizable / growable AB; `None` for non-resizable.
-    pub fn arraybuffer_max_byte_length(&self) -> Option<usize> {
+    pub(crate) fn arraybuffer_max_byte_length(&self) -> Option<usize> {
         self.arraybuffer().and_then(|b| b.max_byte_length)
     }
 
     /// True iff this is a SharedArrayBuffer.
-    pub fn arraybuffer_is_shared(&self) -> bool {
+    pub(crate) fn arraybuffer_is_shared(&self) -> bool {
         self.arraybuffer().is_some_and(|b| b.is_shared)
     }
 
     /// True iff this is an immutable ArrayBuffer (post-`sliceToImmutable`).
-    pub fn arraybuffer_is_immutable(&self) -> bool {
+    pub(crate) fn arraybuffer_is_immutable(&self) -> bool {
         self.arraybuffer().is_some_and(|b| b.is_immutable)
     }
 
@@ -2021,13 +2058,13 @@ impl JsObjectData {
     }
 
     /// SAB shared inner state. `Some` iff this is a SharedArrayBuffer.
-    pub fn sab_shared(&self) -> Option<&Arc<SharedBufferInner>> {
+    pub(crate) fn sab_shared(&self) -> Option<&Arc<SharedBufferInner>> {
         self.arraybuffer().and_then(|b| b.sab_shared.as_ref())
     }
 
     /// Id of the ArrayBuffer wrapper object that backs this TypedArray or DataView,
     /// pulled from whichever kind slot is populated. `None` for non-view objects.
-    pub fn view_buffer_object_id(&self) -> Option<u64> {
+    pub(crate) fn view_buffer_object_id(&self) -> Option<u64> {
         self.typed_array_info()
             .as_ref()
             .and_then(|ta| ta.buffer_object_id)
@@ -2043,9 +2080,7 @@ impl JsObjectData {
             if key == "length" {
                 return Some(JsValue::Number(units.len() as f64));
             }
-            if let Ok(idx) = key.parse::<usize>()
-                && idx < units.len()
-            {
+            if let Some(idx) = string_exotic_index(key, units.len()) {
                 return Some(JsValue::String(crate::types::JsString::from_vec(vec![
                     units[idx],
                 ])));
@@ -2061,7 +2096,7 @@ impl JsObjectData {
 
     // Like get_property_descriptor but without prototype chain walk.
     // Includes parameter_map and array_elements handling.
-    pub fn get_own_property_full<K: PropertyKeyLike + ?Sized>(
+    pub(crate) fn get_own_property_full<K: PropertyKeyLike + ?Sized>(
         &self,
         key: &K,
     ) -> Option<PropertyDescriptor> {
@@ -2120,10 +2155,7 @@ impl JsObjectData {
                     set: None,
                 });
             }
-            if let Some(key_str) = key.as_property_key_str()
-                && let Ok(idx) = key_str.parse::<usize>()
-                && idx < units.len()
-            {
+            if let Some(idx) = string_exotic_index(key, units.len()) {
                 return Some(PropertyDescriptor {
                     value: Some(JsValue::String(crate::types::JsString::from_vec(vec![
                         units[idx],
@@ -2139,7 +2171,7 @@ impl JsObjectData {
         None
     }
 
-    pub fn get_own_property<K: PropertyKeyLike + ?Sized>(
+    pub(crate) fn get_own_property<K: PropertyKeyLike + ?Sized>(
         &self,
         key: &K,
     ) -> Option<PropertyDescriptor> {
@@ -2233,10 +2265,7 @@ impl JsObjectData {
                     false,
                 ));
             }
-            if let Some(key_str) = key.as_property_key_str()
-                && let Ok(idx) = key_str.parse::<usize>()
-                && idx < s.code_units.len()
-            {
+            if let Some(idx) = string_exotic_index(key, s.code_units.len()) {
                 return Some(PropertyDescriptor::data(
                     JsValue::String(JsString::from_vec(vec![s.code_units[idx]])),
                     false,
@@ -2248,7 +2277,7 @@ impl JsObjectData {
         None
     }
 
-    pub fn has_own_property<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> bool {
+    pub(crate) fn has_own_property<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> bool {
         // Module namespace exotic: [[HasProperty]] checks export list
         if let Some(key_str) = key.as_property_key_str()
             && let Some(ns_data) = self.module_namespace()
@@ -2277,11 +2306,7 @@ impl JsObjectData {
             if key.as_property_key_str() == Some("length") {
                 return true;
             }
-            if let Some(key_str) = key.as_property_key_str()
-                && let Ok(idx) = key_str.parse::<usize>()
-            {
-                return idx < s.code_units.len();
-            }
+            return string_exotic_index(key, s.code_units.len()).is_some();
         }
         false
     }
@@ -2291,7 +2316,7 @@ impl JsObjectData {
     // `Interpreter::has_property_on_id`. Own-only variants live as
     // `own_enumerable_keys_with_shadow` / `own_has_property` on this impl.
 
-    pub fn define_own_property<K: Into<JsPropertyKey>>(
+    pub(crate) fn define_own_property<K: Into<JsPropertyKey>>(
         &mut self,
         key: K,
         mut desc: PropertyDescriptor,
@@ -2300,8 +2325,7 @@ impl JsObjectData {
         // String exotic §10.4.3.3 [[DefineOwnProperty]]: reject changes to character index properties
         if self.class_name == "String"
             && let Some(JsValue::String(ref s)) = self.primitive_value
-            && let Ok(idx) = key.parse::<usize>()
-            && idx < s.code_units.len()
+            && let Some(idx) = string_exotic_index(&key, s.code_units.len())
         {
             // String index property: {value: char, writable: false, enumerable: true, configurable: false}
             // Only allow if desc is compatible (no changes to value, not setting writable/configurable)
@@ -2657,7 +2681,7 @@ impl JsObjectData {
         true
     }
 
-    pub fn set_property_value<K: PropertyKeyLike + ?Sized>(
+    pub(crate) fn set_property_value<K: PropertyKeyLike + ?Sized>(
         &mut self,
         key: &K,
         value: JsValue,
@@ -2856,10 +2880,7 @@ impl JsObjectData {
             if let Some(JsValue::String(ref s)) = self.primitive_value
                 && self.class_name == "String"
                 && (key.as_property_key_str() == Some("length")
-                    || key
-                        .as_property_key_str()
-                        .and_then(|k| k.parse::<usize>().ok())
-                        .is_some_and(|i| i < s.code_units.len()))
+                    || string_exotic_index(key, s.code_units.len()).is_some())
             {
                 return false;
             }
@@ -2878,7 +2899,7 @@ impl JsObjectData {
         }
     }
 
-    pub fn insert_value<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {
+    pub(crate) fn insert_value<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {
         let key = intern_js_key(key.into());
         if !self.properties.contains_key(&key) {
             self.property_order.push(key.clone());
@@ -2887,7 +2908,7 @@ impl JsObjectData {
             .insert(key, PropertyDescriptor::data_default(value));
     }
 
-    pub fn insert_builtin<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {
+    pub(crate) fn insert_builtin<K: Into<JsPropertyKey>>(&mut self, key: K, value: JsValue) {
         let key = intern_js_key(key.into());
         if !self.properties.contains_key(&key) {
             self.property_order.push(key.clone());
@@ -2896,7 +2917,11 @@ impl JsObjectData {
             .insert(key, PropertyDescriptor::data(value, true, false, true));
     }
 
-    pub fn insert_property<K: Into<JsPropertyKey>>(&mut self, key: K, desc: PropertyDescriptor) {
+    pub(crate) fn insert_property<K: Into<JsPropertyKey>>(
+        &mut self,
+        key: K,
+        desc: PropertyDescriptor,
+    ) {
         let key = intern_js_key(key.into());
         if !self.properties.contains_key(&key) {
             self.property_order.push(key.clone());
@@ -2909,7 +2934,7 @@ impl JsObjectData {
     /// together, and this is the single place that guarantees it. Returns the
     /// removed descriptor, or `None` if the key was absent (in which case the
     /// order list is left untouched).
-    pub fn remove_property<K: PropertyKeyLike + ?Sized>(
+    pub(crate) fn remove_property<K: PropertyKeyLike + ?Sized>(
         &mut self,
         key: &K,
     ) -> Option<PropertyDescriptor> {
@@ -2921,7 +2946,10 @@ impl JsObjectData {
         removed
     }
 
-    pub fn get_property_value<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<JsValue> {
+    pub(crate) fn get_property_value<K: PropertyKeyLike + ?Sized>(
+        &self,
+        key: &K,
+    ) -> Option<JsValue> {
         self.properties.get(key).and_then(|d| d.value.clone())
     }
 
@@ -2930,7 +2958,10 @@ impl JsObjectData {
     /// module-namespace live bindings, parameter_map, array_elements, typed_array
     /// canonical numeric indices, and string exotic indices). Returns `None` if
     /// the caller should continue walking the prototype chain.
-    pub fn own_property_lookup<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<JsValue> {
+    pub(crate) fn own_property_lookup<K: PropertyKeyLike + ?Sized>(
+        &self,
+        key: &K,
+    ) -> Option<JsValue> {
         if let Some(key_str) = key.as_property_key_str()
             && let Some(ns_data) = self.module_namespace()
             && let Some(binding_name) = ns_data.export_to_binding.get(key_str)
@@ -2982,7 +3013,7 @@ impl JsObjectData {
     /// Mirrors the pre-chain-walk branches of that method exactly (including
     /// OrdinaryGetOwnProperty accessor completion and TypedArray canonical index
     /// with `configurable: false` per §10.4.5.2).
-    pub fn own_property_descriptor_lookup<K: PropertyKeyLike + ?Sized>(
+    pub(crate) fn own_property_descriptor_lookup<K: PropertyKeyLike + ?Sized>(
         &self,
         key: &K,
     ) -> Option<PropertyDescriptor> {
@@ -3049,10 +3080,7 @@ impl JsObjectData {
                     set: None,
                 });
             }
-            if let Some(key_str) = key.as_property_key_str()
-                && let Ok(idx) = key_str.parse::<usize>()
-                && idx < units.len()
-            {
+            if let Some(idx) = string_exotic_index(key, units.len()) {
                 return Some(PropertyDescriptor {
                     value: Some(JsValue::String(crate::types::JsString::from_vec(vec![
                         units[idx],
@@ -3073,7 +3101,7 @@ impl JsObjectData {
     /// canonical-numeric-index on a typed array that's out of range (per
     /// §10.4.5.2, typed arrays never consult the prototype for these),
     /// and `None` to continue walking the chain.
-    pub fn own_has_property<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<bool> {
+    pub(crate) fn own_has_property<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<bool> {
         if let Some(ta) = self.typed_array_info()
             && let Some(index) = canonical_numeric_index_string(key)
         {
@@ -3090,7 +3118,9 @@ impl JsObjectData {
     /// keys in insertion order) and the full shadow set of all own keys
     /// (enumerable + non-enumerable) so the caller can suppress inherited
     /// properties with matching names.
-    pub fn own_enumerable_keys_with_shadow(&self) -> (Vec<JsPropertyKey>, HashSet<JsPropertyKey>) {
+    pub(crate) fn own_enumerable_keys_with_shadow(
+        &self,
+    ) -> (Vec<JsPropertyKey>, HashSet<JsPropertyKey>) {
         let mut seen = HashSet::default();
         let mut index_keys: Vec<(u32, JsPropertyKey)> = Vec::new();
         let mut string_keys: Vec<JsPropertyKey> = Vec::new();
@@ -3188,6 +3218,40 @@ pub(crate) fn canonical_numeric_index_string<K: crate::types::PropertyKeyLike + 
     } else {
         None
     }
+}
+
+/// §10.4.3 String-exotic own indexed-property test (the index branch of
+/// StringGetOwnProperty).
+///
+/// Returns `Some(i)` when `key` is the CanonicalNumericIndexString of an
+/// integral index `i` with `0 <= i < len` — i.e. `key` names an own indexed
+/// character property of a String value whose UTF-16 length is `len`. Returns
+/// `None` for non-canonical spellings (`"01"`, `"+1"`, `"1.0"`), `-0`,
+/// negative, non-integral, or non-finite indices, and indices `>= len`.
+///
+/// This concentrates the one canonical predicate so every String-exotic MOP
+/// operation ([[Get]], [[GetOwnProperty]], [[HasProperty]],
+/// [[DefineOwnProperty]], [[Set]], [[Delete]]) agrees, instead of each caller
+/// reaching for `str::parse::<usize>()`, which wrongly accepts a leading `+`
+/// and leading zeros. `len` must be the string's UTF-16 code-unit length.
+pub(crate) fn string_exotic_index<K: crate::types::PropertyKeyLike + ?Sized>(
+    key: &K,
+    len: usize,
+) -> Option<usize> {
+    let n = canonical_numeric_index_string(key)?;
+    // IsIntegralNumber(index) is false, or index is -0𝔽 -> not an own index.
+    if !n.is_finite() || n.fract() != 0.0 {
+        return None;
+    }
+    if n == 0.0 && n.is_sign_negative() {
+        return None;
+    }
+    // index < 0 or len <= index -> not an own index. Range-check before the
+    // cast so a huge finite index can never saturate into a valid `usize`.
+    if n < 0.0 || n >= len as f64 {
+        return None;
+    }
+    Some(n as usize)
 }
 
 pub(crate) fn typed_array_length(ta: &TypedArrayInfo) -> usize {
@@ -3716,20 +3780,20 @@ fn to_biguint64(v: &JsValue) -> u64 {
 }
 
 #[derive(Debug, Clone)]
-pub enum PromiseState {
+pub(crate) enum PromiseState {
     Pending,
     Fulfilled(JsValue),
     Rejected(JsValue),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum PromiseReactionType {
+pub(crate) enum PromiseReactionType {
     Fulfill,
     Reject,
 }
 
 #[derive(Debug, Clone)]
-pub struct PromiseReaction {
+pub(crate) struct PromiseReaction {
     pub handler: Option<JsValue>,
     pub promise_id: Option<u64>,
     pub resolve: JsValue,
@@ -3738,7 +3802,7 @@ pub struct PromiseReaction {
 }
 
 #[derive(Debug, Clone)]
-pub struct PromiseData {
+pub(crate) struct PromiseData {
     pub state: PromiseState,
     pub fulfill_reactions: Vec<PromiseReaction>,
     pub reject_reactions: Vec<PromiseReaction>,
@@ -3746,7 +3810,7 @@ pub struct PromiseData {
 }
 
 impl PromiseData {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             state: PromiseState::Pending,
             fulfill_reactions: Vec::new(),
@@ -4018,5 +4082,67 @@ mod property_bag_tests {
         assert!(obj.remove_property("a").is_some());
         assert!(obj.remove_property("a").is_none());
         assert!(keys(&obj).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod string_exotic_index_tests {
+    use super::string_exotic_index;
+
+    // §10.4.3 StringGetOwnProperty own-index predicate. Expected values are the
+    // ECMAScript truth table (CanonicalNumericIndexString + IsIntegralNumber +
+    // -0 + range), cross-checked against node.
+    #[test]
+    fn canonical_in_range_indices_resolve() {
+        assert_eq!(string_exotic_index("0", 3), Some(0));
+        assert_eq!(string_exotic_index("1", 3), Some(1));
+        assert_eq!(string_exotic_index("2", 3), Some(2));
+    }
+
+    #[test]
+    fn out_of_range_is_none() {
+        assert_eq!(string_exotic_index("3", 3), None);
+        assert_eq!(string_exotic_index("0", 0), None);
+        assert_eq!(string_exotic_index("9999999999", 3), None);
+    }
+
+    #[test]
+    fn non_canonical_spellings_are_none() {
+        // Round-trippable ToString(ToNumber(key)) != key -> not a canonical index.
+        assert_eq!(string_exotic_index("01", 3), None);
+        assert_eq!(string_exotic_index("00", 3), None);
+        assert_eq!(string_exotic_index("+1", 3), None);
+        assert_eq!(string_exotic_index("1.0", 3), None);
+        assert_eq!(string_exotic_index(" 1", 3), None);
+        assert_eq!(string_exotic_index("1 ", 3), None);
+        assert_eq!(string_exotic_index("1e0", 3), None);
+        assert_eq!(string_exotic_index("0x1", 3), None);
+        assert_eq!(string_exotic_index("", 3), None);
+    }
+
+    #[test]
+    fn non_integral_canonical_numbers_are_none() {
+        assert_eq!(string_exotic_index("1.5", 3), None);
+        assert_eq!(string_exotic_index("0.5", 3), None);
+    }
+
+    #[test]
+    fn negative_and_negative_zero_are_none() {
+        assert_eq!(string_exotic_index("-1", 3), None);
+        // CanonicalNumericIndexString("-0") is -0f; StringGetOwnProperty rejects it.
+        assert_eq!(string_exotic_index("-0", 3), None);
+    }
+
+    #[test]
+    fn non_finite_canonical_words_are_none() {
+        // "Infinity"/"NaN" round-trip through ToString but are not integral indices.
+        assert_eq!(string_exotic_index("Infinity", 3), None);
+        assert_eq!(string_exotic_index("-Infinity", 3), None);
+        assert_eq!(string_exotic_index("NaN", 3), None);
+    }
+
+    #[test]
+    fn length_word_is_not_an_index() {
+        assert_eq!(string_exotic_index("length", 3), None);
     }
 }

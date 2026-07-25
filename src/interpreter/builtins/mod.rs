@@ -9,6 +9,7 @@ mod iterators;
 pub(crate) mod node_host;
 mod number;
 mod promise;
+mod proxy;
 pub(crate) mod regexp;
 mod regexp_lookbehind;
 pub(crate) mod string;
@@ -566,7 +567,12 @@ impl Interpreter {
                         };
                     }
 
-                    if let JsValue::Object(o) = this {
+                    // §20.5.1.1 never reuses `this` — it always allocates via
+                    // OrdinaryCreateFromConstructor. A plain [[Call]] (e.g.
+                    // `Error.call(obj, msg)`) must not mutate an arbitrary `this`.
+                    if interp.new_target.is_some()
+                        && let JsValue::Object(o) = this
+                    {
                         if let Some(obj) = interp.get_object_cell(o.id) {
                             let mut o = obj.borrow_mut();
                             init_error!(o);
@@ -825,7 +831,12 @@ impl Interpreter {
                     1,
                     move |interp, this, args| {
                         let msg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        if let JsValue::Object(o) = this {
+                        // Only box into `this` when invoked via [[Construct]] — a plain
+                        // [[Call]] (e.g. `Test262Error.call(obj, msg)`) must not mutate
+                        // an arbitrary `this`.
+                        if interp.new_target.is_some()
+                            && let JsValue::Object(o) = this
+                        {
                             if let Some(obj) = interp.get_object(o.id) {
                                 let mut o = obj.borrow_mut();
                                 o.class_name = "Test262Error".to_string();
@@ -970,7 +981,12 @@ impl Interpreter {
                         };
                     }
 
-                    if let JsValue::Object(o) = this {
+                    // §20.5.6.1.1 never reuses `this` — it always allocates via
+                    // OrdinaryCreateFromConstructor. A plain [[Call]] (e.g.
+                    // `TypeError.call(obj, msg)`) must not mutate an arbitrary `this`.
+                    if interp.new_target.is_some()
+                        && let JsValue::Object(o) = this
+                    {
                         if let Some(obj) = interp.get_object(o.id) {
                             let mut o = obj.borrow_mut();
                             init_native_error!(o);
@@ -1194,7 +1210,13 @@ impl Interpreter {
                             };
                         }
 
-                        if let JsValue::Object(o) = this {
+                        // §20.5.7.1 never reuses `this` — it always allocates via
+                        // OrdinaryCreateFromConstructor. A plain [[Call]] (e.g.
+                        // `AggregateError.call(obj, errors, msg)`) must not mutate an
+                        // arbitrary `this`.
+                        if interp.new_target.is_some()
+                            && let JsValue::Object(o) = this
+                        {
                             if let Some(obj) = interp.get_object(o.id) {
                                 let mut o = obj.borrow_mut();
                                 init_agg_error!(o);
@@ -1468,6 +1490,8 @@ impl Interpreter {
                         }
                     }
                 };
+                // §22.1.1.1 step 3: only box into `this` when invoked via [[Construct]].
+                // A plain [[Call]] (e.g. `String.call(obj, x)`) must not mutate `this`.
                 if interp.new_target.is_some()
                     && let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
@@ -1481,10 +1505,6 @@ impl Interpreter {
                     if let Some(proto_rc) = proto {
                         obj.borrow_mut().prototype_id = Some(proto_rc);
                     }
-                }
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
-                {
                     obj.borrow_mut().primitive_value = Some(JsValue::String(js_str.clone()));
                     obj.borrow_mut().class_name = "String".to_string();
                 }
@@ -1589,7 +1609,10 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     }
                 };
-                if let JsValue::Object(o) = this
+                // §21.1.1.1 step 3: only box into `this` when invoked via [[Construct]].
+                // A plain [[Call]] (e.g. `Number.call(obj, x)`) must not mutate `this`.
+                if interp.new_target.is_some()
+                    && let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     // OrdinaryCreateFromConstructor — realm-aware prototype
@@ -1722,7 +1745,10 @@ impl Interpreter {
             JsFunction::constructor("Boolean".to_string(), 1, |interp, this, args| {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 let b = interp.to_boolean_val(&val);
-                if let JsValue::Object(o) = this
+                // §21.3.1.1 step 2: only box into `this` when invoked via [[Construct]].
+                // A plain [[Call]] (e.g. `Boolean.call(obj, x)`) must not mutate `this`.
+                if interp.new_target.is_some()
+                    && let JsValue::Object(o) = this
                     && let Some(obj) = interp.get_object(o.id)
                 {
                     // OrdinaryCreateFromConstructor — realm-aware prototype
@@ -1775,7 +1801,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let mut radix = number_ops::to_int32(radix_num);
-                let s = s.trim_matches(crate::interpreter::builtins::string::is_ecma_whitespace);
+                let s = s.trim_matches(crate::interpreter::helpers::is_ecma_whitespace);
                 let (negative, s) = if let Some(rest) = s.strip_prefix('-') {
                     (true, rest)
                 } else if let Some(rest) = s.strip_prefix('+') {
@@ -1835,7 +1861,7 @@ impl Interpreter {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
-                let s = s.trim_matches(crate::interpreter::builtins::string::is_ecma_whitespace);
+                let s = s.trim_matches(crate::interpreter::helpers::is_ecma_whitespace);
                 if s.is_empty() {
                     return Completion::Normal(JsValue::Number(f64::NAN));
                 }
@@ -2525,25 +2551,7 @@ impl Interpreter {
             .insert_builtin("sumPrecise".to_string(), sum_precise_fn);
 
         // @@toStringTag
-        {
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Math"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
-            self.get_object_cell_expect(math_obj_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(math_obj_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(math_obj_id, "Math");
 
         let math_val = JsValue::Object(crate::types::JsObject { id: math_id });
         self.realm()
@@ -2954,7 +2962,7 @@ impl Interpreter {
                                 for i in (0..interp.call_stack_frames.len()).rev() {
                                     if interp.call_stack_frames[i].func_obj_id == this_id {
                                         return Completion::Normal(
-                                            interp.call_stack_frames[i].arguments_obj.clone(),
+                                            interp.materialize_call_frame_arguments(i),
                                         );
                                     }
                                 }
@@ -3167,17 +3175,7 @@ impl Interpreter {
             }
 
             // Symbol.toStringTag = "AsyncFunction"
-            self.get_object_cell_expect(af_proto_id)
-                .borrow_mut()
-                .insert_property(
-                    JsPropertyKey::well_known_symbol("toStringTag"),
-                    PropertyDescriptor::data(
-                        JsValue::String(JsString::from_str("AsyncFunction")),
-                        false,
-                        false,
-                        true,
-                    ),
-                );
+            self.define_to_string_tag(af_proto_id, "AsyncFunction");
 
             self.realm_mut().async_function_prototype = Some(af_proto_id);
         }
@@ -3867,25 +3865,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("isRawJSON".to_string(), json_is_raw_json);
         // @@toStringTag
-        {
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("JSON"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
-            self.get_object_cell_expect(json_obj_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(json_obj_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(json_obj_id, "JSON");
         let json_val = JsValue::Object(crate::types::JsObject { id: json_obj_id });
         self.realm()
             .global_env
@@ -6786,6 +6766,22 @@ impl Interpreter {
                             return Completion::Normal(JsValue::Boolean(true));
                         }
                     }
+                    // String exotic [[Delete]] (§10.4.3): "length" and own
+                    // character indices are non-configurable.
+                    {
+                        let b = obj.borrow();
+                        if b.class_name == "String"
+                            && let Some(JsValue::String(ref s)) = b.primitive_value
+                            && (key.as_str() == Some("length")
+                                || crate::interpreter::types::string_exotic_index(
+                                    &key,
+                                    s.code_units.len(),
+                                )
+                                .is_some())
+                        {
+                            return Completion::Normal(JsValue::Boolean(false));
+                        }
+                    }
                     let mut obj_mut = obj.borrow_mut();
                     if let Some(desc) = obj_mut.properties.get(&key)
                         && desc.configurable == Some(false)
@@ -7647,25 +7643,7 @@ impl Interpreter {
             .insert_builtin("setPrototypeOf".to_string(), spo_fn);
 
         // @@toStringTag
-        {
-            let desc = PropertyDescriptor {
-                value: Some(JsValue::String(JsString::from_str("Reflect"))),
-                writable: Some(false),
-                enumerable: Some(false),
-                configurable: Some(true),
-                get: None,
-                set: None,
-            };
-            let key = crate::interpreter::key_intern::intern_well_known_symbol("toStringTag");
-            self.get_object_cell_expect(reflect_obj_id)
-                .borrow_mut()
-                .property_order
-                .push(key.clone());
-            self.get_object_cell_expect(reflect_obj_id)
-                .borrow_mut()
-                .properties
-                .insert(key, desc);
-        }
+        self.define_to_string_tag(reflect_obj_id, "Reflect");
 
         // Register Reflect as global
         let reflect_val = JsValue::Object(crate::types::JsObject { id: reflect_id });
@@ -7677,147 +7655,6 @@ impl Interpreter {
             .global_env
             .borrow_mut()
             .initialize_binding("Reflect", reflect_val);
-    }
-
-    fn setup_proxy(&mut self) {
-        // Proxy constructor
-        let proxy_fn = self.create_function(JsFunction::constructor(
-            "Proxy".to_string(),
-            2,
-            |interp, _this, args| {
-                // Must be called with new (we check new.target)
-                if interp.new_target.is_none() {
-                    return Completion::Throw(
-                        interp.create_type_error("Constructor Proxy requires 'new'"),
-                    );
-                }
-                let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let handler = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(target, JsValue::Object(_)) {
-                    return Completion::Throw(
-                        interp.create_type_error("Cannot create proxy with a non-object as target"),
-                    );
-                }
-                if !matches!(handler, JsValue::Object(_)) {
-                    return Completion::Throw(
-                        interp
-                            .create_type_error("Cannot create proxy with a non-object as handler"),
-                    );
-                }
-                let proxy_obj_id = interp.create_object_id();
-                interp
-                    .get_object_cell_expect(proxy_obj_id)
-                    .borrow_mut()
-                    .class_name = "Proxy".to_string();
-                if let JsValue::Object(ref t) = target
-                    && let JsValue::Object(ref h) = handler
-                    && let Some(target_rc) = interp.get_object_cell(t.id)
-                {
-                    let callable = target_rc.borrow().callable.clone();
-                    let mut proxy = interp.get_object_cell_expect(proxy_obj_id).borrow_mut();
-                    if callable.is_some() {
-                        proxy.callable = callable;
-                    }
-                    proxy.kind = crate::interpreter::types::ObjectKind::Proxy(
-                        crate::interpreter::types::ProxyData::active(t.id, h.id),
-                    );
-                }
-                let proxy_id = proxy_obj_id;
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: proxy_id }))
-            },
-        ));
-
-        // Override eval_new behavior: Proxy constructor returns proxy_obj, not new_obj
-        // The proxy constructor already returns an Object, so eval_new will use it.
-
-        // Per spec §26.2.2: Proxy constructor has no prototype property
-        if let JsValue::Object(ref pf) = proxy_fn
-            && let Some(proxy_func_obj) = self.get_object_cell(pf.id)
-        {
-            proxy_func_obj.borrow_mut().remove_property("prototype");
-        }
-
-        // Proxy.revocable(target, handler)
-        if let JsValue::Object(ref pf) = proxy_fn
-            && let Some(proxy_func_obj) = self.get_object(pf.id)
-        {
-            let revocable_fn = self.create_function(JsFunction::native(
-                "revocable".to_string(),
-                2,
-                |interp, _this, args| {
-                    let target = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let handler = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    if !matches!(target, JsValue::Object(_)) {
-                        return Completion::Throw(
-                            interp.create_type_error(
-                                "Cannot create proxy with a non-object as target",
-                            ),
-                        );
-                    }
-                    if !matches!(handler, JsValue::Object(_)) {
-                        return Completion::Throw(interp.create_type_error(
-                            "Cannot create proxy with a non-object as handler",
-                        ));
-                    }
-                    let proxy_obj_id = interp.create_object_id();
-                    interp
-                        .get_object_cell_expect(proxy_obj_id)
-                        .borrow_mut()
-                        .class_name = "Proxy".to_string();
-                    if let JsValue::Object(ref t) = target
-                        && let JsValue::Object(ref h) = handler
-                        && let Some(target_rc) = interp.get_object_cell(t.id)
-                    {
-                        let callable = target_rc.borrow().callable.clone();
-                        let mut obj = interp.get_object_cell_expect(proxy_obj_id).borrow_mut();
-                        if callable.is_some() {
-                            obj.callable = callable;
-                        }
-                        obj.kind = crate::interpreter::types::ObjectKind::Proxy(
-                            crate::interpreter::types::ProxyData::active(t.id, h.id),
-                        );
-                    }
-                    let proxy_id = proxy_obj_id;
-                    let proxy_val = JsValue::Object(crate::types::JsObject { id: proxy_id });
-
-                    // Create revoke function that captures proxy_id
-                    let revoke_fn = interp.create_function(JsFunction::native(
-                        "".to_string(),
-                        0,
-                        move |interp2, _this2, _args2| {
-                            if let Some(p) = interp2.get_object_cell(proxy_id)
-                                && let crate::interpreter::types::ObjectKind::Proxy(ref mut pd) =
-                                    p.borrow_mut().kind
-                            {
-                                pd.revoke();
-                            }
-                            Completion::Normal(JsValue::Undefined)
-                        },
-                    ));
-
-                    let result_id = interp.create_object_id();
-                    interp
-                        .get_object_cell_expect(result_id)
-                        .borrow_mut()
-                        .insert_builtin("proxy".to_string(), proxy_val);
-                    interp
-                        .get_object_cell_expect(result_id)
-                        .borrow_mut()
-                        .insert_builtin("revoke".to_string(), revoke_fn);
-                    Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
-                },
-            ));
-            proxy_func_obj
-                .borrow_mut()
-                .insert_builtin("revocable".to_string(), revocable_fn);
-        }
-
-        self.realm()
-            .global_env
-            .borrow_mut()
-            .declare("Proxy", BindingKind::Var);
-        let env = self.realm().global_env.clone();
-        let _ = self.env_set(&env, "Proxy", proxy_fn);
     }
 
     fn setup_function_prototype(&mut self, obj_proto_id: u64) {
@@ -8147,20 +7984,7 @@ impl Interpreter {
         }
 
         // ShadowRealm.prototype[Symbol.toStringTag] = "ShadowRealm"
-        let to_string_tag_key = self
-            .get_symbol_key("toStringTag")
-            .unwrap_or_else(|| JsPropertyKey::well_known_symbol("toStringTag"));
-        self.get_object_cell_expect(proto_id)
-            .borrow_mut()
-            .insert_property(
-                to_string_tag_key,
-                PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("ShadowRealm")),
-                    false,
-                    false,
-                    true,
-                ),
-            );
+        self.define_to_string_tag(proto_id, "ShadowRealm");
 
         // ShadowRealm.prototype.evaluate
         let evaluate_fn = self.create_function(JsFunction::native(

@@ -18,10 +18,10 @@ use crate::interpreter::ic::{CallIcSlot, PropIcSlot};
 /// index so it can be passed down through the evaluator without borrowing the
 /// interpreter.
 #[derive(Clone, Copy, Debug)]
-pub struct BodyStoreHandle(pub usize);
+pub(crate) struct BodyStoreHandle(pub usize);
 
 /// Interpreter-side side table that maps a body identity to its cache.
-pub struct IcStore {
+pub(crate) struct IcStore {
     /// Map from the body statement-vector pointer to the store index. The key
     /// is the `Rc` pointer so that cloned ASTs sharing the same body share the
     /// same cache. Each `BodyIcStore` pins a clone of the body's statement `Rc`
@@ -32,7 +32,7 @@ pub struct IcStore {
 }
 
 impl IcStore {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             index: HashMap::new(),
             stores: Vec::new(),
@@ -42,7 +42,7 @@ impl IcStore {
     /// Return the handle for a body's cache, creating it on first request.
     /// The body must already have had its IC sites assigned (e.g. by the
     /// parser or by `ast::assign_ic_sites` for dynamic code).
-    pub fn for_body(&mut self, body: &Body) -> BodyStoreHandle {
+    pub(crate) fn for_body(&mut self, body: &Body) -> BodyStoreHandle {
         let key = Rc::as_ptr(&body.statements);
         if let Some(&idx) = self.index.get(&key) {
             return BodyStoreHandle(idx);
@@ -55,14 +55,14 @@ impl IcStore {
     }
 
     /// Return a mutable reference to the cache for a handle.
-    pub fn store_mut(&mut self, handle: BodyStoreHandle) -> &mut BodyIcStore {
+    pub(crate) fn store_mut(&mut self, handle: BodyStoreHandle) -> &mut BodyIcStore {
         &mut self.stores[handle.0]
     }
 }
 
 /// Per-body cache for call and property IC slots. Sized once from the
 /// `BodyIcInfo` produced by `ast::assign_ic_sites`.
-pub struct BodyIcStore {
+pub(crate) struct BodyIcStore {
     call_slots: Vec<CallIcSlot>,
     prop_slots: Vec<PropIcSlot>,
     /// Pins the body's statement `Rc` alive so its `Rc::as_ptr` address (used as
@@ -82,13 +82,13 @@ impl BodyIcStore {
 
     /// Return a mutable reference to the call slot for a site id.
     #[inline]
-    pub fn call_slot(&mut self, id: CallSiteId) -> &mut CallIcSlot {
+    pub(crate) fn call_slot(&mut self, id: CallSiteId) -> &mut CallIcSlot {
         &mut self.call_slots[id.0 as usize]
     }
 
     /// Return a mutable reference to the property slot for a site id.
     #[inline]
-    pub fn prop_slot(&mut self, id: PropSiteId) -> &mut PropIcSlot {
+    pub(crate) fn prop_slot(&mut self, id: PropSiteId) -> &mut PropIcSlot {
         &mut self.prop_slots[id.0 as usize]
     }
 }

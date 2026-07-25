@@ -27,6 +27,18 @@ fn run_script(source: &str) -> Interpreter {
     interp
 }
 
+fn run_script_as_blocking_agent(source: &str) -> Interpreter {
+    let program = parse_program(source);
+    let mut interp = Interpreter::new();
+    interp.can_block = true;
+    let result = interp.run(&program);
+    assert!(
+        matches!(result, Completion::Normal(_) | Completion::Empty),
+        "unexpected completion: {result:?}"
+    );
+    interp
+}
+
 fn run_with_path(source: &str, path: &Path) -> Interpreter {
     let program = parse_program(source);
     let mut interp = Interpreter::new();
@@ -69,6 +81,16 @@ fn global_number(interp: &Interpreter, name: &str) -> f64 {
     }
 }
 
+fn global_object_id(interp: &Interpreter, name: &str) -> u64 {
+    match interp
+        .get_global_var_ref(name)
+        .unwrap_or(JsValue::Undefined)
+    {
+        JsValue::Object(o) => o.id,
+        other => panic!("expected global object for {name}, got {other:?}"),
+    }
+}
+
 fn temp_case_dir(label: &str) -> PathBuf {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -86,6 +108,61 @@ fn write_case_file(dir: &Path, name: &str, source: &str) -> PathBuf {
     let path = dir.join(name);
     fs::write(&path, source).expect("write module file");
     path
+}
+
+#[test]
+fn function_environment_pool_reuses_and_resets_unescaped_storage() {
+    let mut interp = Interpreter::new();
+    let first_parent = Environment::new(None);
+    let env = interp.acquire_function_environment(first_parent, 3);
+    let allocation = Rc::as_ptr(&env);
+    {
+        let mut env = env.borrow_mut();
+        env.declare("stale", BindingKind::Var);
+        env.is_arrow_scope = true;
+        env.arguments_immutable = true;
+    }
+
+    interp.recycle_function_environment(env);
+    assert_eq!(interp.function_env_pool.len(), 1);
+
+    let second_parent = Environment::new(None);
+    let reused = interp.acquire_function_environment(second_parent.clone(), 2);
+    assert_eq!(Rc::as_ptr(&reused), allocation);
+    let reused_env = reused.borrow();
+    assert!(reused_env.bindings.is_empty());
+    assert!(!reused_env.is_arrow_scope);
+    assert!(!reused_env.arguments_immutable);
+    assert!(Rc::ptr_eq(
+        reused_env.parent.as_ref().expect("new parent"),
+        &second_parent
+    ));
+}
+
+#[test]
+fn function_environment_pool_rejects_escaped_storage() {
+    let mut interp = Interpreter::new();
+    let env = interp.acquire_function_environment(Environment::new(None), 1);
+    env.borrow_mut().declare("captured", BindingKind::Var);
+    let escaped = env.clone();
+
+    interp.recycle_function_environment(env);
+
+    assert!(interp.function_env_pool.is_empty());
+    assert!(escaped.borrow().bindings.contains_key("captured"));
+}
+
+#[test]
+fn ordinary_calls_return_non_escaping_activations_to_the_pool() {
+    let interp = run_script(
+        r#"
+        function addOne(value) { return value + 1; }
+        var result = addOne(addOne(0));
+        if (result !== 2) throw new Error("unexpected result");
+        "#,
+    );
+
+    assert!(!interp.function_env_pool.is_empty());
 }
 
 #[test]
@@ -206,6 +283,71 @@ fn define_getter_installs_a_correctly_shaped_accessor() {
     let target_val = JsValue::Object(crate::types::JsObject { id: target_id });
     match interp.call_function(&getter, &target_val, &[]) {
         Completion::Normal(JsValue::Number(n)) => assert_eq!(n, 42.0),
+        other => panic!("unexpected completion: {other:?}"),
+    }
+}
+
+#[test]
+fn define_to_string_tag_installs_a_correctly_shaped_data_property() {
+    let mut interp = Interpreter::new();
+    let target_id = interp.create_object_id();
+
+    interp.define_to_string_tag(target_id, "CorrectlyShaped");
+
+    // The tag lives under the @@toStringTag well-known symbol key.
+    let tag_key = crate::types::JsPropertyKey::well_known_symbol("toStringTag");
+
+    // Raw stored descriptor pins exactly what define_to_string_tag installs.
+    let desc = interp
+        .get_object_cell_expect(target_id)
+        .borrow()
+        .get_own_property_full(&tag_key)
+        .expect("@@toStringTag property installed");
+
+    // Per spec, @@toStringTag on builtin prototypes is a data property:
+    // { [[Value]]: tag, [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: true }.
+    match desc.value {
+        Some(JsValue::String(ref s)) => assert_eq!(s.to_rust_string(), "CorrectlyShaped"),
+        ref other => panic!("expected string tag value, got {other:?}"),
+    }
+    assert_eq!(desc.writable, Some(false), "@@toStringTag is non-writable");
+    assert_eq!(
+        desc.enumerable,
+        Some(false),
+        "@@toStringTag is non-enumerable"
+    );
+    assert_eq!(
+        desc.configurable,
+        Some(true),
+        "@@toStringTag stays configurable"
+    );
+    assert!(desc.get.is_none(), "data property has no getter");
+    assert!(desc.set.is_none(), "data property has no setter");
+
+    // Routed through insert_property, so property_order and properties stay in
+    // sync: the symbol key must appear exactly once in the enumeration order.
+    let cell = interp.get_object_cell_expect(target_id);
+    let order_hits = cell
+        .borrow()
+        .property_order
+        .iter()
+        .filter(|k| k.as_bytes() == tag_key.as_bytes())
+        .count();
+    assert_eq!(
+        order_hits, 1,
+        "@@toStringTag appears once in property_order"
+    );
+
+    // Observable: Object.prototype.toString sees the installed tag.
+    let target_val = JsValue::Object(crate::types::JsObject { id: target_id });
+    let to_string = match interp.run(&parse_program("Object.prototype.toString;")) {
+        Completion::Normal(v) => v,
+        other => panic!("expected Object.prototype.toString value, got {other:?}"),
+    };
+    match interp.call_function(&to_string, &target_val, &[]) {
+        Completion::Normal(JsValue::String(s)) => {
+            assert_eq!(s.to_rust_string(), "[object CorrectlyShaped]")
+        }
         other => panic!("unexpected completion: {other:?}"),
     }
 }
@@ -735,6 +877,107 @@ fn shared_array_buffer_atomics_smoke() {
     assert_eq!(global_string(&interp, "result"), "7");
 }
 
+// -- Atomics / SharedArrayBuffer edge cases (issue #25) ----------------------------
+// Deterministic, single-threaded coverage of Atomics plumbing that test262 mostly
+// exercises only through the real multi-agent $262.agent harness. Cross-thread
+// wake-up itself is deliberately NOT tested here (timing-dependent, and already
+// exercised by test262's own agent tests) — these instead lock down the branch
+// logic directly, setting `can_block` on the interpreter rather than spawning a
+// real OS thread.
+
+#[test]
+fn atomics_wait_on_matching_value_throws_on_non_blocking_main_agent() {
+    let interp = run_script(
+        r#"
+        var result = "";
+        var sab = new SharedArrayBuffer(4);
+        var view = new Int32Array(sab);
+        try {
+            Atomics.wait(view, 0, 0);
+            result = "no-throw";
+        } catch (e) {
+            result = e.constructor.name;
+        }
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "TypeError");
+}
+
+#[test]
+fn atomics_wait_value_mismatch_returns_not_equal_without_blocking() {
+    let start = std::time::Instant::now();
+    let interp = run_script(
+        r#"
+        var sab = new SharedArrayBuffer(4);
+        var view = new Int32Array(sab);
+        var result = Atomics.wait(view, 0, 1, Infinity);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "not-equal");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "a value mismatch must return immediately, never touching the wait/notify blocking path"
+    );
+}
+
+#[test]
+fn atomics_wait_zero_timeout_on_blocking_agent_returns_timed_out_immediately() {
+    let start = std::time::Instant::now();
+    let interp = run_script_as_blocking_agent(
+        r#"
+        var sab = new SharedArrayBuffer(4);
+        var view = new Int32Array(sab);
+        var result = Atomics.wait(view, 0, 0, 0);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "timed-out");
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(2),
+        "a zero timeout must never register a waiter or actually block"
+    );
+}
+
+#[test]
+fn atomics_notify_on_non_shared_buffer_returns_zero_without_throwing() {
+    let interp = run_script(
+        r#"
+        var view = new Int32Array(new ArrayBuffer(4));
+        var result = Atomics.notify(view, 0);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "result"), 0.0);
+}
+
+#[test]
+fn atomics_notify_on_shared_buffer_with_no_waiters_returns_zero() {
+    let interp = run_script(
+        r#"
+        var sab = new SharedArrayBuffer(4);
+        var view = new Int32Array(sab);
+        var result = Atomics.notify(view, 0);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "result"), 0.0);
+}
+
+#[test]
+fn atomics_add_on_non_integer_typed_array_throws_type_error() {
+    let interp = run_script(
+        r#"
+        var result = "";
+        var sab = new SharedArrayBuffer(8);
+        var view = new Float64Array(sab);
+        try {
+            Atomics.add(view, 0, 1);
+            result = "no-throw";
+        } catch (e) {
+            result = e.constructor.name;
+        }
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "TypeError");
+}
+
 #[test]
 fn typed_array_clamps_assigned_values() {
     let interp = run_script(
@@ -746,6 +989,160 @@ fn typed_array_clamps_assigned_values() {
         "#,
     );
     assert_eq!(global_string(&interp, "result"), "255");
+}
+
+// -- Resizable ArrayBuffer / growable SharedArrayBuffer invariants (issue #25) -----
+// Whitebox checks on the length-tracking bookkeeping in types.rs. A bug here is a
+// Rust panic or an out-of-bounds slice access, not just a wrong JS-visible value, so
+// these need direct Rust coverage rather than relying on test262 alone.
+
+#[test]
+fn length_tracking_view_recomputes_length_after_resizable_buffer_grows() {
+    let interp = run_script(
+        r#"
+        var buf = new ArrayBuffer(4, { maxByteLength: 16 });
+        var view = new Int32Array(buf);
+        buf.resize(16);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    assert!(
+        ta.is_length_tracking,
+        "omitted length over a resizable buffer must be length-tracking"
+    );
+    assert_eq!(
+        typed_array_length(ta),
+        4,
+        "length must recompute to the grown buffer's element count"
+    );
+    assert!(!is_typed_array_out_of_bounds(ta));
+}
+
+#[test]
+fn length_tracking_view_with_offset_goes_out_of_bounds_after_shrink_below_offset() {
+    let interp = run_script(
+        r#"
+        var buf = new ArrayBuffer(16, { maxByteLength: 16 });
+        var view = new Int32Array(buf, 8);
+        buf.resize(4);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    assert!(
+        is_typed_array_out_of_bounds(ta),
+        "byte_offset (8) now exceeds the shrunk buffer length (4)"
+    );
+    assert_eq!(
+        typed_array_length(ta),
+        0,
+        "an out-of-bounds length-tracking view must saturate to zero, not underflow"
+    );
+}
+
+#[test]
+fn length_tracking_view_recomputes_length_after_growable_shared_buffer_grows() {
+    let interp = run_script(
+        r#"
+        var sab = new SharedArrayBuffer(4, { maxByteLength: 16 });
+        var view = new Int32Array(sab);
+        sab.grow(16);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    assert!(ta.is_length_tracking);
+    assert_eq!(typed_array_length(ta), 4);
+    assert!(!is_typed_array_out_of_bounds(ta));
+}
+
+#[test]
+fn explicit_length_view_over_resizable_buffer_is_not_fixed_length() {
+    let interp = run_script(
+        r#"
+        var buf = new ArrayBuffer(16, { maxByteLength: 16 });
+        var view = new Int32Array(buf, 0, 2);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    let buf_obj = interp.get_object(global_object_id(&interp, "buf")).unwrap();
+    let buf_ref = buf_obj.borrow();
+    assert!(
+        !is_typed_array_fixed_length(ta, &buf_ref),
+        "an explicit-length view over a resizable (non-shared) buffer can still go \
+         out-of-bounds if the buffer shrinks, so it is not IsTypedArrayFixedLength"
+    );
+}
+
+#[test]
+fn explicit_length_view_over_growable_shared_buffer_is_fixed_length() {
+    let interp = run_script(
+        r#"
+        var sab = new SharedArrayBuffer(16, { maxByteLength: 16 });
+        var view = new Int32Array(sab, 0, 2);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    let buf_obj = interp.get_object(global_object_id(&interp, "sab")).unwrap();
+    let buf_ref = buf_obj.borrow();
+    assert!(
+        is_typed_array_fixed_length(ta, &buf_ref),
+        "a growable SharedArrayBuffer can only grow, never shrink, so an explicit-length \
+         view over it stays IsTypedArrayFixedLength"
+    );
+}
+
+#[test]
+fn is_valid_integer_index_rejects_stale_and_malformed_indices() {
+    let interp = run_script(
+        r#"
+        var buf = new ArrayBuffer(16, { maxByteLength: 16 });
+        var view = new Int32Array(buf);
+        buf.resize(8);
+        "#,
+    );
+    let ta_obj = interp
+        .get_object(global_object_id(&interp, "view"))
+        .unwrap();
+    let ta_ref = ta_obj.borrow();
+    let ta = ta_ref.typed_array_info().unwrap();
+    assert!(
+        is_valid_integer_index(ta, 1.0),
+        "index 1 is still within the shrunk length (2)"
+    );
+    assert!(
+        !is_valid_integer_index(ta, 3.0),
+        "index 3 was valid before the shrink but must be rejected now"
+    );
+    assert!(!is_valid_integer_index(ta, f64::NAN));
+    assert!(!is_valid_integer_index(ta, f64::INFINITY));
+    assert!(
+        !is_valid_integer_index(ta, -0.0),
+        "-0 is not a valid integer index"
+    );
+    assert!(!is_valid_integer_index(ta, -1.0));
+    assert!(
+        !is_valid_integer_index(ta, 1.5),
+        "non-integer index must be rejected"
+    );
 }
 
 /// Regression test for PR 1b.2 (#105): prototype chain survives GC.
@@ -1855,6 +2252,215 @@ mod to_integer_or_infinity_value_tests {
             "#,
         );
         assert_eq!(global_string(&interp, "R"), "threw");
+    }
+}
+
+/// §7.1.4.1 StringToNumber through the public `Number(...)` seam. Expected
+/// values are the ECMA-262 truth table (cross-checked against node): these lock
+/// the three divergences the deepened conversion fixes — Rust's whitespace set,
+/// hex overflow, and leaked `inf`/`nan` spellings. Whitespace chars are built
+/// with `String.fromCharCode` so the source stays ASCII-clean.
+mod string_to_number_seam_tests {
+    use super::*;
+
+    #[test]
+    fn ecmascript_whitespace_is_trimmed_but_rust_only_whitespace_is_not() {
+        let interp = run_script(
+            r#"
+            var nel    = Number(String.fromCharCode(0x85) + "1");   // U+0085 NEL: not WhiteSpace
+            var zwnbsp = Number(String.fromCharCode(0xFEFF) + "1"); // U+FEFF ZWNBSP: WhiteSpace
+            var mixed  = Number("\t\n\r 5 \t");
+            "#,
+        );
+        assert!(global_number(&interp, "nel").is_nan());
+        assert_eq!(global_number(&interp, "zwnbsp"), 1.0);
+        assert_eq!(global_number(&interp, "mixed"), 5.0);
+    }
+
+    #[test]
+    fn only_the_capitalized_infinity_word_is_infinite() {
+        let interp = run_script(
+            r#"
+            var inf   = Number("inf");
+            var pInf  = Number("+Infinity");
+            var nInf  = Number("-Infinity");
+            var lc    = Number("infinity");
+            var nan   = +"nan";
+            "#,
+        );
+        assert!(global_number(&interp, "inf").is_nan());
+        assert_eq!(global_number(&interp, "pInf"), f64::INFINITY);
+        assert_eq!(global_number(&interp, "nInf"), f64::NEG_INFINITY);
+        assert!(global_number(&interp, "lc").is_nan());
+        assert!(global_number(&interp, "nan").is_nan());
+    }
+
+    #[test]
+    fn large_non_decimal_literals_round_instead_of_overflowing() {
+        let interp = run_script(
+            r#"
+            var big   = Number("0x10000000000000000"); // 2**64
+            var exact = Number("0x6269e107215582e");
+            var carry = Number("0x200000000000011");
+            var small = Number("0o17");
+            var empty = Number("0x");
+            "#,
+        );
+        assert_eq!(global_number(&interp, "big"), 2f64.powi(64));
+        assert_eq!(global_number(&interp, "exact"), 443_215_406_813_239_360.0);
+        assert_eq!(global_number(&interp, "carry"), 2f64.powi(57) + 32.0);
+        assert_eq!(global_number(&interp, "small"), 15.0);
+        assert!(global_number(&interp, "empty").is_nan());
+    }
+}
+
+/// §10.4.3 String-exotic objects expose an own indexed character property only
+/// when the key is the CanonicalNumericIndexString of an in-range integer.
+/// These exercise the public seams (member read, `in`, GetOwnPropertyDescriptor,
+/// DefineProperty, delete, Reflect) that all route through `string_exotic_index`.
+/// Expected values are node's (spec-conformant) results as known-good literals.
+mod string_exotic_index_seam_tests {
+    use super::*;
+
+    #[test]
+    fn non_canonical_index_keys_are_not_own_string_properties() {
+        // "01"/"+1"/"1.0" are not CanonicalNumericIndexStrings, so they name no
+        // own character property of the string; only "1" does.
+        let interp = run_script(
+            r#"
+            var s = "abc";
+            var o = Object("abc");
+            var report = [
+                String(s["01"]),
+                String(s["+1"]),
+                String(s["1.0"]),
+                String(s["1"]),
+                String(o["01"]),
+                ("01" in o),
+                ("1" in o),
+                (Object.getOwnPropertyDescriptor(o, "01") === undefined),
+                Object.keys(o).join(",")
+            ].join("|");
+            "#,
+        );
+        assert_eq!(
+            global_string(&interp, "report"),
+            "undefined|undefined|undefined|b|undefined|false|true|true|0,1,2"
+        );
+    }
+
+    #[test]
+    fn define_property_on_non_canonical_index_is_allowed() {
+        // "01" is an ordinary property key, so defineProperty must succeed and
+        // the value must read back (the string-index redefinition guard must
+        // not fire for a look-alike key).
+        let interp = run_script(
+            r#"
+            var o = Object("abc");
+            Object.defineProperty(o, "01", {
+                value: "z", writable: true, configurable: true, enumerable: true
+            });
+            // [[Set]] of a look-alike key must also store an ordinary property
+            // (the non-writable string-index guard must not fire for "+2").
+            var p = Object("abc");
+            p["+2"] = "w";
+            var report = String(o["01"]) + "|" + String(p["+2"]);
+            "#,
+        );
+        assert_eq!(global_string(&interp, "report"), "z|w");
+    }
+
+    #[test]
+    fn delete_distinguishes_canonical_indices_from_look_alikes() {
+        // Own indices are non-configurable (delete -> false); look-alikes are
+        // ordinary absent properties (delete -> true). Indexing is by UTF-16
+        // code unit, so both halves of a non-BMP code point are in range.
+        let interp = run_script(
+            r#"
+            var report = [
+                delete Object("abc")["01"],
+                delete Object("abc")[1],
+                Reflect.deleteProperty(Object("abc"), "1"),
+                Reflect.deleteProperty(Object("abc"), "01"),
+                Reflect.deleteProperty(Object("\u{1F4A9}"), "1"),
+                Reflect.deleteProperty(Object("\u{1F4A9}"), "0")
+            ].join(",");
+            "#,
+        );
+        assert_eq!(
+            global_string(&interp, "report"),
+            "true,false,false,true,false,false"
+        );
+    }
+
+    #[test]
+    fn strict_delete_of_own_string_index_throws_but_look_alike_succeeds() {
+        // Index 1 is a non-configurable own property, so strict-mode delete
+        // throws a TypeError; "01" is deletable and returns true.
+        let interp = run_script(
+            r#"
+            "use strict";
+            var deleted01 = delete Object("abc")["01"];
+            var threw = false;
+            try { delete Object("abc")[1]; } catch (e) { threw = (e instanceof TypeError); }
+            var report = String(deleted01) + "|" + String(threw);
+            "#,
+        );
+        assert_eq!(global_string(&interp, "report"), "true|true");
+    }
+}
+
+/// §13.3.7 Optional Chains and §6.2.5.5 GetValue require primitive property
+/// references to perform wrapper [[Get]] with the primitive as the receiver.
+mod optional_chain_primitive_get_tests {
+    use super::*;
+
+    #[test]
+    fn prototype_accessors_are_invoked_with_the_primitive_receiver() {
+        run_script(
+            r#"
+            function install(proto, key, expectedThis, result) {
+                Object.defineProperty(proto, key, {
+                    configurable: true,
+                    get: function () {
+                        "use strict";
+                        if (this !== expectedThis) {
+                            throw new Error("getter received the wrong primitive");
+                        }
+                        return result;
+                    }
+                });
+            }
+
+            var symbol = Symbol("receiver");
+            install(String.prototype, "01", "abc", 41);
+            install(String.prototype, "5", "abc", 42);
+            install(Number.prototype, "optionalAccessor", 5, 43);
+            install(Boolean.prototype, "optionalAccessor", true, 44);
+            install(Symbol.prototype, "optionalAccessor", symbol, 45);
+            install(BigInt.prototype, "optionalAccessor", 7n, 46);
+
+            if ("abc"?.["01"] !== 41) throw new Error("String look-alike getter skipped");
+            if ("abc"?.["5"] !== 42) throw new Error("String out-of-range getter skipped");
+            if ((5)?.optionalAccessor !== 43) throw new Error("Number getter skipped");
+            if ((true)?.["optionalAccessor"] !== 44) throw new Error("Boolean getter skipped");
+            if (symbol?.optionalAccessor !== 45) throw new Error("Symbol getter skipped");
+            if ((7n)?.["optionalAccessor"] !== 46) throw new Error("BigInt getter skipped");
+
+            var marker = {};
+            Object.defineProperty(Boolean.prototype, "throwingOptionalAccessor", {
+                configurable: true,
+                get: function () { throw marker; }
+            });
+            var propagated = false;
+            try {
+                (false)?.throwingOptionalAccessor;
+            } catch (error) {
+                propagated = error === marker;
+            }
+            if (!propagated) throw new Error("getter exception was not propagated");
+            "#,
+        );
     }
 }
 

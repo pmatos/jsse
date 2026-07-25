@@ -22,7 +22,7 @@ impl Interpreter {
     ///
     /// Must run after `setup_globals` (so the global object exists) and before
     /// the Node prelude/main are executed. Never called under test262.
-    pub fn enable_node_host(&mut self) {
+    pub(crate) fn enable_node_host(&mut self) {
         self.node_host_enabled = true;
         self.host_clock_start = Some(std::time::Instant::now());
         self.setup_node_host();

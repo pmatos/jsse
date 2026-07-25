@@ -1539,7 +1539,7 @@ mod date_field_tests {
     fn local_branch_routes_through_local_time_utc_branch_does_not() {
         // The UTC branch must pass t through unchanged; the local branch must
         // apply local_time, so the two branches differ by exactly the host
-        // offset local_tza(). This has teeth only for a developer running in a
+        // offset local_tza(t). This has teeth only for a developer running in a
         // non-UTC zone: on a UTC host (the CI default) local_tza() is 0 and the
         // branches coincide -- an inherent blind spot, since local_time is
         // host-derived and not injectable, so routing is unobservable there.
@@ -1547,7 +1547,7 @@ mod date_field_tests {
         assert_eq!(date_field_value(Y2021, false, id), Y2021);
         assert_eq!(
             date_field_value(Y2021, true, id) - date_field_value(Y2021, false, id),
-            local_tza(),
+            local_tza(Y2021),
         );
     }
 }

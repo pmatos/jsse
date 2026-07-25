@@ -85,6 +85,702 @@ eq(
   "OBJ",
   "%s object with toString"
 );
+eq(util.format("%s", [1, 2, 3]), "[ 1, 2, 3 ]", "%s array uses inspect");
+eq(util.format("%s", { a: 1 }), "{ a: 1 }", "%s plain object uses inspect");
+eq(
+  util.format(
+    "%s",
+    new (class {
+      toString() {
+        return "CLASS";
+      }
+    })()
+  ),
+  "CLASS",
+  "%s class-prototype toString uses String"
+);
+eq(
+  util.format("%s", new Date(0)),
+  "1970-01-01T00:00:00.000Z",
+  "%s Date keeps built-in coercion on inspect path"
+);
+(function () {
+  var originalGetTime = Date.prototype.getTime;
+  var originalToISOString = Date.prototype.toISOString;
+  try {
+    Date.prototype.getTime = function () {
+      throw new Error("patched getTime called");
+    };
+    Date.prototype.toISOString = function () {
+      throw new Error("patched toISOString called");
+    };
+    eq(
+      util.format("%s", new Date(0)),
+      "1970-01-01T00:00:00.000Z",
+      "%s Date ignores patched formatting methods"
+    );
+    eq(
+      util.format("%s", new Date(NaN)),
+      "Invalid Date",
+      "%s invalid Date ignores patched formatting methods"
+    );
+  } finally {
+    Date.prototype.getTime = originalGetTime;
+    Date.prototype.toISOString = originalToISOString;
+  }
+})();
+eq(
+  util.format("%s", Object.create(Date.prototype)),
+  "Date {}",
+  "%s Date prototype spoof falls back to ordinary inspect"
+);
+eq(util.format("%s", /re/g), "/re/g", "%s RegExp uses inspect");
+(function () {
+  var originalDate = globalThis.Date;
+  var originalRegExp = globalThis.RegExp;
+  var date = new originalDate(0);
+  var regexp = new originalRegExp("re", "g");
+  var formattedDate;
+  var formattedRegExp;
+  try {
+    globalThis.Date = function Date() {};
+    globalThis.RegExp = function RegExp() {};
+    formattedDate = util.format("%s", date);
+    formattedRegExp = util.format("%s", regexp);
+  } finally {
+    globalThis.Date = originalDate;
+    globalThis.RegExp = originalRegExp;
+  }
+  eq(
+    formattedDate,
+    "1970-01-01T00:00:00.000Z",
+    "%s Date ignores a replaced global constructor"
+  );
+  eq(
+    formattedRegExp,
+    "/re/g",
+    "%s RegExp ignores a replaced global constructor"
+  );
+})();
+(function () {
+  var original = Object.getOwnPropertyDescriptor(
+    RegExp,
+    Symbol.hasInstance
+  );
+  try {
+    Object.defineProperty(RegExp, Symbol.hasInstance, {
+      configurable: true,
+      value: function () {
+        return false;
+      },
+    });
+    eq(
+      util.format("%s", /re/g),
+      "/re/g",
+      "%s RegExp ignores false Symbol.hasInstance"
+    );
+
+    Object.defineProperty(RegExp, Symbol.hasInstance, {
+      configurable: true,
+      value: function () {
+        throw new Error("patched RegExp Symbol.hasInstance called");
+      },
+    });
+    eq(
+      util.format("%s", /re/g),
+      "/re/g",
+      "%s RegExp ignores throwing Symbol.hasInstance"
+    );
+  } finally {
+    if (original) {
+      Object.defineProperty(RegExp, Symbol.hasInstance, original);
+    } else {
+      delete RegExp[Symbol.hasInstance];
+    }
+  }
+})();
+(function () {
+  var original = RegExp.prototype.toString;
+  try {
+    RegExp.prototype.toString = function () {
+      throw new Error("patched RegExp toString called");
+    };
+    eq(
+      util.format("%s", /re/g),
+      "/re/g",
+      "%s RegExp ignores patched toString"
+    );
+  } finally {
+    RegExp.prototype.toString = original;
+  }
+})();
+(function () {
+  function checkThrowingAccessor(name) {
+    var original = Object.getOwnPropertyDescriptor(RegExp.prototype, name);
+    var sentinel = new Error("patched RegExp " + name);
+    var caught;
+    try {
+      Object.defineProperty(RegExp.prototype, name, {
+        configurable: true,
+        get: function () {
+          throw sentinel;
+        },
+      });
+      try {
+        util.format("%s", /re/g);
+      } catch (e) {
+        caught = e;
+      }
+      truthy(
+        caught === sentinel,
+        "%s RegExp rethrows patched " + name + " accessor error"
+      );
+    } finally {
+      Object.defineProperty(RegExp.prototype, name, original);
+    }
+  }
+
+  checkThrowingAccessor("source");
+  checkThrowingAccessor("flags");
+})();
+eq(
+  util.format("%s", Object.create(RegExp.prototype)),
+  "RegExp {}",
+  "%s RegExp prototype spoof falls back to ordinary inspect"
+);
+eq(
+  util.format("%s", { toString: null, a: 1 }),
+  "{ toString: null, a: 1 }",
+  "%s non-callable toString uses inspect"
+);
+eq(util.format("%s", new Number(-0)), "[Number: -0]", "%s Number wrapper");
+eq(util.format("%s", new String("x")), "[String: 'x']", "%s String wrapper");
+eq(util.format("%s", new Boolean(true)), "[Boolean: true]", "%s Boolean wrapper");
+eq(util.format("%s", Object(10n)), "[BigInt: 10n]", "%s BigInt wrapper");
+eq(
+  util.format("%s", Object(Symbol("wrapped"))),
+  "[Symbol: Symbol(wrapped)]",
+  "%s Symbol wrapper"
+);
+(function () {
+  var cases = [
+    [
+      Date,
+      function () {
+        return new Date(0);
+      },
+      "1970-01-01T00:00:00.000Z",
+      "Date",
+    ],
+    [
+      Number,
+      function () {
+        return new Number(1);
+      },
+      "[Number: 1]",
+      "Number",
+    ],
+    [
+      String,
+      function () {
+        return new String("x");
+      },
+      "[String: 'x']",
+      "String",
+    ],
+    [
+      Boolean,
+      function () {
+        return new Boolean(true);
+      },
+      "[Boolean: true]",
+      "Boolean",
+    ],
+    [
+      BigInt,
+      function () {
+        return Object(10n);
+      },
+      "Object [BigInt] {}",
+      "BigInt",
+    ],
+    [
+      Symbol,
+      function () {
+        return Object(Symbol("wrapped"));
+      },
+      "Object [Symbol] {}",
+      "Symbol",
+    ],
+  ];
+
+  for (var i = 0; i < cases.length; i++) {
+    var ctor = cases[i][0];
+    var makeValue = cases[i][1];
+    var expected = cases[i][2];
+    var name = cases[i][3];
+    var original = Object.getOwnPropertyDescriptor(ctor, Symbol.hasInstance);
+    try {
+      Object.defineProperty(ctor, Symbol.hasInstance, {
+        configurable: true,
+        value: function () {
+          return false;
+        },
+      });
+      eq(
+        util.format("%s", makeValue()),
+        expected,
+        "%s " + name + " ignores false Symbol.hasInstance"
+      );
+
+      Object.defineProperty(ctor, Symbol.hasInstance, {
+        configurable: true,
+        value: function () {
+          throw new Error("patched Symbol.hasInstance called");
+        },
+      });
+      eq(
+        util.format("%s", makeValue()),
+        expected,
+        "%s " + name + " ignores throwing Symbol.hasInstance"
+      );
+    } finally {
+      if (original) {
+        Object.defineProperty(ctor, Symbol.hasInstance, original);
+      } else {
+        delete ctor[Symbol.hasInstance];
+      }
+    }
+  }
+})();
+(function () {
+  var original = Object.getOwnPropertyDescriptor(Error, Symbol.hasInstance);
+  var modes = [
+    function () {
+      return false;
+    },
+    function () {
+      throw new Error("patched Error Symbol.hasInstance called");
+    },
+  ];
+  try {
+    for (var i = 0; i < modes.length; i++) {
+      Object.defineProperty(Error, Symbol.hasInstance, {
+        configurable: true,
+        value: modes[i],
+      });
+      truthy(
+        util.format("%s", new Error("has-instance sentinel"))
+          .indexOf("Error: has-instance sentinel") !== -1,
+        "%s Error ignores " +
+          (i === 0 ? "false" : "throwing") +
+          " Symbol.hasInstance"
+      );
+    }
+  } finally {
+    if (original) {
+      Object.defineProperty(Error, Symbol.hasInstance, original);
+    } else {
+      delete Error[Symbol.hasInstance];
+    }
+  }
+})();
+(function () {
+  var originalToString = Error.prototype.toString;
+  var stackReads = 0;
+  var error = new Error("throwing stack sentinel");
+  Object.defineProperty(error, "stack", {
+    configurable: true,
+    get: function () {
+      stackReads++;
+      throw new Error("stack getter called");
+    },
+  });
+  try {
+    Error.prototype.toString = function () {
+      throw new Error("patched Error toString called");
+    };
+    eq(
+      util.format("%s", error),
+      "[Error: throwing stack sentinel]",
+      "%s Error ignores throwing stack and patched toString"
+    );
+    eq(stackReads, 1, "%s Error reads a stack getter once");
+  } finally {
+    Error.prototype.toString = originalToString;
+  }
+})();
+eq(
+  util.format("%s", Object.create(Number.prototype)),
+  "Number {}",
+  "%s Number prototype spoof falls back to ordinary inspect"
+);
+eq(
+  util.format("%s", Object.create(String.prototype)),
+  "String {}",
+  "%s String prototype spoof falls back to ordinary inspect"
+);
+eq(
+  util.format("%s", Object.create(Boolean.prototype)),
+  "Boolean {}",
+  "%s Boolean prototype spoof falls back to ordinary inspect"
+);
+eq(
+  util.format("%s", Object.create(BigInt.prototype)),
+  "BigInt {}",
+  "%s BigInt prototype spoof falls back to ordinary inspect"
+);
+eq(
+  util.format("%s", Object.create(Symbol.prototype)),
+  "Symbol {}",
+  "%s Symbol prototype spoof falls back to ordinary inspect"
+);
+(function () {
+  var methods = [
+    [Number.prototype, "valueOf"],
+    [Number.prototype, "toString"],
+    [String.prototype, "valueOf"],
+    [String.prototype, "toString"],
+    [Boolean.prototype, "valueOf"],
+    [Boolean.prototype, "toString"],
+    [BigInt.prototype, "valueOf"],
+    [BigInt.prototype, "toString"],
+    [Symbol.prototype, "valueOf"],
+    [Symbol.prototype, "toString"],
+  ];
+  var originals = [];
+  try {
+    for (var i = 0; i < methods.length; i++) {
+      originals.push(methods[i][0][methods[i][1]]);
+      methods[i][0][methods[i][1]] = function () {
+        throw new Error("patched wrapper method called");
+      };
+    }
+    eq(
+      util.format("%s", new Number(1)),
+      "[Number: 1]",
+      "%s Number wrapper ignores patched methods"
+    );
+    eq(
+      util.format("%s", new String("x")),
+      "[String: 'x']",
+      "%s String wrapper ignores patched methods"
+    );
+    eq(
+      util.format("%s", new Boolean(true)),
+      "[Boolean: true]",
+      "%s Boolean wrapper ignores patched methods"
+    );
+    eq(
+      util.format("%s", Object(10n)),
+      "[BigInt: 10n]",
+      "%s BigInt wrapper ignores patched methods"
+    );
+    eq(
+      util.format("%s", Object(Symbol("wrapped"))),
+      "[Symbol: Symbol(wrapped)]",
+      "%s Symbol wrapper ignores patched methods"
+    );
+  } finally {
+    for (var j = 0; j < methods.length; j++) {
+      methods[j][0][methods[j][1]] = originals[j];
+    }
+  }
+})();
+(function () {
+  var value = {
+    [Symbol.toPrimitive]: function (hint) {
+      return hint === "string" ? "PRIMITIVE" : "WRONG HINT";
+    },
+  };
+  eq(
+    util.format("%s", value),
+    "PRIMITIVE",
+    "%s own Symbol.toPrimitive uses String with string hint"
+  );
+})();
+(function () {
+  function Base() {}
+  Base.prototype.toString = function () {
+    return "INHERITED";
+  };
+  function Child() {}
+  Object.setPrototypeOf(Child.prototype, Base.prototype);
+  eq(
+    util.format("%s", new Child()),
+    "INHERITED",
+    "%s inherited user toString uses String"
+  );
+})();
+(function () {
+  function PrimitiveBase() {}
+  PrimitiveBase.prototype[Symbol.toPrimitive] = function (hint) {
+    return hint === "string" ? "INHERITED PRIMITIVE" : "WRONG HINT";
+  };
+  function PrimitiveChild() {}
+  Object.setPrototypeOf(PrimitiveChild.prototype, PrimitiveBase.prototype);
+  eq(
+    util.format("%s", new PrimitiveChild()),
+    "INHERITED PRIMITIVE",
+    "%s inherited user Symbol.toPrimitive uses String"
+  );
+})();
+(function () {
+  function Widget() {
+    this.a = 1;
+  }
+  eq(
+    util.format("%s", new Widget()),
+    "Widget { a: 1 }",
+    "%s inherited built-in Object toString uses inspect"
+  );
+})();
+(function () {
+  var original = Array.prototype.toString;
+  try {
+    Array.prototype.toString = function () {
+      return "PATCHED ARRAY";
+    };
+    eq(
+      util.format("%s", [1, 2]),
+      "[ 1, 2 ]",
+      "%s patched built-in prototype still uses inspect"
+    );
+  } finally {
+    Array.prototype.toString = original;
+  }
+})();
+(function () {
+  var originalGetPrototypeOf = Object.getPrototypeOf;
+  var originalGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor;
+  try {
+    Object.getPrototypeOf = function () {
+      throw new Error("patched getPrototypeOf called");
+    };
+    Object.getOwnPropertyDescriptor = function () {
+      throw new Error("patched getOwnPropertyDescriptor called");
+    };
+    eq(
+      util.format("%s", [1, 2]),
+      "[ 1, 2 ]",
+      "%s ignores patched Object reflection methods for arrays"
+    );
+    eq(
+      util.format("%s", { a: 1 }),
+      "{ a: 1 }",
+      "%s ignores patched Object reflection methods for objects"
+    );
+  } finally {
+    Object.getPrototypeOf = originalGetPrototypeOf;
+    Object.getOwnPropertyDescriptor = originalGetOwnPropertyDescriptor;
+  }
+})();
+(function () {
+  var originalIsArray = Array.isArray;
+  var originalIndexOf = Array.prototype.indexOf;
+  var originalJoin = Array.prototype.join;
+  var originalTest = RegExp.prototype.test;
+  var originalReplace = String.prototype.replace;
+  var originalIs = Object.is;
+  var originalKeys = Object.keys;
+  var formattedArray;
+  var formattedObject;
+  var fail = function () {
+    throw new Error("patched inspect helper called");
+  };
+  try {
+    Array.isArray = fail;
+    Array.prototype.indexOf = fail;
+    Array.prototype.join = fail;
+    Object.is = fail;
+    Object.keys = fail;
+    RegExp.prototype.test = fail;
+    String.prototype.replace = fail;
+    formattedArray = util.format("%s", ["x", -0]);
+    formattedObject = util.format("%s", { "not-key": 1 });
+  } finally {
+    Array.isArray = originalIsArray;
+    Array.prototype.indexOf = originalIndexOf;
+    Array.prototype.join = originalJoin;
+    Object.is = originalIs;
+    Object.keys = originalKeys;
+    RegExp.prototype.test = originalTest;
+    String.prototype.replace = originalReplace;
+  }
+  eq(
+    formattedArray,
+    "[ 'x', -0 ]",
+    "%s array ignores patched inspect helpers"
+  );
+  eq(
+    formattedObject,
+    "{ 'not-key': 1 }",
+    "%s object ignores patched inspect helpers"
+  );
+})();
+(function () {
+  var originalCall = Function.prototype.call;
+  var formatted;
+  try {
+    Function.prototype.call = function () {
+      throw new Error("patched Function call used");
+    };
+    formatted = util.format("%s", { a: 1 });
+  } finally {
+    Function.prototype.call = originalCall;
+  }
+  eq(
+    formatted,
+    "{ a: 1 }",
+    "%s classification ignores patched Function.prototype.call"
+  );
+})();
+(function () {
+  var proxy = new Proxy(
+    {},
+    {
+      get: function (target, key) {
+        if (key === "toString") {
+          return function () {
+            return "PROXY STRING";
+          };
+        }
+        if (key === Symbol.toPrimitive) return undefined;
+        return target[key];
+      },
+      getPrototypeOf: function () {
+        throw new Error("proxy getPrototypeOf trap called");
+      },
+    }
+  );
+  var formatted = util.format("%s", proxy);
+  truthy(
+    formatted === "PROXY STRING" || formatted === "Proxy({})",
+    "%s handles a throwing Proxy prototype walk"
+  );
+})();
+(function () {
+  class Array {
+    toString() {
+      return "USER ARRAY";
+    }
+  }
+  eq(
+    util.format("%s", new Array()),
+    "Array {}",
+    "%s follows Node constructor-name classification"
+  );
+})();
+(function () {
+  function namedToStringClass(name, marker) {
+    return ({
+      [name]: class {
+        toString() {
+          return marker;
+        }
+      },
+    })[name];
+  }
+
+  // Node snapshots this exact set while internal/util/inspect bootstraps. Lock
+  // every member through the observable constructor-name collision behavior so
+  // the shim cannot accidentally drift back to jsse's runtime global set.
+  var nodeBootstrapNames = [
+    "Object",
+    "Function",
+    "Array",
+    "Number",
+    "Infinity",
+    "NaN",
+    "Boolean",
+    "String",
+    "Symbol",
+    "Date",
+    "Promise",
+    "RegExp",
+    "Error",
+    "AggregateError",
+    "EvalError",
+    "RangeError",
+    "ReferenceError",
+    "SyntaxError",
+    "TypeError",
+    "URIError",
+    "JSON",
+    "Math",
+    "Intl",
+    "ArrayBuffer",
+    "Atomics",
+    "Uint8Array",
+    "Int8Array",
+    "Uint16Array",
+    "Int16Array",
+    "Uint32Array",
+    "Int32Array",
+    "BigUint64Array",
+    "BigInt64Array",
+    "Uint8ClampedArray",
+    "Float32Array",
+    "Float64Array",
+    "DataView",
+    "Map",
+    "BigInt",
+    "Set",
+    "Iterator",
+    "WeakMap",
+    "WeakSet",
+    "Proxy",
+    "Reflect",
+    "FinalizationRegistry",
+    "WeakRef",
+  ];
+  for (var i = 0; i < nodeBootstrapNames.length; i++) {
+    var builtInName = nodeBootstrapNames[i];
+    var builtInMarker = "USER " + builtInName;
+    var BuiltInCollision = namedToStringClass(builtInName, builtInMarker);
+    truthy(
+      util.format("%s", new BuiltInCollision()) !== builtInMarker,
+      "%s Node bootstrap name uses inspect: " + builtInName
+    );
+  }
+
+  // These names are visible later in Node, visible only in jsse, or supplied by
+  // the host shims. Node's early snapshot excludes all of them, so a colliding
+  // user class must retain its coercion hook.
+  var nonBootstrapNames = [
+    "Buffer",
+    "URL",
+    "Temporal",
+    "ShadowRealm",
+    "SuppressedError",
+    "DisposableStack",
+    "AsyncDisposableStack",
+    "Float16Array",
+    "SharedArrayBuffer",
+    "WebAssembly",
+  ];
+  for (var j = 0; j < nonBootstrapNames.length; j++) {
+    var userName = nonBootstrapNames[j];
+    var userMarker = "USER " + userName;
+    var UserCollision = namedToStringClass(userName, userMarker);
+    eq(
+      util.format("%s", new UserCollision()),
+      userMarker,
+      "%s non-bootstrap name uses String: " + userName
+    );
+  }
+})();
+(function () {
+  var value = [1, 2];
+  value[Symbol.toPrimitive] = function () {
+    return "ARRAY PRIMITIVE";
+  };
+  eq(
+    util.format("%s", value),
+    "ARRAY PRIMITIVE",
+    "%s own Symbol.toPrimitive overrides built-in array coercion"
+  );
+})();
 
 // ---- util.format: %d %i %f ------------------------------------------------
 eq(util.format("%d", 42), "42", "%d integer");

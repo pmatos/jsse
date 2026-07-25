@@ -130,12 +130,14 @@ and on **Node**, and requires both to exit 0 and emit byte-identical stdout.
 Node is the oracle for the deterministic surfaces — the `util.format` specifiers
 (`%s %d %i %f %j %c %%`), byte-accurate `process.stdout.write`, and the
 `console.count`/`group`/`assert` output shapes are asserted exactly. The
-byte-exact `%s` guarantee covers primitives and objects with a user-defined
-`toString`; `%s`/`%o`/`%O` of plain objects and arrays route through
-`util.inspect`, which is intentionally best-effort (depth, cycles, common types)
-— it does not invoke getters, but it is only smoke-tested structurally and never
-byte-compared against Node. (Fully Node-accurate `%s` object dispatch is tracked
-separately.)
+byte-exact `%s` guarantee covers primitives and objects whose coercion hooks
+Node classifies as user-defined. The shim carries Node's bootstrap built-in-name
+set explicitly, because later Node globals and jsse-only globals are not members
+of that classifier. Objects with built-in coercion hooks (including plain
+objects and arrays) route through `util.inspect`; the dispatch matches Node,
+while the resulting inspection is intentionally best-effort (depth, cycles,
+common types) — it does not invoke getters, but it is only smoke-tested
+structurally and never generally byte-compared against Node.
 
 ## Shared test-runner harness (`node-test-harness.js`)
 
@@ -258,6 +260,10 @@ needs outside that core (`toThrow` and one inline snapshot).
 | `zod` | v4.4.3 | ❌ hangs (jsse#340) | normal + jitless; jsse livelocks indefinitely (spinning thread, never prints a result) instead of completing — see below. Last known result before the regression: 2,176 / 2,184, residuals tracked in #313–#315 |
 | `moment` | 2.30.1 | ✅ 162,868 assertions (cross-checked) | 3,871 tests, 0 failures — fixed by #311/PR #326 |
 | `bignumber.js` | v9.1.2 | ✅ 65,143 (cross-checked) | unblocked by #238 |
+| `css-tree` | v3.2.1 | ⚠️ 16,725 / 16,727 (Node: 16,727) | its own Mocha suite, force-harness; the 2 residual failures are a genuine jsse engine bug, tracked in #355 — see below |
+| `esprima` | (unreleased) `512cd66` | ✅ 80,153 (cross-checked) | ~65 min; ~1,650 unit fixtures + api/grammar/hostile suites + a 78,402-scenario test262 grammar corpus; green since #357/#358 fixed |
+| `uuid` | v14.0.1 | ✅ 75 (cross-checked) | Node's own `node:test`/`node:assert/strict` upstream suite, unmodified; browser build so v3/v5 use pure-JS MD5/SHA-1 and v1/v4/v6/v7 draw randomness via a `crypto.getRandomValues`/`randomUUID` shim (`node-crypto-shim.js`) backed by `__host_random_bytes` |
+| `tweetnacl-js` | 1.0.3 | ✅ 5,470 (cross-checked) | tape corpus: curve25519/Ed25519, secretbox, hash, onetimeauth; curve-heavy vectors sampled — see below |
 
 ### Zod normal and jitless corpus
 
@@ -305,6 +311,54 @@ the marker and exercises its normal path. JSSE now emits the same receiver-aware
 strict-assignment `TypeError` message as Node after the #318 fix landed on main
 ([#325](https://github.com/pmatos/jsse/pull/325)), so qs's upstream assertion
 runs unmodified on both engines.
+
+### tweetnacl-js curve25519/Ed25519 corpus
+
+Pinned to the `1.0.3` git tag (no `v` prefix, unlike every earlier tag —
+it points at the same commit as `v1.0.2`; that's the exact commit npm's
+published `tweetnacl@1.0.3` was cut from). The harness runs the same 13 files
+upstream's `test-node` script does (`tape test/*.js`); `test/c/*.js` needs a
+native addon built via its own Makefile and is out of scope, the same
+no-native-addon precedent js-sha256 sets.
+
+Every test file reads `nacl` via `(typeof window !== 'undefined') ?
+window.nacl : require('../' + (process.env.NACL_SRC || 'nacl.min.js'))`.
+esbuild cannot bundle that require — the argument is a runtime string
+concatenation, and esbuild treats a `'../' + x` require as a directory
+glob-import, trying (and failing) to bundle every file under the repo root,
+including `.git/`. `lib_prepare` rewrites that one identical line across all
+13 files to `window.nacl`; the jsse entry sets `window` and preloads `nacl`
+first, so this is a pure no-op simplification (the same browser/webpack mode
+upstream's own Node entry uses, and the one js-sha256-jsse-entry.js also
+forces), not a behavior change.
+
+`nacl.min.js`'s own PRNG auto-init prefers the browser path
+(`self.crypto.getRandomValues`) before falling back to Node's
+`require('crypto')`. The jsse entry sets `self`, and `node-crypto-shim.js`
+(the Web Crypto shim already wired for the uuid harness, backed by the #229
+`__host_random_bytes` syscall floor) supplies `self.crypto`, so nacl's own
+auto-init configures its PRNG with no jsse-specific code here — the same
+mechanism as upstream's unmodified browser path. `node-test-harness.js`
+supplies the tape assertion adapter on jsse; Node loads real tape as an
+independent framework oracle.
+
+Curve25519/Ed25519 point arithmetic is roughly 100-3500x slower on the
+tree-walker than V8 per operation (measured: a single `scalarMult.base` call
+≈3.4s here vs ≈35ms on Node; `sign.detached.verify` ≈12s vs ≈76ms). At the
+full upstream vector counts (256 scalarmult, 256 box, 1024 Ed25519 sign
+vectors) the complete suite is on the order of ~7h, which isn't practical to
+run as part of landing the harness — a correctness smoke test first
+confirmed all 13 files pass 1233/1233 with truncated vectors, byte-identical
+to Node, so this is pure interpretation overhead rather than an engine bug.
+`lib_prepare` therefore evenly samples the three curve-heavy vector files
+(`scalarmult.random.js`, `box.random.js`, `sign.spec.js`) down to 20 entries
+each (stride-sampled across the full array, not a prefix, so the subset still
+spans the vector space); every other data file (secretbox, hash,
+onetimeauth — no elliptic-curve cost) keeps its full upstream count. This is
+the first sampled corpus in this harness — every other config runs its
+library's suite unmodified. Exhaustive coverage is tracked in
+[#361](https://github.com/pmatos/jsse/issues/361), to revisit once the engine
+has a faster numeric path.
 
 ### PrismJS token-stream fixtures
 
@@ -403,6 +457,102 @@ PR #326 (`03df6fe`), which corrected GC temp-root handling around binary
 operators so a persistent root captured during sustained execution was no
 longer dropped.
 
+### css-tree
+
+css-tree is a CSS tokenizer/parser/generator/walker/lexer — a new grammar
+domain distinct from the JS-focused parser/transform cluster (acorn, prismjs,
+uglify-js, highlight.js). Unlike those, its own suite (`mocha lib/__tests`)
+needed almost no rewriting: it uses only Node's built-in `assert`
+(`strictEqual`/`notStrictEqual`/`deepStrictEqual`/`deepEqual`/`throws`/
+`doesNotThrow`) and `fs.readFileSync`/`readdirSync`/`statSync().isDirectory()`
+to load its own JSON fixture tree, so `gen-css-tree-entry.js` only needed to
+replace that discovery layer, not the test bodies.
+
+The generator snapshots the read-only `fixtures/` tree plus `package.json`
+into a manifest (`globalThis.__VFS_MANIFEST__`) and statically imports every
+top-level test file — Mocha's `describe`/`it`/`before`/`after`/`beforeEach`/
+`afterEach` are ambient globals the force-enabled shared harness installs, the
+same as running them under Mocha's own CLI. `node-fs-module.js` serves both
+engines from that manifest unconditionally (not a Node-vs-jsse selector like
+the other `node-*-module.js` files): the runner executes the generated bundle
+from an arbitrary working directory, not the library's clone directory, so a
+real `fs` call on the Node reference run can't resolve the suite's own
+`./fixtures/...` relative paths. There's no independent-oracle value given up
+by sharing one implementation here either — the manifest is a verbatim
+capture of the same files real `fs` would have returned, taken at generation
+time, so a lookup bug fails loudly (a thrown `ENOENT`) on both engines alike
+rather than silently diverging between them. `node-path-module.js` and
+`node-assert-module.js` keep the usual selector shape (Node's native modules
+vs. a minimal same-surface implementation), since neither depends on a
+particular working directory.
+
+`helpers/setup.js` is excluded from the generated entry: it only installs an
+enumerable, throw-on-read getter on `Object.prototype` as a poison pill
+against accidentally reading inherited properties, and no test depends on it
+being present (confirmed: it's the only file referencing
+`__proto_pollute__`) — registered/passing counts are identical without it,
+and leaving it out avoids every shim and the harness having to tolerate a
+hostile `Object.prototype` getter for no behavioral benefit.
+
+css-tree's own library source (not its tests) uses
+`createRequire(import.meta.url)` to load JSON at three call sites — the
+package version and the `mdn-data` CSS property/at-rule/syntax tables.
+esbuild bundles that pattern as a literal runtime `require()` call rather than
+inlining the JSON, and jsse has no module system to satisfy it at runtime.
+`patch-css-tree-esm.js` rewrites those three sites to static ESM
+`import x from '*.json'` (esbuild's built-in JSON loader) during `lib_prepare`
+— same JSON content, different loading mechanism.
+
+Both engines run the identical bundle and report the same registered-test
+count, 16,727 (cross-checked). Node passes all of them; jsse passes 16,725.
+The 2 residual failures (`List#some`/`#filter` "basic") are a genuine jsse
+engine bug surfaced by this suite, not a harness gap — see jsse#355 below.
+
+### esprima test262 grammar corpus
+
+esprima's own suites (`test/utils/create-testcases.js` + `evaluate-testcase.js`
+ported inline, `test/api-tests.js` unmodified via the `assert` alias, an
+everything.js smoke parse, and the two hostile-environment checks — see
+`scripts/libs/esprima-jsse-entry.js`) cover esprima's unit-level surface, but
+issue #295 also calls for a full test262 grammar-conformance pass. Reproducing
+test262-stream's live enumeration pipeline at runtime needs `fs`/`stream`/a
+real checkout — none of which exist in a jsse bundle — so
+`scripts/gen-esprima-test262-corpus.js` runs that traversal once, in Node, at
+`lib_prepare` time, and freezes the result into a bundlable data file
+(`test/jsse-test262-corpus.js`).
+
+It clones test262 pinned at `36d2d2d348d83e9d6554af59a672fbcd9413914b` and
+walks it with `test262-stream` (`omitRuntime: true` — parsing only, never
+evaluating), storing each file's raw source once (not per scenario — the
+"strict mode" scenario is always exactly `'"use strict";\n' + source`, so the
+runtime reconstructs it instead of storing a second copy) plus every
+default/strict/module scenario test262 defines for it. A leading-boilerplate
+strip (copyright header + YAML frontmatter) shrinks the unique-source payload
+from 55.5 MiB to 19.3 MiB, verified parse-neutral per file before applying it.
+`expected` per scenario is recorded by running local Node against the exact
+compiled `dist/esprima.js` esprima-jsse-entry.js's test262 runner replays at
+run time — not test262-stream's harness-bloated `contents` and not the
+spec-ideal outcome — so a jsse run can only diverge from what's recorded by
+actually behaving differently from Node on the identical esprima code;
+esprima's own pre-existing spec gaps (tracked in
+`test/test-262-whitelist.txt`) don't masquerade as new jsse bugs. The
+whitelist is cross-referenced only as a generation-time sanity log.
+Both the strip-safety check and the recording pass run in
+`gen-esprima-test262-corpus-worker.js`, spawned as fresh child processes, so
+the two concerns never share process state; the recording pass replays the
+exact (module, string) sequence in the exact file/scenario order the runtime
+test262 block replays, so generation and runtime are structurally the same
+parse sequence. The final corpus is a `module.exports = "<JSON-encoded
+string>"` (double-encoded so jsse's tokenizer scans one string token rather
+than building an AST for tens of thousands of nested literals) at 31 MiB,
+close to the ~26 MiB the issue estimates.
+
+Generation is deterministic: a from-scratch Node replay of the recorded
+(module, source) sequence reproduces the recorded `expected` values exactly,
+every time. jsse's 53 residual failures (of 80,153 total, cross-checked
+against Node) are genuine, reproducible jsse-vs-Node divergences, not corpus
+flakiness — see "Engine bugs surfaced" below for what they are.
+
 ### lodash skip list (jsse only; each preserves the assertion count via `skipAssert`)
 
 lodash is green and cross-checked at 6,794 assertions, with a small set of tests
@@ -470,3 +620,103 @@ running those thousands of timers natively would otherwise exhaust OS threads.
   that's never signaled. Discovered 2026-07-20, same day as the moment fix
   above; suspected (unconfirmed) to be an edge case in the same GC temp-root
   rework, since zod's validation codegen is unusually binary-operator-heavy.
+
+- **Pooled call environment corrupted by a native-function first call
+  (jsse#355, open).** See the css-tree section above. Minimal repro:
+  a class method with a default 2nd parameter that calls `fn.call(...)`
+  breaks on its *second* invocation if its *first* invocation was passed a
+  native function (e.g. `Boolean`) as `fn` — any subsequent call then throws
+  `TypeError: undefined is not a function`, regardless of what's passed.
+  Removing any one of "class method", "default 2nd parameter", or "calls
+  `.call()`" makes it disappear. Suspected regression from the pooled
+  function-call-environment work (#73).
+
+- **Astral-plane identifiers truncated by a strict-mode TCO leak (jsse#357,
+  fixed).** Originally suspected to be a lexer/Unicode bug — jsse's own
+  lexer/parser actually handle astral-plane identifiers and regex named
+  groups correctly (100% on test262's identifier and named-groups suites).
+  The real defect: `Return`'s tail-call-optimization eligibility check
+  (`expr_may_contain_tail_call`) over-approximates through a `Conditional`'s
+  two branches with `||`, so a ternary whose consequent is a bare call marks
+  the *whole* return expression tail-call-eligible even while the alternate
+  branch is what actually executes. `eval_expr` evaluated every
+  sub-expression under the ambient `in_tail_position` flag instead of
+  clearing it by default, so a call nested in the branch that runs got
+  returned as an unevaluated `Completion::TailCall`, silently skipping
+  everything after it in that expression. esprima's own
+  `Character.fromCodePoint` — `(cp < 0x10000) ? String.fromCharCode(cp) :
+  String.fromCharCode(A) + String.fromCharCode(B)` — hit this exactly: the
+  alternate's second `fromCharCode` call never ran, truncating every astral
+  surrogate pair to its high half. Fixed at the root: `eval_expr` now
+  captures the ambient tail-call eligibility once at entry and clears it by
+  default, re-propagating only at the handful of genuine tail positions
+  (Conditional's taken branch, Logical's short-circuited right operand,
+  Sequence's last element, Call, TaggedTemplate).
+
+- **Regex property-escape range endpoint not rejected (jsse#358, fixed by
+  PR #365).** `NonemptyClassRanges` static semantics require a Syntax Error
+  when either endpoint of a character-class range is a Unicode property
+  escape (`\p{...}`), since it denotes a whole class rather than one
+  character. esprima's own regex-validation logic missed this early error
+  when run on jsse (`/[￿-\p{Hex}]/u` and `/[\p{Hex}--]/u` both parsed
+  instead of throwing) but caught it correctly on Node. Accounted for the
+  remaining 4 esprima test262-corpus residuals above.
+
+- **Literal `{}` in a regex rejected instead of Annex B fallback (jsse#359,
+  open).** Found via manual exploration while wiring the esprima harness, not
+  surfaced by any esprima/test262 scenario checked so far. Per Annex B's
+  `ExtendedPatternCharacter`, a `{` not starting a valid quantifier should be
+  a literal character in non-`u`/non-`v` mode; jsse rejects `/{}/g` outright,
+  and as an uncatchable parse-time error for a regex *literal* specifically
+  (vs. a catchable `SyntaxError` for the equivalent `new RegExp("{}", "g")`).
+
+### uuid: resolving `node:test` / `node:assert/strict`, and `crypto.getRandomValues`
+
+uuid's own upstream suite (`src/test/*.test.ts`, compiled by `tsc`) imports
+`node:test` and `node:assert/strict` directly and is bundled unmodified — no
+tape/QUnit-style adapter file like other libraries. Two new pieces make that
+possible:
+
+- **`node-crypto-shim.js`** (shared, opt-in via `LIB_SHIMS`) installs
+  `globalThis.crypto.getRandomValues`/`.randomUUID`, backed by the
+  `__host_random_bytes` syscall-floor primitive (#229). It only activates when
+  `crypto` isn't already present — real Node has had a native global `crypto`
+  since Node 19 (some older Node point releases only expose it under
+  `--experimental-global-webcrypto` when running a plain script file, which
+  would make this shim install unnecessarily and then throw, since
+  `__host_random_bytes` doesn't exist on Node; run the harness with a Node ≥ 20
+  from `~/.nvm/versions/node/` if you hit that).
+- **`libs/uuid-jsse-require-shim.js`** resolves those two specifiers for jsse
+  only. esbuild's `--platform=node` build (the default) treats Node-builtin
+  specifiers as external, compiling each import down to a literal
+  `require(specifier)` call via esbuild's own `__require` fallback helper —
+  which, at call time, uses whatever `require` identifier is in scope. On real
+  Node that's the CJS module's own `require` (visible from a nested IIFE via
+  closure), so Node keeps resolving both specifiers natively — the whole point
+  being that Node runs the *unmodified* upstream suite against its own
+  `node:test`/`node:assert` as an independent oracle, not a jsse-side
+  reimplementation. On jsse there is no ambient `require`, so this shim
+  installs one as a global, mapping `"node:test"` to a thin wrapper around
+  `node-test-harness.js`'s shared TAP `describe`/`test` globals (registering an
+  arity-0 function so the harness's done-callback-vs-promise heuristic always
+  takes the promise branch, while still handing the real callback a minimal
+  `t` TestContext supporting just `t.mock.method`/`t.mock.reset` — the only
+  TestContext surface the suite uses, for its "uses native `crypto.randomUUID`"
+  tests) and `"node:assert/strict"` to `globalThis.__jsseAssertStrict`.
+- **`libs/uuid-assert-connector.js`** sets `globalThis.__jsseAssertStrict` from
+  a real, pinned copy of the `assert` npm package (browserify's pure-JS port of
+  Node's own `assert` module) rather than a hand-rolled reimplementation. It's
+  vendored via a relative `require("../node_modules/assert")` — deliberately
+  *not* the bare specifier `"assert"`, which esbuild would also auto-external
+  under `--platform=node` — the same trick `node-tape-module.js` uses for
+  `tape`.
+- The guard in both new shims keys off `__host_write` (the #229 syscall
+  floor), not `process.versions.node`: `node-shim.js` installs a *fake*
+  `process` with `versions.node` set (to pass UMD-style Node checks in
+  bundled libraries), so any later shim checking `process.versions.node`
+  would incorrectly think it's running on real Node.
+- The suite is pinned to uuid's **browser** build (`dist/`, not `dist-node/`)
+  by running `tsc` directly and swapping in the `*-browser.ts`-derived
+  `md5.js`/`sha1.js` — the same rename `scripts/build.sh` does — so v3/v5
+  exercise uuid's own pure-JS MD5/SHA-1 instead of `node:crypto`'s
+  `createHash`, keeping this slice free of any `node:crypto` dependency.

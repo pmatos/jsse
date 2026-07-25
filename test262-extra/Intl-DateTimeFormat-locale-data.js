@@ -232,6 +232,111 @@ assertSame(numericHms('fr-FR'), '03:04:05',
 assertSame(numericHms('it-IT'), '03:04:05',
   'Italian numeric hour remains padded in an h:m:s pattern');
 
+// A requested tag carrying an explicit script subtag that merely repeats the
+// language's own default (e.g. "Latn" for Spanish) isn't literal locale-data
+// key, so resolution strips it — and any following region — down to the bare
+// language, same as Node/V8. This differs from the bare-region form (es-419
+// stays padded) because the explicit script pushes past es-419 entirely.
+assertSame(numericHms('es-Latn-ES'), '3:04:05',
+  'es-Latn-ES resolves past the redundant script down to Spain Spanish data');
+assertSame(numericHms('es-Latn'), '3:04:05',
+  'es-Latn (script-only) resolves down to Spain Spanish data');
+assertSame(numericHms('es-Latn-419'), '3:04:05',
+  'es-Latn-419 resolves down to bare Spanish, unlike padded bare es-419');
+
+assertSame(
+  new Intl.DateTimeFormat('es-Latn-ES').resolvedOptions().locale, 'es',
+  'es-Latn-ES resolvedOptions().locale reports the minimized bare language');
+assertSame(
+  new Intl.DateTimeFormat('es-Latn').resolvedOptions().locale, 'es',
+  'es-Latn resolvedOptions().locale reports the minimized bare language');
+assertSame(
+  new Intl.DateTimeFormat('es-Latn-419').resolvedOptions().locale, 'es',
+  'es-Latn-419 resolvedOptions().locale reports the minimized bare language');
+assertSame(
+  new Intl.DateTimeFormat('es-Latn-ES-u-hc-h23').resolvedOptions().locale,
+  'es-u-hc-h23',
+  'locale lookup preserves supported Unicode extensions on the matched locale');
+
+// Genuinely multi-script languages (CLDR ships distinct per-script data, e.g.
+// Simplified vs Traditional Chinese) must keep their explicit script subtag
+// rather than being folded away like the Spanish cases above.
+assertSame(
+  new Intl.DateTimeFormat('zh-Hant-TW').resolvedOptions().locale, 'zh-Hant-TW',
+  'zh-Hant-TW keeps its script-significant subtag untouched');
+assertSame(
+  new Intl.DateTimeFormat('sr-Cyrl-RS').resolvedOptions().locale, 'sr-Cyrl-RS',
+  'sr-Cyrl-RS keeps its script-significant subtag untouched');
+assertSame(
+  new Intl.DateTimeFormat('hi-Latn').resolvedOptions().locale, 'hi-Latn',
+  'hi-Latn keeps its alternate Latin script data');
+assertSame(
+  new Intl.DisplayNames('hi-Latn', { type: 'language' }).of('en'), 'English',
+  'hi-Latn selects Latin-script display names instead of Devanagari Hindi');
+
+// A script can be genuinely significant for a language while a *specific*
+// script+region combination still isn't real CLDR data — only the region is
+// stripped then, keeping the (valid) script, rather than collapsing to the
+// bare language like an invalid script would.
+assertSame(
+  new Intl.DateTimeFormat('az-Latn-DE').resolvedOptions().locale, 'az-Latn',
+  'az-Latn-DE drops the non-data-bearing region but keeps the valid script');
+assertSame(
+  new Intl.DateTimeFormat('hi-Latn-DE').resolvedOptions().locale, 'hi-Latn',
+  'hi-Latn-DE drops the non-data-bearing region but keeps the valid Latin script');
+assertSame(
+  new Intl.DateTimeFormat('hi-Deva').resolvedOptions().locale, 'hi',
+  "hi-Deva repeats Hindi's own default script, so it collapses like an invalid one");
+assertSame(
+  new Intl.DateTimeFormat('zh-Hant-CN').resolvedOptions().locale, 'zh-Hant',
+  'zh-Hant-CN drops the region (Traditional Chinese has no CN data) but keeps the script');
+assertSame(
+  new Intl.DateTimeFormat('pa-Guru-PK').resolvedOptions().locale, 'pa-Guru',
+  'pa-Guru-PK drops the region (Gurmukhi Punjabi data is India-specific)');
+
+// A script that ISN'T real/distinct data for a language collapses fully to
+// the bare language (script and region both dropped) even though the
+// language itself has OTHER genuinely significant scripts.
+assertSame(
+  new Intl.DateTimeFormat('zh-Latn-CN').resolvedOptions().locale, 'zh',
+  'zh-Latn-CN has no Latin-script Chinese data, so it collapses to bare zh');
+assertSame(
+  new Intl.DateTimeFormat('kk-Latn-KZ').resolvedOptions().locale, 'kk',
+  'kk-Latn-KZ has no Latin-script Kazakh data (only Cyrl/Arab), collapses to bare kk');
+assertSame(
+  new Intl.DateTimeFormat('az-Arab-IR').resolvedOptions().locale, 'az',
+  'az-Arab-IR has no Arabic-script Azerbaijani data (only Latn/Cyrl), collapses to bare az');
+
+// A genuinely significant script keeps working correctly across every region
+// CLDR ships distinct data for, not just the single "home" region.
+assertSame(
+  new Intl.DateTimeFormat('zh-Hant-HK').resolvedOptions().locale, 'zh-Hant-HK',
+  'zh-Hant-HK (Hong Kong Traditional Chinese) is real, distinct data');
+assertSame(
+  new Intl.DateTimeFormat('kk-Arab-CN').resolvedOptions().locale, 'kk-Arab-CN',
+  'kk-Arab-CN (Arabic-script Kazakh in China) is real, distinct data');
+assertSame(
+  new Intl.DateTimeFormat('ku-Latn-IQ').resolvedOptions().locale, 'ku-Latn-IQ',
+  'ku-Latn-IQ (Latin-script Kurdish in Iraq) is real, distinct data');
+assertSame(
+  new Intl.DateTimeFormat('ku-Arab-IQ').resolvedOptions().locale, 'ku',
+  'ku-Arab-IQ has no Arabic-script Kurdish data (only Latn), collapses to bare ku');
+assertSame(
+  new Intl.DateTimeFormat('zh-Hans-HK').resolvedOptions().locale, 'zh-Hans-HK',
+  'zh-Hans-HK (Simplified Chinese in Hong Kong) is real, distinct data');
+assertSame(
+  new Intl.DateTimeFormat('zh-Hans-MO').resolvedOptions().locale, 'zh-Hans-MO',
+  'zh-Hans-MO (Simplified Chinese in Macao) is real, distinct data');
+assertSame(
+  new Intl.DateTimeFormat('zh-Hant-MY').resolvedOptions().locale, 'zh-Hant-MY',
+  'zh-Hant-MY (Traditional Chinese in Malaysia) is real, distinct data');
+assertSame(
+  new Intl.DateTimeFormat('ku-Latn-SY').resolvedOptions().locale, 'ku-Latn-SY',
+  'ku-Latn-SY (Latin-script Kurdish in Syria) is real, distinct data');
+assertSame(
+  new Intl.DateTimeFormat('sr-Latn-XK').resolvedOptions().locale, 'sr-Latn-XK',
+  "sr-Latn-XK (Kosovo's non-ISO CLDR region code) is real, distinct data");
+
 // timeStyle presets select the same unpadded-H record as hour:"numeric" for
 // Spain-based Spanish (the hour option is undefined, so the correction must key
 // off "not explicitly 2-digit" rather than requiring hour:"numeric"). Only an
