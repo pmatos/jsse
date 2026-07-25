@@ -2410,6 +2410,60 @@ mod string_exotic_index_seam_tests {
     }
 }
 
+/// §13.3.7 Optional Chains and §6.2.5.5 GetValue require primitive property
+/// references to perform wrapper [[Get]] with the primitive as the receiver.
+mod optional_chain_primitive_get_tests {
+    use super::*;
+
+    #[test]
+    fn prototype_accessors_are_invoked_with_the_primitive_receiver() {
+        run_script(
+            r#"
+            function install(proto, key, expectedThis, result) {
+                Object.defineProperty(proto, key, {
+                    configurable: true,
+                    get: function () {
+                        "use strict";
+                        if (this !== expectedThis) {
+                            throw new Error("getter received the wrong primitive");
+                        }
+                        return result;
+                    }
+                });
+            }
+
+            var symbol = Symbol("receiver");
+            install(String.prototype, "01", "abc", 41);
+            install(String.prototype, "5", "abc", 42);
+            install(Number.prototype, "optionalAccessor", 5, 43);
+            install(Boolean.prototype, "optionalAccessor", true, 44);
+            install(Symbol.prototype, "optionalAccessor", symbol, 45);
+            install(BigInt.prototype, "optionalAccessor", 7n, 46);
+
+            if ("abc"?.["01"] !== 41) throw new Error("String look-alike getter skipped");
+            if ("abc"?.["5"] !== 42) throw new Error("String out-of-range getter skipped");
+            if ((5)?.optionalAccessor !== 43) throw new Error("Number getter skipped");
+            if ((true)?.["optionalAccessor"] !== 44) throw new Error("Boolean getter skipped");
+            if (symbol?.optionalAccessor !== 45) throw new Error("Symbol getter skipped");
+            if ((7n)?.["optionalAccessor"] !== 46) throw new Error("BigInt getter skipped");
+
+            var marker = {};
+            Object.defineProperty(Boolean.prototype, "throwingOptionalAccessor", {
+                configurable: true,
+                get: function () { throw marker; }
+            });
+            var propagated = false;
+            try {
+                (false)?.throwingOptionalAccessor;
+            } catch (error) {
+                propagated = error === marker;
+            }
+            if (!propagated) throw new Error("getter exception was not propagated");
+            "#,
+        );
+    }
+}
+
 /// Node host-compat "syscall floor" (issue #229). These exercise the ON-path
 /// (`enable_node_host`); the OFF-path 0-regression guarantee is covered by the
 /// full test262 run, which never enables the floor.
