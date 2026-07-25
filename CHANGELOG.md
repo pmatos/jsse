@@ -1,3 +1,17 @@
+## [0.4.10](https://github.com/pmatos/jsse/compare/v0.4.9...v0.4.10) (2026-07-25)
+
+
+### Bug Fixes
+
+* **interpreter:** invoke primitive optional-chain getters ([#394](https://github.com/pmatos/jsse/issues/394)) ([c29d70c](https://github.com/pmatos/jsse/commit/c29d70c269e7c0758722f197a78d1e921f6b0a57))
+* **interpreter:** randomize environment binding hashing ([#393](https://github.com/pmatos/jsse/issues/393)) ([1945998](https://github.com/pmatos/jsse/commit/1945998a95de45882282fb602e00e90e90fa2757))
+* **regexp:** honor nullable priority under positive quantifiers ([#395](https://github.com/pmatos/jsse/issues/395)) ([a903e16](https://github.com/pmatos/jsse/commit/a903e16e7a9aa69e009a2bece35896f6a9f4bbeb))
+
+
+### Performance Improvements
+
+* **interpreter:** collapse local binding writes to one lookup ([#396](https://github.com/pmatos/jsse/issues/396)) ([d34ae92](https://github.com/pmatos/jsse/commit/d34ae921db4203476747caf2f3b1d0729e62776f))
+
 ## [0.4.9](https://github.com/pmatos/jsse/compare/v0.4.8...v0.4.9) (2026-07-25)
 
 
