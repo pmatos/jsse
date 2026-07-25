@@ -999,7 +999,7 @@ impl Interpreter {
                 if let JsValue::Object(obj_ref) = &obj_val {
                     if self.get_object_cell(obj_ref.id).is_some() {
                         let with_env = Rc::new(RefCell::new(Environment {
-                            bindings: HashMap::new(),
+                            bindings: Default::default(),
                             parent: Some(env.clone()),
                             strict: env.borrow().strict,
                             is_function_scope: false,
