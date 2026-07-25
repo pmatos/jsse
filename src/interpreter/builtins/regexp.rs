@@ -6287,29 +6287,6 @@ fn fix_nullable_quantifiers(
     }
 }
 
-#[cfg(test)]
-mod nullable_quantifier_rewrite_tests {
-    use super::fix_nullable_quantifiers;
-
-    #[test]
-    fn bounded_min_zero_preserves_inner_laziness() {
-        assert_eq!(fix_nullable_quantifiers("(a*?)?", true).source, "(a+?)?");
-        assert_eq!(
-            fix_nullable_quantifiers("(a*?){0,2}", true).source,
-            "(a+?){0,2}"
-        );
-    }
-
-    #[test]
-    fn backreferenced_inner_captures_bypass_sentinels() {
-        let with_backreference = fix_nullable_quantifiers("^(a*|(d)){2,3}(e)\\2", true);
-        assert!(with_backreference.sentinel_names.is_empty());
-
-        let capture_only = fix_nullable_quantifiers("^(a*|(d)){2,3}(e)", true);
-        assert!(!capture_only.sentinel_names.is_empty());
-    }
-}
-
 /// Process a full set of top-level alternation branches: for each nullable
 /// branch, prevent it from ever contributing a zero-width "success" that
 /// pre-empts a sibling branch able to consume input at this position (spec
@@ -10656,5 +10633,28 @@ impl Interpreter {
 
     pub(crate) fn get_symbol_key(&self, name: &str) -> Option<JsPropertyKey> {
         get_symbol_key(self, name)
+    }
+}
+
+#[cfg(test)]
+mod nullable_quantifier_rewrite_tests {
+    use super::fix_nullable_quantifiers;
+
+    #[test]
+    fn bounded_min_zero_preserves_inner_laziness() {
+        assert_eq!(fix_nullable_quantifiers("(a*?)?", true).source, "(a+?)?");
+        assert_eq!(
+            fix_nullable_quantifiers("(a*?){0,2}", true).source,
+            "(a+?){0,2}"
+        );
+    }
+
+    #[test]
+    fn backreferenced_inner_captures_bypass_sentinels() {
+        let with_backreference = fix_nullable_quantifiers("^(a*|(d)){2,3}(e)\\2", true);
+        assert!(with_backreference.sentinel_names.is_empty());
+
+        let capture_only = fix_nullable_quantifiers("^(a*|(d)){2,3}(e)", true);
+        assert!(!capture_only.sentinel_names.is_empty());
     }
 }
