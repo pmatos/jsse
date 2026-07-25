@@ -6014,6 +6014,18 @@ fn nq_outer_quantifier(chars: &[char], pos: usize, end: usize) -> Option<NqOuter
     }
 }
 
+fn nq_is_nested_in_repeated_group(chars: &[char], open_pos: usize, close_of: &[usize]) -> bool {
+    close_of
+        .iter()
+        .enumerate()
+        .any(|(ancestor_open, &ancestor_close)| {
+            ancestor_open < open_pos
+                && ancestor_close > open_pos
+                && nq_outer_quantifier(chars, ancestor_close + 1, chars.len())
+                    .is_some_and(|quantifier| quantifier.max.is_none_or(|max| max > 1))
+        })
+}
+
 fn nq_iteration_setter(names: &[String]) -> String {
     let Some((name, rest)) = names.split_first() else {
         return String::new();
@@ -6100,11 +6112,16 @@ fn fix_nullable_quantifiers(source: &str, stateful_positive_minimum: bool) -> St
 
         let branches = nq_split_branches(&chars, body_start, close);
         if outer_quantifier.min > 0
-            && (!stateful_positive_minimum || outer_quantifier.min > NQ_MAX_ITERATION_SENTINELS)
+            && (!stateful_positive_minimum
+                || outer_quantifier.min > NQ_MAX_ITERATION_SENTINELS
+                || nq_is_nested_in_repeated_group(&chars, open_pos, &close_of))
         {
             // Preserve the pre-jsse#378 `+` fallback when stateful conditions
-            // are unavailable (notably the byte matcher) or the minimum would
-            // require attacker-controlled source expansion.
+            // are unavailable (notably the byte matcher), the minimum would
+            // require attacker-controlled source expansion, or a containing
+            // repetition could enter this quantifier more than once. Backend
+            // captures cannot be unset, so nested sentinels would leak their
+            // mandatory-iteration state into the next entry.
             if chars[after] != '+' {
                 continue;
             }
@@ -6451,15 +6468,9 @@ fn nq_fix_branch(
     // atoms across new branches would renumber captures).
     if allow_bump
         && !nq_branch_has_capture(chars, bstart, bend)
-        && let Some(text) = nq_expand_joint_optional(chars, bstart, bend, close_of)
+        && let Some(text) = nq_expand_joint_optional(chars, bstart, bend, close_of, empty_gate)
     {
-        let text = match empty_gate {
-            Some(gate) => {
-                *gate_used = true;
-                format!("(?:{text}|{gate})")
-            }
-            None => text,
-        };
+        *gate_used |= empty_gate.is_some();
         span_replace.insert(bstart, (bend, text));
         return true;
     }
@@ -6554,6 +6565,7 @@ fn nq_expand_joint_optional(
     start: usize,
     end: usize,
     close_of: &[usize],
+    empty_gate: Option<&str>,
 ) -> Option<String> {
     let mut atoms: Vec<(usize, usize)> = Vec::new();
     let mut i = start;
@@ -6591,7 +6603,7 @@ fn nq_expand_joint_optional(
         return None; // single-atom case is nq_bump_bare_atom_min's job
     }
 
-    let mut branches: Vec<String> = Vec::with_capacity(atoms.len());
+    let mut consuming_choices: Vec<(String, bool)> = Vec::with_capacity(atoms.len());
     for (k, &(astart, aend)) in atoms.iter().enumerate() {
         let mut a_replace: HashMap<usize, char> = HashMap::new();
         let mut a_remove = vec![false; chars.len()];
@@ -6608,9 +6620,34 @@ fn nq_expand_joint_optional(
         for &(bstart, bend) in &atoms[k + 1..] {
             piece.extend(chars[bstart..bend].iter());
         }
-        branches.push(piece);
+        consuming_choices.push((
+            piece,
+            nq_bare_atom_quantifier_is_lazy(chars, astart, aend, close_of),
+        ));
     }
-    Some(format!("(?:{})", branches.join("|")))
+
+    // Each optional atom contributes a consume-vs-skip choice. Preserve that
+    // decision tree exactly: a greedy atom's consuming choice precedes the
+    // recursively expanded skip path, while a lazy atom's choice follows it.
+    // The gated all-skipped leaf therefore lands at its source priority,
+    // which may be first, last, or between consuming alternatives.
+    let mut branches = std::collections::VecDeque::with_capacity(
+        consuming_choices.len() + usize::from(empty_gate.is_some()),
+    );
+    if let Some(gate) = empty_gate {
+        branches.push_back(gate.to_string());
+    }
+    for (piece, lazy) in consuming_choices.into_iter().rev() {
+        if lazy {
+            branches.push_back(piece);
+        } else {
+            branches.push_front(piece);
+        }
+    }
+    Some(format!(
+        "(?:{})",
+        branches.into_iter().collect::<Vec<_>>().join("|")
+    ))
 }
 
 /// Split `chars[start..end]` into top-level alternative branches (spans),

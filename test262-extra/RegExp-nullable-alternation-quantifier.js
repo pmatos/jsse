@@ -177,3 +177,27 @@ var sequentialBoth = /^(a*|d)+(b*|e)+/.exec("de");
 assert.sameValue(sequentialBoth[0], "de");
 assert.sameValue(sequentialBoth[1], "d");
 assert.sameValue(sequentialBoth[2], "e");
+
+// A nested positive-minimum quantifier starts a fresh mandatory-iteration
+// budget each time its containing atom is entered. Internal state from the
+// first outer iteration must not reject the second iteration's required empty
+// match.
+var nestedPositive = /((a*|b)+c)+/.exec("cc");
+assert.sameValue(nestedPositive[0], "cc");
+assert.sameValue(nestedPositive[1], "c");
+assert.sameValue(nestedPositive[2], "");
+
+// If every atom in a jointly optional branch is lazy, its all-empty path is
+// preferred during a mandatory iteration. Separating the empty path from the
+// consuming expansion must preserve that original choice priority.
+var lazyJointOptional = /(a??b??|d)+?/.exec("a");
+assert.sameValue(lazyJointOptional[0], "");
+assert.sameValue(lazyJointOptional[1], "");
+
+// With mixed greediness, the empty leaf can sit between consuming choices:
+// `a??b?` prefers consuming `b` but skips both before backtracking to `a`,
+// while `a?b??` has the opposite ordering.
+assert.sameValue(/(a??b?|d)+?/.exec("a")[0], "");
+assert.sameValue(/(a??b?|d)+?/.exec("b")[0], "b");
+assert.sameValue(/(a?b??|d)+?/.exec("a")[0], "a");
+assert.sameValue(/(a?b??|d)+?/.exec("b")[0], "");

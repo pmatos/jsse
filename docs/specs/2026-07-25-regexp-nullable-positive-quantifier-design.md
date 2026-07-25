@@ -32,6 +32,12 @@ minimum-bumped rewrite (`a*` to `a+`, `a?` to `a`, or `{0,m}` to `{1,m}`).
 The pre-minimum empty path is added alongside that consuming form, before it
 for a lazy atom and after it for a greedy atom.
 
+For a jointly optional sequence, the consuming expansion follows the original
+greedy/lazy decision tree. Each greedy atom places its consuming choice before
+the recursively expanded skip path; each lazy atom places it after. The gated
+all-skipped leaf can therefore appear first, last, or between consuming
+alternatives, preserving the source branch's mandatory-iteration priority.
+
 Sentinel expansion is capped at 64 mandatory iterations. Larger minima retain
 the existing fallback behavior instead of expanding source proportional to an
 attacker-controlled quantifier bound. This preserves compilation behavior for
@@ -47,6 +53,12 @@ removes the sentinel slots before constructing the JavaScript match result.
 
 The rewrite forces the fancy-regex path because the standard Rust regex engine
 does not support the internal conditionals.
+
+Capture-backed sentinels cannot be reset by fancy-regex after they participate.
+An affected positive-minimum quantifier nested inside another repetition
+therefore retains the previous non-stateful rewrite. This avoids leaking a
+completed mandatory-iteration budget into the next entry of the nested
+quantifier, while leaving the pre-existing nested priority gap unchanged.
 
 Patterns that require JSSE's byte matcher (`\p{Cs}`/`\p{Co}` handling) retain
 the previous non-stateful rewrite because that matcher cannot compile
@@ -73,7 +85,9 @@ leaving their positive-minimum priority gap unchanged.
 - a continuation that requires falling back to the mandatory empty match;
 - inner capture numbering and last-iteration values;
 - lazy outer quantifiers; and
-- multiple independently affected quantified groups.
+- multiple independently affected quantified groups;
+- nested entry state isolation; and
+- all-lazy and mixed-greediness jointly optional branches.
 
 Validation runs the RegExp-focused test262 directory, the custom suites, and
 the full test262 regression comparison before publishing.
