@@ -67,6 +67,19 @@ An affected positive-minimum quantifier nested inside another repetition
 therefore retains the previous non-stateful rewrite. This avoids leaking a
 completed mandatory-iteration budget into the next entry of the nested
 quantifier, while leaving the pre-existing nested priority gap unchanged.
+The same fallback applies when the quantified body contains a JavaScript
+capture and the source contains a backreference. RepeatMatcher clears captures
+inside the atom before every iteration, but the backend retains a capture from
+an earlier alternative. The backend has the same stale-backreference limitation
+without this rewrite; bypassing sentinels keeps the new iteration mechanism
+from adding another stateful path to those patterns. Capture-only patterns stay
+eligible because JSSE's existing result normalization clears stale output
+captures after matching.
+
+Bounded min-zero quantifiers (`?` and `{0,m}`) use the consuming-branch
+rewrite, which bumps the inner minimum while preserving its greedy/lazy marker.
+They do not use the unbounded single-branch lazy-strip shortcut: with a bounded
+maximum, stripping the inner lazy marker changes the selected match.
 
 Patterns that require JSSE's byte matcher (`\p{Cs}`/`\p{Co}` handling) retain
 the previous non-stateful rewrite because that matcher cannot compile
@@ -95,7 +108,9 @@ leaving their positive-minimum priority gap unchanged.
 - lazy outer quantifiers; and
 - multiple independently affected quantified groups;
 - nested entry state isolation; and
+- sentinel bypass for backreference-observable inner captures; and
 - all-lazy and mixed-greediness jointly optional branches; and
+- bounded min-zero lazy quantifiers; and
 - Annex B identity escapes whose text resembles internal sentinel syntax; and
 - stateful-setter compilation at flat and nested backend-depth boundaries.
 

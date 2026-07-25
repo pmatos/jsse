@@ -229,3 +229,15 @@ assert.sameValue(/(a??b?|d)+?/.exec("a")[0], "");
 assert.sameValue(/(a??b?|d)+?/.exec("b")[0], "b");
 assert.sameValue(/(a?b??|d)+?/.exec("a")[0], "a");
 assert.sameValue(/(a?b??|d)+?/.exec("b")[0], "");
+
+// The no-progress rewrite is for unbounded repetition. A bounded min-zero
+// quantifier cannot add another iteration after an empty choice to recover
+// skipped input, so stripping its inner laziness changes both the match and
+// capture. These forms force the inner atom to consume while retaining its
+// lazy marker.
+var boundedOptional = /(a*?)?/.exec("aa");
+assert.sameValue(boundedOptional[0], "a");
+assert.sameValue(boundedOptional[1], "a");
+var boundedTwo = /(a*?){0,2}/.exec("aaa");
+assert.sameValue(boundedTwo[0], "aa");
+assert.sameValue(boundedTwo[1], "a");

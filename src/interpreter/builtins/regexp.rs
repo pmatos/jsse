@@ -6085,6 +6085,28 @@ fn nq_iteration_names(source: &str, state_id: &mut usize, min: usize) -> Vec<Str
     }
 }
 
+fn nq_has_source_backreference(chars: &[char]) -> bool {
+    let mut i = 0;
+    let mut in_cc = false;
+    while i < chars.len() {
+        match chars[i] {
+            '[' if !in_cc => in_cc = true,
+            ']' if in_cc => in_cc = false,
+            '\\' if !in_cc && i + 1 < chars.len() => {
+                if matches!(chars[i + 1], '1'..='9')
+                    || (chars[i + 1] == 'k' && i + 2 < chars.len() && chars[i + 2] == '<')
+                {
+                    return true;
+                }
+                i += 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    false
+}
+
 fn fix_nullable_quantifiers(
     source: &str,
     stateful_positive_minimum: bool,
@@ -6129,6 +6151,7 @@ fn fix_nullable_quantifiers(
     let mut insert_at: Vec<Vec<String>> = vec![Vec::new(); len + 1];
     let mut sentinel_names: Vec<String> = Vec::new();
     let mut state_id = 0usize;
+    let has_source_backreference = nq_has_source_backreference(&chars);
 
     for open_pos in 0..len {
         if chars[open_pos] != '(' || close_of[open_pos] == 0 {
@@ -6152,14 +6175,17 @@ fn fix_nullable_quantifiers(
         if outer_quantifier.min > 0
             && (!stateful_positive_minimum
                 || outer_quantifier.min > NQ_MAX_ITERATION_SENTINELS
-                || nq_is_nested_in_repeated_group(&chars, open_pos, &close_of))
+                || nq_is_nested_in_repeated_group(&chars, open_pos, &close_of)
+                || (has_source_backreference && nq_branch_has_capture(&chars, body_start, close)))
         {
             // Preserve the pre-jsse#378 `+` fallback when stateful conditions
             // are unavailable (notably the byte matcher), the minimum would
             // require attacker-controlled source expansion, or a containing
-            // repetition could enter this quantifier more than once. Backend
-            // captures cannot be unset, so nested sentinels would leak their
-            // mandatory-iteration state into the next entry.
+            // repetition could enter this quantifier more than once, or an
+            // inner source capture is observable by a backreference. Backend
+            // captures cannot be unset between iterations, so sentinels would
+            // either leak their mandatory-iteration state into the next entry
+            // or compound the backend's stale-backreference limitation.
             if chars[after] != '+' {
                 continue;
             }
@@ -6178,7 +6204,7 @@ fn fix_nullable_quantifiers(
             );
             continue;
         }
-        if outer_quantifier.min == 0 && branches.len() == 1 {
+        if outer_quantifier.min == 0 && outer_quantifier.max.is_none() && branches.len() == 1 {
             // No top-level alternation: greedy sub-quantifiers already
             // consume maximally, so only lazy ones need forcing.
             if nq_is_nullable(&chars, body_start, close, &close_of) {
@@ -6258,6 +6284,29 @@ fn fix_nullable_quantifiers(
     NullableQuantifierRewrite {
         source: result,
         sentinel_names: sentinel_names.into_iter().collect(),
+    }
+}
+
+#[cfg(test)]
+mod nullable_quantifier_rewrite_tests {
+    use super::fix_nullable_quantifiers;
+
+    #[test]
+    fn bounded_min_zero_preserves_inner_laziness() {
+        assert_eq!(fix_nullable_quantifiers("(a*?)?", true).source, "(a+?)?");
+        assert_eq!(
+            fix_nullable_quantifiers("(a*?){0,2}", true).source,
+            "(a+?){0,2}"
+        );
+    }
+
+    #[test]
+    fn backreferenced_inner_captures_bypass_sentinels() {
+        let with_backreference = fix_nullable_quantifiers("^(a*|(d)){2,3}(e)\\2", true);
+        assert!(with_backreference.sentinel_names.is_empty());
+
+        let capture_only = fix_nullable_quantifiers("^(a*|(d)){2,3}(e)", true);
+        assert!(!capture_only.sentinel_names.is_empty());
     }
 }
 
