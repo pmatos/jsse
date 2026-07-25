@@ -129,8 +129,8 @@ impl ObjectHandle {
         self.remember_if_old();
     }
 
-    /// Tenure a full-collection survivor. A major collection leaves no young
-    /// objects, so it does not need to enter the remembered set.
+    /// Tenure a full-collection survivor and clear its stale remembered bit.
+    /// The collector re-adds owners of independently mutable environments.
     pub(crate) fn tenure_after_major(&self) {
         self.allocation().generation.set(Generation::Old);
         self.allocation().nursery_age.set(0);
@@ -390,8 +390,9 @@ impl ObjectArena {
         self.storage.remembered_ids.borrow().len()
     }
 
-    /// A major collection tenures every survivor and starts with empty
-    /// nursery/remembered sets.
+    /// Clear nursery and remembered-set tracking after a major sweep. The
+    /// collector rebuilds persistent remembered membership while tenuring
+    /// survivors.
     pub(crate) fn reset_generations_after_major(&mut self) {
         self.nursery.clear();
         let remembered = std::mem::take(&mut *self.storage.remembered_ids.borrow_mut());

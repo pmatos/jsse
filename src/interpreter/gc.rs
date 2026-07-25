@@ -666,7 +666,13 @@ impl Interpreter {
                 self.free_gc_object(id);
             }
         }
-        // Post-sweep: clear dead weak entries
+        // The major sweep leaves no young objects, so discard stale
+        // generational tracking before rebuilding the persistent subset.
+        self.objects.reset_generations_after_major();
+
+        // Post-sweep: tenure survivors, clear dead weak entries, and keep
+        // environment owners visible to future minor collections. Their
+        // shared EnvRefs can be mutated without borrowing the owner again.
         for i in 0..obj_count {
             if !marks[i] {
                 continue;
@@ -706,8 +712,12 @@ impl Interpreter {
                     }
                 }
             }
+            let requires_persistent_scan = Self::object_requires_persistent_minor_scan(&obj);
+            drop(obj);
+            if requires_persistent_scan {
+                obj_rc.remember_if_old();
+            }
         }
-        self.objects.reset_generations_after_major();
         let live_count = self.objects.live_count();
         self.gc.end_major_collection(live_count);
         // Return the buffer to the interpreter so its capacity is reused next GC.
@@ -1344,6 +1354,38 @@ mod tests {
         interp.gc_safepoint();
 
         assert!(interp.objects.get_cell_expect(survivor).is_old());
+    }
+
+    #[test]
+    fn major_collection_keeps_environment_owner_remembered() {
+        let mut interp = Interpreter::new();
+        tenure_initial_heap(&mut interp);
+
+        let env = Environment::new(None);
+        let mut owner_data = JsObjectData::new();
+        owner_data.kind = ObjectKind::Arguments(HashMap::from([(
+            "0".to_string(),
+            (env.clone(), "captured".to_string()),
+        )]));
+        let owner = interp.alloc_object(owner_data);
+        interp.gc_temp_roots.push(owner);
+
+        interp.gc.request();
+        interp.gc_safepoint();
+        assert!(interp.objects.get_cell_expect(owner).is_old());
+
+        let child = interp.alloc_object(JsObjectData::new());
+        env.borrow_mut().bindings.insert(
+            "captured".to_string(),
+            Binding::new(obj(child), BindingKind::Var, true),
+        );
+        interp.gc.request_minor();
+        interp.gc_safepoint();
+
+        assert!(
+            interp.objects.get_cell(child).is_some(),
+            "an environment mutated after major GC must retain its young object"
+        );
     }
 
     #[test]
