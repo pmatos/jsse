@@ -62,7 +62,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    Completion::Normal(JsValue::BigInt(crate::types::JsBigInt { value: ns }))
+                    Completion::Normal(JsValue::BigInt(crate::types::JsBigInt::new(ns)))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -905,7 +905,7 @@ fn parse_instant_string(interp: &mut Interpreter, s: &str) -> Result<BigInt, Com
 
 pub(super) fn to_bigint_arg(interp: &mut Interpreter, val: &JsValue) -> Result<BigInt, Completion> {
     match val {
-        JsValue::BigInt(n) => Ok(n.value.clone()),
+        JsValue::BigInt(n) => Ok((*n.value).clone()),
         JsValue::String(s) => {
             let s_str = s.to_rust_string();
             match s_str.parse::<BigInt>() {

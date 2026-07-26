@@ -53,7 +53,7 @@ pub(crate) fn to_boolean(val: &JsValue) -> bool {
         JsValue::Boolean(b) => *b,
         JsValue::Number(n) => *n != 0.0 && !n.is_nan(),
         JsValue::String(s) => !s.is_empty(),
-        JsValue::BigInt(b) => b.value != num_bigint::BigInt::from(0),
+        JsValue::BigInt(b) => *b.value != num_bigint::BigInt::from(0),
         JsValue::Symbol(_) | JsValue::Object(_) => true,
     }
 }

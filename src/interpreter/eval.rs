@@ -1485,9 +1485,9 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 match numeric {
-                    JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
-                        value: bigint_ops::unary_minus(&b.value),
-                    })),
+                    JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt::new(
+                        bigint_ops::unary_minus(&b.value),
+                    ))),
                     JsValue::Number(n) => {
                         Completion::Normal(JsValue::Number(number_ops::unary_minus(n)))
                     }
@@ -1505,9 +1505,9 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 match numeric {
-                    JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
-                        value: bigint_ops::bitwise_not(&b.value),
-                    })),
+                    JsValue::BigInt(b) => Completion::Normal(JsValue::BigInt(JsBigInt::new(
+                        bigint_ops::bitwise_not(&b.value),
+                    ))),
                     JsValue::Number(n) => {
                         Completion::Normal(JsValue::Number(number_ops::bitwise_not(n)))
                     }
@@ -1764,20 +1764,18 @@ impl Interpreter {
         };
         match &prim {
             JsValue::BigInt(_) => Ok(prim),
-            JsValue::Boolean(b) => Ok(JsValue::BigInt(crate::types::JsBigInt {
-                value: if *b {
-                    num_bigint::BigInt::from(1)
-                } else {
-                    num_bigint::BigInt::from(0)
-                },
-            })),
+            JsValue::Boolean(b) => Ok(JsValue::BigInt(crate::types::JsBigInt::new(if *b {
+                num_bigint::BigInt::from(1)
+            } else {
+                num_bigint::BigInt::from(0)
+            }))),
             JsValue::String(s) => {
                 let text = s.to_rust_string();
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
-                    return Ok(JsValue::BigInt(crate::types::JsBigInt {
-                        value: num_bigint::BigInt::from(0),
-                    }));
+                    return Ok(JsValue::BigInt(crate::types::JsBigInt::new(
+                        num_bigint::BigInt::from(0),
+                    )));
                 }
                 let parsed = if let Some(hex) = trimmed
                     .strip_prefix("0x")
@@ -1798,7 +1796,7 @@ impl Interpreter {
                     trimmed.parse::<num_bigint::BigInt>().ok()
                 };
                 match parsed {
-                    Some(n) => Ok(JsValue::BigInt(crate::types::JsBigInt { value: n })),
+                    Some(n) => Ok(JsValue::BigInt(crate::types::JsBigInt::new(n))),
                     None => Err(self.create_error(
                         "SyntaxError",
                         &format!("Cannot convert {} to a BigInt", text),
@@ -1947,10 +1945,10 @@ impl Interpreter {
             }
             let n_trunc = n.trunc();
             let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
-            if b.value < n_floor {
+            if *b.value < n_floor {
                 return Ok(Some(true));
             }
-            if b.value > n_floor {
+            if *b.value > n_floor {
                 return Ok(Some(false));
             }
             // n_floor == b.value, so result depends on fractional part
@@ -1968,10 +1966,10 @@ impl Interpreter {
             }
             let n_trunc = n.trunc();
             let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
-            if n_floor < b.value {
+            if n_floor < *b.value {
                 return Ok(Some(true));
             }
-            if n_floor > b.value {
+            if n_floor > *b.value {
                 return Ok(Some(false));
             }
             // n_floor == b.value, so result depends on fractional part
@@ -1980,15 +1978,13 @@ impl Interpreter {
         // BigInt vs String: try parsing via StringToBigInt
         if let (JsValue::BigInt(_), JsValue::String(s)) = (&lprim, &rprim) {
             if let Some(parsed) = string_to_bigint_for_comparison(&s.to_rust_string()) {
-                return self
-                    .abstract_relational(&lprim, &JsValue::BigInt(JsBigInt { value: parsed }));
+                return self.abstract_relational(&lprim, &JsValue::BigInt(JsBigInt::new(parsed)));
             }
             return Ok(None);
         }
         if let (JsValue::String(s), JsValue::BigInt(_)) = (&lprim, &rprim) {
             if let Some(parsed) = string_to_bigint_for_comparison(&s.to_rust_string()) {
-                return self
-                    .abstract_relational(&JsValue::BigInt(JsBigInt { value: parsed }), &rprim);
+                return self.abstract_relational(&JsValue::BigInt(JsBigInt::new(parsed)), &rprim);
             }
             return Ok(None);
         }
@@ -2022,10 +2018,10 @@ impl Interpreter {
             }
             let n_trunc = n.trunc();
             let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
-            if b.value < n_floor {
+            if *b.value < n_floor {
                 return Ok(Some(true));
             }
-            if b.value > n_floor {
+            if *b.value > n_floor {
                 return Ok(Some(false));
             }
             return Ok(Some(n_trunc < *n));
@@ -2042,10 +2038,10 @@ impl Interpreter {
             }
             let n_trunc = n.trunc();
             let n_floor = crate::interpreter::builtins::bigint::f64_to_bigint(n_trunc);
-            if n_floor < b.value {
+            if n_floor < *b.value {
                 return Ok(Some(true));
             }
-            if n_floor > b.value {
+            if n_floor > *b.value {
                 return Ok(Some(false));
             }
             return Ok(Some(*n < n_trunc));
@@ -2216,9 +2212,9 @@ impl Interpreter {
                     };
                     Completion::Normal(JsValue::String(JsString::from_vec(code_units)))
                 } else if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lprim, &rprim) {
-                    Completion::Normal(JsValue::BigInt(JsBigInt {
-                        value: bigint_ops::add(&a.value, &b.value),
-                    }))
+                    Completion::Normal(JsValue::BigInt(JsBigInt::new(bigint_ops::add(
+                        &a.value, &b.value,
+                    ))))
                 } else if lprim.is_bigint() || rprim.is_bigint() {
                     Completion::Throw(self.create_type_error(
                         "Cannot mix BigInt and other types, use explicit conversions",
@@ -2242,26 +2238,26 @@ impl Interpreter {
                 };
                 if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lnum, &rnum) {
                     match op {
-                        BinaryOp::Sub => Completion::Normal(JsValue::BigInt(JsBigInt {
-                            value: bigint_ops::subtract(&a.value, &b.value),
-                        })),
-                        BinaryOp::Mul => Completion::Normal(JsValue::BigInt(JsBigInt {
-                            value: bigint_ops::multiply(&a.value, &b.value),
-                        })),
+                        BinaryOp::Sub => Completion::Normal(JsValue::BigInt(JsBigInt::new(
+                            bigint_ops::subtract(&a.value, &b.value),
+                        ))),
+                        BinaryOp::Mul => Completion::Normal(JsValue::BigInt(JsBigInt::new(
+                            bigint_ops::multiply(&a.value, &b.value),
+                        ))),
                         BinaryOp::Div => match bigint_ops::divide(&a.value, &b.value) {
-                            Ok(v) => Completion::Normal(JsValue::BigInt(JsBigInt { value: v })),
+                            Ok(v) => Completion::Normal(JsValue::BigInt(JsBigInt::new(v))),
                             Err(_) => Completion::Throw(
                                 self.create_error("RangeError", "Division by zero"),
                             ),
                         },
                         BinaryOp::Mod => match bigint_ops::remainder(&a.value, &b.value) {
-                            Ok(v) => Completion::Normal(JsValue::BigInt(JsBigInt { value: v })),
+                            Ok(v) => Completion::Normal(JsValue::BigInt(JsBigInt::new(v))),
                             Err(_) => Completion::Throw(
                                 self.create_error("RangeError", "Division by zero"),
                             ),
                         },
                         BinaryOp::Exp => match bigint_ops::exponentiate(&a.value, &b.value) {
-                            Ok(v) => Completion::Normal(JsValue::BigInt(JsBigInt { value: v })),
+                            Ok(v) => Completion::Normal(JsValue::BigInt(JsBigInt::new(v))),
                             Err(_) => Completion::Throw(
                                 self.create_error("RangeError", "Exponent must be positive"),
                             ),
@@ -2339,15 +2335,11 @@ impl Interpreter {
                         ));
                     }
                     if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lnum, &rnum) {
-                        Completion::Normal(JsValue::BigInt(JsBigInt {
-                            value: match op {
-                                BinaryOp::LShift => bigint_ops::left_shift(&a.value, &b.value),
-                                BinaryOp::RShift => {
-                                    bigint_ops::signed_right_shift(&a.value, &b.value)
-                                }
-                                _ => unreachable!(),
-                            },
-                        }))
+                        Completion::Normal(JsValue::BigInt(JsBigInt::new(match op {
+                            BinaryOp::LShift => bigint_ops::left_shift(&a.value, &b.value),
+                            BinaryOp::RShift => bigint_ops::signed_right_shift(&a.value, &b.value),
+                            _ => unreachable!(),
+                        })))
                     } else {
                         Completion::Throw(self.create_type_error(
                             "Cannot mix BigInt and other types, use explicit conversions",
@@ -2382,14 +2374,12 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 if let (JsValue::BigInt(a), JsValue::BigInt(b)) = (&lnum, &rnum) {
-                    Completion::Normal(JsValue::BigInt(JsBigInt {
-                        value: match op {
-                            BinaryOp::BitAnd => bigint_ops::bitwise_and(&a.value, &b.value),
-                            BinaryOp::BitOr => bigint_ops::bitwise_or(&a.value, &b.value),
-                            BinaryOp::BitXor => bigint_ops::bitwise_xor(&a.value, &b.value),
-                            _ => unreachable!(),
-                        },
-                    }))
+                    Completion::Normal(JsValue::BigInt(JsBigInt::new(match op {
+                        BinaryOp::BitAnd => bigint_ops::bitwise_and(&a.value, &b.value),
+                        BinaryOp::BitOr => bigint_ops::bitwise_or(&a.value, &b.value),
+                        BinaryOp::BitXor => bigint_ops::bitwise_xor(&a.value, &b.value),
+                        _ => unreachable!(),
+                    })))
                 } else if lnum.is_bigint() || rnum.is_bigint() {
                     Completion::Throw(self.create_type_error(
                         "Cannot mix BigInt and other types, use explicit conversions",
@@ -2492,11 +2482,11 @@ impl Interpreter {
             use num_bigint::BigInt;
             let one = BigInt::from(1);
             let new_bigint = match op {
-                UpdateOp::Increment => &b.value + &one,
-                UpdateOp::Decrement => &b.value - &one,
+                UpdateOp::Increment => &*b.value + &one,
+                UpdateOp::Decrement => &*b.value - &one,
             };
             let old_val = JsValue::BigInt(b.clone());
-            let new_val = JsValue::BigInt(JsBigInt { value: new_bigint });
+            let new_val = JsValue::BigInt(JsBigInt::new(new_bigint));
             Ok((old_val, new_val))
         } else if let JsValue::Symbol(_) = numeric {
             Err(self.create_type_error("Cannot convert a Symbol value to a number"))

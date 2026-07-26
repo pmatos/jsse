@@ -2953,9 +2953,9 @@ impl Interpreter {
                             }
                             Err(interp.create_type_error("Cannot convert value to a BigInt"))
                         }
-                        JsValue::Boolean(b) => Ok(JsValue::BigInt(JsBigInt {
-                            value: num_bigint::BigInt::from(if *b { 1 } else { 0 }),
-                        })),
+                        JsValue::Boolean(b) => Ok(JsValue::BigInt(JsBigInt::new(
+                            num_bigint::BigInt::from(if *b { 1 } else { 0 }),
+                        ))),
                         JsValue::Number(n) => {
                             // ToBigInt throws TypeError for Number values
                             Err(interp
@@ -2985,7 +2985,7 @@ impl Interpreter {
                                 text.parse::<num_bigint::BigInt>().ok()
                             };
                             match parsed {
-                                Some(v) => Ok(JsValue::BigInt(JsBigInt { value: v })),
+                                Some(v) => Ok(JsValue::BigInt(JsBigInt::new(v))),
                                 None => Err(interp.create_error(
                                     "SyntaxError",
                                     &format!("Cannot convert {} to a BigInt", text),
@@ -5356,9 +5356,7 @@ impl Interpreter {
             } else {
                 i64::from_be_bytes(bytes)
             };
-            JsValue::BigInt(JsBigInt {
-                value: num_bigint::BigInt::from(v),
-            })
+            JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(v)))
         });
         dv_get_method!("getBigUint64", 8, |buf: &[u8], le: bool| -> JsValue {
             let mut bytes = [0u8; 8];
@@ -5368,9 +5366,7 @@ impl Interpreter {
             } else {
                 u64::from_be_bytes(bytes)
             };
-            JsValue::BigInt(JsBigInt {
-                value: num_bigint::BigInt::from(v),
-            })
+            JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(v)))
         });
         dv_get_method!("getFloat16", 2, |buf: &[u8], le: bool| -> JsValue {
             let bits = if le {
@@ -5652,7 +5648,7 @@ impl Interpreter {
             bigint,
             |buf: &mut [u8], v: &JsValue, le: bool| {
                 let n = match v {
-                    JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
+                    JsValue::BigInt(b) => i64::try_from(b.value.as_ref()).unwrap_or(0),
                     _ => 0,
                 };
                 let bytes = if le { n.to_le_bytes() } else { n.to_be_bytes() };
@@ -5665,7 +5661,7 @@ impl Interpreter {
             bigint,
             |buf: &mut [u8], v: &JsValue, le: bool| {
                 let n = match v {
-                    JsValue::BigInt(b) => u64::try_from(&b.value).unwrap_or(0),
+                    JsValue::BigInt(b) => u64::try_from(b.value.as_ref()).unwrap_or(0),
                     _ => 0,
                 };
                 let bytes = if le { n.to_le_bytes() } else { n.to_be_bytes() };

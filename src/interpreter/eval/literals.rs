@@ -98,7 +98,7 @@ impl Interpreter {
                 } else {
                     s.parse::<BigInt>().unwrap_or_default()
                 };
-                JsValue::BigInt(JsBigInt { value })
+                JsValue::BigInt(JsBigInt::new(value))
             }
             Literal::RegExp(pattern, flags) => {
                 let mut obj = JsObjectData::new();

@@ -357,7 +357,15 @@ impl JsSymbol {
 
 #[derive(Clone, Debug)]
 pub(crate) struct JsBigInt {
-    pub value: num_bigint::BigInt,
+    pub value: Arc<num_bigint::BigInt>,
+}
+
+impl JsBigInt {
+    pub(crate) fn new(value: num_bigint::BigInt) -> Self {
+        Self {
+            value: Arc::new(value),
+        }
+    }
 }
 
 // Placeholder — full object model comes in Phase 5
@@ -1073,11 +1081,9 @@ mod tests {
             description: Some(JsString::from_str("s")),
         };
         assert_eq!(JsValue::symbol(sym).as_symbol().unwrap().id, 1);
-        let big = JsBigInt {
-            value: num_bigint::BigInt::from(42),
-        };
+        let big = JsBigInt::new(num_bigint::BigInt::from(42));
         assert_eq!(
-            JsValue::bigint(big).as_bigint().unwrap().value,
+            *JsValue::bigint(big).as_bigint().unwrap().value,
             num_bigint::BigInt::from(42)
         );
     }
@@ -1106,9 +1112,7 @@ mod tests {
         assert_eq!(sym.with_symbol(|s| s.id), Some(9));
         assert_eq!(JsValue::Null.with_symbol(|s| s.id), None);
 
-        let big = JsValue::BigInt(JsBigInt {
-            value: num_bigint::BigInt::from(5),
-        });
+        let big = JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(5)));
         assert_eq!(
             big.with_bigint(|b| b.clone()),
             Some(num_bigint::BigInt::from(5))
@@ -1122,11 +1126,9 @@ mod tests {
         assert_eq!(s.into_string().unwrap().to_rust_string(), "x");
         assert!(JsValue::Null.into_string().is_none());
 
-        let big = JsValue::BigInt(JsBigInt {
-            value: num_bigint::BigInt::from(11),
-        });
+        let big = JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(11)));
         assert_eq!(
-            big.into_bigint().unwrap().value,
+            *big.into_bigint().unwrap().value,
             num_bigint::BigInt::from(11)
         );
         assert!(JsValue::Number(1.0).into_bigint().is_none());
@@ -1148,9 +1150,7 @@ mod tests {
                 ValueKind::Symbol,
             ),
             (
-                JsValue::BigInt(JsBigInt {
-                    value: num_bigint::BigInt::from(0),
-                }),
+                JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(0))),
                 ValueKind::BigInt,
             ),
             (JsValue::object(1), ValueKind::Object),

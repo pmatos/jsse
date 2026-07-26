@@ -3390,9 +3390,9 @@ fn typed_array_get_index_shared(
             }
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::BigInt(crate::types::JsBigInt {
-                value: num_bigint::BigInt::from(i64::from_ne_bytes(bytes)),
-            })
+            JsValue::BigInt(crate::types::JsBigInt::new(num_bigint::BigInt::from(
+                i64::from_ne_bytes(bytes),
+            )))
         }),
         TypedArrayKind::BigUint64 => sab.with_read(|buf| {
             if offset + 8 > buf.len() {
@@ -3400,9 +3400,9 @@ fn typed_array_get_index_shared(
             }
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::BigInt(crate::types::JsBigInt {
-                value: num_bigint::BigInt::from(u64::from_ne_bytes(bytes)),
-            })
+            JsValue::BigInt(crate::types::JsBigInt::new(num_bigint::BigInt::from(
+                u64::from_ne_bytes(bytes),
+            )))
         }),
         TypedArrayKind::Float16 => sab.with_read(|buf| {
             if offset + 2 > buf.len() {
@@ -3497,16 +3497,16 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
             TypedArrayKind::BigInt64 => {
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&buf[offset..offset + 8]);
-                JsValue::BigInt(crate::types::JsBigInt {
-                    value: num_bigint::BigInt::from(i64::from_ne_bytes(bytes)),
-                })
+                JsValue::BigInt(crate::types::JsBigInt::new(num_bigint::BigInt::from(
+                    i64::from_ne_bytes(bytes),
+                )))
             }
             TypedArrayKind::BigUint64 => {
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&buf[offset..offset + 8]);
-                JsValue::BigInt(crate::types::JsBigInt {
-                    value: num_bigint::BigInt::from(u64::from_ne_bytes(bytes)),
-                })
+                JsValue::BigInt(crate::types::JsBigInt::new(num_bigint::BigInt::from(
+                    u64::from_ne_bytes(bytes),
+                )))
             }
             TypedArrayKind::Float16 => {
                 let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
@@ -3743,7 +3743,7 @@ fn to_uint32(v: &JsValue) -> u32 {
 fn to_bigint64(v: &JsValue) -> i64 {
     match v {
         JsValue::BigInt(b) => {
-            i64::try_from(&b.value).unwrap_or_else(|_| {
+            i64::try_from(b.value.as_ref()).unwrap_or_else(|_| {
                 // Truncate to 64 bits
                 let bytes = b.value.to_signed_bytes_le();
                 let mut result = [0u8; 8];
@@ -3762,7 +3762,7 @@ fn to_bigint64(v: &JsValue) -> i64 {
 }
 fn to_biguint64(v: &JsValue) -> u64 {
     match v {
-        JsValue::BigInt(b) => u64::try_from(&b.value).unwrap_or_else(|_| {
+        JsValue::BigInt(b) => u64::try_from(b.value.as_ref()).unwrap_or_else(|_| {
             let bytes = b.value.to_signed_bytes_le();
             let mut result = [0u8; 8];
             let len = bytes.len().min(8);

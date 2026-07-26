@@ -326,7 +326,7 @@ impl Interpreter {
                     })
                     .unwrap_or(0);
                 let expected = match &converted {
-                    JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
+                    JsValue::BigInt(b) => i64::try_from(b.value.as_ref()).unwrap_or(0),
                     _ => 0,
                 };
                 current == expected
@@ -739,12 +739,12 @@ fn atomic_load_shared(
             })
             .unwrap_or(0);
         let bv = match kind {
-            TypedArrayKind::BigInt64 => JsValue::BigInt(JsBigInt {
-                value: num_bigint::BigInt::from(val),
-            }),
-            TypedArrayKind::BigUint64 => JsValue::BigInt(JsBigInt {
-                value: num_bigint::BigInt::from(val as u64),
-            }),
+            TypedArrayKind::BigInt64 => {
+                JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(val)))
+            }
+            TypedArrayKind::BigUint64 => {
+                JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(val as u64)))
+            }
             _ => JsValue::Number(0.0),
         };
         Completion::Normal(bv)
@@ -801,7 +801,7 @@ fn atomic_store_shared(
 ) {
     if is_bigint {
         let i = match val {
-            JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
+            JsValue::BigInt(b) => i64::try_from(b.value.as_ref()).unwrap_or(0),
             _ => 0,
         };
         let _ = sab.with_atomic_ptr::<i64, _>(offset, 8, |ptr| unsafe {
@@ -859,11 +859,11 @@ fn atomic_compare_exchange_shared(
 ) -> Completion {
     if is_bigint {
         let exp = match expected {
-            JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
+            JsValue::BigInt(b) => i64::try_from(b.value.as_ref()).unwrap_or(0),
             _ => 0,
         };
         let rep = match replacement {
-            JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
+            JsValue::BigInt(b) => i64::try_from(b.value.as_ref()).unwrap_or(0),
             _ => 0,
         };
         let old = sab
@@ -874,12 +874,12 @@ fn atomic_compare_exchange_shared(
             })
             .unwrap_or(0);
         let bv = match kind {
-            TypedArrayKind::BigInt64 => JsValue::BigInt(JsBigInt {
-                value: num_bigint::BigInt::from(old),
-            }),
-            TypedArrayKind::BigUint64 => JsValue::BigInt(JsBigInt {
-                value: num_bigint::BigInt::from(old as u64),
-            }),
+            TypedArrayKind::BigInt64 => {
+                JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(old)))
+            }
+            TypedArrayKind::BigUint64 => {
+                JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(old as u64)))
+            }
             _ => JsValue::Number(0.0),
         };
         Completion::Normal(bv)
@@ -1045,7 +1045,7 @@ fn atomic_rmw_shared(
 ) -> Completion {
     if is_bigint {
         let new_i64 = match converted {
-            JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
+            JsValue::BigInt(b) => i64::try_from(b.value.as_ref()).unwrap_or(0),
             _ => 0,
         };
         let old = sab
@@ -1067,12 +1067,12 @@ fn atomic_rmw_shared(
             })
             .unwrap_or(0);
         let bv = match kind {
-            TypedArrayKind::BigInt64 => JsValue::BigInt(JsBigInt {
-                value: num_bigint::BigInt::from(old),
-            }),
-            TypedArrayKind::BigUint64 => JsValue::BigInt(JsBigInt {
-                value: num_bigint::BigInt::from(old as u64),
-            }),
+            TypedArrayKind::BigInt64 => {
+                JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(old)))
+            }
+            TypedArrayKind::BigUint64 => {
+                JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(old as u64)))
+            }
             _ => JsValue::Number(0.0),
         };
         Completion::Normal(bv)
@@ -1280,7 +1280,7 @@ fn atomics_rmw(
             let old_bytes = read_bigint_raw_bytes(buf, offset, kind);
             let old_i64 = i64::from_le_bytes(old_bytes);
             let new_i64 = match &converted {
-                JsValue::BigInt(b) => i64::try_from(&b.value).unwrap_or(0),
+                JsValue::BigInt(b) => i64::try_from(b.value.as_ref()).unwrap_or(0),
                 _ => 0,
             };
             let result_i64 = bigint_op(old_i64, new_i64);
@@ -1355,14 +1355,10 @@ fn number_from_raw_bytes(kind: TypedArrayKind, raw: &[u8; 8]) -> JsValue {
 fn bigint_from_raw_bytes(kind: TypedArrayKind, raw: &[u8; 8]) -> JsValue {
     let i = i64::from_le_bytes(*raw);
     match kind {
-        TypedArrayKind::BigInt64 => JsValue::BigInt(JsBigInt {
-            value: num_bigint::BigInt::from(i),
-        }),
+        TypedArrayKind::BigInt64 => JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(i))),
         TypedArrayKind::BigUint64 => {
             let u = u64::from_le_bytes(*raw);
-            JsValue::BigInt(JsBigInt {
-                value: num_bigint::BigInt::from(u),
-            })
+            JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(u)))
         }
         _ => JsValue::Number(0.0),
     }
@@ -1380,7 +1376,7 @@ fn number_to_raw_bytes(kind: TypedArrayKind, val: &JsValue) -> [u8; 8] {
 fn bigint_to_raw_bytes(kind: TypedArrayKind, val: &JsValue) -> [u8; 8] {
     match val {
         JsValue::BigInt(b) => {
-            let i = i64::try_from(&b.value).unwrap_or(0);
+            let i = i64::try_from(b.value.as_ref()).unwrap_or(0);
             match kind {
                 TypedArrayKind::BigInt64 => i.to_le_bytes(),
                 TypedArrayKind::BigUint64 => (i as u64).to_le_bytes(),
@@ -1402,7 +1398,7 @@ fn write_number_to_buffer(buf: &mut [u8], offset: usize, kind: TypedArrayKind, v
 
 fn write_bigint_to_buffer(buf: &mut [u8], offset: usize, kind: TypedArrayKind, val: &JsValue) {
     if let JsValue::BigInt(b) = val {
-        let i = i64::try_from(&b.value).unwrap_or(0);
+        let i = i64::try_from(b.value.as_ref()).unwrap_or(0);
         match kind {
             TypedArrayKind::BigInt64 | TypedArrayKind::BigUint64 => {
                 let bytes = i.to_le_bytes();
@@ -1487,14 +1483,12 @@ mod tests {
     }
 
     fn bigint(value: i64) -> JsValue {
-        JsValue::BigInt(JsBigInt {
-            value: num_bigint::BigInt::from(value),
-        })
+        JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(value)))
     }
 
     fn completion_bigint(completion: Completion) -> num_bigint::BigInt {
         match completion {
-            Completion::Normal(JsValue::BigInt(value)) => value.value,
+            Completion::Normal(JsValue::BigInt(value)) => (*value.value).clone(),
             _ => panic!("expected a BigInt normal completion"),
         }
     }
