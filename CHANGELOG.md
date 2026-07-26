@@ -1,3 +1,10 @@
+## [0.4.11](https://github.com/pmatos/jsse/compare/v0.4.10...v0.4.11) (2026-07-26)
+
+
+### Performance Improvements
+
+* **bytecode:** compile member/array-element access ([#397](https://github.com/pmatos/jsse/issues/397)) ([2691b54](https://github.com/pmatos/jsse/commit/2691b54e7c3912e598147ebd4eea2d645326b2b4))
+
 ## [0.4.10](https://github.com/pmatos/jsse/compare/v0.4.9...v0.4.10) (2026-07-25)
 
 
