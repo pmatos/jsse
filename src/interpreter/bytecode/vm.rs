@@ -18,6 +18,97 @@ fn decode_u16(chunk: &Chunk, pc: usize) -> u16 {
     (hi << 8) | lo
 }
 
+/// Roots every `JsValue::Object` currently on the operand stack, not just the
+/// current opcode's own operands. A value pushed by an earlier `GetProp`/
+/// `GetElement` (e.g. the base of `a.b.value = a.c`) can still be pending on
+/// the stack while a *later* opcode's own getter/proxy-trap/`ToPropertyKey`
+/// coercion runs and reaches a nested `gc_safepoint()` — rooting only this
+/// opcode's own operands would miss that older, still-pending value.
+fn root_operand_stack(interp: &mut Interpreter, stack: &[JsValue]) -> usize {
+    let frame = interp.gc_root_frame();
+    for v in stack {
+        interp.gc_root_value(v);
+    }
+    frame
+}
+
+fn member_get(interp: &mut Interpreter, base: &JsValue, name: &str) -> Completion {
+    if matches!(base, JsValue::Undefined | JsValue::Null) {
+        let err = interp.create_type_error(&format!(
+            "Cannot read properties of {base} (reading '{name}')"
+        ));
+        return Completion::Throw(err);
+    }
+    let obj_val = if matches!(base, JsValue::Object(_)) {
+        base.clone()
+    } else {
+        match interp.to_object(base) {
+            Completion::Normal(v) => v,
+            abrupt => return abrupt,
+        }
+    };
+    let JsValue::Object(o) = &obj_val else {
+        return Completion::Normal(JsValue::Undefined);
+    };
+    interp.get_object_property(o.id, name, &obj_val)
+}
+
+fn member_get_computed(interp: &mut Interpreter, base: &JsValue, key_val: &JsValue) -> Completion {
+    if matches!(base, JsValue::Undefined | JsValue::Null) {
+        let err = interp.create_type_error(&format!(
+            "Cannot read properties of {base} (reading property)"
+        ));
+        return Completion::Throw(err);
+    }
+    let key = match interp.to_property_key(key_val) {
+        Ok(k) => k,
+        Err(e) => return Completion::Throw(e),
+    };
+    let obj_val = if matches!(base, JsValue::Object(_)) {
+        base.clone()
+    } else {
+        match interp.to_object(base) {
+            Completion::Normal(v) => v,
+            abrupt => return abrupt,
+        }
+    };
+    let JsValue::Object(o) = &obj_val else {
+        return Completion::Normal(JsValue::Undefined);
+    };
+    interp.get_object_property(o.id, &key, &obj_val)
+}
+
+fn member_set(
+    interp: &mut Interpreter,
+    base: JsValue,
+    name: &str,
+    rhs: JsValue,
+    strict: bool,
+) -> Result<(), JsValue> {
+    if matches!(base, JsValue::Undefined | JsValue::Null) {
+        return Err(interp.create_type_error(&format!(
+            "Cannot set properties of {base} (setting '{name}')"
+        )));
+    }
+    interp.set_object_with_key(base, name, rhs, strict)
+}
+
+fn member_set_computed(
+    interp: &mut Interpreter,
+    base: JsValue,
+    key_val: &JsValue,
+    rhs: JsValue,
+    strict: bool,
+) -> Result<(), JsValue> {
+    let key = interp.to_property_key(key_val)?;
+    if matches!(base, JsValue::Undefined | JsValue::Null) {
+        return Err(interp.create_type_error(&format!(
+            "Cannot set properties of {base} (setting '{key}')"
+        )));
+    }
+    interp.set_object_with_key(base, &key, rhs, strict)
+}
+
 pub(crate) fn run_chunk(
     interp: &mut Interpreter,
     chunk: &Chunk,
@@ -107,6 +198,58 @@ pub(crate) fn run_chunk(
                 match interp.eval_identifier_update(op, prefix, name, env) {
                     Completion::Normal(value) => stack.push(value),
                     abrupt => return abrupt,
+                }
+            }
+            Op::GetProp => {
+                let idx = decode_u16(chunk, pc);
+                pc += 2;
+                let name = chunk.names[idx as usize].clone();
+                let gc_frame = root_operand_stack(interp, &stack);
+                let base = stack.pop().expect("stack underflow on GetProp");
+                let result = member_get(interp, &base, &name);
+                interp.gc_unroot_frame(gc_frame);
+                match result {
+                    Completion::Normal(v) => stack.push(v),
+                    abrupt => return abrupt,
+                }
+            }
+            Op::GetElement => {
+                let gc_frame = root_operand_stack(interp, &stack);
+                let key_val = stack.pop().expect("stack underflow on GetElement key");
+                let base = stack.pop().expect("stack underflow on GetElement base");
+                let result = member_get_computed(interp, &base, &key_val);
+                interp.gc_unroot_frame(gc_frame);
+                match result {
+                    Completion::Normal(v) => stack.push(v),
+                    abrupt => return abrupt,
+                }
+            }
+            Op::SetProp => {
+                let idx = decode_u16(chunk, pc);
+                pc += 2;
+                let name = chunk.names[idx as usize].clone();
+                let gc_frame = root_operand_stack(interp, &stack);
+                let rhs = stack.pop().expect("stack underflow on SetProp rhs");
+                let base = stack.pop().expect("stack underflow on SetProp base");
+                let strict = env.borrow().strict;
+                let result = member_set(interp, base, &name, rhs.clone(), strict);
+                interp.gc_unroot_frame(gc_frame);
+                match result {
+                    Ok(()) => stack.push(rhs),
+                    Err(e) => return Completion::Throw(e),
+                }
+            }
+            Op::SetElement => {
+                let gc_frame = root_operand_stack(interp, &stack);
+                let rhs = stack.pop().expect("stack underflow on SetElement rhs");
+                let key_val = stack.pop().expect("stack underflow on SetElement key");
+                let base = stack.pop().expect("stack underflow on SetElement base");
+                let strict = env.borrow().strict;
+                let result = member_set_computed(interp, base, &key_val, rhs.clone(), strict);
+                interp.gc_unroot_frame(gc_frame);
+                match result {
+                    Ok(()) => stack.push(rhs),
+                    Err(e) => return Completion::Throw(e),
                 }
             }
             Op::LoadUndefined => {

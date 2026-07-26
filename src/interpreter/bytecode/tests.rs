@@ -93,6 +93,162 @@ fn end_to_end_constructor_with_empty_body_returns_this() {
 }
 
 #[test]
+fn end_to_end_member_assignment_in_loop_takes_bytecode_path() {
+    // Motivating case for issue #388 (mandreel's heap-copy loop shape):
+    // a numeric `for` loop whose body is nothing but member/array-element
+    // read + write. Before member-access opcodes landed, `Expression::Member`
+    // had no `compile_expr` case, so this bailed the whole body to the
+    // tree-walker (bc_count == 0) despite being otherwise loop-eligible.
+    let source = "var __r = (function(a, b, n) { \
+        for (var i = 0; i < n; i++) { a[i] = b[i]; } \
+        return a[n - 1]; \
+    })([0, 0, 0], [7, 8, 9], 3);";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "member access inside the loop should now compile to bytecode"
+    );
+    assert!(matches!(v, JsValue::Number(n) if n == 9.0));
+}
+
+#[test]
+fn end_to_end_dot_read_takes_bytecode_path() {
+    let source = "var __r = (function(o){ return o.x; })({x: 5});";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(count >= 1, "dot read should compile to bytecode");
+    assert!(matches!(v, JsValue::Number(n) if n == 5.0));
+}
+
+#[test]
+fn end_to_end_computed_read_on_plain_array_takes_bytecode_path() {
+    let source = "var __r = (function(a,i){ return a[i]; })([10,20,30], 1);";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(count >= 1, "computed array read should compile to bytecode");
+    assert!(matches!(v, JsValue::Number(n) if n == 20.0));
+}
+
+#[test]
+fn end_to_end_computed_read_on_typed_array_takes_bytecode_path() {
+    let source = "var __r = (function(ta,i){ return ta[i]; })(new Int32Array([1,2,3]), 2);";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "computed typed-array read should compile to bytecode"
+    );
+    assert!(matches!(v, JsValue::Number(n) if n == 3.0));
+}
+
+#[test]
+fn end_to_end_dot_write_takes_bytecode_path() {
+    let source = "var __r = (function(o){ o.x = 9; return o.x; })({});";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(count >= 1, "dot write should compile to bytecode");
+    assert!(matches!(v, JsValue::Number(n) if n == 9.0));
+}
+
+#[test]
+fn end_to_end_computed_write_on_plain_array_takes_bytecode_path() {
+    let source = "var __r = (function(a,i,v){ a[i] = v; return a[i]; })([1,2,3], 1, 42);";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "computed array write should compile to bytecode"
+    );
+    assert!(matches!(v, JsValue::Number(n) if n == 42.0));
+}
+
+#[test]
+fn end_to_end_computed_write_on_typed_array_takes_bytecode_path() {
+    let source =
+        "var __r = (function(ta,i,v){ ta[i] = v; return ta[i]; })(new Int32Array(3), 1, 42);";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "computed typed-array write should compile to bytecode"
+    );
+    assert!(matches!(v, JsValue::Number(n) if n == 42.0));
+}
+
+fn assert_message_parity(source: &str) {
+    let (ast_v, _) = eval_with_mode(source, false);
+    let (bc_v, bc_count) = eval_with_mode(source, true);
+    assert!(
+        bc_count >= 1,
+        "expected the member-access opcodes to compile for {source}"
+    );
+    assert_eq!(
+        format!("{ast_v}"),
+        format!("{bc_v}"),
+        "tree-walker and bytecode paths must throw the exact same message for {source}"
+    );
+}
+
+#[test]
+fn end_to_end_dot_read_null_base_message_matches_tree_walker() {
+    assert_message_parity(
+        "var __r; try { (function(o){ return o.x; })(null); } catch (e) { __r = e.message; }",
+    );
+}
+
+#[test]
+fn end_to_end_computed_read_null_base_message_matches_tree_walker() {
+    // The computed-key null/undefined-base check does NOT interpolate the
+    // key into the message (unlike the Dot case) — this pins that exactly,
+    // per the corrected design in the plan after adversarial review.
+    assert_message_parity(
+        "var __r; try { (function(k){ return null[k]; })(0); } catch (e) { __r = e.message; }",
+    );
+}
+
+#[test]
+fn end_to_end_dot_write_undefined_base_message_matches_tree_walker() {
+    assert_message_parity(
+        "var __r; try { (function(o){ o.x = 1; })(undefined); } catch (e) { __r = e.message; }",
+    );
+}
+
+#[test]
+fn end_to_end_computed_write_null_base_message_matches_tree_walker() {
+    assert_message_parity(
+        "var __r; try { (function(k){ null[k] = 1; })(0); } catch (e) { __r = e.message; }",
+    );
+}
+
+#[test]
+fn end_to_end_member_chain_base_survives_gc_during_rhs_evaluation() {
+    // Two-hop GC-rooting regression (mirrors test262-extra/GC-member-assignment-base-rooting.js,
+    // but exercises the *bytecode* GetProp/SetProp opcodes specifically). `a.base` is read
+    // first, pushing a freshly-allocated, otherwise-unreferenced object onto the VM operand
+    // stack. `a.rhs` is evaluated next as the assignment's RHS — a *separate*, later-dispatched
+    // GetProp opcode whose own getter forces a GC collection ($262.gc()) before the pending
+    // `a.base` result is ever consumed by the final SetProp("value"). A single-hop test (e.g.
+    // a bare `x.value = rhs()` where `x` is a local variable) would pass even if the VM's
+    // whole-stack rooting fix were missing, since `x` stays separately reachable via the
+    // environment/call-frame roots regardless — this shape specifically requires the fix.
+    let source = "
+        var observed = 0;
+        var prototype = { set value(v) { observed = v; } };
+        function makeBase() { return Object.create(prototype); }
+        var __r = (function(a) {
+            a.base.value = a.rhs;
+            return observed;
+        })({
+            get base() { return makeBase(); },
+            get rhs() { $262.gc(); return 42; },
+        });
+    ";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "the containing function should compile to bytecode"
+    );
+    assert!(
+        matches!(v, JsValue::Number(n) if n == 42.0),
+        "the `a.base` result must survive the nested GC triggered while evaluating `a.rhs`, got {v:?}"
+    );
+}
+
+#[test]
 fn load_const_and_return_yields_number_completion() {
     let chunk = Chunk {
         code: vec![Op::LoadConst as u8, 0, 0, Op::Return as u8],
@@ -616,6 +772,57 @@ fn if_with_unsupported_alternate_bails_to_unsupported() {
             Literal::Number(2.0),
         )))),
     })];
+    match compile_body(&body) {
+        Err(CompileError::Unsupported(_)) => {}
+        other => panic!("expected Err(Unsupported), got {other:?}"),
+    }
+}
+
+#[test]
+fn compound_assign_on_member_bails_to_unsupported() {
+    let source = "var __r = (function(a){ a[0] += 1; return a[0]; })([1]);";
+    let (v, count) = eval_with_mode(source, true);
+    assert_eq!(
+        count, 0,
+        "compound assignment on a member target must bail to the tree-walker"
+    );
+    assert!(matches!(v, JsValue::Number(n) if n == 2.0));
+}
+
+#[test]
+fn update_on_member_bails_to_unsupported() {
+    let source = "var __r = (function(a){ a[0]++; return a[0]; })([1]);";
+    let (v, count) = eval_with_mode(source, true);
+    assert_eq!(
+        count, 0,
+        "update expression on a member target must bail to the tree-walker"
+    );
+    assert!(matches!(v, JsValue::Number(n) if n == 2.0));
+}
+
+#[test]
+fn optional_member_access_bails_to_unsupported() {
+    let source = "var __r = (function(a){ return a?.x; })({x: 3});";
+    let (v, count) = eval_with_mode(source, true);
+    assert_eq!(
+        count, 0,
+        "optional member access must bail to the tree-walker"
+    );
+    assert!(matches!(v, JsValue::Number(n) if n == 3.0));
+}
+
+#[test]
+fn private_field_member_bails_to_unsupported() {
+    use super::compiler::CompileError;
+    use crate::ast::{MemberProperty, PropSiteId};
+    // `this.#x` — private-field access always bails, regardless of what the
+    // base expression is; the `MemberProperty::Private` arm short-circuits
+    // before ever recursing into the base.
+    let body = vec![Statement::Return(Some(Expression::Member(
+        Box::new(Expression::This),
+        MemberProperty::Private("x".to_string()),
+        PropSiteId::UNASSIGNED,
+    )))];
     match compile_body(&body) {
         Err(CompileError::Unsupported(_)) => {}
         other => panic!("expected Err(Unsupported), got {other:?}"),

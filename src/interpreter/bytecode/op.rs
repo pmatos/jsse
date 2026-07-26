@@ -44,6 +44,10 @@ pub(crate) enum Op {
     LoadResolvedName = 40,
     StoreResolvedName = 41,
     UpdateName = 42,
+    GetProp = 43,
+    SetProp = 44,
+    GetElement = 45,
+    SetElement = 46,
 }
 
 impl Op {
@@ -92,6 +96,10 @@ impl Op {
             40 => Some(Op::LoadResolvedName),
             41 => Some(Op::StoreResolvedName),
             42 => Some(Op::UpdateName),
+            43 => Some(Op::GetProp),
+            44 => Some(Op::SetProp),
+            45 => Some(Op::GetElement),
+            46 => Some(Op::SetElement),
             _ => None,
         }
     }
