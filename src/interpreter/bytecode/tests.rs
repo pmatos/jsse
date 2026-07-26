@@ -112,6 +112,54 @@ fn end_to_end_member_assignment_in_loop_takes_bytecode_path() {
 }
 
 #[test]
+fn property_access_loop_releases_consumed_operand_roots() {
+    use crate::parser::Parser;
+
+    let source = "
+        function collect() { $262.gc(); }
+        function make() { return { value: 1 }; }
+        function makeKey() { return ['value']; }
+        function hot(limit) {
+            for (var i = 0; i < limit; i++) {
+                collect();
+                make().value;
+                make()[makeKey()];
+                make().value = 1;
+                make()[makeKey()] = 1;
+            }
+            collect();
+        }
+    ";
+    let mut parser = Parser::new(source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+    assert!(matches!(
+        interp.run(&program),
+        Completion::Normal(_) | Completion::Empty
+    ));
+    interp.gc.request();
+    interp.gc_safepoint();
+    let live_before = interp.objects.live_count();
+
+    let hot = interp.get_global_var_ref("hot").expect("hot binding");
+    let chunks_before = interp.bytecode_chunks_executed;
+    assert!(matches!(
+        interp.call_function(&hot, &JsValue::Undefined, &[JsValue::Number(64.0)]),
+        Completion::Normal(_)
+    ));
+    assert!(
+        interp.bytecode_chunks_executed > chunks_before,
+        "the property-access loop must execute through bytecode"
+    );
+    assert_eq!(
+        interp.objects.live_count(),
+        live_before,
+        "consumed property bases and keys must be collectable before the bytecode chunk exits"
+    );
+}
+
+#[test]
 fn end_to_end_dot_read_takes_bytecode_path() {
     let source = "var __r = (function(o){ return o.x; })({x: 5});";
     let (v, count) = eval_with_mode(source, true);

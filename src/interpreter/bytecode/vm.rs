@@ -289,6 +289,7 @@ fn run_chunk_inner(
                 let gc_frame = root_operand_stack(interp, &stack);
                 let base = stack.pop().expect("stack underflow on GetProp");
                 let result = member_get(interp, &base, &name);
+                unroot_stack_value(interp, &base);
                 interp.gc_unroot_frame(gc_frame);
                 match result {
                     Completion::Normal(v) => push_value(interp, &mut stack, v),
@@ -300,6 +301,8 @@ fn run_chunk_inner(
                 let key_val = stack.pop().expect("stack underflow on GetElement key");
                 let base = stack.pop().expect("stack underflow on GetElement base");
                 let result = member_get_computed(interp, &base, &key_val);
+                unroot_stack_value(interp, &key_val);
+                unroot_stack_value(interp, &base);
                 interp.gc_unroot_frame(gc_frame);
                 match result {
                     Completion::Normal(v) => push_value(interp, &mut stack, v),
@@ -313,8 +316,11 @@ fn run_chunk_inner(
                 let gc_frame = root_operand_stack(interp, &stack);
                 let rhs = stack.pop().expect("stack underflow on SetProp rhs");
                 let base = stack.pop().expect("stack underflow on SetProp base");
+                let base_root = base.clone();
                 let strict = env.borrow().strict;
                 let result = member_set(interp, base, &name, rhs.clone(), strict);
+                unroot_stack_value(interp, &rhs);
+                unroot_stack_value(interp, &base_root);
                 interp.gc_unroot_frame(gc_frame);
                 match result {
                     Ok(()) => push_value(interp, &mut stack, rhs),
@@ -326,8 +332,12 @@ fn run_chunk_inner(
                 let rhs = stack.pop().expect("stack underflow on SetElement rhs");
                 let key_val = stack.pop().expect("stack underflow on SetElement key");
                 let base = stack.pop().expect("stack underflow on SetElement base");
+                let base_root = base.clone();
                 let strict = env.borrow().strict;
                 let result = member_set_computed(interp, base, &key_val, rhs.clone(), strict);
+                unroot_stack_value(interp, &rhs);
+                unroot_stack_value(interp, &key_val);
+                unroot_stack_value(interp, &base_root);
                 interp.gc_unroot_frame(gc_frame);
                 match result {
                     Ok(()) => push_value(interp, &mut stack, rhs),
