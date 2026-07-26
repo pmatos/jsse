@@ -113,6 +113,7 @@ pub(crate) struct Interpreter {
     pub(crate) call_stack_envs: Vec<EnvRef>,
     pub(crate) call_stack_frames: Vec<CallFrame>,
     pub(crate) gc_temp_roots: Vec<u64>,
+    pub(crate) gc_bytecode_roots: Vec<u64>,
     // microtask roots are stored inline alongside their jobs in JobScheduler
     pub(crate) class_private_names: Vec<HashMap<String, String>>,
     next_class_brand_id: u64,
@@ -387,6 +388,7 @@ impl Interpreter {
             call_stack_envs: Vec::new(),
             call_stack_frames: Vec::new(),
             gc_temp_roots: Vec::new(),
+            gc_bytecode_roots: Vec::new(),
             class_private_names: Vec::new(),
             next_class_brand_id: 0,
             next_auto_accessor_id: 0,

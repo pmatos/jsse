@@ -368,8 +368,52 @@ impl Compiler {
                 }
                 MemberProperty::Private(_) => Err(CompileError::Unsupported("private field")),
             },
+            Expression::Call(callee, args, _) => self.compile_call(callee, args, Op::Call),
             _ => Err(CompileError::Unsupported("expression")),
         }
+    }
+
+    fn compile_call(
+        &mut self,
+        callee: &Expression,
+        args: &[Expression],
+        op: Op,
+    ) -> Result<(), CompileError> {
+        let Expression::Identifier(name) = callee else {
+            return Err(CompileError::Unsupported("call callee"));
+        };
+        // A bare `eval` may resolve to the realm's intrinsic eval at runtime,
+        // in which case it needs the caller's lexical environment. Keep the
+        // whole Body on the tree-walker rather than changing direct-eval
+        // semantics.
+        if name == "eval" {
+            return Err(CompileError::Unsupported("direct eval call"));
+        }
+        if args.iter().any(|arg| matches!(arg, Expression::Spread(_))) {
+            return Err(CompileError::Unsupported("spread call argument"));
+        }
+        let argc = u16::try_from(args.len())
+            .map_err(|_| CompileError::Unsupported("call argument count overflow"))?;
+        if usize::from(self.current_stack) + args.len() + 2 > usize::from(u16::MAX) {
+            return Err(CompileError::Unsupported("operand stack overflow"));
+        }
+
+        let name_idx = self.add_name(name)?;
+        self.emit(Op::LoadCalleeName);
+        self.emit_u16(name_idx);
+        // Stack layout consumed by Call/ReturnCall:
+        //   [..., callee, this, arg0, ..., argN]
+        self.push_n(2);
+        for arg in args {
+            self.compile_expr(arg)?;
+        }
+        self.emit(op);
+        self.emit_u16(argc);
+        self.pop_n(argc + 2);
+        if matches!(op, Op::Call | Op::ReturnCall) {
+            self.push_n(1);
+        }
+        Ok(())
     }
 
     fn compile_var_declaration(&mut self, decl: &VariableDeclaration) -> Result<(), CompileError> {
@@ -521,7 +565,16 @@ impl Compiler {
                 self.emit(Op::ReturnUndefined);
                 Ok(())
             }
+            Statement::Return(Some(Expression::Call(callee, args, _))) => {
+                self.compile_call(callee, args, Op::ReturnCall)?;
+                self.emit(Op::Return);
+                self.pop_n(1);
+                Ok(())
+            }
             Statement::Return(Some(expr)) => {
+                if contains_tail_call(expr) {
+                    return Err(CompileError::Unsupported("nested tail call"));
+                }
                 self.compile_expr(expr)?;
                 self.emit(Op::Return);
                 self.pop_n(1);
@@ -548,6 +601,20 @@ impl Compiler {
             max_stack: self.max_stack,
             max_refs: self.max_refs,
         }
+    }
+}
+
+fn contains_tail_call(expr: &Expression) -> bool {
+    match expr {
+        Expression::Call(..) => true,
+        Expression::Conditional(_, consequent, alternate) => {
+            contains_tail_call(consequent) || contains_tail_call(alternate)
+        }
+        Expression::Logical(_, _, rhs) => contains_tail_call(rhs),
+        Expression::Sequence(exprs) | Expression::Comma(exprs) => {
+            exprs.last().is_some_and(contains_tail_call)
+        }
+        _ => false,
     }
 }
 

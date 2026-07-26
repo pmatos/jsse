@@ -306,6 +306,8 @@ impl Interpreter {
             }
         }
         roots.extend_from_slice(&self.gc_temp_roots);
+        // Values held by active bytecode operand stacks
+        roots.extend_from_slice(&self.gc_bytecode_roots);
         for microtask_roots in self.scheduler.iter_microtask_roots() {
             for val in microtask_roots {
                 Self::collect_value_roots(val, &mut roots);

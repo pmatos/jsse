@@ -112,6 +112,54 @@ fn end_to_end_member_assignment_in_loop_takes_bytecode_path() {
 }
 
 #[test]
+fn property_access_loop_releases_consumed_operand_roots() {
+    use crate::parser::Parser;
+
+    let source = "
+        function collect() { $262.gc(); }
+        function make() { return { value: 1 }; }
+        function makeKey() { return ['value']; }
+        function hot(limit) {
+            for (var i = 0; i < limit; i++) {
+                collect();
+                make().value;
+                make()[makeKey()];
+                make().value = 1;
+                make()[makeKey()] = 1;
+            }
+            collect();
+        }
+    ";
+    let mut parser = Parser::new(source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+    assert!(matches!(
+        interp.run(&program),
+        Completion::Normal(_) | Completion::Empty
+    ));
+    interp.gc.request();
+    interp.gc_safepoint();
+    let live_before = interp.objects.live_count();
+
+    let hot = interp.get_global_var_ref("hot").expect("hot binding");
+    let chunks_before = interp.bytecode_chunks_executed;
+    assert!(matches!(
+        interp.call_function(&hot, &JsValue::Undefined, &[JsValue::Number(64.0)]),
+        Completion::Normal(_)
+    ));
+    assert!(
+        interp.bytecode_chunks_executed > chunks_before,
+        "the property-access loop must execute through bytecode"
+    );
+    assert_eq!(
+        interp.objects.live_count(),
+        live_before,
+        "consumed property bases and keys must be collectable before the bytecode chunk exits"
+    );
+}
+
+#[test]
 fn end_to_end_dot_read_takes_bytecode_path() {
     let source = "var __r = (function(o){ return o.x; })({x: 5});";
     let (v, count) = eval_with_mode(source, true);
@@ -245,6 +293,40 @@ fn end_to_end_member_chain_base_survives_gc_during_rhs_evaluation() {
     assert!(
         matches!(v, JsValue::Number(n) if n == 42.0),
         "the `a.base` result must survive the nested GC triggered while evaluating `a.rhs`, got {v:?}"
+    );
+}
+
+#[test]
+fn end_to_end_getprop_call_argument_survives_gc_during_sibling_arg_evaluation() {
+    // Regression for merging PR #399 (calls) with PR #397 (member access): `GetProp`
+    // pushed its result with a raw `stack.push`, bypassing `push_value`'s
+    // `gc_bytecode_roots` rooting. Harmless while GetProp and Call were compiled by
+    // separate PRs, but the merged VM now compiles `identity(a.child, forceGc())`
+    // end-to-end: `a.child`'s freshly-allocated, otherwise-unreferenced result sits
+    // on the *same chunk's* operand stack as a pending Call argument while the
+    // *second* argument's own nested call runs and forces a GC before the outer
+    // Call consumes it.
+    let source = "
+        function identity(x, _y) { return x; }
+        function forceGc() { $262.gc(); return 0; }
+        var __r = (function(a) {
+            return identity(a.child, forceGc()).tag;
+        })({
+            get child() {
+                var o = Object.create(null);
+                o.tag = 'ok';
+                return o;
+            },
+        });
+    ";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "the containing function should compile to bytecode"
+    );
+    assert!(
+        matches!(&v, JsValue::String(s) if s.to_string() == "ok"),
+        "GetProp's call-argument result must survive the GC forced while evaluating a sibling call argument, got {v:?}"
     );
 }
 
@@ -1031,4 +1113,333 @@ fn loop_with_break_falls_back_to_tree_walker() {
     let (value, count) = eval_with_mode(source, true);
     assert_eq!(count, 0, "break lowering is not part of this slice");
     assert!(matches!(value, JsValue::Number(n) if n == 1.0));
+}
+
+// ----- direct identifier calls -----
+
+#[test]
+fn direct_call_compiles_caller_and_compilable_callee() {
+    let source = "\
+        function addOne(value) { return value + 1; } \
+        var __r = (function(value) { return addOne(value); })(41);";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(
+        bytecode_count >= 2,
+        "caller and callee must both execute bytecode"
+    );
+    assert!(matches!(ast, JsValue::Number(n) if n == 42.0));
+    assert!(matches!(bytecode, JsValue::Number(n) if n == 42.0));
+}
+
+#[test]
+fn direct_call_bridges_to_ineligible_callee() {
+    let source = "\
+        function readObject(value) { var box = { value: value }; return box.value; } \
+        var __r = (function(value) { return readObject(value); })(37);";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert_eq!(
+        bytecode_count, 1,
+        "only the caller should compile; the object/member callee must fall back"
+    );
+    assert!(matches!(ast, JsValue::Number(n) if n == 37.0));
+    assert!(matches!(bytecode, JsValue::Number(n) if n == 37.0));
+}
+
+#[test]
+fn direct_native_call_takes_bytecode_path() {
+    let source = "var __r = (function(value) { return parseInt(value); })('42');";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert_eq!(bytecode_count, 1, "native callee has no bytecode Body");
+    assert!(matches!(ast, JsValue::Number(n) if n == 42.0));
+    assert!(matches!(bytecode, JsValue::Number(n) if n == 42.0));
+}
+
+#[test]
+fn direct_native_call_preserves_persistent_callback_root() {
+    use crate::parser::Parser;
+
+    let source = "\
+        function makeCallback() { return function() {}; } \
+        function schedule(callback) { return setTimeout(callback, 0); }";
+    let mut parser = Parser::new(source).expect("parser init");
+    let program = parser.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+    assert!(matches!(
+        interp.run(&program),
+        Completion::Normal(_) | Completion::Empty
+    ));
+
+    let make_callback = interp
+        .get_global_var_ref("makeCallback")
+        .expect("makeCallback binding");
+    let callback = match interp.call_function(&make_callback, &JsValue::Undefined, &[]) {
+        Completion::Normal(value) => value,
+        other => panic!("makeCallback failed: {other:?}"),
+    };
+    let JsValue::Object(callback_object) = callback.clone() else {
+        panic!("makeCallback must return a function object");
+    };
+    let schedule = interp
+        .get_global_var_ref("schedule")
+        .expect("schedule binding");
+    assert!(matches!(
+        interp.call_function(&schedule, &JsValue::Undefined, &[callback]),
+        Completion::Normal(_)
+    ));
+    assert!(
+        interp.bytecode_chunks_executed >= 1,
+        "schedule must execute through bytecode"
+    );
+    assert!(
+        interp.gc_bytecode_roots.is_empty(),
+        "bytecode operand roots must be released with the frame"
+    );
+
+    interp.gc.request();
+    interp.gc_safepoint();
+    assert!(
+        interp.get_object_cell(callback_object.id).is_some(),
+        "setTimeout's persistent callback root must survive the bytecode frame"
+    );
+}
+
+#[test]
+fn loop_with_direct_calls_takes_bytecode_path() {
+    assert_parity_number(
+        "\
+            function addOne(value) { return value + 1; } \
+            var __r = (function(limit) { \
+                var sum = 0; \
+                for (var i = 0; i < limit; i++) { sum += addOne(i); } \
+                return sum; \
+            })(5);",
+        15.0,
+    );
+}
+
+#[test]
+fn direct_call_preserves_with_base_as_this_value() {
+    let source = "\
+        var scope = { \
+            value: 40, \
+            invoke: function(value) { return this.value + value; } \
+        }; \
+        var runner; \
+        with (scope) { runner = function() { return invoke(2); }; } \
+        var __r = runner();";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "runner must execute through bytecode");
+    assert!(matches!(ast, JsValue::Number(n) if n == 42.0));
+    assert!(matches!(bytecode, JsValue::Number(n) if n == 42.0));
+}
+
+#[test]
+fn direct_call_clears_stale_with_base_before_global_resolution() {
+    let source = "
+        var observed = 0;
+        function recordThis() {
+            'use strict';
+            observed = this === undefined ? 1 : -1;
+        }
+        var runner;
+        with ({ value: 42 }) {
+            runner = function() {
+                var ignored = value;
+                recordThis();
+            };
+        }
+        runner();
+        var __r = observed;
+    ";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "runner must execute through bytecode");
+    assert!(matches!(ast, JsValue::Number(n) if n == 1.0));
+    assert!(
+        matches!(bytecode, JsValue::Number(n) if n == 1.0),
+        "a global call must not inherit a with base from an earlier identifier read"
+    );
+}
+
+#[test]
+fn direct_call_checks_global_proxy_binding_once() {
+    let source = "
+        var hasCount = 0;
+        var callCount = 0;
+        var outcome = 0;
+        var oldPrototype = Object.getPrototypeOf($262.global);
+        var target = { fn: function() { callCount = callCount + 1; } };
+        var proxy = new Proxy(target, {
+            has: function(target, key) {
+                if (key === 'fn') {
+                    hasCount = hasCount + 1;
+                    return hasCount === 1;
+                }
+                return Reflect.has(target, key);
+            },
+        });
+        Object.setPrototypeOf($262.global, proxy);
+        function run() { fn(); }
+        try {
+            run();
+            outcome = 100;
+        } catch (error) {
+            outcome = -100;
+        }
+        Object.setPrototypeOf($262.global, oldPrototype);
+        var __r = outcome + hasCount * 10 + callCount;
+    ";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "run must execute through bytecode");
+    assert!(matches!(ast, JsValue::Number(n) if n == 111.0));
+    assert!(
+        matches!(bytecode, JsValue::Number(n) if n == 111.0),
+        "bytecode must invoke the stateful global proxy has trap exactly once, got {bytecode:?}"
+    );
+}
+
+#[test]
+fn pending_argument_survives_gc_during_later_call_argument() {
+    let source = "\
+        var collect = $262.gc; \
+        var observed = 0; \
+        function makeValue() { return { marker: 42 }; } \
+        function consume(value, ignored) { observed = value.marker; } \
+        function run() { consume(makeValue(), collect()); } \
+        run(); \
+        var __r = observed;";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "run must execute through bytecode");
+    assert!(matches!(ast, JsValue::Number(n) if n == 42.0));
+    assert!(matches!(bytecode, JsValue::Number(n) if n == 42.0));
+}
+
+#[test]
+fn pending_with_getter_callee_survives_gc_during_argument() {
+    let source = "\
+        var collect = $262.gc; \
+        var observed = 0; \
+        var scope; \
+        scope = { \
+            get invoke() { \
+                return function(ignored) { observed = this === scope ? 17 : -1; }; \
+            } \
+        }; \
+        var runner; \
+        with (scope) { runner = function() { invoke(collect()); }; } \
+        runner(); \
+        var __r = observed;";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "runner must execute through bytecode");
+    assert!(matches!(ast, JsValue::Number(n) if n == 17.0));
+    assert!(matches!(bytecode, JsValue::Number(n) if n == 17.0));
+}
+
+#[test]
+fn strict_direct_return_call_preserves_tail_calls() {
+    let source = "\
+        function recur(count) { \
+            'use strict'; \
+            if (count === 0) return 42; \
+            return recur(count - 1); \
+        } \
+        var __r = recur(2000);";
+    let (value, bytecode_count) = eval_with_mode(source, true);
+    assert!(
+        bytecode_count >= 2001,
+        "every recursive dispatch must execute bytecode"
+    );
+    assert!(matches!(value, JsValue::Number(n) if n == 42.0));
+}
+
+#[test]
+fn non_callable_direct_call_throws_via_bytecode() {
+    let source = "\
+        var value = 1; \
+        var __r = false; \
+        function run() { return value(); } \
+        try { run(); } catch (error) { __r = error instanceof TypeError; }";
+    let (value, bytecode_count) = eval_with_mode(source, true);
+    assert!(bytecode_count >= 1, "run must execute through bytecode");
+    assert!(matches!(value, JsValue::Boolean(true)));
+}
+
+#[test]
+fn direct_eval_and_spread_calls_remain_ineligible() {
+    use super::compiler::CompileError;
+    use crate::ast::CallSiteId;
+
+    let direct_eval = vec![Statement::Expression(Expression::Call(
+        Box::new(Expression::Identifier("eval".to_string())),
+        vec![Expression::Literal(Literal::String(
+            "var x = 1".encode_utf16().collect(),
+        ))],
+        CallSiteId::UNASSIGNED,
+    ))];
+    assert!(matches!(
+        compile_body(&direct_eval),
+        Err(CompileError::Unsupported(_))
+    ));
+
+    let spread = vec![Statement::Expression(Expression::Call(
+        Box::new(Expression::Identifier("f".to_string())),
+        vec![Expression::Spread(Box::new(Expression::Identifier(
+            "args".to_string(),
+        )))],
+        CallSiteId::UNASSIGNED,
+    ))];
+    assert!(matches!(
+        compile_body(&spread),
+        Err(CompileError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn member_calls_and_nested_tail_positions_remain_ineligible() {
+    use super::compiler::CompileError;
+    use crate::ast::{CallSiteId, LogicalOp, MemberProperty, PropSiteId};
+
+    let member_call = vec![Statement::Expression(Expression::Call(
+        Box::new(Expression::Member(
+            Box::new(Expression::Identifier("object".to_string())),
+            MemberProperty::Dot("method".to_string()),
+            PropSiteId::UNASSIGNED,
+        )),
+        vec![],
+        CallSiteId::UNASSIGNED,
+    ))];
+    assert!(matches!(
+        compile_body(&member_call),
+        Err(CompileError::Unsupported(_))
+    ));
+
+    let nested_tail_call = Expression::Logical(
+        LogicalOp::And,
+        Box::new(Expression::Identifier("condition".to_string())),
+        Box::new(Expression::Call(
+            Box::new(Expression::Identifier("f".to_string())),
+            vec![],
+            CallSiteId::UNASSIGNED,
+        )),
+    );
+    assert!(matches!(
+        compile_body(&[Statement::Return(Some(nested_tail_call))]),
+        Err(CompileError::Unsupported(_))
+    ));
 }
