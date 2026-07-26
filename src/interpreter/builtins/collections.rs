@@ -97,7 +97,7 @@ impl Interpreter {
                                         IteratorKind::KeyValue => interp
                                             .create_array(vec![entry.0.clone(), entry.1.clone()]),
                                     };
-                                    obj.borrow_mut().kind =
+                                    obj.borrow_mut_untracked().kind =
                                         crate::interpreter::types::ObjectKind::Iterator(
                                             IteratorState::MapIterator {
                                                 map_id,
@@ -114,14 +114,15 @@ impl Interpreter {
                             }
                         }
                     }
-                    obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::MapIterator {
-                            map_id,
-                            index,
-                            kind,
-                            done: true,
-                        },
-                    );
+                    obj.borrow_mut_untracked().kind =
+                        crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::MapIterator {
+                                map_id,
+                                index,
+                                kind,
+                                done: true,
+                            },
+                        );
                     return Completion::Normal(
                         interp.create_iter_result_object(JsValue::Undefined, true),
                     );
@@ -241,7 +242,9 @@ impl Interpreter {
                     {
                         key = JsValue::Number(0.0);
                     }
-                    let mut borrowed = obj.borrow_mut();
+                    interp.gc_write_barrier_value(obj, &key);
+                    interp.gc_write_barrier_value(obj, &value);
+                    let mut borrowed = obj.borrow_mut_untracked();
                     let entries = borrowed.map_data_mut().unwrap();
                     for entry in entries.iter_mut().flatten() {
                         if same_value_zero(&entry.0, &key) {
@@ -280,7 +283,7 @@ impl Interpreter {
                 Err(c) => return c,
             };
             let key = args.first().cloned().unwrap_or(JsValue::Undefined);
-            let mut borrowed = obj.borrow_mut();
+            let mut borrowed = obj.borrow_mut_untracked();
             let entries = borrowed.map_data_mut().unwrap();
             for entry in entries.iter_mut() {
                 let matches = entry.as_ref().is_some_and(|e| same_value_zero(&e.0, &key));
@@ -298,7 +301,8 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Map(Vec::new());
+            obj.borrow_mut_untracked().kind =
+                crate::interpreter::types::ObjectKind::Map(Vec::new());
             Completion::Normal(JsValue::Undefined)
         });
 
@@ -375,7 +379,9 @@ impl Interpreter {
                 }
             }
             // Key not found - append new entry
-            let mut borrowed = obj.borrow_mut();
+            interp.gc_write_barrier_value(&obj, &key);
+            interp.gc_write_barrier_value(&obj, &value);
+            let mut borrowed = obj.borrow_mut_untracked();
             let entries = borrowed.map_data_mut().unwrap();
             entries.push(Some((key, value.clone())));
             Completion::Normal(value)
@@ -417,7 +423,9 @@ impl Interpreter {
                 };
                 // Step 7: Re-check if key was inserted by callback
                 {
-                    let mut borrowed = obj.borrow_mut();
+                    interp.gc_write_barrier_value(&obj, &key);
+                    interp.gc_write_barrier_value(&obj, &value);
+                    let mut borrowed = obj.borrow_mut_untracked();
                     let entries = borrowed.map_data_mut().unwrap();
                     for entry in entries.iter_mut().flatten() {
                         if same_value_zero(&entry.0, &key) {
@@ -765,7 +773,7 @@ impl Interpreter {
                                             interp.create_array(vec![val.clone(), val.clone()])
                                         }
                                     };
-                                    obj.borrow_mut().kind =
+                                    obj.borrow_mut_untracked().kind =
                                         crate::interpreter::types::ObjectKind::Iterator(
                                             IteratorState::SetIterator {
                                                 set_id,
@@ -782,14 +790,15 @@ impl Interpreter {
                             }
                         }
                     }
-                    obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
-                        IteratorState::SetIterator {
-                            set_id,
-                            index,
-                            kind,
-                            done: true,
-                        },
-                    );
+                    obj.borrow_mut_untracked().kind =
+                        crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::SetIterator {
+                                set_id,
+                                index,
+                                kind,
+                                done: true,
+                            },
+                        );
                     return Completion::Normal(
                         interp.create_iter_result_object(JsValue::Undefined, true),
                     );
@@ -882,7 +891,8 @@ impl Interpreter {
             {
                 value = JsValue::Number(0.0);
             }
-            let mut borrowed = obj.borrow_mut();
+            interp.gc_write_barrier_value(&obj, &value);
+            let mut borrowed = obj.borrow_mut_untracked();
             let entries = borrowed.set_data_mut().unwrap();
             for entry in entries.iter().flatten() {
                 if same_value_zero(entry, &value) {
@@ -916,7 +926,7 @@ impl Interpreter {
                 Err(c) => return c,
             };
             let value = args.first().cloned().unwrap_or(JsValue::Undefined);
-            let mut borrowed = obj.borrow_mut();
+            let mut borrowed = obj.borrow_mut_untracked();
             let entries = borrowed.set_data_mut().unwrap();
             for entry in entries.iter_mut() {
                 let matches = entry.as_ref().is_some_and(|e| same_value_zero(e, &value));
@@ -934,7 +944,8 @@ impl Interpreter {
                 Ok(t) => t,
                 Err(c) => return c,
             };
-            obj.borrow_mut().kind = crate::interpreter::types::ObjectKind::Set(Vec::new());
+            obj.borrow_mut_untracked().kind =
+                crate::interpreter::types::ObjectKind::Set(Vec::new());
             Completion::Normal(JsValue::Undefined)
         });
 
@@ -1666,7 +1677,9 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
                     let value = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    let mut borrowed = obj.borrow_mut();
+                    interp.gc_write_barrier_value(obj, &key);
+                    interp.gc_write_barrier_value(obj, &value);
+                    let mut borrowed = obj.borrow_mut_untracked();
                     let entries = borrowed.map_data_mut().unwrap();
                     for entry in entries.iter_mut().flatten() {
                         if strict_equality(&entry.0, &key) {
@@ -1718,7 +1731,7 @@ impl Interpreter {
                     if !interp.can_be_held_weakly(&key) {
                         return Completion::Normal(JsValue::Boolean(false));
                     }
-                    let mut borrowed = obj.borrow_mut();
+                    let mut borrowed = obj.borrow_mut_untracked();
                     let entries = borrowed.map_data_mut().unwrap();
                     for entry in entries.iter_mut() {
                         let matches = entry.as_ref().is_some_and(|e| strict_equality(&e.0, &key));
@@ -1757,7 +1770,9 @@ impl Interpreter {
                             }
                         }
                     }
-                    let mut borrowed = obj.borrow_mut();
+                    interp.gc_write_barrier_value(obj, &key);
+                    interp.gc_write_barrier_value(obj, &value);
+                    let mut borrowed = obj.borrow_mut_untracked();
                     let entries = borrowed.map_data_mut().unwrap();
                     entries.push(Some((key, value.clone())));
                     return Completion::Normal(value);
@@ -1808,7 +1823,9 @@ impl Interpreter {
                             other => return other,
                         };
                         let obj = interp.get_object_cell(o.id).unwrap();
-                        let mut borrowed = obj.borrow_mut();
+                        interp.gc_write_barrier_value(obj, &key);
+                        interp.gc_write_barrier_value(obj, &value);
+                        let mut borrowed = obj.borrow_mut_untracked();
                         let entries = borrowed.map_data_mut().unwrap();
                         for entry in entries.iter_mut().flatten() {
                             if strict_equality(&entry.0, &key) {
@@ -2012,7 +2029,8 @@ impl Interpreter {
                         let err = interp.create_type_error("Invalid value used in weak set");
                         return Completion::Throw(err);
                     }
-                    let mut borrowed = obj.borrow_mut();
+                    interp.gc_write_barrier_value(obj, &value);
+                    let mut borrowed = obj.borrow_mut_untracked();
                     let entries = borrowed.set_data_mut().unwrap();
                     for entry in entries.iter().flatten() {
                         if strict_equality(entry, &value) {
@@ -2063,7 +2081,7 @@ impl Interpreter {
                     if !interp.can_be_held_weakly(&value) {
                         return Completion::Normal(JsValue::Boolean(false));
                     }
-                    let mut borrowed = obj.borrow_mut();
+                    let mut borrowed = obj.borrow_mut_untracked();
                     let entries = borrowed.set_data_mut().unwrap();
                     for entry in entries.iter_mut() {
                         let matches = entry.as_ref().is_some_and(|e| strict_equality(e, &value));

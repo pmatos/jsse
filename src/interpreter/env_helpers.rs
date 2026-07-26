@@ -110,7 +110,10 @@ impl Interpreter {
                         // Borrow on `current` is dropped above; safe to call
                         // out to the slab (re-entrant set traps OK).
                         if let Some(go) = self.get_object_cell(gid) {
-                            let ok = go.borrow_mut().set_property_value(name, value.clone());
+                            self.gc_write_barrier_value(go, &value);
+                            let ok = go
+                                .borrow_mut_untracked()
+                                .set_property_value(name, value.clone());
                             if !ok {
                                 if strict {
                                     return Err(JsValue::String(JsString::from_str(&format!(
@@ -135,9 +138,11 @@ impl Interpreter {
                     let already_on_global = self
                         .get_object_cell(gid)
                         .is_some_and(|go| go.borrow().has_own_property(name));
-                    let ok = self
-                        .get_object_cell(gid)
-                        .is_some_and(|go| go.borrow_mut().set_property_value(name, value.clone()));
+                    let ok = self.get_object_cell(gid).is_some_and(|go| {
+                        self.gc_write_barrier_value(go, &value);
+                        go.borrow_mut_untracked()
+                            .set_property_value(name, value.clone())
+                    });
                     if !ok {
                         return Ok(());
                     }

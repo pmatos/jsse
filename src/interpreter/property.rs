@@ -811,7 +811,8 @@ impl Interpreter {
                 };
                 if recv_id == Some(obj_id) {
                     // Common case: receiver is the same object, direct set
-                    return Ok(obj.borrow_mut().set_property_value(key, value));
+                    self.gc_write_barrier_value(&obj, &value);
+                    return Ok(obj.borrow_mut_untracked().set_property_value(key, value));
                 }
                 // Receiver differs: call Receiver.[[GetOwnProperty]](P) and [[DefineOwnProperty]]
                 if let Some(rid) = recv_id {
@@ -862,7 +863,8 @@ impl Interpreter {
                         );
                     }
                 }
-                return Ok(obj.borrow_mut().set_property_value(key, value));
+                self.gc_write_barrier_value(&obj, &value);
+                return Ok(obj.borrow_mut_untracked().set_property_value(key, value));
             }
             // No own property, walk prototype chain
             let proto = obj.borrow().prototype_id;
@@ -924,10 +926,14 @@ impl Interpreter {
                     }
                 }
                 if let Some(recv_obj) = self.get_object_cell(recv_id) {
-                    return Ok(recv_obj.borrow_mut().set_property_value(key, value));
+                    self.gc_write_barrier_value(recv_obj, &value);
+                    return Ok(recv_obj
+                        .borrow_mut_untracked()
+                        .set_property_value(key, value));
                 }
             }
-            Ok(obj.borrow_mut().set_property_value(key, value))
+            self.gc_write_barrier_value(&obj, &value);
+            Ok(obj.borrow_mut_untracked().set_property_value(key, value))
         } else {
             Ok(false)
         }

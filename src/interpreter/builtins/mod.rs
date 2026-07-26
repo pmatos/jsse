@@ -2979,7 +2979,7 @@ impl Interpreter {
                     let fp_id = fp.borrow().id;
 
                     // Helper: fix a single object's prototype if it's callable
-                    let fix_callable = |obj: &RefCell<JsObjectData>, fp: &RefCell<JsObjectData>| {
+                    let fix_callable = |obj: &ObjectHandle, fp: &ObjectHandle| {
                         if obj.borrow().callable.is_some() {
                             obj.borrow_mut().prototype_id = Some(fp.borrow().id.unwrap());
                         }
@@ -3090,7 +3090,7 @@ impl Interpreter {
                     .into_iter()
                     .flatten()
                     .collect();
-                    let internal_protos: Vec<&RefCell<JsObjectData>> = internal_proto_ids
+                    let internal_protos: Vec<&ObjectHandle> = internal_proto_ids
                         .into_iter()
                         .filter_map(|id| self.get_object_cell(id))
                         .collect();

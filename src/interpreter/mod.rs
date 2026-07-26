@@ -1576,14 +1576,14 @@ impl Interpreter {
         result
     }
 
-    /// Borrow the slot's `RefCell` if live, else `None`. Lifetime tied
-    /// to `&self`; drop the borrow before any `&mut self` call.
+    /// Borrow the slot's object handle if live, else `None`. Lifetime tied to
+    /// `&self`; drop the payload borrow before any `&mut self` call.
     #[allow(dead_code)] // get_object_cell isn't yet hot; get_object_cell_expect is
-    pub(crate) fn get_object_cell(&self, id: u64) -> Option<&RefCell<JsObjectData>> {
+    pub(crate) fn get_object_cell(&self, id: u64) -> Option<&ObjectHandle> {
         self.objects.get_cell(id)
     }
 
-    pub(crate) fn get_object_cell_expect(&self, id: u64) -> &RefCell<JsObjectData> {
+    pub(crate) fn get_object_cell_expect(&self, id: u64) -> &ObjectHandle {
         self.objects.get_cell_expect(id)
     }
 

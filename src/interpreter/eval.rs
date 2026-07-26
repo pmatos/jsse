@@ -2986,7 +2986,8 @@ impl Interpreter {
                             proto_opt = self.get_object_cell_expect(proto_id).borrow().prototype_id;
                         }
                     }
-                    obj.borrow_mut().set_property_value(&key, value);
+                    self.gc_write_barrier_value(&obj, &value);
+                    obj.borrow_mut_untracked().set_property_value(&key, value);
                 }
                 Ok(())
             }
@@ -3720,7 +3721,10 @@ impl Interpreter {
                                 Err(e) => return Completion::Throw(e),
                             }
                         }
-                        let success = obj.borrow_mut().set_property_value(&key, final_val.clone());
+                        self.gc_write_barrier_value(&obj, &final_val);
+                        let success = obj
+                            .borrow_mut_untracked()
+                            .set_property_value(&key, final_val.clone());
                         if !success && env.borrow().strict {
                             return Completion::Throw(self.create_type_error(&format!(
                                 "Cannot assign to read only property '{key}'"
@@ -4237,7 +4241,10 @@ impl Interpreter {
                             Err(e) => return Completion::Throw(e),
                         }
                     }
-                    let success = obj.borrow_mut().set_property_value(&key, rval.clone());
+                    self.gc_write_barrier_value(obj, &rval);
+                    let success = obj
+                        .borrow_mut_untracked()
+                        .set_property_value(&key, rval.clone());
                     if !success && env.borrow().strict {
                         return Completion::Throw(self.create_type_error(&format!(
                             "Cannot assign to read only property '{key}'"
