@@ -1851,9 +1851,7 @@ impl Interpreter {
         });
 
         zdt_getter!("epochNanoseconds", |ns, _tz, _cal| {
-            Completion::Normal(JsValue::BigInt(crate::types::JsBigInt {
-                value: ns.clone(),
-            }))
+            Completion::Normal(JsValue::BigInt(crate::types::JsBigInt::new(ns.clone())))
         });
 
         zdt_getter!("year", |ns, tz, cal| {

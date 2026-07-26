@@ -119,9 +119,7 @@ impl Interpreter {
                     .host_clock_start
                     .map(|start| start.elapsed().as_nanos())
                     .unwrap_or(0);
-                Completion::Normal(JsValue::BigInt(JsBigInt {
-                    value: num_bigint::BigInt::from(ns),
-                }))
+                Completion::Normal(JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(ns))))
             },
         ));
         self.install_host_global("__host_hrtime", hrtime_fn);

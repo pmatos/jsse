@@ -39,13 +39,13 @@ impl Interpreter {
 
         fn this_bigint_value(interp: &Interpreter, this: &JsValue) -> Option<num_bigint::BigInt> {
             match this {
-                JsValue::BigInt(b) => Some(b.value.clone()),
+                JsValue::BigInt(b) => Some((*b.value).clone()),
                 JsValue::Object(o) => interp.get_object_cell(o.id).and_then(|cell| {
                     let b = cell.borrow();
                     if b.class_name == "BigInt"
                         && let Some(JsValue::BigInt(bi)) = &b.primitive_value
                     {
-                        return Some(bi.value.clone());
+                        return Some((*bi.value).clone());
                     }
                     None
                 }),
@@ -103,7 +103,7 @@ impl Interpreter {
                             interp.create_type_error("BigInt.prototype.valueOf requires a BigInt"),
                         );
                     };
-                    Completion::Normal(JsValue::BigInt(JsBigInt { value: n }))
+                    Completion::Normal(JsValue::BigInt(JsBigInt::new(n)))
                 }),
             ),
             (
@@ -121,7 +121,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let bigint_val = JsValue::BigInt(JsBigInt { value: n });
+                    let bigint_val = JsValue::BigInt(JsBigInt::new(n));
                     interp.intl_number_format_format(&nf, &bigint_val)
                 }),
             ),
@@ -151,9 +151,7 @@ impl Interpreter {
                 let val = args.first().cloned().unwrap_or(JsValue::Undefined);
                 match &val {
                     JsValue::BigInt(_) => Completion::Normal(val),
-                    JsValue::Boolean(b) => Completion::Normal(JsValue::BigInt(JsBigInt {
-                        value: num_bigint::BigInt::from(if *b { 1 } else { 0 }),
-                    })),
+                    JsValue::Boolean(b) => Completion::Normal(JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(if *b { 1 } else { 0 })))),
                     JsValue::Number(n) => {
                         if n.is_nan() || n.is_infinite() || *n != n.trunc() {
                             return Completion::Throw(interp.create_error(
@@ -161,16 +159,12 @@ impl Interpreter {
                                 &format!("The number {n} cannot be converted to a BigInt because it is not an integer"),
                             ));
                         }
-                        Completion::Normal(JsValue::BigInt(JsBigInt {
-                            value: f64_to_bigint(*n),
-                        }))
+                        Completion::Normal(JsValue::BigInt(JsBigInt::new(f64_to_bigint(*n))))
                     }
                     JsValue::String(s) => {
                         let text = s.to_rust_string().trim().to_string();
                         if text.is_empty() {
-                            return Completion::Normal(JsValue::BigInt(JsBigInt {
-                                value: num_bigint::BigInt::from(0),
-                            }));
+                            return Completion::Normal(JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(0))));
                         }
                         let parsed = if let Some(hex) =
                             text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
@@ -188,7 +182,7 @@ impl Interpreter {
                             text.parse::<num_bigint::BigInt>().ok()
                         };
                         match parsed {
-                            Some(v) => Completion::Normal(JsValue::BigInt(JsBigInt { value: v })),
+                            Some(v) => Completion::Normal(JsValue::BigInt(JsBigInt::new(v))),
                             None => Completion::Throw(interp.create_error(
                                 "SyntaxError",
                                 &format!("Cannot convert {text} to a BigInt"),
@@ -238,16 +232,16 @@ impl Interpreter {
                     unreachable!()
                 };
                 if bits == 0 {
-                    return Completion::Normal(JsValue::BigInt(JsBigInt {
-                        value: num_bigint::BigInt::from(0),
-                    }));
+                    return Completion::Normal(JsValue::BigInt(JsBigInt::new(
+                        num_bigint::BigInt::from(0),
+                    )));
                 }
                 let bit_len = b.value.bits() + 1; // +1 for sign bit
                 if bit_len <= bits {
                     return Completion::Normal(bigint_val);
                 }
                 let modulus = num_bigint::BigInt::from(1) << bits;
-                let mut result = &b.value % &modulus;
+                let mut result = &*b.value % &modulus;
                 if result < num_bigint::BigInt::from(0) {
                     result += &modulus;
                 }
@@ -255,7 +249,7 @@ impl Interpreter {
                 if result >= half {
                     result -= modulus;
                 }
-                Completion::Normal(JsValue::BigInt(JsBigInt { value: result }))
+                Completion::Normal(JsValue::BigInt(JsBigInt::new(result)))
             },
         ));
         let as_uint_n = self.create_function(JsFunction::native(
@@ -279,19 +273,19 @@ impl Interpreter {
                     unreachable!()
                 };
                 if bits == 0 {
-                    return Completion::Normal(JsValue::BigInt(JsBigInt {
-                        value: num_bigint::BigInt::from(0),
-                    }));
+                    return Completion::Normal(JsValue::BigInt(JsBigInt::new(
+                        num_bigint::BigInt::from(0),
+                    )));
                 }
-                if b.value >= num_bigint::BigInt::from(0) && b.value.bits() <= bits {
+                if *b.value >= num_bigint::BigInt::from(0) && b.value.bits() <= bits {
                     return Completion::Normal(bigint_val);
                 }
                 let modulus = num_bigint::BigInt::from(1) << bits;
-                let mut result = &b.value % &modulus;
+                let mut result = &*b.value % &modulus;
                 if result < num_bigint::BigInt::from(0) {
                     result += &modulus;
                 }
-                Completion::Normal(JsValue::BigInt(JsBigInt { value: result }))
+                Completion::Normal(JsValue::BigInt(JsBigInt::new(result)))
             },
         ));
 
