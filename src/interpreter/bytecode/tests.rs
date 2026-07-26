@@ -249,6 +249,40 @@ fn end_to_end_member_chain_base_survives_gc_during_rhs_evaluation() {
 }
 
 #[test]
+fn end_to_end_getprop_call_argument_survives_gc_during_sibling_arg_evaluation() {
+    // Regression for merging PR #399 (calls) with PR #397 (member access): `GetProp`
+    // pushed its result with a raw `stack.push`, bypassing `push_value`'s
+    // `gc_bytecode_roots` rooting. Harmless while GetProp and Call were compiled by
+    // separate PRs, but the merged VM now compiles `identity(a.child, forceGc())`
+    // end-to-end: `a.child`'s freshly-allocated, otherwise-unreferenced result sits
+    // on the *same chunk's* operand stack as a pending Call argument while the
+    // *second* argument's own nested call runs and forces a GC before the outer
+    // Call consumes it.
+    let source = "
+        function identity(x, _y) { return x; }
+        function forceGc() { $262.gc(); return 0; }
+        var __r = (function(a) {
+            return identity(a.child, forceGc()).tag;
+        })({
+            get child() {
+                var o = Object.create(null);
+                o.tag = 'ok';
+                return o;
+            },
+        });
+    ";
+    let (v, count) = eval_with_mode(source, true);
+    assert!(
+        count >= 1,
+        "the containing function should compile to bytecode"
+    );
+    assert!(
+        matches!(&v, JsValue::String(s) if s.to_string() == "ok"),
+        "GetProp's call-argument result must survive the GC forced while evaluating a sibling call argument, got {v:?}"
+    );
+}
+
+#[test]
 fn load_const_and_return_yields_number_completion() {
     let chunk = Chunk {
         code: vec![Op::LoadConst as u8, 0, 0, Op::Return as u8],
