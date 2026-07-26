@@ -1,3 +1,10 @@
+## [0.4.12](https://github.com/pmatos/jsse/compare/v0.4.11...v0.4.12) (2026-07-26)
+
+
+### Performance Improvements
+
+* **gc:** add generational nursery ([#400](https://github.com/pmatos/jsse/issues/400)) ([47c1754](https://github.com/pmatos/jsse/commit/47c175420a5b62b5dcf21a905c5d9f04f671ba85))
+
 ## [0.4.11](https://github.com/pmatos/jsse/compare/v0.4.10...v0.4.11) (2026-07-26)
 
 
