@@ -1,3 +1,10 @@
+## [0.4.13](https://github.com/pmatos/jsse/compare/v0.4.12...v0.4.13) (2026-07-26)
+
+
+### Performance Improvements
+
+* **bytecode:** compile direct identifier calls ([#399](https://github.com/pmatos/jsse/issues/399)) ([2da6b6d](https://github.com/pmatos/jsse/commit/2da6b6d02ab58ff56bb89e16122eec357df92510))
+
 ## [0.4.12](https://github.com/pmatos/jsse/compare/v0.4.11...v0.4.12) (2026-07-26)
 
 
