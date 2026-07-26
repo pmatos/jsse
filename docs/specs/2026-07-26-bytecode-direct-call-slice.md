@@ -77,12 +77,14 @@ The operand layout immediately before either call opcode is:
 [..., callee, this, arg0, ..., argN]
 ```
 
-`LoadCalleeName` uses `resolve_identifier_ref` followed by
-`get_identifier_value_by_ref`. `IdentifierRef::WithObject(id)` becomes the
-`this` object; other identifier references use `undefined`. Arguments compile
-left to right after both values are on the stack. The call bridge therefore
-matches `EvaluateCall`'s required ordering and keeps a getter-produced callee
-stable while arguments execute.
+`LoadCalleeName` clears the prior receiver marker and uses the same
+single-pass `resolve_identifier` path as the tree-walker. A binding resolved
+through `with` records its object as `this`; other identifier references use
+`undefined`. Keeping resolution and value retrieval in one pass also avoids
+repeating an observable Proxy `has` trap for inherited global bindings.
+Arguments compile left to right after both values are on the stack. The call
+bridge therefore matches `EvaluateCall`'s required ordering and keeps a
+getter-produced callee stable while arguments execute.
 
 The opcode stores `argc` as `u16`. Bodies whose call argument count or
 resulting operand height does not fit are ineligible rather than truncated.
@@ -103,6 +105,9 @@ The VM now mirrors every object-valued operand-stack entry into its dedicated
 - a non-calling pop removes its matching root;
 - binary and unary operations retain popped operand roots until coercion
   finishes, then release them before pushing the result;
+- property operations keep the complete pending stack temporarily rooted
+  across getters, setters, proxy traps, and key coercion, then release the
+  dedicated roots for their consumed operands;
 - call operands retain their roots after removal from the operand vector,
   across the complete nested `call_function`, and are released in reverse
   stack order after it returns;
@@ -156,6 +161,9 @@ Bytecode unit/end-to-end coverage verifies:
 - persistent callback roots installed by native callees;
 - calls in a numeric loop;
 - `with`-environment receiver preservation;
+- global-prototype Proxy bindings invoke their observable `has` trap once,
+  including when the trap result is stateful;
+- member-access loops release consumed base and key roots before chunk exit;
 - strict direct-return recursion beyond the normal soft call-depth limit;
 - non-callable error propagation;
 - explicit rejection of direct eval, spread, member calls, and unsupported

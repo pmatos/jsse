@@ -212,19 +212,16 @@ fn run_chunk_inner(
                 let idx = decode_u16(chunk, pc);
                 pc += 2;
                 let name = &chunk.names[idx as usize];
-                let id_ref = match interp.resolve_identifier_ref(name, env) {
-                    Ok(id_ref) => id_ref,
-                    Err(error) => return Completion::Throw(error),
+                let strict = env.borrow().strict;
+                interp.last_identifier_with_base = None;
+                let callee_result = interp.resolve_identifier(name, env, strict);
+                let this_value = match interp.last_identifier_with_base.take() {
+                    Some(id) => JsValue::Object(crate::types::JsObject { id }),
+                    None => JsValue::Undefined,
                 };
-                let callee = match interp.get_identifier_value_by_ref(name, &id_ref, env) {
+                let callee = match callee_result {
                     Completion::Normal(value) => value,
                     abrupt => return abrupt,
-                };
-                let this_value = match id_ref {
-                    IdentifierRef::WithObject(id) => JsValue::Object(crate::types::JsObject { id }),
-                    IdentifierRef::Unresolvable | IdentifierRef::SpecificEnv(_) => {
-                        JsValue::Undefined
-                    }
                 };
                 push_value(interp, &mut stack, callee);
                 push_value(interp, &mut stack, this_value);

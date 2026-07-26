@@ -1243,6 +1243,74 @@ fn direct_call_preserves_with_base_as_this_value() {
 }
 
 #[test]
+fn direct_call_clears_stale_with_base_before_global_resolution() {
+    let source = "
+        var observed = 0;
+        function recordThis() {
+            'use strict';
+            observed = this === undefined ? 1 : -1;
+        }
+        var runner;
+        with ({ value: 42 }) {
+            runner = function() {
+                var ignored = value;
+                recordThis();
+            };
+        }
+        runner();
+        var __r = observed;
+    ";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "runner must execute through bytecode");
+    assert!(matches!(ast, JsValue::Number(n) if n == 1.0));
+    assert!(
+        matches!(bytecode, JsValue::Number(n) if n == 1.0),
+        "a global call must not inherit a with base from an earlier identifier read"
+    );
+}
+
+#[test]
+fn direct_call_checks_global_proxy_binding_once() {
+    let source = "
+        var hasCount = 0;
+        var callCount = 0;
+        var outcome = 0;
+        var oldPrototype = Object.getPrototypeOf($262.global);
+        var target = { fn: function() { callCount = callCount + 1; } };
+        var proxy = new Proxy(target, {
+            has: function(target, key) {
+                if (key === 'fn') {
+                    hasCount = hasCount + 1;
+                    return hasCount === 1;
+                }
+                return Reflect.has(target, key);
+            },
+        });
+        Object.setPrototypeOf($262.global, proxy);
+        function run() { fn(); }
+        try {
+            run();
+            outcome = 100;
+        } catch (error) {
+            outcome = -100;
+        }
+        Object.setPrototypeOf($262.global, oldPrototype);
+        var __r = outcome + hasCount * 10 + callCount;
+    ";
+    let (ast, ast_count) = eval_with_mode(source, false);
+    let (bytecode, bytecode_count) = eval_with_mode(source, true);
+    assert_eq!(ast_count, 0);
+    assert!(bytecode_count >= 1, "run must execute through bytecode");
+    assert!(matches!(ast, JsValue::Number(n) if n == 111.0));
+    assert!(
+        matches!(bytecode, JsValue::Number(n) if n == 111.0),
+        "bytecode must invoke the stateful global proxy has trap exactly once, got {bytecode:?}"
+    );
+}
+
+#[test]
 fn pending_argument_survives_gc_during_later_call_argument() {
     let source = "\
         var collect = $262.gc; \
