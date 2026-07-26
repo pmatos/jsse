@@ -154,10 +154,18 @@ Two existing types need a wrapper before they can be pointer-packed:
 
 - `JsSymbol` (`src/types.rs:336-339`) currently inlines
   `description: Option<JsString>` with no `Arc`/`Rc` wrapper around the
-  symbol itself. Issue #404 decides between an `Arc`-wrapped symbol-data
-  struct (`id` plus `description`) and a side table keyed by `id` alone (the
-  id already fits in 48 bits unwrapped, so a side table is viable if lookup
-  indirection is cheaper than the extra allocation).
+  symbol itself. [ADR 0003](../adr/0003-nan-boxed-jsvalue.md) already
+  ratifies `Symbol` as `Arc`-backed alongside `String`/`BigInt` — retain on
+  `Clone`, release on `Drop`, uniformly — so tag 6 is always a 48-bit
+  `Arc<SymbolData>` pointer, never a bare id. Issue #404 wraps `JsSymbol` as
+  `Arc<SymbolData { id: u64, description: Option<JsString> }>` and works out
+  construction and interning mechanics, but does not reopen whether tag 6 is
+  a pointer or an id: an id-keyed side table was considered and set aside
+  here because it would need its own non-`Arc` `Clone`/`Drop` story (an
+  id-tagged variant that must never reach `Arc::from_raw`), contradicting
+  ADR 0003's uniform String/Symbol/BigInt retain/release procedure.
+  Revisiting that trade-off would mean amending ADR 0003, not just resolving
+  issue #404.
 - `JsBigInt` (`src/types.rs:359-361`) owns `num_bigint::BigInt` by value with
   no wrapper. Issue #403 wraps it as `Arc<num_bigint::BigInt>`; an audit of
   `src/interpreter/builtins/bigint.rs` found no in-place mutation of a
