@@ -118,18 +118,26 @@ a realistic exhaustion risk.
 
 ### String/Symbol/BigInt packing
 
-Heap-payload tags store `Arc::into_raw(payload) as u64` truncated to 48 bits.
-On today's x86-64 and AArch64 userspace address spaces, a canonical pointer's
-top 16 bits (48–63) are always zero, so truncating to 48 bits loses no
-information and reconstruction is a zero-extend, not a sign-extend. This is
-an explicit scope limit, not a universal guarantee: 5-level paging (57-bit
-virtual addresses) and ARMv8.2 LVA (52-bit virtual addresses) can hand out
-pointers outside 48 bits. Neither is default on this project's supported
-targets today, so it is out of scope for this design, but the boxing
-constructor should `debug_assert!` that a pointer's top 16 bits are zero
-before packing it, so a future target that violates the assumption fails
-loudly in development rather than silently truncating a pointer in release.
-`Clone` and `Drop` branch on the tag first:
+Heap-payload tags store `Arc::into_raw(payload) as u64` masked to its low 48
+bits. On today's x86-64 and AArch64 userspace address spaces, a canonical
+pointer's top 16 bits (48–63) are always zero, so the mask is a no-op and
+reconstruction is a zero-extend, not a sign-extend. This is an explicit scope
+limit, not a universal guarantee: 5-level paging (57-bit virtual addresses)
+and ARMv8.2 LVA (52-bit virtual addresses) can hand out pointers outside 48
+bits. Neither is default on this project's supported targets today, so
+running there is out of scope for this design — but "out of scope" must mean
+the boxing constructor refuses to run, not that it silently mis-packs a
+pointer. A `target_pointer_width`-style compile-time gate cannot enforce
+that: x86-64 LA57 and AArch64 LVA both still report ordinary 64-bit pointers,
+so only a check on the actual pointer value catches the violation. The
+constructor therefore checks, unconditionally in every build profile —
+`debug_assert!` alone is not enough, since it compiles to nothing in
+`--release` — that a candidate pointer's top 16 bits are zero before packing
+it, and panics with a clear "unsupported address space" error on failure
+rather than truncating and continuing. Continuing past a failed check would
+let a later `Clone`/`Drop`'s `Arc::from_raw` dereference an address
+`Arc::into_raw` never produced — memory corruption, not graceful
+degradation. `Clone` and `Drop` branch on the tag first:
 
 - `Number`/`Boolean`/`Undefined`/`Null`: no-op — the bit pattern is copied or
   discarded outright. This is the load-bearing invariant from ADR 0003: these
@@ -271,6 +279,10 @@ Undefined, Null, Object, String, Symbol, or BigInt semantics.
   no source file constructs `JsValue::Number(...)` via the enum's tuple
   constructor directly, so `JsValue::number` stays the sole entry point
   canonicalization can rely on.
+- A unit test (issue #414) that injects an out-of-range pointer value into
+  the packing path and asserts the constructor panics rather than storing a
+  truncated pointer, run under both `cargo test` and `cargo test --release`
+  so the guard is proven to fire in the release profile, not only in debug.
 - test262-extra regression coverage for the DataView/TypedArray
   byte-boundary sites (`getFloat32`, `getFloat64`, `getFloat16`, and the
   shared/non-shared typed-array element getters), confirming JS-constructed
