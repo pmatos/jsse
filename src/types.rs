@@ -1044,8 +1044,7 @@ mod tests {
 
     #[test]
     fn symbol_property_keys_do_not_collide_with_display_text() {
-        let symbol =
-            JsSymbol::new(7, Some(JsString::from_str("x"))).to_property_key();
+        let symbol = JsSymbol::new(7, Some(JsString::from_str("x"))).to_property_key();
         let text = JsPropertyKey::from_str("Symbol(x)#7");
 
         assert!(symbol.is_symbol());
@@ -1058,8 +1057,8 @@ mod tests {
     #[test]
     fn well_known_symbol_property_keys_are_tagged() {
         let constructed = JsPropertyKey::well_known_symbol("iterator");
-        let symbol = JsSymbol::new(1, Some(JsString::from_str("Symbol.iterator")))
-            .to_property_key();
+        let symbol =
+            JsSymbol::new(1, Some(JsString::from_str("Symbol.iterator"))).to_property_key();
 
         assert_eq!(constructed, symbol);
         assert!(constructed.is_symbol());
@@ -1171,10 +1170,7 @@ mod tests {
             (JsValue::Boolean(true), ValueKind::Boolean),
             (JsValue::Number(1.0), ValueKind::Number),
             (JsValue::from_str("s"), ValueKind::String),
-            (
-                JsValue::Symbol(JsSymbol::new(0, None)),
-                ValueKind::Symbol,
-            ),
+            (JsValue::Symbol(JsSymbol::new(0, None)), ValueKind::Symbol),
             (
                 JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(0))),
                 ValueKind::BigInt,

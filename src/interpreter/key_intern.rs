@@ -163,10 +163,8 @@ mod tests {
 
     #[test]
     fn symbol_keys_are_interned_and_preserved() {
-        let symbol = crate::types::JsSymbol::new(
-            42,
-            Some(crate::types::JsString::from_str("desc")),
-        );
+        let symbol =
+            crate::types::JsSymbol::new(42, Some(crate::types::JsString::from_str("desc")));
         let a = intern_js_key(symbol.to_property_key());
         let b = intern_js_key(symbol.to_property_key());
         assert!(a.shares_storage_with(&b), "Symbol keys must intern");
