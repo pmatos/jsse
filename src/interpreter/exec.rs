@@ -1577,23 +1577,11 @@ impl Interpreter {
             if !self.to_boolean_val(&test) {
                 break;
             }
-            match self.exec_statement(&w.body, env) {
-                Completion::Normal(val) => {
-                    v = val;
-                }
-                Completion::Empty => {}
-                Completion::Continue(None, cont_val) => {
-                    if let Some(val) = cont_val {
-                        v = val;
-                    }
-                }
-                Completion::Break(None, break_val) => {
-                    if let Some(val) = break_val {
-                        v = val;
-                    }
-                    return Completion::Normal(v);
-                }
-                other => return other,
+            let comp = self.exec_statement(&w.body, env);
+            match handle_loop_body_completion(comp, &mut v, None) {
+                LoopFlow::Iterate => {}
+                LoopFlow::Break => return Completion::Normal(v),
+                LoopFlow::Propagate(other) => return other,
             }
         }
         Completion::Normal(v)
@@ -1605,23 +1593,11 @@ impl Interpreter {
             self.gc_root_value(&v);
             self.gc_safepoint();
             self.gc_unroot_value(&v);
-            match self.exec_statement(&dw.body, env) {
-                Completion::Normal(val) => {
-                    v = val;
-                }
-                Completion::Empty => {}
-                Completion::Continue(None, cont_val) => {
-                    if let Some(val) = cont_val {
-                        v = val;
-                    }
-                }
-                Completion::Break(None, break_val) => {
-                    if let Some(val) = break_val {
-                        v = val;
-                    }
-                    return Completion::Normal(v);
-                }
-                other => return other,
+            let comp = self.exec_statement(&dw.body, env);
+            match handle_loop_body_completion(comp, &mut v, None) {
+                LoopFlow::Iterate => {}
+                LoopFlow::Break => return Completion::Normal(v),
+                LoopFlow::Propagate(other) => return other,
             }
             let test = match self.eval_expr(&dw.test, env) {
                 Completion::Normal(v) => v,
@@ -1649,28 +1625,11 @@ impl Interpreter {
                     if !self.to_boolean_val(&test) {
                         break;
                     }
-                    match self.exec_statement(&w.body, env) {
-                        Completion::Normal(val) => {
-                            v = val;
-                        }
-                        Completion::Empty => {}
-                        Completion::Continue(None, cont_val) => {
-                            if let Some(val) = cont_val {
-                                v = val;
-                            }
-                        }
-                        Completion::Continue(Some(ref l), cont_val) if l == label => {
-                            if let Some(val) = cont_val {
-                                v = val;
-                            }
-                        }
-                        Completion::Break(None, break_val) => {
-                            if let Some(val) = break_val {
-                                v = val;
-                            }
-                            return Completion::Normal(v);
-                        }
-                        other => return other,
+                    let comp = self.exec_statement(&w.body, env);
+                    match handle_loop_body_completion(comp, &mut v, Some(label)) {
+                        LoopFlow::Iterate => {}
+                        LoopFlow::Break => return Completion::Normal(v),
+                        LoopFlow::Propagate(other) => return other,
                     }
                 }
                 Completion::Normal(v)
@@ -1681,28 +1640,11 @@ impl Interpreter {
                     self.gc_root_value(&v);
                     self.gc_safepoint();
                     self.gc_unroot_value(&v);
-                    match self.exec_statement(&dw.body, env) {
-                        Completion::Normal(val) => {
-                            v = val;
-                        }
-                        Completion::Empty => {}
-                        Completion::Continue(None, cont_val) => {
-                            if let Some(val) = cont_val {
-                                v = val;
-                            }
-                        }
-                        Completion::Continue(Some(ref l), cont_val) if l == label => {
-                            if let Some(val) = cont_val {
-                                v = val;
-                            }
-                        }
-                        Completion::Break(None, break_val) => {
-                            if let Some(val) = break_val {
-                                v = val;
-                            }
-                            return Completion::Normal(v);
-                        }
-                        other => return other,
+                    let comp = self.exec_statement(&dw.body, env);
+                    match handle_loop_body_completion(comp, &mut v, Some(label)) {
+                        LoopFlow::Iterate => {}
+                        LoopFlow::Break => return Completion::Normal(v),
+                        LoopFlow::Propagate(other) => return other,
                     }
                     let test = match self.eval_expr(&dw.test, env) {
                         Completion::Normal(v) => v,
@@ -1790,28 +1732,11 @@ impl Interpreter {
                         break;
                     }
                 }
-                match self.exec_statement(&f.body, &iter_env) {
-                    Completion::Normal(val) => {
-                        v = val;
-                    }
-                    Completion::Empty => {}
-                    Completion::Continue(None, cont_val) => {
-                        if let Some(val) = cont_val {
-                            v = val;
-                        }
-                    }
-                    Completion::Continue(Some(ref l), cont_val) if label == Some(l.as_str()) => {
-                        if let Some(val) = cont_val {
-                            v = val;
-                        }
-                    }
-                    Completion::Break(None, break_val) => {
-                        if let Some(val) = break_val {
-                            v = val;
-                        }
-                        break;
-                    }
-                    other => break 'for_loop other,
+                let comp = self.exec_statement(&f.body, &iter_env);
+                match handle_loop_body_completion(comp, &mut v, label) {
+                    LoopFlow::Iterate => {}
+                    LoopFlow::Break => break,
+                    LoopFlow::Propagate(other) => break 'for_loop other,
                 }
                 // CreatePerIterationEnvironment before update
                 if !per_iteration_bindings.is_empty() {
@@ -2007,30 +1932,10 @@ impl Interpreter {
                         }
                     }
                     let result = self.exec_statement(&fi.body, &for_env);
-                    match result {
-                        Completion::Normal(val) => {
-                            v = val;
-                        }
-                        Completion::Empty => {}
-                        Completion::Continue(None, cont_val) => {
-                            if let Some(val) = cont_val {
-                                v = val;
-                            }
-                        }
-                        Completion::Continue(Some(ref l), cont_val)
-                            if label == Some(l.as_str()) =>
-                        {
-                            if let Some(val) = cont_val {
-                                v = val;
-                            }
-                        }
-                        Completion::Break(None, break_val) => {
-                            if let Some(val) = break_val {
-                                v = val;
-                            }
-                            break 'unroot Completion::Normal(v);
-                        }
-                        other => break 'unroot other,
+                    match handle_loop_body_completion(result, &mut v, label) {
+                        LoopFlow::Iterate => {}
+                        LoopFlow::Break => break 'unroot Completion::Normal(v),
+                        LoopFlow::Propagate(other) => break 'unroot other,
                     }
                 }
             }
@@ -2706,5 +2611,204 @@ impl Interpreter {
             }
             _ => false,
         }
+    }
+}
+
+/// What a loop executor should do after running its body once. Externalises the
+/// per-loop-kind control-flow — `return`, `break`, or `break 'label` — so the
+/// shared body-completion bookkeeping (folding the completion value into the
+/// running loop value, matching labels) lives in exactly one place instead of
+/// being copy-pasted at each loop head.
+#[derive(Debug)]
+enum LoopFlow {
+    /// Keep iterating. The body's completion value has already been folded into
+    /// the running loop value.
+    Iterate,
+    /// Terminate the loop normally; the running loop value is the result.
+    Break,
+    /// An abrupt completion this loop does not consume — the caller propagates
+    /// it in whatever way its control-flow requires.
+    Propagate(Completion),
+}
+
+/// Apply one iteration's body `Completion` to the running loop value `v` and
+/// decide how the loop proceeds. `label` is the loop's own label (`None` for an
+/// unlabelled loop), used to recognise a `continue label;` that targets *this*
+/// loop.
+///
+/// This concentrates the `while` / `do-while` / `for` / `for-in` body protocol.
+/// `for-of` and `switch` are deliberately NOT routed through here: `for-of`
+/// must interleave IteratorClose on every abrupt completion, and `switch` has
+/// no `continue` arm and a different break-value default.
+fn handle_loop_body_completion(comp: Completion, v: &mut JsValue, label: Option<&str>) -> LoopFlow {
+    match comp {
+        Completion::Normal(val) => {
+            *v = val;
+            LoopFlow::Iterate
+        }
+        Completion::Empty => LoopFlow::Iterate,
+        Completion::Continue(None, cont_val) => {
+            if let Some(val) = cont_val {
+                *v = val;
+            }
+            LoopFlow::Iterate
+        }
+        Completion::Continue(Some(l), cont_val) => {
+            if label == Some(l.as_str()) {
+                if let Some(val) = cont_val {
+                    *v = val;
+                }
+                LoopFlow::Iterate
+            } else {
+                LoopFlow::Propagate(Completion::Continue(Some(l), cont_val))
+            }
+        }
+        Completion::Break(None, break_val) => {
+            if let Some(val) = break_val {
+                *v = val;
+            }
+            LoopFlow::Break
+        }
+        other => LoopFlow::Propagate(other),
+    }
+}
+
+#[cfg(test)]
+mod loop_flow_tests {
+    use super::*;
+
+    fn num(x: f64) -> JsValue {
+        JsValue::Number(x)
+    }
+
+    fn is_num(v: &JsValue, x: f64) -> bool {
+        matches!(v, JsValue::Number(n) if *n == x)
+    }
+
+    #[test]
+    fn normal_completion_folds_value_and_iterates() {
+        let mut v = JsValue::Undefined;
+        assert!(matches!(
+            handle_loop_body_completion(Completion::Normal(num(7.0)), &mut v, None),
+            LoopFlow::Iterate
+        ));
+        assert!(is_num(&v, 7.0));
+    }
+
+    #[test]
+    fn empty_completion_iterates_and_preserves_value() {
+        let mut v = num(3.0);
+        assert!(matches!(
+            handle_loop_body_completion(Completion::Empty, &mut v, None),
+            LoopFlow::Iterate
+        ));
+        assert!(is_num(&v, 3.0));
+    }
+
+    #[test]
+    fn unlabelled_continue_with_value_folds_and_iterates() {
+        let mut v = JsValue::Undefined;
+        // A loop's own label is irrelevant to an unlabelled continue.
+        assert!(matches!(
+            handle_loop_body_completion(
+                Completion::Continue(None, Some(num(5.0))),
+                &mut v,
+                Some("l")
+            ),
+            LoopFlow::Iterate
+        ));
+        assert!(is_num(&v, 5.0));
+    }
+
+    #[test]
+    fn unlabelled_continue_without_value_preserves_value() {
+        let mut v = num(9.0);
+        assert!(matches!(
+            handle_loop_body_completion(Completion::Continue(None, None), &mut v, None),
+            LoopFlow::Iterate
+        ));
+        assert!(is_num(&v, 9.0));
+    }
+
+    #[test]
+    fn matching_labelled_continue_folds_and_iterates() {
+        let mut v = JsValue::Undefined;
+        let comp = Completion::Continue(Some("outer".to_string()), Some(num(11.0)));
+        assert!(matches!(
+            handle_loop_body_completion(comp, &mut v, Some("outer")),
+            LoopFlow::Iterate
+        ));
+        assert!(is_num(&v, 11.0));
+    }
+
+    #[test]
+    fn non_matching_labelled_continue_propagates_untouched() {
+        let mut v = num(1.0);
+        let comp = Completion::Continue(Some("outer".to_string()), Some(num(2.0)));
+        match handle_loop_body_completion(comp, &mut v, Some("inner")) {
+            LoopFlow::Propagate(Completion::Continue(Some(l), Some(pv))) => {
+                assert_eq!(l, "outer");
+                assert!(is_num(&pv, 2.0));
+            }
+            other => panic!("expected Propagate(Continue outer), got {other:?}"),
+        }
+        // A continue we don't consume must not disturb our running value.
+        assert!(is_num(&v, 1.0));
+    }
+
+    #[test]
+    fn labelled_continue_in_unlabelled_loop_propagates() {
+        let mut v = num(1.0);
+        let comp = Completion::Continue(Some("outer".to_string()), None);
+        match handle_loop_body_completion(comp, &mut v, None) {
+            LoopFlow::Propagate(Completion::Continue(Some(l), None)) => assert_eq!(l, "outer"),
+            other => panic!("expected Propagate(Continue outer), got {other:?}"),
+        }
+        assert!(is_num(&v, 1.0));
+    }
+
+    #[test]
+    fn unlabelled_break_with_value_folds_and_breaks() {
+        let mut v = JsValue::Undefined;
+        assert!(matches!(
+            handle_loop_body_completion(Completion::Break(None, Some(num(99.0))), &mut v, None),
+            LoopFlow::Break
+        ));
+        assert!(is_num(&v, 99.0));
+    }
+
+    #[test]
+    fn unlabelled_break_without_value_preserves_value_and_breaks() {
+        let mut v = num(44.0);
+        assert!(matches!(
+            handle_loop_body_completion(Completion::Break(None, None), &mut v, None),
+            LoopFlow::Break
+        ));
+        assert!(is_num(&v, 44.0));
+    }
+
+    #[test]
+    fn labelled_break_propagates_untouched() {
+        let mut v = num(1.0);
+        let comp = Completion::Break(Some("outer".to_string()), Some(num(2.0)));
+        match handle_loop_body_completion(comp, &mut v, Some("inner")) {
+            LoopFlow::Propagate(Completion::Break(Some(l), _)) => assert_eq!(l, "outer"),
+            other => panic!("expected Propagate(Break outer), got {other:?}"),
+        }
+        assert!(is_num(&v, 1.0));
+    }
+
+    #[test]
+    fn throw_and_return_propagate_untouched() {
+        let mut v = num(1.0);
+        assert!(matches!(
+            handle_loop_body_completion(Completion::Throw(num(7.0)), &mut v, None),
+            LoopFlow::Propagate(Completion::Throw(_))
+        ));
+        assert!(matches!(
+            handle_loop_body_completion(Completion::Return(num(8.0)), &mut v, None),
+            LoopFlow::Propagate(Completion::Return(_))
+        ));
+        assert!(is_num(&v, 1.0));
     }
 }
