@@ -163,10 +163,10 @@ mod tests {
 
     #[test]
     fn symbol_keys_are_interned_and_preserved() {
-        let symbol = crate::types::JsSymbol {
-            id: 42,
-            description: Some(crate::types::JsString::from_str("desc")),
-        };
+        let symbol = crate::types::JsSymbol::new(
+            42,
+            Some(crate::types::JsString::from_str("desc")),
+        );
         let a = intern_js_key(symbol.to_property_key());
         let b = intern_js_key(symbol.to_property_key());
         assert!(a.shares_storage_with(&b), "Symbol keys must intern");
@@ -256,12 +256,12 @@ mod tests {
     #[test]
     fn oversized_symbol_keys_preserve_their_exact_encoding() {
         let mut cache = KeyCache::new();
-        let symbol = crate::types::JsSymbol {
-            id: 99,
-            description: Some(crate::types::JsString::from_str(
+        let symbol = crate::types::JsSymbol::new(
+            99,
+            Some(crate::types::JsString::from_str(
                 &"s".repeat(MAX_CACHEABLE_KEY_BYTES),
             )),
-        };
+        );
         let original = symbol.to_property_key();
         let a = cache.intern(symbol.to_property_key());
         let b = cache.intern(symbol.to_property_key());

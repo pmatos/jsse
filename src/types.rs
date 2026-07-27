@@ -332,24 +332,48 @@ impl<T: PropertyKeyLike + ?Sized> PropertyKeyLike for &T {
     }
 }
 
+#[derive(Debug)]
+struct JsSymbolData {
+    id: u64,
+    description: Option<JsString>,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct JsSymbol {
-    pub id: u64,
-    pub description: Option<JsString>,
+    data: Arc<JsSymbolData>,
 }
 
 impl JsSymbol {
+    pub(crate) fn new(id: u64, description: Option<JsString>) -> Self {
+        Self {
+            data: Arc::new(JsSymbolData { id, description }),
+        }
+    }
+
+    pub(crate) fn id(&self) -> u64 {
+        self.data.id
+    }
+
+    pub(crate) fn description(&self) -> Option<&JsString> {
+        self.data.description.as_ref()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shares_storage_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.data, &other.data)
+    }
+
     /// Convert to the internal Symbol-valued property key.
     /// Well-known symbols (description starts with "Symbol.") use a stable format
     /// without id, so bootstrap lookups can construct the same key directly.
     /// User-created symbols include the unique id to avoid collisions.
     pub(crate) fn to_property_key(&self) -> JsPropertyKey {
-        let encoding = match &self.description {
+        let encoding = match self.description() {
             Some(desc) if desc.to_string().starts_with("Symbol.") => {
                 format!("Symbol({})", desc)
             }
-            Some(desc) => format!("Symbol({})#{}", desc, self.id),
-            None => format!("Symbol()#{}", self.id),
+            Some(desc) => format!("Symbol({})#{}", desc, self.id()),
+            None => format!("Symbol()#{}", self.id()),
         };
         JsPropertyKey::from_symbol_encoding(encoding)
     }
@@ -800,7 +824,7 @@ impl fmt::Display for JsValue {
             JsValue::Number(n) => write!(f, "{}", number_ops::to_string(*n)),
             JsValue::String(s) => write!(f, "{s}"),
             JsValue::Symbol(s) => {
-                if let Some(desc) = &s.description {
+                if let Some(desc) = s.description() {
                     write!(f, "Symbol({desc})")
                 } else {
                     write!(f, "Symbol()")
@@ -1020,11 +1044,8 @@ mod tests {
 
     #[test]
     fn symbol_property_keys_do_not_collide_with_display_text() {
-        let symbol = JsSymbol {
-            id: 7,
-            description: Some(JsString::from_str("x")),
-        }
-        .to_property_key();
+        let symbol =
+            JsSymbol::new(7, Some(JsString::from_str("x"))).to_property_key();
         let text = JsPropertyKey::from_str("Symbol(x)#7");
 
         assert!(symbol.is_symbol());
@@ -1037,17 +1058,31 @@ mod tests {
     #[test]
     fn well_known_symbol_property_keys_are_tagged() {
         let constructed = JsPropertyKey::well_known_symbol("iterator");
-        let symbol = JsSymbol {
-            id: 1,
-            description: Some(JsString::from_str("Symbol.iterator")),
-        }
-        .to_property_key();
+        let symbol = JsSymbol::new(1, Some(JsString::from_str("Symbol.iterator")))
+            .to_property_key();
 
         assert_eq!(constructed, symbol);
         assert!(constructed.is_symbol());
         assert_ne!(
             constructed,
             JsPropertyKey::from_str("Symbol(Symbol.iterator)")
+        );
+    }
+
+    #[test]
+    fn symbol_clones_share_one_word_data_pointer() {
+        let symbol = JsSymbol::new(7, Some(JsString::from_str("description")));
+        let cloned = symbol.clone();
+
+        assert_eq!(
+            std::mem::size_of::<JsSymbol>(),
+            std::mem::size_of::<Arc<JsSymbolData>>()
+        );
+        assert!(symbol.shares_storage_with(&cloned));
+        assert_eq!(cloned.id(), 7);
+        assert_eq!(
+            cloned.description().map(JsString::to_rust_string),
+            Some("description".to_string())
         );
     }
 
@@ -1076,11 +1111,8 @@ mod tests {
                 .to_rust_string(),
             "yo"
         );
-        let sym = JsSymbol {
-            id: 1,
-            description: Some(JsString::from_str("s")),
-        };
-        assert_eq!(JsValue::symbol(sym).as_symbol().unwrap().id, 1);
+        let sym = JsSymbol::new(1, Some(JsString::from_str("s")));
+        assert_eq!(JsValue::symbol(sym).as_symbol().unwrap().id(), 1);
         let big = JsBigInt::new(num_bigint::BigInt::from(42));
         assert_eq!(
             *JsValue::bigint(big).as_bigint().unwrap().value,
@@ -1105,12 +1137,9 @@ mod tests {
         assert_eq!(s.with_string(|cu| cu.len()), Some(3));
         assert_eq!(JsValue::Null.with_string(|cu| cu.len()), None);
 
-        let sym = JsValue::Symbol(JsSymbol {
-            id: 9,
-            description: None,
-        });
-        assert_eq!(sym.with_symbol(|s| s.id), Some(9));
-        assert_eq!(JsValue::Null.with_symbol(|s| s.id), None);
+        let sym = JsValue::Symbol(JsSymbol::new(9, None));
+        assert_eq!(sym.with_symbol(JsSymbol::id), Some(9));
+        assert_eq!(JsValue::Null.with_symbol(JsSymbol::id), None);
 
         let big = JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(5)));
         assert_eq!(
@@ -1143,10 +1172,7 @@ mod tests {
             (JsValue::Number(1.0), ValueKind::Number),
             (JsValue::from_str("s"), ValueKind::String),
             (
-                JsValue::Symbol(JsSymbol {
-                    id: 0,
-                    description: None,
-                }),
+                JsValue::Symbol(JsSymbol::new(0, None)),
                 ValueKind::Symbol,
             ),
             (

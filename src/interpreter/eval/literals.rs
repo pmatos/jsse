@@ -562,7 +562,7 @@ impl Interpreter {
                             Completion::Normal(v) => {
                                 let is_symbol = matches!(&v, JsValue::Symbol(_));
                                 let fn_name = if let JsValue::Symbol(ref sym) = v {
-                                    match &sym.description {
+                                    match sym.description() {
                                         Some(desc) => format!("[{}]", desc),
                                         None => String::new(),
                                     }
@@ -1290,7 +1290,7 @@ impl Interpreter {
                             self.gc_root_value(&v);
                             let is_symbol = matches!(&v, JsValue::Symbol(_));
                             let fn_name = if let JsValue::Symbol(ref sym) = v {
-                                match &sym.description {
+                                match sym.description() {
                                     Some(desc) => format!("[{}]", desc),
                                     None => String::new(),
                                 }

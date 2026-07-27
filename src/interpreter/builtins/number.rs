@@ -290,8 +290,7 @@ impl Interpreter {
                         return Completion::Throw(err);
                     };
                     let desc = sym
-                        .description
-                        .as_ref()
+                        .description()
                         .map(|d| d.to_rust_string())
                         .unwrap_or_default();
                     Completion::Normal(JsValue::String(JsString::from_str(&format!(
@@ -328,8 +327,8 @@ impl Interpreter {
                     interp.create_type_error("Symbol.prototype.description requires a Symbol");
                 return Completion::Throw(err);
             };
-            match sym.description {
-                Some(d) => Completion::Normal(JsValue::String(d)),
+            match sym.description() {
+                Some(d) => Completion::Normal(JsValue::String(d.clone())),
                 None => Completion::Normal(JsValue::Undefined),
             }
         });
