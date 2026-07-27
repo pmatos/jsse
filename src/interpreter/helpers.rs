@@ -214,7 +214,7 @@ pub(crate) fn strict_equality(left: &JsValue, right: &JsValue) -> bool {
         (JsValue::Boolean(a), JsValue::Boolean(b)) => a == b,
         (JsValue::Number(a), JsValue::Number(b)) => number_ops::equal(*a, *b),
         (JsValue::String(a), JsValue::String(b)) => a == b,
-        (JsValue::Symbol(a), JsValue::Symbol(b)) => a.id == b.id,
+        (JsValue::Symbol(a), JsValue::Symbol(b)) => a.id() == b.id(),
         (JsValue::BigInt(a), JsValue::BigInt(b)) => bigint_ops::equal(&a.value, &b.value),
         (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
         _ => false,

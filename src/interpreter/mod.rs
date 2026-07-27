@@ -1028,7 +1028,7 @@ impl Interpreter {
             JsValue::Symbol(sym) => !self
                 .global_symbol_registry
                 .values()
-                .any(|reg| reg.id == sym.id),
+                .any(|reg| reg.id() == sym.id()),
             _ => false,
         }
     }
@@ -1849,14 +1849,11 @@ impl Interpreter {
             };
             // Check global_symbol_registry for Symbol.for() symbols
             for sym in self.global_symbol_registry.values() {
-                if sym.id == id {
+                if sym.id() == id {
                     return JsValue::Symbol(sym.clone());
                 }
             }
-            return JsValue::Symbol(crate::types::JsSymbol {
-                id,
-                description: desc,
-            });
+            return JsValue::Symbol(crate::types::JsSymbol::new(id, desc));
         }
         // Fallback: return as string
         JsValue::String(exact_key.to_js_string())

@@ -842,12 +842,12 @@ impl Interpreter {
         }
         let id = self.next_symbol_id;
         self.next_symbol_id += 1;
-        let sym = JsValue::Symbol(crate::types::JsSymbol {
+        let sym = JsValue::Symbol(crate::types::JsSymbol::new(
             id,
-            description: Some(crate::types::JsString::from_str(
+            Some(crate::types::JsString::from_str(
                 "IntlLegacyConstructedSymbol",
             )),
-        });
+        ));
         self.realm_mut().intl_fallback_symbol = Some(sym.clone());
         sym
     }

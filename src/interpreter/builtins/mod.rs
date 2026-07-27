@@ -1350,10 +1350,7 @@ impl Interpreter {
                     };
                     let id = interp.next_symbol_id;
                     interp.next_symbol_id += 1;
-                    Completion::Normal(JsValue::Symbol(crate::types::JsSymbol {
-                        id,
-                        description: desc,
-                    }))
+                    Completion::Normal(JsValue::Symbol(crate::types::JsSymbol::new(id, desc)))
                 },
             ));
             if let JsValue::Object(ref o) = symbol_fn
@@ -1382,10 +1379,7 @@ impl Interpreter {
                     } else {
                         let id = self.next_symbol_id;
                         self.next_symbol_id += 1;
-                        let sym = crate::types::JsSymbol {
-                            id,
-                            description: Some(JsString::from_str(desc)),
-                        };
+                        let sym = crate::types::JsSymbol::new(id, Some(JsString::from_str(desc)));
                         self.well_known_symbols
                             .insert(name.to_string(), sym.clone());
                         JsValue::Symbol(sym)
@@ -1414,10 +1408,7 @@ impl Interpreter {
                         }
                         let id = interp.next_symbol_id;
                         interp.next_symbol_id += 1;
-                        let sym = crate::types::JsSymbol {
-                            id,
-                            description: Some(JsString::from_str(&key)),
-                        };
+                        let sym = crate::types::JsSymbol::new(id, Some(JsString::from_str(&key)));
                         interp.global_symbol_registry.insert(key, sym.clone());
                         Completion::Normal(JsValue::Symbol(sym))
                     }),
@@ -1436,7 +1427,7 @@ impl Interpreter {
                             return Completion::Throw(err);
                         };
                         for (key, reg_sym) in &interp.global_symbol_registry {
-                            if reg_sym.id == sym.id {
+                            if reg_sym.id() == sym.id() {
                                 return Completion::Normal(JsValue::String(JsString::from_str(
                                     key,
                                 )));
@@ -1474,7 +1465,7 @@ impl Interpreter {
                     if interp.new_target.is_none()
                         && let JsValue::Symbol(sym) = val
                     {
-                        let desc = if let Some(desc) = &sym.description {
+                        let desc = if let Some(desc) = sym.description() {
                             format!("Symbol({desc})")
                         } else {
                             "Symbol()".to_string()
