@@ -2175,6 +2175,123 @@ fn date_set_utc_full_year_on_invalid_date_seeds_missing_args_from_epoch_not_nan(
     assert_eq!(global_number(&interp, "__d"), 1.0);
 }
 
+// Loop and labelled-statement completion values are the observable surface of
+// the `v = val` folding consolidated into `handle_loop_body_completion`
+// (src/interpreter/exec.rs). These pin the behaviour across the six loop heads
+// migrated to the shared helper, plus the two deliberately-excluded forms
+// (for-of interleaves IteratorClose; switch has no `continue` arm). Expected
+// values are the ECMAScript completion-value semantics, cross-checked against
+// Node — not recomputed from jsse's code.
+mod loop_completion_value_tests {
+    use super::*;
+
+    fn completion_value(source: &str) -> JsValue {
+        let program = parse_program(source);
+        let mut interp = Interpreter::new();
+        match interp.run(&program) {
+            Completion::Normal(v) => v,
+            other => panic!("unexpected completion for `{source}`: {other:?}"),
+        }
+    }
+
+    fn assert_number(source: &str, expected: f64) {
+        match completion_value(source) {
+            JsValue::Number(n) => assert_eq!(n, expected, "completion value of `{source}`"),
+            other => panic!("expected number completion for `{source}`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn while_loop_yields_last_body_value() {
+        assert_number("var i=0; while(i<3){ i++; 42; }", 42.0);
+    }
+
+    #[test]
+    fn do_while_yields_last_body_value() {
+        assert_number("do { 5; } while(false)", 5.0);
+    }
+
+    #[test]
+    fn for_loop_yields_last_body_value() {
+        assert_number("for(var i=0;i<1;i++){ 7; }", 7.0);
+    }
+
+    #[test]
+    fn for_in_yields_last_body_value() {
+        assert_number("for(var k in {a:1,b:2}){ 33; }", 33.0);
+    }
+
+    #[test]
+    fn while_break_with_value_wins() {
+        assert_number(
+            "var n=0; while(n<3){ n++; if(n===2){ 99; break; } 44; }",
+            99.0,
+        );
+    }
+
+    #[test]
+    fn labelled_for_continue_carries_value() {
+        assert_number(
+            "outer: for(var i=0;i<2;i++){ for(var j=0;j<2;j++){ 9; continue outer; } }",
+            9.0,
+        );
+    }
+
+    #[test]
+    fn labelled_while_body_value_after_inner_break() {
+        assert_number(
+            "var o=0; outer: while(o<2){ o++; inner: while(true){ 11; break inner; } 22; }",
+            22.0,
+        );
+    }
+
+    #[test]
+    fn labelled_do_while_continue_then_body_value() {
+        assert_number(
+            "var m=0; outer: do { m++; if(m<3){ 55; continue outer; } 66; } while(m<3)",
+            66.0,
+        );
+    }
+
+    #[test]
+    fn labelled_for_in_continue_carries_value() {
+        assert_number(
+            "outer: for(var k in {a:1,b:2}){ for(var j=0;j<2;j++){ 77; continue outer; } }",
+            77.0,
+        );
+    }
+
+    #[test]
+    fn labelled_break_out_of_for_carries_value() {
+        assert_number(
+            "L: for (var i=0;i<3;i++){ if(i===1){ 71; break L; } }",
+            71.0,
+        );
+    }
+
+    #[test]
+    fn labelled_block_break_yields_value() {
+        assert_number("l: { 1; break l; }", 1.0);
+    }
+
+    // Guard: for-of and switch are deliberately NOT routed through the shared
+    // helper. These pin that the refactor left them unaffected.
+    #[test]
+    fn for_of_completion_value_unaffected() {
+        assert_number("for(var x of [1,2,3]){ x*10; }", 30.0);
+    }
+
+    #[test]
+    fn for_of_break_with_value_unaffected() {
+        assert_number("for(var x of [1,2,3]){ if(x===2){ 88; break; } }", 88.0);
+    }
+
+    #[test]
+    fn switch_break_with_value_unaffected() {
+        assert_number("switch(1){ case 1: 111; break; }", 111.0);
+    }
+}
+
 // §7.1.5 ToIntegerOrInfinity — the combined `? ToIntegerOrInfinity(argument)`
 // coercion method that sits alongside to_number_value / to_string_value / to_index.
 // Expected values are the spec's, not recomputed the way the code does it.
