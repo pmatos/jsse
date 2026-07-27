@@ -4,54 +4,51 @@ use icu_normalizer::{ComposingNormalizerBorrowed, DecomposingNormalizerBorrowed}
 
 // §22.1.3 thisStringValue — RequireObjectCoercible + extract primitive from String wrapper
 fn this_string_value(interp: &mut Interpreter, this: &JsValue) -> Result<String, Completion> {
-    match this {
-        JsValue::Null | JsValue::Undefined => Err(Completion::Throw(
-            interp.create_type_error("String.prototype method called on null or undefined"),
-        )),
-        JsValue::String(s) => Ok(s.to_rust_string()),
-        JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object_cell(o.id)
-                && obj.borrow().class_name == "String"
-                && let Some(JsValue::String(s)) = &obj.borrow().primitive_value
-            {
-                return Ok(s.to_rust_string());
-            }
-            match interp.to_string_value(this) {
-                Ok(s) => Ok(s),
-                Err(e) => Err(Completion::Throw(e)),
-            }
-        }
-        _ => match interp.to_string_value(this) {
-            Ok(s) => Ok(s),
-            Err(e) => Err(Completion::Throw(e)),
-        },
+    if this.is_nullish() {
+        return Err(Completion::Throw(interp.create_type_error(
+            "String.prototype method called on null or undefined",
+        )));
     }
+    if let Some(string) = this.as_string() {
+        return Ok(string.to_rust_string());
+    }
+    if let Some(object_id) = this.as_object_id()
+        && let Some(obj) = interp.get_object_cell(object_id)
+    {
+        let object = obj.borrow();
+        if object.class_name == "String"
+            && let Some(string) = object.primitive_value.as_ref().and_then(JsValue::as_string)
+        {
+            return Ok(string.to_rust_string());
+        }
+    }
+    interp.to_string_value(this).map_err(Completion::Throw)
 }
 
 // Extract the raw JsString (preserving lone surrogates) from this value
 fn this_js_string(interp: &mut Interpreter, this: &JsValue) -> Result<JsString, Completion> {
-    match this {
-        JsValue::Null | JsValue::Undefined => Err(Completion::Throw(
-            interp.create_type_error("String.prototype method called on null or undefined"),
-        )),
-        JsValue::String(s) => Ok(s.clone()),
-        JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object_cell(o.id)
-                && obj.borrow().class_name == "String"
-                && let Some(JsValue::String(s)) = &obj.borrow().primitive_value
-            {
-                return Ok(s.clone());
-            }
-            match interp.to_string_value(this) {
-                Ok(s) => Ok(JsString::from_str(&s)),
-                Err(e) => Err(Completion::Throw(e)),
-            }
-        }
-        _ => match interp.to_string_value(this) {
-            Ok(s) => Ok(JsString::from_str(&s)),
-            Err(e) => Err(Completion::Throw(e)),
-        },
+    if this.is_nullish() {
+        return Err(Completion::Throw(interp.create_type_error(
+            "String.prototype method called on null or undefined",
+        )));
     }
+    if let Some(string) = this.as_string() {
+        return Ok(string);
+    }
+    if let Some(object_id) = this.as_object_id()
+        && let Some(obj) = interp.get_object_cell(object_id)
+    {
+        let object = obj.borrow();
+        if object.class_name == "String"
+            && let Some(string) = object.primitive_value.as_ref().and_then(JsValue::as_string)
+        {
+            return Ok(string);
+        }
+    }
+    interp
+        .to_string_value(this)
+        .map(|string| JsString::from_str(&string))
+        .map_err(Completion::Throw)
 }
 
 fn to_str(interp: &mut Interpreter, val: &JsValue) -> Result<String, Completion> {
@@ -85,7 +82,7 @@ fn utf16_units(s: &str) -> Vec<u16> {
 fn is_regexp(interp: &mut Interpreter, obj_id: u64, obj_val: &JsValue) -> Result<bool, JsValue> {
     if let Some(match_key) = interp.get_symbol_key("match") {
         match interp.get_object_property(obj_id, &match_key, obj_val) {
-            Completion::Normal(v) if !matches!(v, JsValue::Undefined) => {
+            Completion::Normal(v) if !(v).is_undefined() => {
                 return Ok(interp.to_boolean_val(&v));
             }
             Completion::Normal(_) => {}
@@ -116,7 +113,7 @@ impl Interpreter {
             .class_name = "String".to_string();
         self.get_object_cell_expect(proto_id)
             .borrow_mut()
-            .primitive_value = Some(JsValue::String(JsString::from_str("")));
+            .primitive_value = Some(JsValue::string(JsString::from_str("")));
 
         #[allow(clippy::type_complexity)]
         let methods: Vec<(
@@ -142,9 +139,9 @@ impl Interpreter {
                     let units = &js_str.code_units;
                     let idx = pos as isize;
                     if idx < 0 || idx as usize >= units.len() {
-                        return Completion::Normal(JsValue::String(JsString::from_str("")));
+                        return Completion::Normal(JsValue::string(JsString::from_str("")));
                     }
-                    Completion::Normal(JsValue::String(JsString::from_vec(vec![
+                    Completion::Normal(JsValue::string(JsString::from_vec(vec![
                         units[idx as usize],
                     ])))
                 }),
@@ -167,9 +164,9 @@ impl Interpreter {
                     let units = &js_str.code_units;
                     let idx = pos as isize;
                     if idx < 0 || idx as usize >= units.len() {
-                        return Completion::Normal(JsValue::Number(f64::NAN));
+                        return Completion::Normal(JsValue::number(f64::NAN));
                     }
-                    Completion::Normal(JsValue::Number(units[idx as usize] as f64))
+                    Completion::Normal(JsValue::number(units[idx as usize] as f64))
                 }),
             ),
             (
@@ -190,7 +187,7 @@ impl Interpreter {
                     let units = &js_str.code_units;
                     let idx = pos as isize;
                     if idx < 0 || idx as usize >= units.len() {
-                        return Completion::Normal(JsValue::Undefined);
+                        return Completion::Normal(JsValue::UNDEFINED);
                     }
                     let idx = idx as usize;
                     let code = units[idx];
@@ -199,10 +196,10 @@ impl Interpreter {
                         if (0xDC00..=0xDFFF).contains(&trail) {
                             let cp =
                                 ((code as u32 - 0xD800) << 10) + (trail as u32 - 0xDC00) + 0x10000;
-                            return Completion::Normal(JsValue::Number(cp as f64));
+                            return Completion::Normal(JsValue::number(cp as f64));
                         }
                     }
-                    Completion::Normal(JsValue::Number(code as f64))
+                    Completion::Normal(JsValue::number(code as f64))
                 }),
             ),
             (
@@ -233,16 +230,16 @@ impl Interpreter {
                     let search_len = search_units.len();
                     let start = pos.max(0.0).min(s_len as f64) as usize;
                     if search_len == 0 {
-                        return Completion::Normal(JsValue::Number(start.min(s_len) as f64));
+                        return Completion::Normal(JsValue::number(start.min(s_len) as f64));
                     }
                     if search_len <= s_len {
                         for i in start..=s_len - search_len {
                             if s_units[i..i + search_len] == search_units[..] {
-                                return Completion::Normal(JsValue::Number(i as f64));
+                                return Completion::Normal(JsValue::number(i as f64));
                             }
                         }
                     }
-                    Completion::Normal(JsValue::Number(-1.0))
+                    Completion::Normal(JsValue::number(-1.0))
                 }),
             ),
             (
@@ -261,7 +258,7 @@ impl Interpreter {
                         None => "undefined".to_string(),
                     };
                     let num_pos = match args.get(1) {
-                        Some(v) if !matches!(v, JsValue::Undefined) => match to_num(interp, v) {
+                        Some(v) if !(v).is_undefined() => match to_num(interp, v) {
                             Ok(n) => n,
                             Err(c) => return c,
                         },
@@ -277,16 +274,16 @@ impl Interpreter {
                         to_integer_or_infinity(num_pos).max(0.0).min(s_len as f64) as usize
                     };
                     if search_len == 0 {
-                        return Completion::Normal(JsValue::Number(pos.min(s_len) as f64));
+                        return Completion::Normal(JsValue::number(pos.min(s_len) as f64));
                     }
                     let max_start = pos.min(s_len.saturating_sub(search_len));
                     for i in (0..=max_start).rev() {
                         if i + search_len <= s_len && s_units[i..i + search_len] == search_units[..]
                         {
-                            return Completion::Normal(JsValue::Number(i as f64));
+                            return Completion::Normal(JsValue::number(i as f64));
                         }
                     }
-                    Completion::Normal(JsValue::Number(-1.0))
+                    Completion::Normal(JsValue::number(-1.0))
                 }),
             ),
             (
@@ -297,9 +294,9 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let search_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = search_arg {
-                        match is_regexp(interp, o.id, &search_arg) {
+                    let search_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    if let Some(object_id) = search_arg.as_object_id() {
+                        match is_regexp(interp, object_id, &search_arg) {
                             Ok(true) => {
                                 return Completion::Throw(interp.create_type_error(
                                     "First argument to String.prototype.includes must not be a regular expression",
@@ -325,16 +322,16 @@ impl Interpreter {
                     let s_len = s_units.len();
                     let search_len = search_units.len();
                     if search_len == 0 {
-                        return Completion::Normal(JsValue::Boolean(true));
+                        return Completion::Normal(JsValue::boolean(true));
                     }
                     if search_len <= s_len {
                         for i in pos..=s_len - search_len {
                             if s_units[i..i + search_len] == search_units[..] {
-                                return Completion::Normal(JsValue::Boolean(true));
+                                return Completion::Normal(JsValue::boolean(true));
                             }
                         }
                     }
-                    Completion::Normal(JsValue::Boolean(false))
+                    Completion::Normal(JsValue::boolean(false))
                 }),
             ),
             (
@@ -345,9 +342,9 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let search_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = search_arg {
-                        match is_regexp(interp, o.id, &search_arg) {
+                    let search_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    if let Some(object_id) = search_arg.as_object_id() {
+                        match is_regexp(interp, object_id, &search_arg) {
                             Ok(true) => {
                                 return Completion::Throw(interp.create_type_error(
                                     "First argument to String.prototype.startsWith must not be a regular expression",
@@ -362,12 +359,10 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let pos = match args.get(1) {
-                        Some(v) if !matches!(v, JsValue::Undefined) => {
-                            match to_int_or_inf(interp, v) {
-                                Ok(n) => n.max(0.0) as usize,
-                                Err(c) => return c,
-                            }
-                        }
+                        Some(v) if !(v).is_undefined() => match to_int_or_inf(interp, v) {
+                            Ok(n) => n.max(0.0) as usize,
+                            Err(c) => return c,
+                        },
                         _ => 0,
                     };
                     let s_units = utf16_units(&s);
@@ -375,10 +370,10 @@ impl Interpreter {
                     let s_len = s_units.len();
                     let start = pos.min(s_len);
                     if start + search_units.len() > s_len {
-                        return Completion::Normal(JsValue::Boolean(false));
+                        return Completion::Normal(JsValue::boolean(false));
                     }
                     let result = s_units[start..start + search_units.len()] == search_units[..];
-                    Completion::Normal(JsValue::Boolean(result))
+                    Completion::Normal(JsValue::boolean(result))
                 }),
             ),
             (
@@ -389,9 +384,9 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let search_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = search_arg {
-                        match is_regexp(interp, o.id, &search_arg) {
+                    let search_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    if let Some(object_id) = search_arg.as_object_id() {
+                        match is_regexp(interp, object_id, &search_arg) {
                             Ok(true) => {
                                 return Completion::Throw(interp.create_type_error(
                                     "First argument to String.prototype.endsWith must not be a regular expression",
@@ -409,21 +404,19 @@ impl Interpreter {
                     let search_units = utf16_units(&search);
                     let s_len = s_units.len();
                     let end_pos = match args.get(1) {
-                        Some(v) if !matches!(v, JsValue::Undefined) => {
-                            match to_int_or_inf(interp, v) {
-                                Ok(n) => n.max(0.0).min(s_len as f64) as usize,
-                                Err(c) => return c,
-                            }
-                        }
+                        Some(v) if !(v).is_undefined() => match to_int_or_inf(interp, v) {
+                            Ok(n) => n.max(0.0).min(s_len as f64) as usize,
+                            Err(c) => return c,
+                        },
                         _ => s_len,
                     };
                     let search_len = search_units.len();
                     if search_len > end_pos {
-                        return Completion::Normal(JsValue::Boolean(false));
+                        return Completion::Normal(JsValue::boolean(false));
                     }
                     let start = end_pos - search_len;
                     let result = s_units[start..end_pos] == search_units[..];
-                    Completion::Normal(JsValue::Boolean(result))
+                    Completion::Normal(JsValue::boolean(result))
                 }),
             ),
             (
@@ -444,12 +437,10 @@ impl Interpreter {
                         None => 0.0,
                     };
                     let int_end = match args.get(1) {
-                        Some(v) if !matches!(v, JsValue::Undefined) => {
-                            match to_int_or_inf(interp, v) {
-                                Ok(n) => n,
-                                Err(c) => return c,
-                            }
-                        }
+                        Some(v) if !(v).is_undefined() => match to_int_or_inf(interp, v) {
+                            Ok(n) => n,
+                            Err(c) => return c,
+                        },
                         _ => len,
                     };
                     let from = resolve_relative_index(int_start, len as usize);
@@ -457,9 +448,9 @@ impl Interpreter {
                     let from = from.min(units.len());
                     let to = to.min(units.len());
                     if from >= to {
-                        return Completion::Normal(JsValue::String(JsString::from_str("")));
+                        return Completion::Normal(JsValue::string(JsString::from_str("")));
                     }
-                    Completion::Normal(JsValue::String(JsString::from_vec(
+                    Completion::Normal(JsValue::string(JsString::from_vec(
                         units[from..to].to_vec(),
                     )))
                 }),
@@ -485,7 +476,7 @@ impl Interpreter {
                         None => 0.0,
                     };
                     let int_end = match args.get(1) {
-                        Some(v) if !matches!(v, JsValue::Undefined) => match to_num(interp, v) {
+                        Some(v) if !(v).is_undefined() => match to_num(interp, v) {
                             Ok(n) => {
                                 let i = to_integer_or_infinity(n);
                                 if n.is_nan() { 0.0 } else { i }
@@ -502,7 +493,7 @@ impl Interpreter {
                         (final_end, final_start)
                     };
                     let result = utf16_substring(&units, from, to);
-                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                    Completion::Normal(JsValue::string(JsString::from_str(&result)))
                 }),
             ),
             (
@@ -513,7 +504,7 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    Completion::Normal(JsValue::String(JsString::from_str(&s.to_lowercase())))
+                    Completion::Normal(JsValue::string(JsString::from_str(&s.to_lowercase())))
                 }),
             ),
             (
@@ -524,7 +515,7 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    Completion::Normal(JsValue::String(JsString::from_str(&s.to_uppercase())))
+                    Completion::Normal(JsValue::string(JsString::from_str(&s.to_uppercase())))
                 }),
             ),
             (
@@ -535,7 +526,7 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let locale_list = match interp.intl_canonicalize_locale_list(&locales_arg) {
                         Ok(list) => list,
                         Err(e) => return Completion::Throw(e),
@@ -545,7 +536,7 @@ impl Interpreter {
                         resolved.parse().unwrap_or_else(|_| "und".parse().unwrap());
                     let cm = icu::casemap::CaseMapper::new();
                     let result = cm.lowercase_to_string(&s, &langid);
-                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                    Completion::Normal(JsValue::string(JsString::from_str(&result)))
                 }),
             ),
             (
@@ -556,7 +547,7 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let locale_list = match interp.intl_canonicalize_locale_list(&locales_arg) {
                         Ok(list) => list,
                         Err(e) => return Completion::Throw(e),
@@ -566,7 +557,7 @@ impl Interpreter {
                         resolved.parse().unwrap_or_else(|_| "und".parse().unwrap());
                     let cm = icu::casemap::CaseMapper::new();
                     let result = cm.uppercase_to_string(&s, &langid);
-                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                    Completion::Normal(JsValue::string(JsString::from_str(&result)))
                 }),
             ),
             (
@@ -577,7 +568,7 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    Completion::Normal(JsValue::String(JsString::from_str(
+                    Completion::Normal(JsValue::string(JsString::from_str(
                         s.trim_matches(is_ecma_whitespace),
                     )))
                 }),
@@ -590,7 +581,7 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    Completion::Normal(JsValue::String(JsString::from_str(
+                    Completion::Normal(JsValue::string(JsString::from_str(
                         s.trim_start_matches(is_ecma_whitespace),
                     )))
                 }),
@@ -603,7 +594,7 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    Completion::Normal(JsValue::String(JsString::from_str(
+                    Completion::Normal(JsValue::string(JsString::from_str(
                         s.trim_end_matches(is_ecma_whitespace),
                     )))
                 }),
@@ -627,7 +618,7 @@ impl Interpreter {
                         return Completion::Throw(interp.create_range_error("Invalid count value"));
                     }
                     let count = n as usize;
-                    Completion::Normal(JsValue::String(JsString::from_str(&s.repeat(count))))
+                    Completion::Normal(JsValue::string(JsString::from_str(&s.repeat(count))))
                 }),
             ),
             (
@@ -646,7 +637,7 @@ impl Interpreter {
                         None => 0.0,
                     };
                     let fill = match args.get(1) {
-                        Some(v) if !matches!(v, JsValue::Undefined) => match to_str(interp, v) {
+                        Some(v) if !(v).is_undefined() => match to_str(interp, v) {
                             Ok(s) => s,
                             Err(c) => return c,
                         },
@@ -656,14 +647,14 @@ impl Interpreter {
                     let s_len = s_units.len();
                     let int_max = max_length as usize;
                     if int_max <= s_len || fill.is_empty() {
-                        return Completion::Normal(JsValue::String(JsString::from_str(&s)));
+                        return Completion::Normal(JsValue::string(JsString::from_str(&s)));
                     }
                     let fill_units = utf16_units(&fill);
                     let fill_len = int_max - s_len;
                     let pad: Vec<u16> = fill_units.iter().copied().cycle().take(fill_len).collect();
                     let mut result = pad;
                     result.extend_from_slice(&s_units);
-                    Completion::Normal(JsValue::String(JsString::from_vec(result)))
+                    Completion::Normal(JsValue::string(JsString::from_vec(result)))
                 }),
             ),
             (
@@ -682,7 +673,7 @@ impl Interpreter {
                         None => 0.0,
                     };
                     let fill = match args.get(1) {
-                        Some(v) if !matches!(v, JsValue::Undefined) => match to_str(interp, v) {
+                        Some(v) if !(v).is_undefined() => match to_str(interp, v) {
                             Ok(s) => s,
                             Err(c) => return c,
                         },
@@ -692,14 +683,14 @@ impl Interpreter {
                     let s_len = s_units.len();
                     let int_max = max_length as usize;
                     if int_max <= s_len || fill.is_empty() {
-                        return Completion::Normal(JsValue::String(JsString::from_str(&s)));
+                        return Completion::Normal(JsValue::string(JsString::from_str(&s)));
                     }
                     let fill_units = utf16_units(&fill);
                     let fill_len = int_max - s_len;
                     let pad: Vec<u16> = fill_units.iter().copied().cycle().take(fill_len).collect();
                     let mut result = s_units;
                     result.extend_from_slice(&pad);
-                    Completion::Normal(JsValue::String(JsString::from_vec(result)))
+                    Completion::Normal(JsValue::string(JsString::from_vec(result)))
                 }),
             ),
             (
@@ -716,7 +707,7 @@ impl Interpreter {
                             Err(c) => return c,
                         }
                     }
-                    Completion::Normal(JsValue::String(JsString::from_str(&s)))
+                    Completion::Normal(JsValue::string(JsString::from_str(&s)))
                 }),
             ),
             (
@@ -724,24 +715,24 @@ impl Interpreter {
                 2,
                 Rc::new(|interp, this_val, args| {
                     // RequireObjectCoercible
-                    if matches!(this_val, JsValue::Null | JsValue::Undefined) {
+                    if (this_val).is_nullish() {
                         return Completion::Throw(interp.create_type_error(
                             "String.prototype.split called on null or undefined",
                         ));
                     }
-                    let separator = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let separator = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     // Check for Symbol.split on the separator
-                    if let JsValue::Object(ref o) = separator
+                    if let Some(object_id) = separator.as_object_id()
                         && let Some(key) = interp.get_symbol_key("split")
                     {
-                        let method = match interp.get_object_property(o.id, &key, &separator) {
+                        let method = match interp.get_object_property(object_id, &key, &separator) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
                             other => return other,
                         };
-                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                        if !(method).is_nullish() {
                             let this_str = this_val.clone();
-                            let limit = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                            let limit = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                             return interp.call_function(&method, &separator, &[this_str, limit]);
                         }
                     }
@@ -749,9 +740,9 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let limit_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let limit_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     // Per spec: ToUint32(limit) — NaN/Infinity/2^32/etc map to 0
-                    let limit: u32 = if matches!(limit_arg, JsValue::Undefined) {
+                    let limit: u32 = if (limit_arg).is_undefined() {
                         0xFFFF_FFFF // 2^32 - 1
                     } else {
                         match to_num(interp, &limit_arg) {
@@ -760,7 +751,7 @@ impl Interpreter {
                         }
                     };
                     // Per spec step 7: ToString(separator) BEFORE limit check
-                    let sep_is_undef = matches!(separator, JsValue::Undefined);
+                    let sep_is_undef = (separator).is_undefined();
                     let sep_str = if !sep_is_undef {
                         match to_str(interp, &separator) {
                             Ok(s) => Some(s),
@@ -774,7 +765,7 @@ impl Interpreter {
                     }
                     if sep_is_undef {
                         return Completion::Normal(
-                            interp.create_array(vec![JsValue::String(JsString::from_str(&s))]),
+                            interp.create_array(vec![JsValue::string(JsString::from_str(&s))]),
                         );
                     }
                     let sep_str = sep_str.unwrap();
@@ -791,7 +782,7 @@ impl Interpreter {
                                 break;
                             }
                             let ch = String::from_utf16_lossy(&s_units[i..i + 1]);
-                            parts.push(JsValue::String(JsString::from_str(&ch)));
+                            parts.push(JsValue::string(JsString::from_str(&ch)));
                         }
                         return Completion::Normal(interp.create_array(parts));
                     }
@@ -803,7 +794,7 @@ impl Interpreter {
                     while q + sep_len <= s_len {
                         if s_units[q..q + sep_len] == sep_units[..] {
                             let seg = utf16_substring(&s_units, p, q);
-                            parts.push(JsValue::String(JsString::from_str(&seg)));
+                            parts.push(JsValue::string(JsString::from_str(&seg)));
                             if parts.len() >= limit as usize {
                                 return Completion::Normal(interp.create_array(parts));
                             }
@@ -815,7 +806,7 @@ impl Interpreter {
                     }
                     // Add remaining
                     let seg = utf16_substring(&s_units, p, s_len);
-                    parts.push(JsValue::String(JsString::from_str(&seg)));
+                    parts.push(JsValue::string(JsString::from_str(&seg)));
                     parts.truncate(limit as usize);
                     Completion::Normal(interp.create_array(parts))
                 }),
@@ -824,22 +815,23 @@ impl Interpreter {
                 "replace",
                 2,
                 Rc::new(|interp, this_val, args| {
-                    if matches!(this_val, JsValue::Null | JsValue::Undefined) {
+                    if (this_val).is_nullish() {
                         return Completion::Throw(interp.create_type_error(
                             "String.prototype.replace called on null or undefined",
                         ));
                     }
-                    let search_value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = search_value
+                    let search_value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    if let Some(object_id) = search_value.as_object_id()
                         && let Some(key) = interp.get_symbol_key("replace")
                     {
-                        let method = match interp.get_object_property(o.id, &key, &search_value) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            other => return other,
-                        };
-                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                            let replace_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                        let method =
+                            match interp.get_object_property(object_id, &key, &search_value) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                other => return other,
+                            };
+                        if !(method).is_nullish() {
+                            let replace_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                             return interp.call_function(
                                 &method,
                                 &search_value,
@@ -855,10 +847,10 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let replace_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    let is_fn = if let JsValue::Object(ref o) = replace_arg {
+                    let replace_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                    let is_fn = if let Some(object_id) = replace_arg.as_object_id() {
                         interp
-                            .get_object_cell(o.id)
+                            .get_object_cell(object_id)
                             .map(|obj| obj.borrow().callable.is_some())
                             .unwrap_or(false)
                     } else {
@@ -885,11 +877,11 @@ impl Interpreter {
                             let matched = utf16_substring(&s_units, p, p + search_len);
                             let r = interp.call_function(
                                 &replace_arg,
-                                &JsValue::Undefined,
+                                &JsValue::UNDEFINED,
                                 &[
-                                    JsValue::String(JsString::from_str(&matched)),
-                                    JsValue::Number(p as f64),
-                                    JsValue::String(JsString::from_str(&s)),
+                                    JsValue::string(JsString::from_str(&matched)),
+                                    JsValue::number(p as f64),
+                                    JsValue::string(JsString::from_str(&s)),
                                 ],
                             );
                             let replacement = match r {
@@ -902,9 +894,9 @@ impl Interpreter {
                             let before = utf16_substring(&s_units, 0, p);
                             let after = utf16_substring(&s_units, p + search_len, s_len);
                             let result = format!("{before}{replacement}{after}");
-                            Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                            Completion::Normal(JsValue::string(JsString::from_str(&result)))
                         } else {
-                            Completion::Normal(JsValue::String(JsString::from_str(&s)))
+                            Completion::Normal(JsValue::string(JsString::from_str(&s)))
                         }
                     } else {
                         let replacement = match to_str(interp, &replace_arg) {
@@ -933,9 +925,9 @@ impl Interpreter {
                             let matched = utf16_substring(&s_units, pos, pos + search_len);
                             let rep = apply_replacement_pattern(&replacement, &matched, &s, pos);
                             let result = format!("{before}{rep}{after}");
-                            Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                            Completion::Normal(JsValue::string(JsString::from_str(&result)))
                         } else {
-                            Completion::Normal(JsValue::String(JsString::from_str(&s)))
+                            Completion::Normal(JsValue::string(JsString::from_str(&s)))
                         }
                     }
                 }),
@@ -944,21 +936,21 @@ impl Interpreter {
                 "replaceAll",
                 2,
                 Rc::new(|interp, this_val, args| {
-                    if matches!(this_val, JsValue::Null | JsValue::Undefined) {
+                    if (this_val).is_nullish() {
                         return Completion::Throw(interp.create_type_error(
                             "String.prototype.replaceAll called on null or undefined",
                         ));
                     }
-                    let search_value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = search_value {
+                    let search_value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    if let Some(object_id) = search_value.as_object_id() {
                         // Step 2a: IsRegExp check
                         let is_regexp = if let Some(match_key) = interp.get_symbol_key("match") {
-                            match interp.get_object_property(o.id, &match_key, &search_value) {
-                                Completion::Normal(v) if !matches!(v, JsValue::Undefined) => {
+                            match interp.get_object_property(object_id, &match_key, &search_value) {
+                                Completion::Normal(v) if !(v).is_undefined() => {
                                     interp.to_boolean_val(&v)
                                 }
                                 Completion::Normal(_) => interp
-                                    .get_object_cell(o.id)
+                                    .get_object_cell(object_id)
                                     .map(|obj| obj.borrow().class_name == "RegExp")
                                     .unwrap_or(false),
                                 Completion::Throw(e) => return Completion::Throw(e),
@@ -966,14 +958,15 @@ impl Interpreter {
                             }
                         } else {
                             interp
-                                .get_object_cell(o.id)
+                                .get_object_cell(object_id)
                                 .map(|obj| obj.borrow().class_name == "RegExp")
                                 .unwrap_or(false)
                         };
                         if is_regexp {
                             // Step 2b: Get flags via getter
                             let flags_val =
-                                match interp.get_object_property(o.id, "flags", &search_value) {
+                                match interp.get_object_property(object_id, "flags", &search_value)
+                                {
                                     Completion::Normal(v) => v,
                                     Completion::Throw(e) => return Completion::Throw(e),
                                     other => return other,
@@ -990,15 +983,15 @@ impl Interpreter {
                         }
                         // Step 2c-d: GetMethod(searchValue, @@replace)
                         if let Some(key) = interp.get_symbol_key("replace") {
-                            let method = match interp.get_object_property(o.id, &key, &search_value)
-                            {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                other => return other,
-                            };
-                            if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                            let method =
+                                match interp.get_object_property(object_id, &key, &search_value) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    other => return other,
+                                };
+                            if !(method).is_nullish() {
                                 let replace_val =
-                                    args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                                    args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                                 return interp.call_function(
                                     &method,
                                     &search_value,
@@ -1015,10 +1008,10 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let replace_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    let is_fn = if let JsValue::Object(ref o) = replace_arg {
+                    let replace_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                    let is_fn = if let Some(object_id) = replace_arg.as_object_id() {
                         interp
-                            .get_object_cell(o.id)
+                            .get_object_cell(object_id)
                             .map(|obj| obj.borrow().callable.is_some())
                             .unwrap_or(false)
                     } else {
@@ -1057,7 +1050,7 @@ impl Interpreter {
                     }
 
                     if positions.is_empty() {
-                        return Completion::Normal(JsValue::String(JsString::from_str(&s)));
+                        return Completion::Normal(JsValue::string(JsString::from_str(&s)));
                     }
 
                     let mut result = Vec::new();
@@ -1068,11 +1061,11 @@ impl Interpreter {
                         if is_fn {
                             let r = interp.call_function(
                                 &replace_arg,
-                                &JsValue::Undefined,
+                                &JsValue::UNDEFINED,
                                 &[
-                                    JsValue::String(JsString::from_str(&matched)),
-                                    JsValue::Number(pos as f64),
-                                    JsValue::String(JsString::from_str(&s)),
+                                    JsValue::string(JsString::from_str(&matched)),
+                                    JsValue::number(pos as f64),
+                                    JsValue::string(JsString::from_str(&s)),
                                 ],
                             );
                             let rep = match r {
@@ -1091,7 +1084,7 @@ impl Interpreter {
                         last_end = pos + search_len;
                     }
                     result.extend_from_slice(&s_units[last_end..]);
-                    Completion::Normal(JsValue::String(JsString::from_str(
+                    Completion::Normal(JsValue::string(JsString::from_str(
                         &String::from_utf16_lossy(&result),
                     )))
                 }),
@@ -1115,9 +1108,9 @@ impl Interpreter {
                     };
                     let actual = if idx < 0 { len + idx } else { idx };
                     if actual < 0 || actual >= len {
-                        return Completion::Normal(JsValue::Undefined);
+                        return Completion::Normal(JsValue::UNDEFINED);
                     }
-                    Completion::Normal(JsValue::String(JsString::from_vec(vec![
+                    Completion::Normal(JsValue::string(JsString::from_vec(vec![
                         units[actual as usize],
                     ])))
                 }),
@@ -1126,21 +1119,21 @@ impl Interpreter {
                 "search",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    if matches!(this_val, JsValue::Null | JsValue::Undefined) {
+                    if (this_val).is_nullish() {
                         return Completion::Throw(interp.create_type_error(
                             "String.prototype.search called on null or undefined",
                         ));
                     }
-                    let regexp = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = regexp
+                    let regexp = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    if let Some(object_id) = regexp.as_object_id()
                         && let Some(key) = interp.get_symbol_key("search")
                     {
-                        let method = match interp.get_object_property(o.id, &key, &regexp) {
+                        let method = match interp.get_object_property(object_id, &key, &regexp) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
                             other => return other,
                         };
-                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                        if !(method).is_nullish() {
                             let this_str = this_val.clone();
                             return interp.call_function(&method, &regexp, &[this_str]);
                         }
@@ -1149,7 +1142,7 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let source = if matches!(regexp, JsValue::Undefined) {
+                    let source = if (regexp).is_undefined() {
                         String::new()
                     } else {
                         match to_str(interp, &regexp) {
@@ -1159,12 +1152,12 @@ impl Interpreter {
                     };
                     // Create a RegExp and call @@search
                     let rx = interp.create_regexp(&source, "");
-                    if let JsValue::Object(ref ro) = rx
+                    if let Some(regexp_id) = rx.as_object_id()
                         && let Some(key) = interp.get_symbol_key("search")
                     {
-                        let method = interp.get_property_on_id(ro.id, &key);
-                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                            let this_str = JsValue::String(JsString::from_str(&s));
+                        let method = interp.get_property_on_id(regexp_id, &key);
+                        if !(method).is_nullish() {
+                            let this_str = JsValue::string(JsString::from_str(&s));
                             return interp.call_function(&method, &rx, &[this_str]);
                         }
                     }
@@ -1172,30 +1165,30 @@ impl Interpreter {
                     if let Ok(re) = regex::Regex::new(&source)
                         && let Some(m) = re.find(&s)
                     {
-                        return Completion::Normal(JsValue::Number(m.start() as f64));
+                        return Completion::Normal(JsValue::number(m.start() as f64));
                     }
-                    Completion::Normal(JsValue::Number(-1.0))
+                    Completion::Normal(JsValue::number(-1.0))
                 }),
             ),
             (
                 "match",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    if matches!(this_val, JsValue::Null | JsValue::Undefined) {
+                    if (this_val).is_nullish() {
                         return Completion::Throw(interp.create_type_error(
                             "String.prototype.match called on null or undefined",
                         ));
                     }
-                    let regexp = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = regexp
+                    let regexp = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    if let Some(object_id) = regexp.as_object_id()
                         && let Some(key) = interp.get_symbol_key("match")
                     {
-                        let method = match interp.get_object_property(o.id, &key, &regexp) {
+                        let method = match interp.get_object_property(object_id, &key, &regexp) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
                             other => return other,
                         };
-                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                        if !(method).is_nullish() {
                             let this_str = this_val.clone();
                             return interp.call_function(&method, &regexp, &[this_str]);
                         }
@@ -1204,7 +1197,7 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let source = if args.is_empty() || matches!(regexp, JsValue::Undefined) {
+                    let source = if args.is_empty() || (regexp).is_undefined() {
                         String::new()
                     } else {
                         match to_str(interp, &regexp) {
@@ -1214,38 +1207,38 @@ impl Interpreter {
                     };
                     // Create a RegExp and call @@match
                     let rx = interp.create_regexp(&source, "");
-                    if let JsValue::Object(ref ro) = rx
+                    if let Some(regexp_id) = rx.as_object_id()
                         && let Some(key) = interp.get_symbol_key("match")
                     {
-                        let method = interp.get_property_on_id(ro.id, &key);
-                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                            let this_str = JsValue::String(JsString::from_str(&s));
+                        let method = interp.get_property_on_id(regexp_id, &key);
+                        if !(method).is_nullish() {
+                            let this_str = JsValue::string(JsString::from_str(&s));
                             return interp.call_function(&method, &rx, &[this_str]);
                         }
                     }
                     // Fallback
                     if let Ok(re) = regex::Regex::new(&source) {
                         if let Some(m) = re.find(&s) {
-                            let matched = JsValue::String(JsString::from_str(m.as_str()));
+                            let matched = JsValue::string(JsString::from_str(m.as_str()));
                             let result = interp.create_array(vec![matched]);
-                            if let JsValue::Object(ro) = &result
-                                && let Some(robj) = interp.get_object_cell(ro.id)
+                            if let Some(result_id) = result.as_object_id()
+                                && let Some(robj) = interp.get_object_cell(result_id)
                             {
                                 robj.borrow_mut().insert_value(
                                     "index".to_string(),
-                                    JsValue::Number(m.start() as f64),
+                                    JsValue::number(m.start() as f64),
                                 );
                                 robj.borrow_mut().insert_value(
                                     "input".to_string(),
-                                    JsValue::String(JsString::from_str(&s)),
+                                    JsValue::string(JsString::from_str(&s)),
                                 );
                             }
                             Completion::Normal(result)
                         } else {
-                            Completion::Normal(JsValue::Null)
+                            Completion::Normal(JsValue::NULL)
                         }
                     } else {
-                        Completion::Normal(JsValue::Null)
+                        Completion::Normal(JsValue::NULL)
                     }
                 }),
             ),
@@ -1253,21 +1246,21 @@ impl Interpreter {
                 "matchAll",
                 1,
                 Rc::new(|interp, this_val, args| {
-                    if matches!(this_val, JsValue::Null | JsValue::Undefined) {
+                    if (this_val).is_nullish() {
                         return Completion::Throw(interp.create_type_error(
                             "String.prototype.matchAll called on null or undefined",
                         ));
                     }
-                    let regexp = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref o) = regexp {
+                    let regexp = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    if let Some(object_id) = regexp.as_object_id() {
                         // IsRegExp check
                         let is_regexp = if let Some(match_key) = interp.get_symbol_key("match") {
-                            match interp.get_object_property(o.id, &match_key, &regexp) {
-                                Completion::Normal(v) if !matches!(v, JsValue::Undefined) => {
+                            match interp.get_object_property(object_id, &match_key, &regexp) {
+                                Completion::Normal(v) if !(v).is_undefined() => {
                                     interp.to_boolean_val(&v)
                                 }
                                 Completion::Normal(_) => interp
-                                    .get_object_cell(o.id)
+                                    .get_object_cell(object_id)
                                     .map(|obj| obj.borrow().class_name == "RegExp")
                                     .unwrap_or(false),
                                 Completion::Throw(e) => return Completion::Throw(e),
@@ -1275,17 +1268,17 @@ impl Interpreter {
                             }
                         } else {
                             interp
-                                .get_object_cell(o.id)
+                                .get_object_cell(object_id)
                                 .map(|obj| obj.borrow().class_name == "RegExp")
                                 .unwrap_or(false)
                         };
                         if is_regexp {
-                            let flags_val = match interp.get_object_property(o.id, "flags", &regexp)
-                            {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                other => return other,
-                            };
+                            let flags_val =
+                                match interp.get_object_property(object_id, "flags", &regexp) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    other => return other,
+                                };
                             let flags = match interp.to_string_value(&flags_val) {
                                 Ok(s) => s,
                                 Err(e) => return Completion::Throw(e),
@@ -1297,12 +1290,13 @@ impl Interpreter {
                             }
                         }
                         if let Some(key) = interp.get_symbol_key("matchAll") {
-                            let method = match interp.get_object_property(o.id, &key, &regexp) {
+                            let method = match interp.get_object_property(object_id, &key, &regexp)
+                            {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 other => return other,
                             };
-                            if !matches!(method, JsValue::Undefined | JsValue::Null) {
+                            if !(method).is_nullish() {
                                 let this_str = this_val.clone();
                                 return interp.call_function(&method, &regexp, &[this_str]);
                             }
@@ -1315,7 +1309,7 @@ impl Interpreter {
                     };
                     // Step 4: Let R be ? ToString(regexp)
                     // Per spec: RegExpCreate(regexp, "g") — undefined -> empty pattern
-                    let source = if matches!(regexp, JsValue::Undefined) {
+                    let source = if (regexp).is_undefined() {
                         String::new()
                     } else {
                         match to_str(interp, &regexp) {
@@ -1324,16 +1318,16 @@ impl Interpreter {
                         }
                     };
                     let rx = interp.create_regexp(&source, "g");
-                    if let JsValue::Object(ref ro) = rx
+                    if let Some(regexp_id) = rx.as_object_id()
                         && let Some(key) = interp.get_symbol_key("matchAll")
                     {
-                        let method = match interp.get_object_property(ro.id, &key, &rx) {
+                        let method = match interp.get_object_property(regexp_id, &key, &rx) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
                             other => return other,
                         };
-                        if !matches!(method, JsValue::Undefined | JsValue::Null) {
-                            let this_str = JsValue::String(JsString::from_str(&s));
+                        if !(method).is_nullish() {
+                            let this_str = JsValue::string(JsString::from_str(&s));
                             return interp.call_function(&method, &rx, &[this_str]);
                         }
                     }
@@ -1349,7 +1343,7 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let form = match args.first() {
-                        Some(v) if !matches!(v, JsValue::Undefined) => match to_str(interp, v) {
+                        Some(v) if !(v).is_undefined() => match to_str(interp, v) {
                             Ok(s) => s,
                             Err(c) => return c,
                         },
@@ -1366,7 +1360,7 @@ impl Interpreter {
                             ));
                         }
                     };
-                    Completion::Normal(JsValue::String(JsString::from_str(&normalized)))
+                    Completion::Normal(JsValue::string(JsString::from_str(&normalized)))
                 }),
             ),
             (
@@ -1384,10 +1378,10 @@ impl Interpreter {
                         },
                         None => "undefined".to_string(),
                     };
-                    let locales = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    let options = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+                    let locales = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                    let options = args.get(2).cloned().unwrap_or(JsValue::UNDEFINED);
                     match interp.intl_locale_compare(&s, &that, &locales, &options) {
-                        Ok(result) => Completion::Normal(JsValue::Number(result)),
+                        Ok(result) => Completion::Normal(JsValue::number(result)),
                         Err(e) => Completion::Throw(e),
                     }
                 }),
@@ -1406,16 +1400,16 @@ impl Interpreter {
                         let cu = units[i];
                         if (0xD800..=0xDBFF).contains(&cu) {
                             if i + 1 >= units.len() || !(0xDC00..=0xDFFF).contains(&units[i + 1]) {
-                                return Completion::Normal(JsValue::Boolean(false));
+                                return Completion::Normal(JsValue::boolean(false));
                             }
                             i += 2;
                         } else if (0xDC00..=0xDFFF).contains(&cu) {
-                            return Completion::Normal(JsValue::Boolean(false));
+                            return Completion::Normal(JsValue::boolean(false));
                         } else {
                             i += 1;
                         }
                     }
-                    Completion::Normal(JsValue::Boolean(true))
+                    Completion::Normal(JsValue::boolean(true))
                 }),
             ),
             (
@@ -1448,7 +1442,7 @@ impl Interpreter {
                             i += 1;
                         }
                     }
-                    Completion::Normal(JsValue::String(JsString::from_vec(result)))
+                    Completion::Normal(JsValue::string(JsString::from_vec(result)))
                 }),
             ),
         ];
@@ -1467,26 +1461,22 @@ impl Interpreter {
             let tostring_fn = self.create_function(JsFunction::native(
                 "toString".to_string(),
                 0,
-                move |interp, this_val, _args| match this_val {
-                    JsValue::String(s) => Completion::Normal(JsValue::String(s.clone())),
-                    JsValue::Object(o) => {
-                        if let Some(obj) = interp.get_object_cell(o.id)
-                            && obj.borrow().class_name == "String"
-                            && let Some(ref pv) = obj.borrow().primitive_value
-                        {
-                            return Completion::Normal(pv.clone());
-                        }
-                        Completion::Throw(interp.create_error_in_realm(
-                            realm_id,
-                            "TypeError",
-                            "String.prototype.toString requires that 'this' be a String",
-                        ))
+                move |interp, this_val, _args| {
+                    if this_val.is_string() {
+                        return Completion::Normal(this_val.clone());
                     }
-                    _ => Completion::Throw(interp.create_error_in_realm(
+                    if let Some(object_id) = this_val.as_object_id()
+                        && let Some(obj) = interp.get_object_cell(object_id)
+                        && obj.borrow().class_name == "String"
+                        && let Some(ref primitive) = obj.borrow().primitive_value
+                    {
+                        return Completion::Normal(primitive.clone());
+                    }
+                    Completion::Throw(interp.create_error_in_realm(
                         realm_id,
                         "TypeError",
                         "String.prototype.toString requires that 'this' be a String",
-                    )),
+                    ))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -1496,26 +1486,22 @@ impl Interpreter {
             let valueof_fn = self.create_function(JsFunction::native(
                 "valueOf".to_string(),
                 0,
-                move |interp, this_val, _args| match this_val {
-                    JsValue::String(s) => Completion::Normal(JsValue::String(s.clone())),
-                    JsValue::Object(o) => {
-                        if let Some(obj) = interp.get_object_cell(o.id)
-                            && obj.borrow().class_name == "String"
-                            && let Some(ref pv) = obj.borrow().primitive_value
-                        {
-                            return Completion::Normal(pv.clone());
-                        }
-                        Completion::Throw(interp.create_error_in_realm(
-                            realm_id,
-                            "TypeError",
-                            "String.prototype.valueOf requires that 'this' be a String",
-                        ))
+                move |interp, this_val, _args| {
+                    if this_val.is_string() {
+                        return Completion::Normal(this_val.clone());
                     }
-                    _ => Completion::Throw(interp.create_error_in_realm(
+                    if let Some(object_id) = this_val.as_object_id()
+                        && let Some(obj) = interp.get_object_cell(object_id)
+                        && obj.borrow().class_name == "String"
+                        && let Some(ref primitive) = obj.borrow().primitive_value
+                    {
+                        return Completion::Normal(primitive.clone());
+                    }
+                    Completion::Throw(interp.create_error_in_realm(
                         realm_id,
                         "TypeError",
                         "String.prototype.valueOf requires that 'this' be a String",
-                    )),
+                    ))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -1546,7 +1532,7 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    Completion::Normal(JsValue::String(JsString::from_str(&format!(
+                    Completion::Normal(JsValue::string(JsString::from_str(&format!(
                         "<{tag_o}>{s}</{tag_c}>"
                     ))))
                 }),
@@ -1575,13 +1561,13 @@ impl Interpreter {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let attr_val = match interp.to_string_value(&arg) {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
                     let escaped = attr_val.replace('"', "&quot;");
-                    Completion::Normal(JsValue::String(JsString::from_str(&format!(
+                    Completion::Normal(JsValue::string(JsString::from_str(&format!(
                         "<{tag_o} {attr_name}=\"{escaped}\">{s}</{tag_c}>"
                     ))))
                 }),
@@ -1618,7 +1604,7 @@ impl Interpreter {
                         (int_start as usize).min(units.len())
                     };
                     let result_len = match args.get(1) {
-                        Some(v) if !matches!(v, JsValue::Undefined) => {
+                        Some(v) if !(v).is_undefined() => {
                             let l = match to_num(interp, v) {
                                 Ok(n) => n,
                                 Err(c) => return c,
@@ -1629,7 +1615,7 @@ impl Interpreter {
                         _ => units.len(),
                     };
                     let end = (start + result_len).min(units.len());
-                    Completion::Normal(JsValue::String(JsString::from_vec(
+                    Completion::Normal(JsValue::string(JsString::from_vec(
                         units[start..end].to_vec(),
                     )))
                 }),
@@ -1655,14 +1641,14 @@ impl Interpreter {
             "[Symbol.iterator]".to_string(),
             0,
             |interp, this_val, _args| {
-                if matches!(this_val, JsValue::Null | JsValue::Undefined) {
+                if (this_val).is_nullish() {
                     return Completion::Throw(interp.create_type_error(
                         "String.prototype[Symbol.iterator] called on null or undefined",
                     ));
                 }
-                let s = match this_val {
-                    JsValue::String(s) => s.clone(),
-                    _ => match interp.to_string_value(this_val) {
+                let s = match this_val.as_string() {
+                    Some(string) => string,
+                    None => match interp.to_string_value(this_val) {
                         Ok(converted) => JsString::from_str(&converted),
                         Err(e) => return Completion::Throw(e),
                     },
@@ -1681,10 +1667,10 @@ impl Interpreter {
 
         // Set String.prototype on the String constructor and wire constructor back
         if let Some(str_val) = self.get_global_var("String")
-            && let JsValue::Object(o) = &str_val
-            && let Some(str_obj) = self.get_object_cell(o.id)
+            && let Some(string_id) = str_val.as_object_id()
+            && let Some(str_obj) = self.get_object_cell(string_id)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            let proto_val = JsValue::object(proto_id);
             str_obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val.clone(), false, false, false),
