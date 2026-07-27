@@ -23,14 +23,12 @@ fn date_to_locale_string(
     defaults: &str,
 ) -> Completion {
     fn this_time_value_locale(interp: &Interpreter, this: &JsValue) -> Option<f64> {
-        if let JsValue::Object(o) = this
-            && let Some(obj) = interp.get_object_cell(o.id)
+        if let Some(object_id) = this.as_object_id()
+            && let Some(obj) = interp.get_object_cell(object_id)
         {
-            let b = obj.borrow();
-            if b.class_name == "Date"
-                && let Some(JsValue::Number(t)) = &b.primitive_value
-            {
-                return Some(*t);
+            let object = obj.borrow();
+            if object.class_name == "Date" {
+                return object.primitive_value.as_ref().and_then(JsValue::as_number);
             }
         }
         None
@@ -45,20 +43,20 @@ fn date_to_locale_string(
     };
 
     if tv.is_nan() {
-        return Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")));
+        return Completion::Normal(JsValue::string(JsString::from_str("Invalid Date")));
     }
 
-    let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-    let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+    let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+    let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
     // ToDateTimeOptions(options, required, defaults)
-    let options_obj_id = if matches!(options_arg, JsValue::Undefined) {
+    let options_obj_id = if (options_arg).is_undefined() {
         interp.create_object_id()
     } else {
         match interp.to_object(&options_arg) {
             Completion::Normal(v) => {
-                if let JsValue::Object(o) = &v {
-                    if let Some(src) = interp.get_object_cell(o.id) {
+                if let Some(object_id) = v.as_object_id() {
+                    if let Some(src) = interp.get_object_cell(object_id) {
                         let pds: Vec<(JsPropertyKey, PropertyDescriptor)> = src
                             .borrow()
                             .properties
@@ -130,7 +128,7 @@ fn date_to_locale_string(
     }
 
     if need_defaults {
-        let numeric = JsValue::String(JsString::from_str("numeric"));
+        let numeric = JsValue::string(JsString::from_str("numeric"));
         if defaults == "date" || defaults == "all" {
             interp
                 .get_object_cell_expect(options_obj_id)
@@ -179,13 +177,13 @@ fn date_to_locale_string(
         }
     }
 
-    let opt_val = JsValue::Object(crate::types::JsObject { id: options_obj_id });
+    let opt_val = JsValue::object(options_obj_id);
 
     // Use the built-in DateTimeFormat constructor directly (not through user-visible Intl property)
     let dtf_val = match interp.realm().intl_date_time_format_ctor.clone() {
         Some(v) => v,
         None => {
-            return Completion::Normal(JsValue::String(JsString::from_str(&format_date_string(
+            return Completion::Normal(JsValue::string(JsString::from_str(&format_date_string(
                 tv,
             ))));
         }
@@ -195,26 +193,26 @@ fn date_to_locale_string(
     let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, opt_val]) {
         Completion::Normal(v) => v,
         Completion::Throw(e) => return Completion::Throw(e),
-        _ => return Completion::Normal(JsValue::Undefined),
+        _ => return Completion::Normal(JsValue::UNDEFINED),
     };
 
     // Get the format function from the DateTimeFormat instance
-    if let JsValue::Object(dtf_obj) = &dtf_instance {
-        let format_val = match interp.get_object_property(dtf_obj.id, "format", &dtf_instance) {
+    if let Some(dtf_id) = dtf_instance.as_object_id() {
+        let format_val = match interp.get_object_property(dtf_id, "format", &dtf_instance) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Completion::Throw(e),
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         };
 
         // Call format(tv)
-        let date_val = JsValue::Number(tv);
+        let date_val = JsValue::number(tv);
         match interp.call_function(&format_val, &dtf_instance, &[date_val]) {
             Completion::Normal(v) => Completion::Normal(v),
             Completion::Throw(e) => Completion::Throw(e),
-            _ => Completion::Normal(JsValue::Undefined),
+            _ => Completion::Normal(JsValue::UNDEFINED),
         }
     } else {
-        Completion::Normal(JsValue::String(JsString::from_str(&format_date_string(tv))))
+        Completion::Normal(JsValue::string(JsString::from_str(&format_date_string(tv))))
     }
 }
 
@@ -227,14 +225,12 @@ impl Interpreter {
         // Date.prototype does NOT have [[DateValue]] per spec
 
         fn this_time_value(interp: &Interpreter, this: &JsValue) -> Option<f64> {
-            if let JsValue::Object(o) = this
-                && let Some(obj) = interp.get_object_cell(o.id)
+            if let Some(object_id) = this.as_object_id()
+                && let Some(obj) = interp.get_object_cell(object_id)
             {
-                let b = obj.borrow();
-                if b.class_name == "Date"
-                    && let Some(JsValue::Number(t)) = &b.primitive_value
-                {
-                    return Some(*t);
+                let object = obj.borrow();
+                if object.class_name == "Date" {
+                    return object.primitive_value.as_ref().and_then(JsValue::as_number);
                 }
             }
             None
@@ -252,7 +248,7 @@ impl Interpreter {
         ) -> Completion {
             match this_time_value(interp, this) {
                 Some(t) => {
-                    Completion::Normal(JsValue::Number(date_field_value(t, local, component)))
+                    Completion::Normal(JsValue::number(date_field_value(t, local, component)))
                 }
                 None => {
                     let e = interp.create_type_error("this is not a Date object");
@@ -262,10 +258,10 @@ impl Interpreter {
         }
 
         fn set_date_value(interp: &Interpreter, this: &JsValue, v: f64) {
-            if let JsValue::Object(o) = this
-                && let Some(obj) = interp.get_object_cell(o.id)
+            if let Some(object_id) = this.as_object_id()
+                && let Some(obj) = interp.get_object_cell(object_id)
             {
-                obj.borrow_mut().primitive_value = Some(JsValue::Number(v));
+                obj.borrow_mut().primitive_value = Some(JsValue::number(v));
             }
         }
 
@@ -300,7 +296,7 @@ impl Interpreter {
         ) -> Completion {
             let v = make_date_clipped(day, time, is_local);
             set_date_value(interp, this, v);
-            Completion::Normal(JsValue::Number(v))
+            Completion::Normal(JsValue::number(v))
         }
 
         // Getter methods
@@ -428,7 +424,7 @@ impl Interpreter {
                     };
                     let v = time_clip(v);
                     set_date_value(interp, this, v);
-                    Completion::Normal(JsValue::Number(v))
+                    Completion::Normal(JsValue::number(v))
                 }),
             ),
             (
@@ -444,7 +440,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
-                        return Completion::Normal(JsValue::Number(f64::NAN));
+                        return Completion::Normal(JsValue::number(f64::NAN));
                     }
                     let lt = local_time(t);
                     let time =
@@ -465,7 +461,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
-                        return Completion::Normal(JsValue::Number(f64::NAN));
+                        return Completion::Normal(JsValue::number(f64::NAN));
                     }
                     let time = make_time(hour_from_time(t), min_from_time(t), sec_from_time(t), ms);
                     finish_set(interp, this, day(t), time, false)
@@ -493,7 +489,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
-                        return Completion::Normal(JsValue::Number(f64::NAN));
+                        return Completion::Normal(JsValue::number(f64::NAN));
                     }
                     let lt = local_time(t);
                     let time = make_time(hour_from_time(lt), min_from_time(lt), s, ms);
@@ -522,7 +518,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
-                        return Completion::Normal(JsValue::Number(f64::NAN));
+                        return Completion::Normal(JsValue::number(f64::NAN));
                     }
                     let time = make_time(hour_from_time(t), min_from_time(t), s, ms);
                     finish_set(interp, this, day(t), time, false)
@@ -559,7 +555,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
-                        return Completion::Normal(JsValue::Number(f64::NAN));
+                        return Completion::Normal(JsValue::number(f64::NAN));
                     }
                     let lt = local_time(t);
                     let time = make_time(hour_from_time(lt), m, s, ms);
@@ -597,7 +593,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
-                        return Completion::Normal(JsValue::Number(f64::NAN));
+                        return Completion::Normal(JsValue::number(f64::NAN));
                     }
                     let time = make_time(hour_from_time(t), m, s, ms);
                     finish_set(interp, this, day(t), time, false)
@@ -643,7 +639,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
-                        return Completion::Normal(JsValue::Number(f64::NAN));
+                        return Completion::Normal(JsValue::number(f64::NAN));
                     }
                     let lt = local_time(t);
                     let time = make_time(h, m, s, ms);
@@ -690,7 +686,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
-                        return Completion::Normal(JsValue::Number(f64::NAN));
+                        return Completion::Normal(JsValue::number(f64::NAN));
                     }
                     let time = make_time(h, m, s, ms);
                     finish_set(interp, this, day(t), time, false)
@@ -709,7 +705,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
-                        return Completion::Normal(JsValue::Number(f64::NAN));
+                        return Completion::Normal(JsValue::number(f64::NAN));
                     }
                     let lt = local_time(t);
                     let new_date = make_day(year_from_time(lt), month_from_time(lt), dt);
@@ -729,7 +725,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
-                        return Completion::Normal(JsValue::Number(f64::NAN));
+                        return Completion::Normal(JsValue::number(f64::NAN));
                     }
                     let new_date = make_day(year_from_time(t), month_from_time(t), dt);
                     finish_set(interp, this, new_date, time_within_day(t), false)
@@ -757,7 +753,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
-                        return Completion::Normal(JsValue::Number(f64::NAN));
+                        return Completion::Normal(JsValue::number(f64::NAN));
                     }
                     let lt = local_time(t);
                     let new_date = make_day(year_from_time(lt), m, dt);
@@ -786,7 +782,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
                     if t.is_nan() {
-                        return Completion::Normal(JsValue::Number(f64::NAN));
+                        return Completion::Normal(JsValue::number(f64::NAN));
                     }
                     let new_date = make_day(year_from_time(t), m, dt);
                     finish_set(interp, this, new_date, time_within_day(t), false)
@@ -850,9 +846,9 @@ impl Interpreter {
                 0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => {
-                        Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
+                        Completion::Normal(JsValue::string(JsString::from_str("Invalid Date")))
                     }
-                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
+                    Some(t) => Completion::Normal(JsValue::string(JsString::from_str(
                         &format_date_string(t),
                     ))),
                     None => {
@@ -866,9 +862,9 @@ impl Interpreter {
                 0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => {
-                        Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
+                        Completion::Normal(JsValue::string(JsString::from_str("Invalid Date")))
                     }
-                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
+                    Some(t) => Completion::Normal(JsValue::string(JsString::from_str(
                         &format_date_only_string(t),
                     ))),
                     None => {
@@ -882,9 +878,9 @@ impl Interpreter {
                 0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => {
-                        Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
+                        Completion::Normal(JsValue::string(JsString::from_str("Invalid Date")))
                     }
-                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
+                    Some(t) => Completion::Normal(JsValue::string(JsString::from_str(
                         &format_time_only_string(t),
                     ))),
                     None => {
@@ -901,7 +897,7 @@ impl Interpreter {
                         let e = interp.create_range_error("Invalid time value");
                         Completion::Throw(e)
                     }
-                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
+                    Some(t) => Completion::Normal(JsValue::string(JsString::from_str(
                         &format_iso_string(t),
                     ))),
                     None => {
@@ -915,9 +911,9 @@ impl Interpreter {
                 0,
                 Rc::new(|interp, this, _args| match this_time_value(interp, this) {
                     Some(t) if t.is_nan() => {
-                        Completion::Normal(JsValue::String(JsString::from_str("Invalid Date")))
+                        Completion::Normal(JsValue::string(JsString::from_str("Invalid Date")))
                     }
-                    Some(t) => Completion::Normal(JsValue::String(JsString::from_str(
+                    Some(t) => Completion::Normal(JsValue::string(JsString::from_str(
                         &format_utc_string(t),
                     ))),
                     None => {
@@ -938,24 +934,22 @@ impl Interpreter {
                     let o = match interp.to_object(this) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Completion::Throw(e),
-                        _ => return Completion::Normal(JsValue::Undefined),
+                        _ => return Completion::Normal(JsValue::UNDEFINED),
                     };
                     let tv = match interp.to_primitive(&o, "number") {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
-                    if let JsValue::Number(n) = &tv
-                        && !n.is_finite()
-                    {
-                        return Completion::Normal(JsValue::Null);
+                    if tv.as_number().is_some_and(|number| !number.is_finite()) {
+                        return Completion::Normal(JsValue::NULL);
                     }
-                    if let JsValue::Object(obj_ref) = &o {
-                        let to_iso = interp.get_object_property(obj_ref.id, "toISOString", &o);
+                    if let Some(object_id) = o.as_object_id() {
+                        let to_iso = interp.get_object_property(object_id, "toISOString", &o);
                         match to_iso {
                             Completion::Normal(func) => {
-                                if let JsValue::Object(fo) = &func
+                                if let Some(function_id) = func.as_object_id()
                                     && interp
-                                        .get_object_cell(fo.id)
+                                        .get_object_cell(function_id)
                                         .map(|obj| obj.borrow().callable.is_some())
                                         .unwrap_or(false)
                                 {
@@ -1031,7 +1025,7 @@ impl Interpreter {
                             },
                         );
                     let id = obj_id;
-                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                    Completion::Normal(JsValue::object(id))
                 }),
             ),
         ];
@@ -1055,10 +1049,10 @@ impl Interpreter {
             "[Symbol.toPrimitive]".to_string(),
             1,
             |interp, this, args| {
-                let JsValue::Object(_) = this else {
+                if !this.is_object() {
                     let e = interp.create_type_error("this is not an object");
                     return Completion::Throw(e);
-                };
+                }
                 let hint = args.first().map(to_js_string).unwrap_or_default();
                 let try_first = match hint.as_str() {
                     "string" | "default" => "string",
@@ -1070,7 +1064,7 @@ impl Interpreter {
                 };
                 // Inline OrdinaryToPrimitive to avoid infinite recursion
                 // (to_primitive() checks @@toPrimitive which would call us again)
-                let JsValue::Object(o) = this else {
+                let Some(object_id) = this.as_object_id() else {
                     return Completion::Normal(this.clone());
                 };
                 let methods = if try_first == "string" {
@@ -1079,20 +1073,21 @@ impl Interpreter {
                     ["valueOf", "toString"]
                 };
                 for method_name in &methods {
-                    let method_val = match interp.get_object_property(o.id, method_name, this) {
+                    let method_val = match interp.get_object_property(object_id, method_name, this)
+                    {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
-                    if let JsValue::Object(fo) = &method_val
+                    if let Some(function_id) = method_val.as_object_id()
                         && interp
-                            .get_object_cell(fo.id)
+                            .get_object_cell(function_id)
                             .map(|o| o.borrow().callable.is_some())
                             .unwrap_or(false)
                     {
                         let result = interp.call_function(&method_val, this, &[]);
                         match result {
-                            Completion::Normal(v) if !matches!(v, JsValue::Object(_)) => {
+                            Completion::Normal(v) if !(v).is_object() => {
                                 return Completion::Normal(v);
                             }
                             Completion::Throw(e) => return Completion::Throw(e),
@@ -1121,7 +1116,7 @@ impl Interpreter {
             move |interp, this, args| {
                 if interp.new_target.is_none() {
                     let t = now_ms();
-                    return Completion::Normal(JsValue::String(JsString::from_str(
+                    return Completion::Normal(JsValue::string(JsString::from_str(
                         &format_date_string(t),
                     )));
                 }
@@ -1130,23 +1125,23 @@ impl Interpreter {
                     now_ms()
                 } else if args.len() == 1 {
                     let v = &args[0];
-                    if let JsValue::Object(o) = v
-                        && let Some(obj) = interp.get_object_cell(o.id)
+                    if let Some(object_id) = v.as_object_id()
+                        && let Some(obj) = interp.get_object_cell(object_id)
                         && obj.borrow().class_name == "Date"
-                        && obj.borrow().primitive_value.is_some()
+                        && let Some(time) = obj
+                            .borrow()
+                            .primitive_value
+                            .as_ref()
+                            .and_then(JsValue::as_number)
                     {
-                        if let Some(JsValue::Number(t)) = obj.borrow().primitive_value.clone() {
-                            t
-                        } else {
-                            f64::NAN
-                        }
+                        time
                     } else {
                         // ToPrimitive(value) with hint "default"
                         let prim = match interp.to_primitive(v, "default") {
                             Ok(p) => p,
                             Err(e) => return Completion::Throw(e),
                         };
-                        if let JsValue::String(_) = &prim {
+                        if prim.is_string() {
                             parse_date_string(&to_js_string(&prim))
                         } else {
                             match interp.to_number_value(&prim) {
@@ -1217,8 +1212,8 @@ impl Interpreter {
                     time_clip(utc_time(make_date(d, time)))
                 };
 
-                if let JsValue::Object(o) = this
-                    && interp.get_object_cell(o.id).is_some()
+                if let Some(object_id) = this.as_object_id()
+                    && interp.get_object_cell(object_id).is_some()
                 {
                     // OrdinaryCreateFromConstructor — realm-aware prototype
                     let proto = match interp
@@ -1227,30 +1222,29 @@ impl Interpreter {
                         Ok(p) => p.unwrap_or(date_proto_clone_id),
                         Err(e) => return Completion::Throw(e),
                     };
-                    let mut b = interp.get_object_cell_expect(o.id).borrow_mut();
+                    let mut b = interp.get_object_cell_expect(object_id).borrow_mut();
                     b.class_name = "Date".to_string();
-                    b.primitive_value = Some(JsValue::Number(time_val));
+                    b.primitive_value = Some(JsValue::number(time_val));
                     b.prototype_id = Some(proto);
                 }
                 Completion::Normal(this.clone())
             },
         ));
 
-        if let JsValue::Object(o) = &date_ctor
-            && self.get_object_cell(o.id).is_some()
+        if let Some(date_ctor_id) = date_ctor.as_object_id()
+            && self.get_object_cell(date_ctor_id).is_some()
         {
-            let date_ctor_id = o.id;
             self.get_object_cell_expect(date_ctor_id)
                 .borrow_mut()
                 .insert_property(
                     "length".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(7.0), false, false, true),
+                    PropertyDescriptor::data(JsValue::number(7.0), false, false, true),
                 );
 
             let now_fn = self.create_function(JsFunction::native(
                 "now".to_string(),
                 0,
-                |_interp, _this, _args| Completion::Normal(JsValue::Number(now_ms().floor())),
+                |_interp, _this, _args| Completion::Normal(JsValue::number(now_ms().floor())),
             ));
             self.get_object_cell_expect(date_ctor_id)
                 .borrow_mut()
@@ -1267,7 +1261,7 @@ impl Interpreter {
                         },
                         None => String::new(),
                     };
-                    Completion::Normal(JsValue::Number(parse_date_string(&s)))
+                    Completion::Normal(JsValue::number(parse_date_string(&s)))
                 },
             ));
             self.get_object_cell_expect(date_ctor_id)
@@ -1339,14 +1333,14 @@ impl Interpreter {
                     };
                     let d = make_day(yr, m, dt);
                     let time = make_time(h, min, s, ms);
-                    Completion::Normal(JsValue::Number(time_clip(make_date(d, time))))
+                    Completion::Normal(JsValue::number(time_clip(make_date(d, time))))
                 },
             ));
             self.get_object_cell_expect(date_ctor_id)
                 .borrow_mut()
                 .insert_builtin("UTC".to_string(), utc_fn);
 
-            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            let proto_val = JsValue::object(proto_id);
             self.get_object_cell_expect(date_ctor_id)
                 .borrow_mut()
                 .insert_property(
@@ -1394,7 +1388,7 @@ impl Interpreter {
                 };
                 if y.is_nan() {
                     set_date_value(interp, this, f64::NAN);
-                    return Completion::Normal(JsValue::Number(f64::NAN));
+                    return Completion::Normal(JsValue::number(f64::NAN));
                 }
                 let yi = y as i64;
                 let yr = if (0..=99).contains(&yi) {
@@ -1432,16 +1426,9 @@ impl Interpreter {
     pub(crate) fn create_error(&mut self, name: &str, msg: &str) -> JsValue {
         let ctor = self.get_global_var(name);
         let error_proto_id: Option<u64> = ctor.and_then(|v| {
-            if let JsValue::Object(o) = &v {
-                let pv = self.get_property_on_id(o.id, "prototype");
-                if let JsValue::Object(p) = &pv {
-                    Some(p.id)
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
+            let constructor_id = v.as_object_id()?;
+            self.get_property_on_id(constructor_id, "prototype")
+                .as_object_id()
         });
         let obj_id = self.create_object_id();
         {
@@ -1452,15 +1439,15 @@ impl Interpreter {
             }
             o.insert_builtin(
                 "message".to_string(),
-                JsValue::String(JsString::from_str(msg)),
+                JsValue::string(JsString::from_str(msg)),
             );
             o.insert_builtin(
                 "name".to_string(),
-                JsValue::String(JsString::from_str(name)),
+                JsValue::string(JsString::from_str(name)),
             );
         }
         let id = obj_id;
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 }
 

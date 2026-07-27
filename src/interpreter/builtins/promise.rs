@@ -11,7 +11,7 @@ pub(crate) struct PromiseCapability {
 impl Interpreter {
     /// IfAbruptRejectPromise: reject with error and return the promise.
     fn if_abrupt_reject_promise(&mut self, error: JsValue, cap: &PromiseCapability) -> Completion {
-        let _ = self.call_function(&cap.reject, &JsValue::Undefined, &[error]);
+        let _ = self.call_function(&cap.reject, &JsValue::UNDEFINED, &[error]);
         Completion::Normal(cap.promise.clone())
     }
 
@@ -32,11 +32,7 @@ impl Interpreter {
             && same_value(constructor, ctor_val)
         {
             let promise = self.create_promise_object();
-            let promise_id = if let JsValue::Object(ref o) = promise {
-                o.id
-            } else {
-                0
-            };
+            let promise_id = promise.as_object_id().unwrap_or_default();
             let (resolve, reject) = self.create_resolving_functions(promise_id);
             return Ok(PromiseCapability {
                 promise,
@@ -46,8 +42,8 @@ impl Interpreter {
         }
 
         // General case: call new C(executor) where executor captures resolve/reject
-        let resolve_slot: Rc<RefCell<JsValue>> = Rc::new(RefCell::new(JsValue::Undefined));
-        let reject_slot: Rc<RefCell<JsValue>> = Rc::new(RefCell::new(JsValue::Undefined));
+        let resolve_slot: Rc<RefCell<JsValue>> = Rc::new(RefCell::new(JsValue::UNDEFINED));
+        let reject_slot: Rc<RefCell<JsValue>> = Rc::new(RefCell::new(JsValue::UNDEFINED));
 
         let rs = resolve_slot.clone();
         let rj = reject_slot.clone();
@@ -55,17 +51,17 @@ impl Interpreter {
             "".to_string(),
             2,
             move |interp, _this, args| {
-                let resolve_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let reject_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let resolve_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let reject_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 // Spec: If promiseCapability.[[Resolve]] is not undefined, throw TypeError
-                if !matches!(*rs.borrow(), JsValue::Undefined) {
+                if !(*rs.borrow()).is_undefined() {
                     return Completion::Throw(
                         interp.create_type_error("Promise executor has already been resolved"),
                     );
                 }
                 // Spec: If promiseCapability.[[Reject]] is not undefined, throw TypeError
-                if !matches!(*rj.borrow(), JsValue::Undefined) {
+                if !(*rj.borrow()).is_undefined() {
                     return Completion::Throw(
                         interp.create_type_error("Promise executor has already been resolved"),
                     );
@@ -76,7 +72,7 @@ impl Interpreter {
                 // Spec: Set promiseCapability.[[Reject]] to reject
                 *rj.borrow_mut() = reject_arg;
 
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
 
@@ -109,8 +105,8 @@ impl Interpreter {
         obj: &JsValue,
         default_ctor: &JsValue,
     ) -> Result<JsValue, JsValue> {
-        let obj_id = if let JsValue::Object(o) = obj {
-            o.id
+        let obj_id = if let Some(o) = obj.as_object_id() {
+            o
         } else {
             return Ok(default_ctor.clone());
         };
@@ -122,17 +118,17 @@ impl Interpreter {
             _ => return Ok(default_ctor.clone()),
         };
 
-        if matches!(ctor, JsValue::Undefined) {
+        if (ctor).is_undefined() {
             return Ok(default_ctor.clone());
         }
 
-        if !matches!(ctor, JsValue::Object(_)) {
+        if !(ctor).is_object() {
             return Err(self.create_type_error("Species constructor is not an object"));
         }
 
         // Get constructor[Symbol.species]
-        let ctor_id = if let JsValue::Object(o) = &ctor {
-            o.id
+        let ctor_id = if let Some(o) = ctor.as_object_id() {
+            o
         } else {
             return Ok(default_ctor.clone());
         };
@@ -146,7 +142,7 @@ impl Interpreter {
             _ => return Ok(default_ctor.clone()),
         };
 
-        if matches!(species, JsValue::Undefined | JsValue::Null) {
+        if (species).is_nullish() {
             return Ok(default_ctor.clone());
         }
 
@@ -165,14 +161,14 @@ impl Interpreter {
         value: &JsValue,
     ) -> Result<JsValue, JsValue> {
         // If value is a promise and its constructor matches C, return it
-        if let JsValue::Object(o) = value
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = value.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
             && obj.borrow().promise_data().is_some()
         {
-            let ctor_val = match self.get_object_property(o.id, "constructor", value) {
+            let ctor_val = match self.get_object_property(o, "constructor", value) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             if same_value(&ctor_val, constructor) {
                 return Ok(value.clone());
@@ -182,7 +178,7 @@ impl Interpreter {
         let cap = self.new_promise_capability(constructor)?;
         if let Completion::Throw(e) = self.call_function(
             &cap.resolve,
-            &JsValue::Undefined,
+            &JsValue::UNDEFINED,
             std::slice::from_ref(value),
         ) {
             return Err(e);
@@ -199,8 +195,8 @@ impl Interpreter {
             "then".to_string(),
             2,
             |interp, this, args| {
-                let on_fulfilled = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let on_rejected = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let on_fulfilled = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let on_rejected = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 interp.promise_then(this, &on_fulfilled, &on_rejected)
             },
         ));
@@ -213,25 +209,21 @@ impl Interpreter {
             "catch".to_string(),
             1,
             |interp, this, args| {
-                let on_rejected = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let on_rejected = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 // Spec 27.2.5.1: Return ? Invoke(this, "then", « undefined, onRejected »).
                 // Invoke calls GetV(V, P) which calls ToObject(V).
                 let obj = match interp.to_object(this) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Completion::Throw(e),
-                    _ => return Completion::Normal(JsValue::Undefined),
+                    _ => return Completion::Normal(JsValue::UNDEFINED),
                 };
-                let obj_id = if let JsValue::Object(ref o) = obj {
-                    o.id
-                } else {
-                    0
-                };
+                let obj_id = obj.as_object_id().unwrap_or_default();
                 let then_method = match interp.get_object_property(obj_id, "then", &obj) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Completion::Throw(e),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 };
-                interp.call_function(&then_method, this, &[JsValue::Undefined, on_rejected])
+                interp.call_function(&then_method, this, &[JsValue::UNDEFINED, on_rejected])
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -244,26 +236,22 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 // Step 1-2: Let promise be the this value. If not Object, throw TypeError.
-                let promise_id =
-                    match this {
-                        JsValue::Object(o) => o.id,
-                        _ => {
-                            return Completion::Throw(interp.create_type_error(
-                                "Promise.prototype.finally called on non-object",
-                            ));
-                        }
-                    };
+                let Some(promise_id) = this.as_object_id() else {
+                    return Completion::Throw(
+                        interp.create_type_error("Promise.prototype.finally called on non-object"),
+                    );
+                };
 
                 // Step 3: Let C = ? SpeciesConstructor(promise, %Promise%).
                 let promise_ctor = interp
                     .get_global_var("Promise")
-                    .unwrap_or(JsValue::Undefined);
+                    .unwrap_or(JsValue::UNDEFINED);
                 let c = match interp.species_constructor(this, &promise_ctor) {
                     Ok(c) => c,
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let on_finally = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let on_finally = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
 
                 // Steps 5-6: Create thenFinally and catchFinally
                 let (then_finally, catch_finally) = if !interp.is_callable(&on_finally) {
@@ -277,10 +265,10 @@ impl Interpreter {
                         "".to_string(),
                         1,
                         move |interp, _this, args| {
-                            let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                            let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                             // Step 6a.i: Let result = ? Call(onFinally, undefined).
                             let result =
-                                interp.call_function(&on_finally_clone, &JsValue::Undefined, &[]);
+                                interp.call_function(&on_finally_clone, &JsValue::UNDEFINED, &[]);
                             match result {
                                 Completion::Throw(e) => Completion::Throw(e),
                                 Completion::Normal(r) => {
@@ -301,20 +289,16 @@ impl Interpreter {
                                         },
                                     ));
                                     // Step 6a.v: Return ? Invoke(promise, "then", « valueThunk »).
-                                    let p_id = if let JsValue::Object(ref o) = p {
-                                        o.id
-                                    } else {
-                                        0
-                                    };
+                                    let p_id = p.as_object_id().unwrap_or_default();
                                     let then_method =
                                         match interp.get_object_property(p_id, "then", &p) {
                                             Completion::Normal(v) => v,
                                             Completion::Throw(e) => return Completion::Throw(e),
-                                            _ => JsValue::Undefined,
+                                            _ => JsValue::UNDEFINED,
                                         };
                                     interp.call_function(&then_method, &p, &[return_fn])
                                 }
-                                _ => Completion::Normal(JsValue::Undefined),
+                                _ => Completion::Normal(JsValue::UNDEFINED),
                             }
                         },
                     ));
@@ -326,10 +310,10 @@ impl Interpreter {
                         "".to_string(),
                         1,
                         move |interp, _this, args| {
-                            let reason = args.first().cloned().unwrap_or(JsValue::Undefined);
+                            let reason = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                             // Step 6c.i: Let result = ? Call(onFinally, undefined).
                             let result =
-                                interp.call_function(&on_finally_clone2, &JsValue::Undefined, &[]);
+                                interp.call_function(&on_finally_clone2, &JsValue::UNDEFINED, &[]);
                             match result {
                                 Completion::Throw(e) => Completion::Throw(e),
                                 Completion::Normal(r) => {
@@ -350,20 +334,16 @@ impl Interpreter {
                                         },
                                     ));
                                     // Step 6c.v: Return ? Invoke(promise, "then", « thrower »).
-                                    let p_id = if let JsValue::Object(ref o) = p {
-                                        o.id
-                                    } else {
-                                        0
-                                    };
+                                    let p_id = p.as_object_id().unwrap_or_default();
                                     let then_method =
                                         match interp.get_object_property(p_id, "then", &p) {
                                             Completion::Normal(v) => v,
                                             Completion::Throw(e) => return Completion::Throw(e),
-                                            _ => JsValue::Undefined,
+                                            _ => JsValue::UNDEFINED,
                                         };
                                     interp.call_function(&then_method, &p, &[throw_fn])
                                 }
-                                _ => Completion::Normal(JsValue::Undefined),
+                                _ => Completion::Normal(JsValue::UNDEFINED),
                             }
                         },
                     ));
@@ -375,7 +355,7 @@ impl Interpreter {
                 let then_method = match interp.get_object_property(promise_id, "then", this) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Completion::Throw(e),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 };
                 interp.call_function(&then_method, this, &[then_finally, catch_finally])
             },
@@ -400,7 +380,7 @@ impl Interpreter {
                     );
                 }
                 // Step 2: If IsCallable(executor) is false, throw a TypeError
-                let executor = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let executor = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 if !interp.is_callable(&executor) {
                     let err = interp.create_type_error("Promise resolver is not a function");
                     return Completion::Throw(err);
@@ -414,25 +394,21 @@ impl Interpreter {
                 };
                 let promise = interp.create_promise_object();
                 if let Some(p) = proto
-                    && let JsValue::Object(po) = &promise
-                    && let Some(pobj) = interp.get_object_cell(po.id)
+                    && let Some(po) = promise.as_object_id()
+                    && let Some(pobj) = interp.get_object_cell(po)
                 {
                     pobj.borrow_mut().prototype_id = Some(p);
                 }
-                let promise_id = if let JsValue::Object(ref o) = promise {
-                    o.id
-                } else {
-                    0
-                };
+                let promise_id = promise.as_object_id().unwrap_or_default();
                 let (resolve_fn, reject_fn) = interp.create_resolving_functions(promise_id);
                 let result = interp.call_function(
                     &executor,
-                    &JsValue::Undefined,
+                    &JsValue::UNDEFINED,
                     &[resolve_fn.clone(), reject_fn.clone()],
                 );
                 if let Completion::Throw(e) = result
                     && let Completion::Throw(e2) =
-                        interp.call_function(&reject_fn, &JsValue::Undefined, &[e])
+                        interp.call_function(&reject_fn, &JsValue::UNDEFINED, &[e])
                 {
                     return Completion::Throw(e2);
                 }
@@ -442,27 +418,22 @@ impl Interpreter {
 
         // Mark Promise constructor as deferred_construct so construct_with_new_target
         // skips early prototype access (Promise checks callable before OrdinaryCreateFromConstructor).
-        if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(func_obj) = self.get_object_cell(o)
         {
             func_obj.borrow_mut().deferred_construct = true;
         }
 
         // Set Promise.prototype on constructor
-        if let JsValue::Object(ref o) = ctor
-            && self.get_object_cell(o.id).is_some()
+        if let Some(o) = ctor.as_object_id()
+            && self.get_object_cell(o).is_some()
         {
-            let ctor_id = o.id;
+            let ctor_id = o;
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
                     "prototype".to_string(),
-                    PropertyDescriptor::data(
-                        JsValue::Object(crate::types::JsObject { id: proto_id }),
-                        false,
-                        false,
-                        false,
-                    ),
+                    PropertyDescriptor::data(JsValue::object(proto_id), false, false, false),
                 );
 
             // Promise[Symbol.species] getter
@@ -499,20 +470,20 @@ impl Interpreter {
             "resolve".to_string(),
             1,
             |interp, this, args| {
-                if !matches!(this, JsValue::Object(_)) {
+                if !(this).is_object() {
                     return Completion::Throw(
                         interp.create_type_error("Promise.resolve requires an object"),
                     );
                 }
-                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 match interp.promise_resolve_with_constructor(this, &value) {
                     Ok(p) => Completion::Normal(p),
                     Err(e) => Completion::Throw(e),
                 }
             },
         ));
-        if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(func_obj) = self.get_object_cell(o)
         {
             func_obj
                 .borrow_mut()
@@ -524,16 +495,16 @@ impl Interpreter {
             "reject".to_string(),
             1,
             |interp, this, args| {
-                if !matches!(this, JsValue::Object(_)) {
+                if !(this).is_object() {
                     return Completion::Throw(
                         interp.create_type_error("Promise.reject requires an object"),
                     );
                 }
-                let reason = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let reason = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 match interp.new_promise_capability(this) {
                     Ok(cap) => {
                         if let Completion::Throw(e) =
-                            interp.call_function(&cap.reject, &JsValue::Undefined, &[reason])
+                            interp.call_function(&cap.reject, &JsValue::UNDEFINED, &[reason])
                         {
                             return Completion::Throw(e);
                         }
@@ -543,8 +514,8 @@ impl Interpreter {
                 }
             },
         ));
-        if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(func_obj) = self.get_object_cell(o)
         {
             func_obj
                 .borrow_mut()
@@ -556,12 +527,12 @@ impl Interpreter {
             "all".to_string(),
             1,
             |interp, this, args| {
-                let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 interp.promise_all(this, &iterable)
             },
         ));
-        if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(func_obj) = self.get_object_cell(o)
         {
             func_obj
                 .borrow_mut()
@@ -573,12 +544,12 @@ impl Interpreter {
             "allSettled".to_string(),
             1,
             |interp, this, args| {
-                let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 interp.promise_all_settled(this, &iterable)
             },
         ));
-        if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(func_obj) = self.get_object_cell(o)
         {
             func_obj
                 .borrow_mut()
@@ -590,12 +561,12 @@ impl Interpreter {
             "race".to_string(),
             1,
             |interp, this, args| {
-                let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 interp.promise_race(this, &iterable)
             },
         ));
-        if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(func_obj) = self.get_object_cell(o)
         {
             func_obj
                 .borrow_mut()
@@ -607,12 +578,12 @@ impl Interpreter {
             "any".to_string(),
             1,
             |interp, this, args| {
-                let iterable = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let iterable = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 interp.promise_any(this, &iterable)
             },
         ));
-        if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(func_obj) = self.get_object_cell(o)
         {
             func_obj
                 .borrow_mut()
@@ -639,13 +610,13 @@ impl Interpreter {
                         .borrow_mut()
                         .insert_value("reject".to_string(), cap.reject);
                     let id = result_id;
-                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                    Completion::Normal(JsValue::object(id))
                 }
                 Err(e) => Completion::Throw(e),
             },
         ));
-        if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(func_obj) = self.get_object_cell(o)
         {
             func_obj
                 .borrow_mut()
@@ -661,7 +632,7 @@ impl Interpreter {
                     Ok(cap) => cap,
                     Err(e) => return Completion::Throw(e),
                 };
-                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let call_args: Vec<JsValue> = if args.len() > 1 {
                     args[1..].to_vec()
                 } else {
@@ -670,24 +641,24 @@ impl Interpreter {
                 if !interp.is_callable(&callback) {
                     let err = interp.create_type_error("Promise.try requires a callable");
                     if let Completion::Throw(e) =
-                        interp.call_function(&cap.reject, &JsValue::Undefined, &[err])
+                        interp.call_function(&cap.reject, &JsValue::UNDEFINED, &[err])
                     {
                         return Completion::Throw(e);
                     }
                     return Completion::Normal(cap.promise);
                 }
-                let result = interp.call_function(&callback, &JsValue::Undefined, &call_args);
+                let result = interp.call_function(&callback, &JsValue::UNDEFINED, &call_args);
                 match result {
                     Completion::Normal(v) => {
                         if let Completion::Throw(e) =
-                            interp.call_function(&cap.resolve, &JsValue::Undefined, &[v])
+                            interp.call_function(&cap.resolve, &JsValue::UNDEFINED, &[v])
                         {
                             return Completion::Throw(e);
                         }
                     }
                     Completion::Throw(e) => {
                         if let Completion::Throw(e2) =
-                            interp.call_function(&cap.reject, &JsValue::Undefined, &[e])
+                            interp.call_function(&cap.reject, &JsValue::UNDEFINED, &[e])
                         {
                             return Completion::Throw(e2);
                         }
@@ -697,8 +668,8 @@ impl Interpreter {
                 Completion::Normal(cap.promise)
             },
         ));
-        if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(func_obj) = self.get_object_cell(o)
         {
             func_obj
                 .borrow_mut()
@@ -710,12 +681,12 @@ impl Interpreter {
             "allKeyed".to_string(),
             1,
             |interp, this, args| {
-                let promises = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let promises = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 interp.promise_all_keyed(this, &promises)
             },
         ));
-        if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(func_obj) = self.get_object_cell(o)
         {
             func_obj
                 .borrow_mut()
@@ -727,12 +698,12 @@ impl Interpreter {
             "allSettledKeyed".to_string(),
             1,
             |interp, this, args| {
-                let promises = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let promises = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 interp.promise_all_settled_keyed(this, &promises)
             },
         ));
-        if let JsValue::Object(ref o) = ctor
-            && let Some(func_obj) = self.get_object_cell(o.id)
+        if let Some(o) = ctor.as_object_id()
+            && let Some(func_obj) = self.get_object_cell(o)
         {
             func_obj
                 .borrow_mut()
@@ -754,32 +725,28 @@ impl Interpreter {
         data.class_name = "Promise".to_string();
         data.kind = crate::interpreter::types::ObjectKind::Promise(PromiseData::new());
         let id = self.alloc_object(data);
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 
     pub(crate) fn create_resolved_promise(&mut self, value: JsValue) -> Completion {
         let promise = self.create_promise_object();
-        if let JsValue::Object(ref o) = promise {
-            self.fulfill_promise(o.id, value);
+        if let Some(o) = promise.as_object_id() {
+            self.fulfill_promise(o, value);
         }
         Completion::Normal(promise)
     }
 
     pub(crate) fn create_rejected_promise(&mut self, reason: JsValue) -> Completion {
         let promise = self.create_promise_object();
-        if let JsValue::Object(ref o) = promise {
-            self.reject_promise(o.id, reason);
+        if let Some(o) = promise.as_object_id() {
+            self.reject_promise(o, reason);
         }
         Completion::Normal(promise)
     }
 
     pub(crate) fn create_promise_parts(&mut self) -> (JsValue, JsValue, JsValue) {
         let promise = self.create_promise_object();
-        let promise_id = if let JsValue::Object(ref o) = promise {
-            o.id
-        } else {
-            0
-        };
+        let promise_id = promise.as_object_id().unwrap_or_default();
         let (resolve, reject) = self.create_resolving_functions(promise_id);
         (resolve, reject, promise)
     }
@@ -793,38 +760,38 @@ impl Interpreter {
             1,
             move |interp, _this, args| {
                 if ar1.get() {
-                    return Completion::Normal(JsValue::Undefined);
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
                 ar1.set(true);
-                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 // If resolving with self, reject with TypeError
-                if let JsValue::Object(ref o) = value
-                    && o.id == promise_id
+                if let Some(o) = value.as_object_id()
+                    && o == promise_id
                 {
                     let err = interp.create_type_error("A promise cannot be resolved with itself.");
                     interp.reject_promise(promise_id, err);
-                    return Completion::Normal(JsValue::Undefined);
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
                 // Check if value is a thenable
-                if let JsValue::Object(ref o) = value {
+                if let Some(o) = value.as_object_id() {
                     // Spec step 8: Let then be Completion(Get(resolution, "then")).
                     // Step 9: If then is an abrupt completion, then
                     //   a. Return RejectPromise(promise, then.[[Value]]).
-                    let then_val = match interp.get_object_property(o.id, "then", &value) {
+                    let then_val = match interp.get_object_property(o, "then", &value) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => {
                             interp.reject_promise(promise_id, e);
-                            return Completion::Normal(JsValue::Undefined);
+                            return Completion::Normal(JsValue::UNDEFINED);
                         }
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
                     if interp.is_callable(&then_val) {
                         interp.promise_resolve_thenable(promise_id, value.clone(), then_val);
-                        return Completion::Normal(JsValue::Undefined);
+                        return Completion::Normal(JsValue::UNDEFINED);
                     }
                 }
                 interp.fulfill_promise(promise_id, value);
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
 
@@ -834,12 +801,12 @@ impl Interpreter {
             1,
             move |interp, _this, args| {
                 if ar2.get() {
-                    return Completion::Normal(JsValue::Undefined);
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
                 ar2.set(true);
-                let reason = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let reason = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 interp.reject_promise(promise_id, reason);
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
 
@@ -848,10 +815,10 @@ impl Interpreter {
         // resolving functions so the Promise survives as long as either
         // resolve or reject is reachable.
         if promise_id != 0 {
-            let pin = JsValue::Object(crate::types::JsObject { id: promise_id });
+            let pin = JsValue::object(promise_id);
             for fn_val in [&resolve_fn, &reject_fn] {
-                if let JsValue::Object(o) = fn_val
-                    && let Some(fn_obj) = self.get_object_cell(o.id)
+                if let Some(o) = fn_val.as_object_id()
+                    && let Some(fn_obj) = self.get_object_cell(o)
                 {
                     let mut borrowed = fn_obj.borrow_mut();
                     borrowed
@@ -924,7 +891,7 @@ impl Interpreter {
             // The resolve/reject closures only capture promise_id as a u64, which is
             // invisible to the GC tracer.
             if let Some(pid) = reaction.promise_id {
-                roots.push(JsValue::Object(crate::types::JsObject { id: pid }));
+                roots.push(JsValue::object(pid));
             }
             self.scheduler.enqueue_microtask((
                 roots,
@@ -933,7 +900,7 @@ impl Interpreter {
                         if interp.is_callable(handler) {
                             match interp.call_function(
                                 handler,
-                                &JsValue::Undefined,
+                                &JsValue::UNDEFINED,
                                 std::slice::from_ref(&arg),
                             ) {
                                 Completion::Throw(e) => Err(e),
@@ -943,7 +910,7 @@ impl Interpreter {
                                 // `Completion::Exit` — the Promise reaction must
                                 // not consume it into a fulfillment/rejection.
                                 Completion::Exit(code) => return Completion::Exit(code),
-                                _ => Ok(JsValue::Undefined),
+                                _ => Ok(JsValue::UNDEFINED),
                             }
                         } else {
                             match reaction.reaction_type {
@@ -963,7 +930,7 @@ impl Interpreter {
                             Ok(value) => {
                                 if let Completion::Throw(e) = interp.call_function(
                                     &reaction.resolve,
-                                    &JsValue::Undefined,
+                                    &JsValue::UNDEFINED,
                                     &[value],
                                 ) {
                                     return Completion::Throw(e);
@@ -972,7 +939,7 @@ impl Interpreter {
                             Err(reason) => {
                                 if let Completion::Throw(e) = interp.call_function(
                                     &reaction.reject,
-                                    &JsValue::Undefined,
+                                    &JsValue::UNDEFINED,
                                     &[reason],
                                 ) {
                                     return Completion::Throw(e);
@@ -980,7 +947,7 @@ impl Interpreter {
                             }
                         }
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 }),
             ));
         }
@@ -998,7 +965,7 @@ impl Interpreter {
             then_fn.clone(),
             resolve_fn.clone(),
             reject_fn.clone(),
-            JsValue::Object(crate::types::JsObject { id: promise_id }),
+            JsValue::object(promise_id),
         ];
         self.scheduler.enqueue_microtask((
             roots,
@@ -1013,11 +980,11 @@ impl Interpreter {
                 }
                 if let Completion::Throw(e) = result
                     && let Completion::Throw(e2) =
-                        interp.call_function(&reject_fn, &JsValue::Undefined, &[e])
+                        interp.call_function(&reject_fn, &JsValue::UNDEFINED, &[e])
                 {
                     return Completion::Throw(e2);
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             }),
         ));
     }
@@ -1033,18 +1000,14 @@ impl Interpreter {
         result_resolve: JsValue,
         result_reject: JsValue,
     ) -> Completion {
-        let promise_id = if let JsValue::Object(o) = promise_val {
-            o.id
+        let promise_id = if let Some(o) = promise_val.as_object_id() {
+            o
         } else {
             return Completion::Throw(
                 self.create_type_error("PerformPromiseThen called on non-promise"),
             );
         };
-        let derived_id = if let JsValue::Object(ref o) = result_promise {
-            o.id
-        } else {
-            0
-        };
+        let derived_id = result_promise.as_object_id().unwrap_or_default();
 
         let fulfill_handler = if self.is_callable(on_fulfilled) {
             Some(on_fulfilled.clone())
@@ -1111,10 +1074,10 @@ impl Interpreter {
         on_fulfilled: &JsValue,
         on_rejected: &JsValue,
     ) -> Completion {
-        let promise_id = if let JsValue::Object(o) = promise_val {
-            if let Some(obj) = self.get_object_cell(o.id) {
+        let promise_id = if let Some(o) = promise_val.as_object_id() {
+            if let Some(obj) = self.get_object_cell(o) {
                 if obj.borrow().promise_data().is_some() {
-                    o.id
+                    o
                 } else {
                     let err =
                         self.create_type_error("Promise.prototype.then called on non-promise");
@@ -1130,7 +1093,7 @@ impl Interpreter {
         };
 
         // SpeciesConstructor(promise, %Promise%)
-        let promise_ctor = self.get_global_var("Promise").unwrap_or(JsValue::Undefined);
+        let promise_ctor = self.get_global_var("Promise").unwrap_or(JsValue::UNDEFINED);
         let c = match self.species_constructor(promise_val, &promise_ctor) {
             Ok(c) => c,
             Err(e) => return Completion::Throw(e),
@@ -1141,11 +1104,7 @@ impl Interpreter {
             Err(e) => return Completion::Throw(e),
         };
         let derived = cap.promise;
-        let derived_id = if let JsValue::Object(ref o) = derived {
-            o.id
-        } else {
-            0
-        };
+        let derived_id = derived.as_object_id().unwrap_or_default();
         let resolve_fn = cap.resolve;
         let reject_fn = cap.reject;
 
@@ -1210,11 +1169,11 @@ impl Interpreter {
 
     pub(crate) fn promise_resolve_value(&mut self, value: &JsValue) -> JsValue {
         // §27.2.4.7.1 PromiseResolve(C, x): if IsPromise(x), check x.constructor === C
-        if let JsValue::Object(o) = value
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = value.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
             && obj.borrow().promise_data().is_some()
         {
-            match self.get_object_property(o.id, "constructor", value) {
+            match self.get_object_property(o, "constructor", value) {
                 Completion::Normal(ctor) => {
                     let promise_ctor = self.get_global_var("Promise");
                     if let Some(ref pc) = promise_ctor
@@ -1226,11 +1185,7 @@ impl Interpreter {
                 Completion::Throw(e) => {
                     // Get(x, "constructor") threw — create rejected promise
                     let promise = self.create_promise_object();
-                    let promise_id = if let JsValue::Object(ref o) = promise {
-                        o.id
-                    } else {
-                        0
-                    };
+                    let promise_id = promise.as_object_id().unwrap_or_default();
                     self.reject_promise(promise_id, e);
                     return promise;
                 }
@@ -1238,20 +1193,16 @@ impl Interpreter {
             }
         }
         let promise = self.create_promise_object();
-        let promise_id = if let JsValue::Object(ref o) = promise {
-            o.id
-        } else {
-            0
-        };
+        let promise_id = promise.as_object_id().unwrap_or_default();
         // Check if value is a thenable using [[Get]] to trigger Proxy traps/getters
-        if let JsValue::Object(o) = value {
-            let then_val = match self.get_object_property(o.id, "then", value) {
+        if let Some(o) = value.as_object_id() {
+            let then_val = match self.get_object_property(o, "then", value) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
                     self.reject_promise(promise_id, e);
                     return promise;
                 }
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             if self.is_callable(&then_val) {
                 self.promise_resolve_thenable(promise_id, value.clone(), then_val);
@@ -1269,17 +1220,13 @@ impl Interpreter {
         };
 
         // GetPromiseResolve(C) + IfAbruptRejectPromise
-        let ctor_id = if let JsValue::Object(o) = constructor {
-            o.id
-        } else {
-            0
-        };
+        let ctor_id = constructor.as_object_id().unwrap_or_default();
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => {
                 return self.if_abrupt_reject_promise(e, &cap);
             }
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         };
         if !self.is_callable(&promise_resolve) {
             let err = self.create_type_error("Promise resolve is not a function");
@@ -1308,7 +1255,7 @@ impl Interpreter {
                         let values = results.borrow().clone();
                         let arr = self.create_array(values);
                         if let Completion::Throw(e) =
-                            self.call_function(&cap.resolve, &JsValue::Undefined, &[arr])
+                            self.call_function(&cap.resolve, &JsValue::UNDEFINED, &[arr])
                         {
                             return self.if_abrupt_reject_promise(e, &cap);
                         }
@@ -1329,7 +1276,7 @@ impl Interpreter {
                 }
             };
 
-            results.borrow_mut().push(JsValue::Undefined);
+            results.borrow_mut().push(JsValue::UNDEFINED);
             remaining.set(remaining.get() + 1);
 
             let p = match self.call_function(&promise_resolve, constructor, &[next_value]) {
@@ -1338,7 +1285,7 @@ impl Interpreter {
                     self.iterator_close(&iterator, e.clone());
                     return self.if_abrupt_reject_promise(e, &cap);
                 }
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
 
             let i = index;
@@ -1353,10 +1300,10 @@ impl Interpreter {
                 1,
                 move |interp, _this, args| {
                     if ac.get() {
-                        return Completion::Normal(JsValue::Undefined);
+                        return Completion::Normal(JsValue::UNDEFINED);
                     }
                     ac.set(true);
-                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     results.borrow_mut()[i] = val;
                     let r = remaining.get() - 1;
                     remaining.set(r);
@@ -1364,28 +1311,24 @@ impl Interpreter {
                         let values = results.borrow().clone();
                         let arr = interp.create_array(values);
                         if let Completion::Throw(e) =
-                            interp.call_function(&resolve_fn, &JsValue::Undefined, &[arr])
+                            interp.call_function(&resolve_fn, &JsValue::UNDEFINED, &[arr])
                         {
                             return Completion::Throw(e);
                         }
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
 
             let reject_fn_clone = cap.reject.clone();
-            let p_id = if let JsValue::Object(ref o) = p {
-                o.id
-            } else {
-                0
-            };
+            let p_id = p.as_object_id().unwrap_or_default();
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
                     self.iterator_close(&iterator, e.clone());
                     return self.if_abrupt_reject_promise(e, &cap);
                 }
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             if let Completion::Throw(e) =
                 self.call_function(&then_fn, &p, &[on_fulfilled, reject_fn_clone])
@@ -1404,15 +1347,11 @@ impl Interpreter {
             Err(e) => return Completion::Throw(e),
         };
 
-        let ctor_id = if let JsValue::Object(o) = constructor {
-            o.id
-        } else {
-            0
-        };
+        let ctor_id = constructor.as_object_id().unwrap_or_default();
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         };
         if !self.is_callable(&promise_resolve) {
             let err = self.create_type_error("Promise resolve is not a function");
@@ -1439,7 +1378,7 @@ impl Interpreter {
                         let values = results.borrow().clone();
                         let arr = self.create_array(values);
                         if let Completion::Throw(e) =
-                            self.call_function(&cap.resolve, &JsValue::Undefined, &[arr])
+                            self.call_function(&cap.resolve, &JsValue::UNDEFINED, &[arr])
                         {
                             return self.if_abrupt_reject_promise(e, &cap);
                         }
@@ -1459,7 +1398,7 @@ impl Interpreter {
                 }
             };
 
-            results.borrow_mut().push(JsValue::Undefined);
+            results.borrow_mut().push(JsValue::UNDEFINED);
             remaining.set(remaining.get() + 1);
 
             let p = match self.call_function(&promise_resolve, constructor, &[next_value]) {
@@ -1468,7 +1407,7 @@ impl Interpreter {
                     self.iterator_close(&iterator, e.clone());
                     return self.if_abrupt_reject_promise(e, &cap);
                 }
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
 
             let i = index;
@@ -1486,33 +1425,33 @@ impl Interpreter {
                 1,
                 move |interp, _this, args| {
                     if ac_f.get() {
-                        return Completion::Normal(JsValue::Undefined);
+                        return Completion::Normal(JsValue::UNDEFINED);
                     }
                     ac_f.set(true);
-                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let obj_id = interp.create_object_id();
                     {
                         let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                         o.insert_value(
                             "status".to_string(),
-                            JsValue::String(JsString::from_str("fulfilled")),
+                            JsValue::string(JsString::from_str("fulfilled")),
                         );
                         o.insert_value("value".to_string(), val);
                     }
                     let oid = obj_id;
-                    results_f.borrow_mut()[i] = JsValue::Object(crate::types::JsObject { id: oid });
+                    results_f.borrow_mut()[i] = JsValue::object(oid);
                     let r = remaining_f.get() - 1;
                     remaining_f.set(r);
                     if r == 0 {
                         let values = results_f.borrow().clone();
                         let arr = interp.create_array(values);
                         if let Completion::Throw(e) =
-                            interp.call_function(&resolve_fn_f, &JsValue::Undefined, &[arr])
+                            interp.call_function(&resolve_fn_f, &JsValue::UNDEFINED, &[arr])
                         {
                             return Completion::Throw(e);
                         }
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
             let ac_r = already_called.clone();
@@ -1521,48 +1460,44 @@ impl Interpreter {
                 1,
                 move |interp, _this, args| {
                     if ac_r.get() {
-                        return Completion::Normal(JsValue::Undefined);
+                        return Completion::Normal(JsValue::UNDEFINED);
                     }
                     ac_r.set(true);
-                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let obj_id = interp.create_object_id();
                     {
                         let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                         o.insert_value(
                             "status".to_string(),
-                            JsValue::String(JsString::from_str("rejected")),
+                            JsValue::string(JsString::from_str("rejected")),
                         );
                         o.insert_value("reason".to_string(), val);
                     }
                     let oid = obj_id;
-                    results_r.borrow_mut()[i] = JsValue::Object(crate::types::JsObject { id: oid });
+                    results_r.borrow_mut()[i] = JsValue::object(oid);
                     let r = remaining_r.get() - 1;
                     remaining_r.set(r);
                     if r == 0 {
                         let values = results_r.borrow().clone();
                         let arr = interp.create_array(values);
                         if let Completion::Throw(e) =
-                            interp.call_function(&resolve_fn_r, &JsValue::Undefined, &[arr])
+                            interp.call_function(&resolve_fn_r, &JsValue::UNDEFINED, &[arr])
                         {
                             return Completion::Throw(e);
                         }
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
 
-            let p_id = if let JsValue::Object(ref o) = p {
-                o.id
-            } else {
-                0
-            };
+            let p_id = p.as_object_id().unwrap_or_default();
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
                     self.iterator_close(&iterator, e.clone());
                     return self.if_abrupt_reject_promise(e, &cap);
                 }
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             if let Completion::Throw(e) =
                 self.call_function(&then_fn, &p, &[on_fulfilled, on_rejected])
@@ -1583,15 +1518,11 @@ impl Interpreter {
         };
 
         // GetPromiseResolve(C) + IfAbruptRejectPromise
-        let ctor_id = if let JsValue::Object(o) = constructor {
-            o.id
-        } else {
-            0
-        };
+        let ctor_id = constructor.as_object_id().unwrap_or_default();
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         };
         if !self.is_callable(&promise_resolve) {
             let err = self.create_type_error("Promise resolve is not a function");
@@ -1599,12 +1530,9 @@ impl Interpreter {
         }
 
         // If `promises` is not an Object, reject the returned promise.
-        let promises_obj_id = match promises {
-            JsValue::Object(o) => o.id,
-            _ => {
-                let err = self.create_type_error("Promise.allKeyed argument is not an object");
-                return self.if_abrupt_reject_promise(err, &cap);
-            }
+        let Some(promises_obj_id) = promises.as_object_id() else {
+            let err = self.create_type_error("Promise.allKeyed argument is not an object");
+            return self.if_abrupt_reject_promise(err, &cap);
         };
 
         // allKeys = ? promises.[[OwnPropertyKeys]]()
@@ -1625,7 +1553,7 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(e) => return self.if_abrupt_reject_promise(e, &cap),
             };
-            if matches!(desc_val, JsValue::Undefined) {
+            if (desc_val).is_undefined() {
                 continue;
             }
             // Spec: process only when desc.[[Enumerable]] is true. After
@@ -1644,18 +1572,18 @@ impl Interpreter {
             let next_value = match self.get_object_property(promises_obj_id, &key_str, promises) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
 
             let i = values.borrow().len();
             keys.borrow_mut().push(key_str.clone());
-            values.borrow_mut().push(JsValue::Undefined);
+            values.borrow_mut().push(JsValue::UNDEFINED);
             remaining.set(remaining.get() + 1);
 
             let p = match self.call_function(&promise_resolve, constructor, &[next_value]) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
 
             let remaining_c = remaining.clone();
@@ -1670,10 +1598,10 @@ impl Interpreter {
                 1,
                 move |interp, _this, args| {
                     if ac.get() {
-                        return Completion::Normal(JsValue::Undefined);
+                        return Completion::Normal(JsValue::UNDEFINED);
                     }
                     ac.set(true);
-                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     values_c.borrow_mut()[i] = val;
                     let r = remaining_c.get() - 1;
                     remaining_c.set(r);
@@ -1682,24 +1610,20 @@ impl Interpreter {
                         let values_snapshot = values_c.borrow().clone();
                         let result = interp.build_keyed_result(&keys_snapshot, &values_snapshot);
                         if let Completion::Throw(e) =
-                            interp.call_function(&resolve_fn, &JsValue::Undefined, &[result])
+                            interp.call_function(&resolve_fn, &JsValue::UNDEFINED, &[result])
                         {
                             return Completion::Throw(e);
                         }
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
 
-            let p_id = if let JsValue::Object(ref o) = p {
-                o.id
-            } else {
-                0
-            };
+            let p_id = p.as_object_id().unwrap_or_default();
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             if let Completion::Throw(e) =
                 self.call_function(&then_fn, &p, &[on_fulfilled, cap.reject.clone()])
@@ -1716,7 +1640,7 @@ impl Interpreter {
             let values_snapshot = values.borrow().clone();
             let result = self.build_keyed_result(&keys_snapshot, &values_snapshot);
             if let Completion::Throw(e) =
-                self.call_function(&cap.resolve, &JsValue::Undefined, &[result])
+                self.call_function(&cap.resolve, &JsValue::UNDEFINED, &[result])
             {
                 return self.if_abrupt_reject_promise(e, &cap);
             }
@@ -1736,28 +1660,20 @@ impl Interpreter {
             Err(e) => return Completion::Throw(e),
         };
 
-        let ctor_id = if let JsValue::Object(o) = constructor {
-            o.id
-        } else {
-            0
-        };
+        let ctor_id = constructor.as_object_id().unwrap_or_default();
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         };
         if !self.is_callable(&promise_resolve) {
             let err = self.create_type_error("Promise resolve is not a function");
             return self.if_abrupt_reject_promise(err, &cap);
         }
 
-        let promises_obj_id = match promises {
-            JsValue::Object(o) => o.id,
-            _ => {
-                let err =
-                    self.create_type_error("Promise.allSettledKeyed argument is not an object");
-                return self.if_abrupt_reject_promise(err, &cap);
-            }
+        let Some(promises_obj_id) = promises.as_object_id() else {
+            let err = self.create_type_error("Promise.allSettledKeyed argument is not an object");
+            return self.if_abrupt_reject_promise(err, &cap);
         };
 
         let all_keys = match self.proxy_own_keys(promises_obj_id) {
@@ -1776,7 +1692,7 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(e) => return self.if_abrupt_reject_promise(e, &cap),
             };
-            if matches!(desc_val, JsValue::Undefined) {
+            if (desc_val).is_undefined() {
                 continue;
             }
             // Spec: process only when desc.[[Enumerable]] is true (absent
@@ -1793,18 +1709,18 @@ impl Interpreter {
             let next_value = match self.get_object_property(promises_obj_id, &key_str, promises) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
 
             let i = values.borrow().len();
             keys.borrow_mut().push(key_str.clone());
-            values.borrow_mut().push(JsValue::Undefined);
+            values.borrow_mut().push(JsValue::UNDEFINED);
             remaining.set(remaining.get() + 1);
 
             let p = match self.call_function(&promise_resolve, constructor, &[next_value]) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
 
             let already_called = Rc::new(Cell::new(false));
@@ -1819,21 +1735,20 @@ impl Interpreter {
                 1,
                 move |interp, _this, args| {
                     if ac_f.get() {
-                        return Completion::Normal(JsValue::Undefined);
+                        return Completion::Normal(JsValue::UNDEFINED);
                     }
                     ac_f.set(true);
-                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let obj_id = interp.create_object_id();
                     {
                         let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                         o.insert_value(
                             "status".to_string(),
-                            JsValue::String(JsString::from_str("fulfilled")),
+                            JsValue::string(JsString::from_str("fulfilled")),
                         );
                         o.insert_value("value".to_string(), val);
                     }
-                    values_f.borrow_mut()[i] =
-                        JsValue::Object(crate::types::JsObject { id: obj_id });
+                    values_f.borrow_mut()[i] = JsValue::object(obj_id);
                     let r = remaining_f.get() - 1;
                     remaining_f.set(r);
                     if r == 0 {
@@ -1841,12 +1756,12 @@ impl Interpreter {
                         let values_snapshot = values_f.borrow().clone();
                         let result = interp.build_keyed_result(&keys_snapshot, &values_snapshot);
                         if let Completion::Throw(e) =
-                            interp.call_function(&resolve_fn_f, &JsValue::Undefined, &[result])
+                            interp.call_function(&resolve_fn_f, &JsValue::UNDEFINED, &[result])
                         {
                             return Completion::Throw(e);
                         }
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
 
@@ -1860,21 +1775,20 @@ impl Interpreter {
                 1,
                 move |interp, _this, args| {
                     if ac_r.get() {
-                        return Completion::Normal(JsValue::Undefined);
+                        return Completion::Normal(JsValue::UNDEFINED);
                     }
                     ac_r.set(true);
-                    let reason = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let reason = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let obj_id = interp.create_object_id();
                     {
                         let mut o = interp.get_object_cell_expect(obj_id).borrow_mut();
                         o.insert_value(
                             "status".to_string(),
-                            JsValue::String(JsString::from_str("rejected")),
+                            JsValue::string(JsString::from_str("rejected")),
                         );
                         o.insert_value("reason".to_string(), reason);
                     }
-                    values_r.borrow_mut()[i] =
-                        JsValue::Object(crate::types::JsObject { id: obj_id });
+                    values_r.borrow_mut()[i] = JsValue::object(obj_id);
                     let r = remaining_r.get() - 1;
                     remaining_r.set(r);
                     if r == 0 {
@@ -1882,24 +1796,20 @@ impl Interpreter {
                         let values_snapshot = values_r.borrow().clone();
                         let result = interp.build_keyed_result(&keys_snapshot, &values_snapshot);
                         if let Completion::Throw(e) =
-                            interp.call_function(&resolve_fn_r, &JsValue::Undefined, &[result])
+                            interp.call_function(&resolve_fn_r, &JsValue::UNDEFINED, &[result])
                         {
                             return Completion::Throw(e);
                         }
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
 
-            let p_id = if let JsValue::Object(ref o) = p {
-                o.id
-            } else {
-                0
-            };
+            let p_id = p.as_object_id().unwrap_or_default();
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             if let Completion::Throw(e) =
                 self.call_function(&then_fn, &p, &[on_fulfilled, on_rejected])
@@ -1915,7 +1825,7 @@ impl Interpreter {
             let values_snapshot = values.borrow().clone();
             let result = self.build_keyed_result(&keys_snapshot, &values_snapshot);
             if let Completion::Throw(e) =
-                self.call_function(&cap.resolve, &JsValue::Undefined, &[result])
+                self.call_function(&cap.resolve, &JsValue::UNDEFINED, &[result])
             {
                 return self.if_abrupt_reject_promise(e, &cap);
             }
@@ -1937,7 +1847,7 @@ impl Interpreter {
                 o.insert_value(k.clone(), v.clone());
             }
         }
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 
     fn promise_race(&mut self, constructor: &JsValue, iterable: &JsValue) -> Completion {
@@ -1946,15 +1856,11 @@ impl Interpreter {
             Err(e) => return Completion::Throw(e),
         };
 
-        let ctor_id = if let JsValue::Object(o) = constructor {
-            o.id
-        } else {
-            0
-        };
+        let ctor_id = constructor.as_object_id().unwrap_or_default();
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         };
         if !self.is_callable(&promise_resolve) {
             let err = self.create_type_error("Promise resolve is not a function");
@@ -1990,21 +1896,17 @@ impl Interpreter {
                     self.iterator_close(&iterator, e.clone());
                     return self.if_abrupt_reject_promise(e, &cap);
                 }
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
 
-            let p_id = if let JsValue::Object(ref o) = p {
-                o.id
-            } else {
-                0
-            };
+            let p_id = p.as_object_id().unwrap_or_default();
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
                     self.iterator_close(&iterator, e.clone());
                     return self.if_abrupt_reject_promise(e, &cap);
                 }
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             if let Completion::Throw(e) =
                 self.call_function(&then_fn, &p, &[cap.resolve.clone(), cap.reject.clone()])
@@ -2021,15 +1923,11 @@ impl Interpreter {
             Err(e) => return Completion::Throw(e),
         };
 
-        let ctor_id = if let JsValue::Object(o) = constructor {
-            o.id
-        } else {
-            0
-        };
+        let ctor_id = constructor.as_object_id().unwrap_or_default();
         let promise_resolve = match self.get_object_property(ctor_id, "resolve", constructor) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return self.if_abrupt_reject_promise(e, &cap),
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         };
         if !self.is_callable(&promise_resolve) {
             let err = self.create_type_error("Promise resolve is not a function");
@@ -2072,7 +1970,7 @@ impl Interpreter {
                 }
             };
 
-            errors.borrow_mut().push(JsValue::Undefined);
+            errors.borrow_mut().push(JsValue::UNDEFINED);
             remaining.set(remaining.get() + 1);
 
             let p = match self.call_function(&promise_resolve, constructor, &[next_value]) {
@@ -2081,7 +1979,7 @@ impl Interpreter {
                     self.iterator_close(&iterator, e.clone());
                     return self.if_abrupt_reject_promise(e, &cap);
                 }
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
 
             let i = index;
@@ -2096,10 +1994,10 @@ impl Interpreter {
                 1,
                 move |interp, _this, args| {
                     if ac.get() {
-                        return Completion::Normal(JsValue::Undefined);
+                        return Completion::Normal(JsValue::UNDEFINED);
                     }
                     ac.set(true);
-                    let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     errors.borrow_mut()[i] = val;
                     let r = remaining.get() - 1;
                     remaining.set(r);
@@ -2107,27 +2005,23 @@ impl Interpreter {
                         let errs = errors.borrow().clone();
                         let err = interp.create_aggregate_error(errs, "All promises were rejected");
                         if let Completion::Throw(e) =
-                            interp.call_function(&reject_fn_clone, &JsValue::Undefined, &[err])
+                            interp.call_function(&reject_fn_clone, &JsValue::UNDEFINED, &[err])
                         {
                             return Completion::Throw(e);
                         }
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
 
-            let p_id = if let JsValue::Object(ref o) = p {
-                o.id
-            } else {
-                0
-            };
+            let p_id = p.as_object_id().unwrap_or_default();
             let then_fn = match self.get_object_property(p_id, "then", &p) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => {
                     self.iterator_close(&iterator, e.clone());
                     return self.if_abrupt_reject_promise(e, &cap);
                 }
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             if let Completion::Throw(e) =
                 self.call_function(&then_fn, &p, &[cap.resolve.clone(), on_rejected])
@@ -2150,7 +2044,7 @@ impl Interpreter {
             }
             o.insert_builtin(
                 "message".to_string(),
-                JsValue::String(JsString::from_str(message)),
+                JsValue::string(JsString::from_str(message)),
             );
         }
         let errors_arr = self.create_array(errors);
@@ -2158,19 +2052,19 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("errors".to_string(), errors_arr);
         let id = obj_id;
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 
     pub(crate) fn is_callable(&self, val: &JsValue) -> bool {
-        if let JsValue::Object(o) = val
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = val.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             if obj.borrow().callable.is_some() {
                 return true;
             }
             // Proxy wrapping a callable is callable
             if obj.borrow().is_proxy() {
-                let target_val = self.get_proxy_target_val(o.id);
+                let target_val = self.get_proxy_target_val(o);
                 return self.is_callable(&target_val);
             }
         }
@@ -2178,8 +2072,8 @@ impl Interpreter {
     }
 
     pub(crate) fn is_constructor(&self, val: &JsValue) -> bool {
-        if let JsValue::Object(o) = val
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = val.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             if let Some(ref func) = obj.borrow().callable {
                 return match func {
@@ -2195,7 +2089,7 @@ impl Interpreter {
             }
             // Proxy wrapping a constructor is a constructor
             if obj.borrow().is_proxy() {
-                let target_val = self.get_proxy_target_val(o.id);
+                let target_val = self.get_proxy_target_val(o);
                 return self.is_constructor(&target_val);
             }
         }
@@ -2203,8 +2097,8 @@ impl Interpreter {
     }
 
     pub(crate) fn is_promise(&self, val: &JsValue) -> bool {
-        if let JsValue::Object(o) = val
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = val.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             return obj.borrow().promise_data().is_some();
         }

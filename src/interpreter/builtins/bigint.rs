@@ -38,19 +38,21 @@ impl Interpreter {
             .class_name = "BigInt".to_string();
 
         fn this_bigint_value(interp: &Interpreter, this: &JsValue) -> Option<num_bigint::BigInt> {
-            match this {
-                JsValue::BigInt(b) => Some((*b.value).clone()),
-                JsValue::Object(o) => interp.get_object_cell(o.id).and_then(|cell| {
-                    let b = cell.borrow();
-                    if b.class_name == "BigInt"
-                        && let Some(JsValue::BigInt(bi)) = &b.primitive_value
-                    {
-                        return Some((*bi.value).clone());
-                    }
-                    None
-                }),
-                _ => None,
+            if let Some(bigint) = this.with_bigint(Clone::clone) {
+                return Some(bigint);
             }
+            let object_id = this.as_object_id()?;
+            interp.get_object_cell(object_id).and_then(|cell| {
+                let object = cell.borrow();
+                if object.class_name == "BigInt" {
+                    object
+                        .primitive_value
+                        .as_ref()
+                        .and_then(|value| value.with_bigint(Clone::clone))
+                } else {
+                    None
+                }
+            })
         }
 
         #[allow(clippy::type_complexity)]
@@ -91,7 +93,7 @@ impl Interpreter {
                     } else {
                         bigint_to_string_radix(&n, radix)
                     };
-                    Completion::Normal(JsValue::String(JsString::from_str(&s)))
+                    Completion::Normal(JsValue::from_str(&s))
                 }),
             ),
             (
@@ -103,7 +105,7 @@ impl Interpreter {
                             interp.create_type_error("BigInt.prototype.valueOf requires a BigInt"),
                         );
                     };
-                    Completion::Normal(JsValue::BigInt(JsBigInt::new(n)))
+                    Completion::Normal(JsValue::bigint(JsBigInt::new(n)))
                 }),
             ),
             (
@@ -115,13 +117,13 @@ impl Interpreter {
                             "BigInt.prototype.toLocaleString requires a BigInt",
                         ));
                     };
-                    let locales = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let locales = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let nf = match interp.intl_construct_number_format(&locales, &options) {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let bigint_val = JsValue::BigInt(JsBigInt::new(n));
+                    let bigint_val = JsValue::bigint(JsBigInt::new(n));
                     interp.intl_number_format_format(&nf, &bigint_val)
                 }),
             ),
@@ -148,65 +150,71 @@ impl Interpreter {
                         interp.create_type_error("BigInt is not a constructor"),
                     );
                 }
-                let val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                match &val {
-                    JsValue::BigInt(_) => Completion::Normal(val),
-                    JsValue::Boolean(b) => Completion::Normal(JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(if *b { 1 } else { 0 })))),
-                    JsValue::Number(n) => {
-                        if n.is_nan() || n.is_infinite() || *n != n.trunc() {
-                            return Completion::Throw(interp.create_error(
-                                "RangeError",
-                                &format!("The number {n} cannot be converted to a BigInt because it is not an integer"),
-                            ));
-                        }
-                        Completion::Normal(JsValue::BigInt(JsBigInt::new(f64_to_bigint(*n))))
-                    }
-                    JsValue::String(s) => {
-                        let text = s.to_rust_string().trim().to_string();
-                        if text.is_empty() {
-                            return Completion::Normal(JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(0))));
-                        }
-                        let parsed = if let Some(hex) =
-                            text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
-                        {
-                            num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16)
-                        } else if let Some(oct) =
-                            text.strip_prefix("0o").or_else(|| text.strip_prefix("0O"))
-                        {
-                            num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8)
-                        } else if let Some(bin) =
-                            text.strip_prefix("0b").or_else(|| text.strip_prefix("0B"))
-                        {
-                            num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2)
-                        } else {
-                            text.parse::<num_bigint::BigInt>().ok()
-                        };
-                        match parsed {
-                            Some(v) => Completion::Normal(JsValue::BigInt(JsBigInt::new(v))),
-                            None => Completion::Throw(interp.create_error(
-                                "SyntaxError",
-                                &format!("Cannot convert {text} to a BigInt"),
-                            )),
-                        }
-                    }
-                    JsValue::Object(_) => {
-                        let prim = match interp.to_primitive(&val, "number") {
-                            Ok(v) => v,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        let args = [prim];
-                        let bigint_fn = interp.get_global_var("BigInt");
-                        if let Some(bigint_fn) = bigint_fn {
-                            return interp.call_function(&bigint_fn, &JsValue::Undefined, &args);
-                        }
-                        Completion::Throw(
-                            interp.create_type_error("Cannot convert value to a BigInt"),
-                        )
-                    }
-                    _ => Completion::Throw(
-                        interp.create_type_error("Cannot convert value to a BigInt"),
-                    ),
+                let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if val.is_bigint() {
+                    return Completion::Normal(val);
                 }
+                if let Some(boolean) = val.as_boolean() {
+                    return Completion::Normal(JsValue::bigint(JsBigInt::new(
+                        num_bigint::BigInt::from(if boolean { 1 } else { 0 }),
+                    )));
+                }
+                if let Some(number) = val.as_number() {
+                    if number.is_nan() || number.is_infinite() || number != number.trunc() {
+                        return Completion::Throw(interp.create_error(
+                            "RangeError",
+                            &format!("The number {number} cannot be converted to a BigInt because it is not an integer"),
+                        ));
+                    }
+                    return Completion::Normal(JsValue::bigint(JsBigInt::new(f64_to_bigint(
+                        number,
+                    ))));
+                }
+                if let Some(string) = val.as_string() {
+                    let text = string.to_rust_string().trim().to_string();
+                    if text.is_empty() {
+                        return Completion::Normal(JsValue::bigint(JsBigInt::new(
+                            num_bigint::BigInt::from(0),
+                        )));
+                    }
+                    let parsed = if let Some(hex) =
+                        text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
+                    {
+                        num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16)
+                    } else if let Some(oct) =
+                        text.strip_prefix("0o").or_else(|| text.strip_prefix("0O"))
+                    {
+                        num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8)
+                    } else if let Some(bin) =
+                        text.strip_prefix("0b").or_else(|| text.strip_prefix("0B"))
+                    {
+                        num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2)
+                    } else {
+                        text.parse::<num_bigint::BigInt>().ok()
+                    };
+                    return match parsed {
+                        Some(value) => Completion::Normal(JsValue::bigint(JsBigInt::new(value))),
+                        None => Completion::Throw(interp.create_error(
+                            "SyntaxError",
+                            &format!("Cannot convert {text} to a BigInt"),
+                        )),
+                    };
+                }
+                if val.is_object() {
+                    let prim = match interp.to_primitive(&val, "number") {
+                        Ok(value) => value,
+                        Err(error) => return Completion::Throw(error),
+                    };
+                    let args = [prim];
+                    let bigint_fn = interp.get_global_var("BigInt");
+                    if let Some(bigint_fn) = bigint_fn {
+                        return interp.call_function(&bigint_fn, &JsValue::UNDEFINED, &args);
+                    }
+                    return Completion::Throw(
+                        interp.create_type_error("Cannot convert value to a BigInt"),
+                    );
+                }
+                Completion::Throw(interp.create_type_error("Cannot convert value to a BigInt"))
             }),
         );
 
@@ -216,32 +224,34 @@ impl Interpreter {
             2,
             |interp, _this, args| {
                 // Step 1: Let bits be ? ToIndex(bits).
-                let bits_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let bits_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let bits = match interp.to_index(&bits_val) {
-                    Completion::Normal(JsValue::Number(n)) => n as u64,
-                    Completion::Normal(_) => unreachable!(),
+                    Completion::Normal(value) => value
+                        .as_number()
+                        .expect("ToIndex returns a Number completion")
+                        as u64,
                     other => return other,
                 };
                 // Step 2: Let bigint be ? ToBigInt(bigint).
-                let bigint_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let bigint_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let bigint_val = match interp.to_bigint_value(&bigint_val) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                let JsValue::BigInt(ref b) = bigint_val else {
-                    unreachable!()
-                };
+                let bigint = bigint_val
+                    .as_bigint()
+                    .expect("ToBigInt returns a BigInt value");
                 if bits == 0 {
-                    return Completion::Normal(JsValue::BigInt(JsBigInt::new(
+                    return Completion::Normal(JsValue::bigint(JsBigInt::new(
                         num_bigint::BigInt::from(0),
                     )));
                 }
-                let bit_len = b.value.bits() + 1; // +1 for sign bit
+                let bit_len = bigint.value.bits() + 1; // +1 for sign bit
                 if bit_len <= bits {
                     return Completion::Normal(bigint_val);
                 }
                 let modulus = num_bigint::BigInt::from(1) << bits;
-                let mut result = &*b.value % &modulus;
+                let mut result = &*bigint.value % &modulus;
                 if result < num_bigint::BigInt::from(0) {
                     result += &modulus;
                 }
@@ -249,7 +259,7 @@ impl Interpreter {
                 if result >= half {
                     result -= modulus;
                 }
-                Completion::Normal(JsValue::BigInt(JsBigInt::new(result)))
+                Completion::Normal(JsValue::bigint(JsBigInt::new(result)))
             },
         ));
         let as_uint_n = self.create_function(JsFunction::native(
@@ -257,43 +267,45 @@ impl Interpreter {
             2,
             |interp, _this, args| {
                 // Step 1: Let bits be ? ToIndex(bits).
-                let bits_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let bits_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let bits = match interp.to_index(&bits_val) {
-                    Completion::Normal(JsValue::Number(n)) => n as u64,
-                    Completion::Normal(_) => unreachable!(),
+                    Completion::Normal(value) => value
+                        .as_number()
+                        .expect("ToIndex returns a Number completion")
+                        as u64,
                     other => return other,
                 };
                 // Step 2: Let bigint be ? ToBigInt(bigint).
-                let bigint_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let bigint_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let bigint_val = match interp.to_bigint_value(&bigint_val) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
                 };
-                let JsValue::BigInt(ref b) = bigint_val else {
-                    unreachable!()
-                };
+                let bigint = bigint_val
+                    .as_bigint()
+                    .expect("ToBigInt returns a BigInt value");
                 if bits == 0 {
-                    return Completion::Normal(JsValue::BigInt(JsBigInt::new(
+                    return Completion::Normal(JsValue::bigint(JsBigInt::new(
                         num_bigint::BigInt::from(0),
                     )));
                 }
-                if *b.value >= num_bigint::BigInt::from(0) && b.value.bits() <= bits {
+                if *bigint.value >= num_bigint::BigInt::from(0) && bigint.value.bits() <= bits {
                     return Completion::Normal(bigint_val);
                 }
                 let modulus = num_bigint::BigInt::from(1) << bits;
-                let mut result = &*b.value % &modulus;
+                let mut result = &*bigint.value % &modulus;
                 if result < num_bigint::BigInt::from(0) {
                     result += &modulus;
                 }
-                Completion::Normal(JsValue::BigInt(JsBigInt::new(result)))
+                Completion::Normal(JsValue::bigint(JsBigInt::new(result)))
             },
         ));
 
         if let Some(bigint_val) = self.get_global_var("BigInt")
-            && let JsValue::Object(o) = &bigint_val
-            && let Some(bigint_cell) = self.get_object_cell(o.id)
+            && let Some(bigint_id) = bigint_val.as_object_id()
+            && let Some(bigint_cell) = self.get_object_cell(bigint_id)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            let proto_val = JsValue::object(proto_id);
             bigint_cell.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
