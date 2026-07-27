@@ -1379,10 +1379,7 @@ impl Interpreter {
                     } else {
                         let id = self.next_symbol_id;
                         self.next_symbol_id += 1;
-                        let sym = crate::types::JsSymbol::new(
-                            id,
-                            Some(JsString::from_str(desc)),
-                        );
+                        let sym = crate::types::JsSymbol::new(id, Some(JsString::from_str(desc)));
                         self.well_known_symbols
                             .insert(name.to_string(), sym.clone());
                         JsValue::Symbol(sym)
@@ -1411,10 +1408,7 @@ impl Interpreter {
                         }
                         let id = interp.next_symbol_id;
                         interp.next_symbol_id += 1;
-                        let sym = crate::types::JsSymbol::new(
-                            id,
-                            Some(JsString::from_str(&key)),
-                        );
+                        let sym = crate::types::JsSymbol::new(id, Some(JsString::from_str(&key)));
                         interp.global_symbol_registry.insert(key, sym.clone());
                         Completion::Normal(JsValue::Symbol(sym))
                     }),
