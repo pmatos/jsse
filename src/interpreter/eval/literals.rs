@@ -16,27 +16,29 @@ impl Interpreter {
         if let Some(&obj_id) = self.realm().template_cache.get(&cache_key)
             && self.get_object_cell(obj_id).is_some()
         {
-            return JsValue::Object(crate::types::JsObject { id: obj_id });
+            return JsValue::object(obj_id);
         }
 
         let cooked_vals: Vec<JsValue> = tmpl
             .quasis
             .iter()
             .map(|q| match q {
-                Some(cu) => JsValue::String(JsString::from_vec(cu.clone())),
-                None => JsValue::Undefined,
+                Some(cu) => JsValue::string(JsString::from_vec(cu.clone())),
+                None => JsValue::UNDEFINED,
             })
             .collect();
         let raw_vals: Vec<JsValue> = tmpl
             .raw_quasis
             .iter()
-            .map(|s| JsValue::String(JsString::from_str(s)))
+            .map(|s| JsValue::string(JsString::from_str(s)))
             .collect();
 
         let raw_arr = self.create_frozen_template_array(raw_vals);
         let template_arr = self.create_frozen_template_array(cooked_vals);
 
-        if let JsValue::Object(o) = &template_arr
+        if let Some(o) = template_arr
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && let Some(obj) = self.get_object_cell(o.id)
         {
             obj.borrow_mut().insert_property(
@@ -45,7 +47,10 @@ impl Interpreter {
             );
         }
 
-        if let JsValue::Object(o) = &template_arr {
+        if let Some(o) = template_arr
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             self.realm_mut().template_cache.insert(cache_key, o.id);
         }
 
@@ -68,23 +73,23 @@ impl Interpreter {
         }
         obj_data.insert_property(
             "length".to_string(),
-            PropertyDescriptor::data(JsValue::Number(len as f64), false, false, false),
+            PropertyDescriptor::data(JsValue::number(len as f64), false, false, false),
         );
         obj_data.kind = crate::interpreter::types::ObjectKind::Array(values);
         obj_data.extensible = false;
         let id = self.alloc_object(obj_data);
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 
     pub(super) fn eval_literal(&mut self, lit: &Literal) -> JsValue {
         match lit {
-            Literal::Null => JsValue::Null,
-            Literal::Boolean(b) => JsValue::Boolean(*b),
-            Literal::Number(n) => JsValue::Number(*n),
+            Literal::Null => JsValue::NULL,
+            Literal::Boolean(b) => JsValue::boolean(*b),
+            Literal::Number(n) => JsValue::number(*n),
             Literal::String(s) => {
                 let code_units =
                     crate::interpreter::builtins::regexp::pua_code_units_to_surrogates(s);
-                JsValue::String(JsString::from_vec(code_units))
+                JsValue::string(JsString::from_vec(code_units))
             }
             Literal::BigInt(s) => {
                 use num_bigint::BigInt;
@@ -98,7 +103,7 @@ impl Interpreter {
                 } else {
                     s.parse::<BigInt>().unwrap_or_default()
                 };
-                JsValue::BigInt(JsBigInt::new(value))
+                JsValue::bigint(JsBigInt::new(value))
             }
             Literal::RegExp(pattern, flags) => {
                 let mut obj = JsObjectData::new();
@@ -120,10 +125,10 @@ impl Interpreter {
                 );
                 obj.insert_property(
                     "lastIndex".to_string(),
-                    PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
+                    PropertyDescriptor::data(JsValue::number(0.0), true, false, false),
                 );
                 let id = self.alloc_object(obj);
-                JsValue::Object(crate::types::JsObject { id })
+                JsValue::object(id)
             }
         }
     }
@@ -131,26 +136,28 @@ impl Interpreter {
     #[allow(clippy::wrong_self_convention)]
     pub(crate) fn to_property_key(&mut self, val: &JsValue) -> Result<JsPropertyKey, JsValue> {
         // Fast path: non-negative integer Number → integer string (avoids ryu_js)
-        if let JsValue::Number(n) = val {
+        if let Some(n) = (val).as_number() {
             let trunc = n.trunc();
-            if *n == trunc && trunc >= 0.0 && trunc <= u32::MAX as f64 {
+            if n == trunc && trunc >= 0.0 && trunc <= u32::MAX as f64 {
                 return Ok(JsPropertyKey::from((trunc as u32).to_string()));
             }
         }
-        match val {
-            JsValue::String(s) => Ok(JsPropertyKey::from_js_string(s)),
-            JsValue::Symbol(s) => Ok(s.to_property_key()),
-            JsValue::Object(_) => {
-                let prim = self.to_primitive(val, "string")?;
-                if let JsValue::Symbol(s) = &prim {
-                    return Ok(s.to_property_key());
-                }
-                match prim {
-                    JsValue::String(s) => Ok(JsPropertyKey::from_js_string(&s)),
-                    _ => self.to_string_value(&prim).map(JsPropertyKey::from),
-                }
+        if let Some(s) = val.as_string() {
+            Ok(JsPropertyKey::from_js_string(&s))
+        } else if let Some(s) = val.as_symbol() {
+            Ok(s.to_property_key())
+        } else if val.is_object() {
+            let prim = self.to_primitive(val, "string")?;
+            if let Some(s) = prim.as_symbol() {
+                return Ok(s.to_property_key());
             }
-            _ => self.to_string_value(val).map(JsPropertyKey::from),
+            if let Some(s) = prim.as_string() {
+                Ok(JsPropertyKey::from_js_string(&s))
+            } else {
+                self.to_string_value(&prim).map(JsPropertyKey::from)
+            }
+        } else {
+            self.to_string_value(val).map(JsPropertyKey::from)
         }
     }
 
@@ -169,10 +176,10 @@ impl Interpreter {
             });
         obj.insert_property(
             "lastIndex".to_string(),
-            PropertyDescriptor::data(JsValue::Number(0.0), true, false, false),
+            PropertyDescriptor::data(JsValue::number(0.0), true, false, false),
         );
         let id = self.alloc_object(obj);
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 
     pub(super) fn eval_array_literal(
@@ -312,7 +319,7 @@ impl Interpreter {
 
         // Validate super class: must be null or a constructor
         if let Some(ref sv) = super_val
-            && !matches!(sv, JsValue::Null)
+            && !(sv).is_null()
             && !self.is_constructor(sv)
         {
             return Completion::Throw(
@@ -395,7 +402,9 @@ impl Interpreter {
         let ctor_val = self.create_function(ctor_func);
 
         // Mark derived class constructors and make .prototype writable:false
-        if let JsValue::Object(ref o) = ctor_val
+        if let Some(o) = (ctor_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && let Some(func_obj) = self.get_object_cell(o.id)
         {
             func_obj.borrow_mut().constructor_kind = if super_val.is_some() {
@@ -427,9 +436,15 @@ impl Interpreter {
         }
 
         // Get the prototype object that was auto-created by create_function
-        let proto_obj = if let JsValue::Object(ref o) = ctor_val {
+        let proto_obj = if let Some(o) = (ctor_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             let proto_val = self.get_property_on_id(o.id, "prototype");
-            if let JsValue::Object(ref p) = proto_val {
+            if let Some(p) = (proto_val)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+            {
                 self.get_object(p.id)
             } else {
                 None
@@ -440,7 +455,7 @@ impl Interpreter {
 
         // Set up inheritance
         if let Some(ref sv) = super_val
-            && let JsValue::Object(super_o) = sv
+            && let Some(super_o) = (sv).as_object_id().map(|id| crate::types::JsObject { id })
         {
             let super_o_id = super_o.id;
             let sv_clone = sv.clone();
@@ -452,22 +467,23 @@ impl Interpreter {
                 other => return other,
             };
             // Validate: must be Object or null
-            match &super_proto_val {
-                JsValue::Object(_) | JsValue::Null => {}
-                _ => {
-                    return Completion::Throw(self.create_type_error(
-                        "Class extends value does not have valid prototype property",
-                    ));
-                }
+            if !super_proto_val.is_object() && !super_proto_val.is_null() {
+                return Completion::Throw(self.create_type_error(
+                    "Class extends value does not have valid prototype property",
+                ));
             }
-            if let JsValue::Object(ref sp) = super_proto_val
+            if let Some(sp) = (super_proto_val)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
                 && let Some(super_proto) = self.get_object_cell(sp.id)
                 && let Some(ref proto) = proto_obj
             {
                 proto.borrow_mut().prototype_id = Some(super_proto.borrow().id.unwrap());
             }
             // Step 7.a: F.[[Prototype]] = superclass (for static method inheritance)
-            if let JsValue::Object(ref o) = ctor_val
+            if let Some(o) = (ctor_val)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
                 && let Some(ctor_obj) = self.get_object_cell(o.id)
                 && let Some(super_obj) = self.get_object_cell(super_o_id)
             {
@@ -476,7 +492,7 @@ impl Interpreter {
         }
 
         // Handle `extends null` — set prototype's [[Prototype]] to null
-        if let Some(JsValue::Null) = super_val
+        if super_val.as_ref().is_some_and(JsValue::is_null)
             && let Some(ref proto) = proto_obj
         {
             proto.borrow_mut().prototype_id = None;
@@ -487,9 +503,9 @@ impl Interpreter {
         // shadow this with their own __home_object__ binding.
         let ctor_home = if let Some(ref p) = proto_obj {
             let pid = p.borrow().id.unwrap();
-            JsValue::Object(crate::types::JsObject { id: pid })
+            JsValue::object(pid)
         } else {
-            JsValue::Undefined
+            JsValue::UNDEFINED
         };
         class_env
             .borrow_mut()
@@ -555,13 +571,13 @@ impl Interpreter {
                             (key.clone(), key)
                         }
                         PropertyKey::Number(n) => {
-                            let key = JsPropertyKey::from(to_js_string(&JsValue::Number(*n)));
+                            let key = JsPropertyKey::from(to_js_string(&JsValue::number(*n)));
                             (key.clone(), key)
                         }
                         PropertyKey::Computed(expr) => match self.eval_expr(expr, &class_env) {
                             Completion::Normal(v) => {
-                                let is_symbol = matches!(&v, JsValue::Symbol(_));
-                                let fn_name = if let JsValue::Symbol(ref sym) = v {
+                                let is_symbol = v.is_symbol();
+                                let fn_name = if let Some(sym) = v.as_symbol() {
                                     match sym.description() {
                                         Some(desc) => format!("[{}]", desc),
                                         None => String::new(),
@@ -589,9 +605,9 @@ impl Interpreter {
                                 ctor_val.clone()
                             } else if let Some(ref p) = proto_obj {
                                 let pid = p.borrow().id.unwrap();
-                                JsValue::Object(crate::types::JsObject { id: pid })
+                                JsValue::object(pid)
                             } else {
-                                JsValue::Undefined
+                                JsValue::UNDEFINED
                             };
                             let method_closure = Environment::new(Some(class_env.clone()));
                             method_closure
@@ -618,7 +634,9 @@ impl Interpreter {
                             let method_val = self.create_function(method_func);
 
                             if m.is_static {
-                                if let JsValue::Object(ref o) = ctor_val
+                                if let Some(o) = (ctor_val)
+                                    .as_object_id()
+                                    .map(|id| crate::types::JsObject { id })
                                     && let Some(func_obj) = self.get_object_cell(o.id)
                                 {
                                     match m.kind {
@@ -682,7 +700,9 @@ impl Interpreter {
                                         }
                                     }
                                 }
-                            } else if let JsValue::Object(ref o) = ctor_val
+                            } else if let Some(o) = (ctor_val)
+                                .as_object_id()
+                                .map(|id| crate::types::JsObject { id })
                                 && let Some(func_obj) = self.get_object_cell(o.id)
                             {
                                 match m.kind {
@@ -764,9 +784,9 @@ impl Interpreter {
                         ctor_val.clone()
                     } else if let Some(ref p) = proto_obj {
                         let pid = p.borrow().id.unwrap();
-                        JsValue::Object(crate::types::JsObject { id: pid })
+                        JsValue::object(pid)
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     };
                     let method_closure = Environment::new(Some(class_env.clone()));
                     method_closure
@@ -796,7 +816,10 @@ impl Interpreter {
                     self.set_function_name(&method_val, &method_display_name);
 
                     let target = if m.is_static {
-                        if let JsValue::Object(ref o) = ctor_val {
+                        if let Some(o) = (ctor_val)
+                            .as_object_id()
+                            .map(|id| crate::types::JsObject { id })
+                        {
                             self.get_object(o.id)
                         } else {
                             None
@@ -856,7 +879,9 @@ impl Interpreter {
                         let branded = self.resolve_private_name(name, &class_env);
                         if !p.is_static {
                             // Store instance private field definition
-                            if let JsValue::Object(ref o) = ctor_val
+                            if let Some(o) = (ctor_val)
+                                .as_object_id()
+                                .map(|id| crate::types::JsObject { id })
                                 && let Some(func_obj) = self.get_object(o.id)
                             {
                                 func_obj.borrow_mut().class_instance_field_defs.push(
@@ -882,7 +907,7 @@ impl Interpreter {
                             PropertyKey::Identifier(s) => JsPropertyKey::from(s.clone()),
                             PropertyKey::String(s) => literal_string_property_key(s),
                             PropertyKey::Number(n) => {
-                                JsPropertyKey::from(to_js_string(&JsValue::Number(*n)))
+                                JsPropertyKey::from(to_js_string(&JsValue::number(*n)))
                             }
                             PropertyKey::Computed(expr) => match self.eval_expr(expr, &class_env) {
                                 Completion::Normal(v) => match self.to_property_key(&v) {
@@ -905,7 +930,7 @@ impl Interpreter {
                             PropertyKey::Identifier(s) => JsPropertyKey::from(s.clone()),
                             PropertyKey::String(s) => literal_string_property_key(s),
                             PropertyKey::Number(n) => {
-                                JsPropertyKey::from(to_js_string(&JsValue::Number(*n)))
+                                JsPropertyKey::from(to_js_string(&JsValue::number(*n)))
                             }
                             PropertyKey::Computed(expr) => match self.eval_expr(expr, &class_env) {
                                 Completion::Normal(v) => match self.to_property_key(&v) {
@@ -916,7 +941,9 @@ impl Interpreter {
                             },
                             PropertyKey::Private(_) => unreachable!(),
                         };
-                        if let JsValue::Object(ref o) = ctor_val
+                        if let Some(o) = (ctor_val)
+                            .as_object_id()
+                            .map(|id| crate::types::JsObject { id })
                             && let Some(func_obj) = self.get_object(o.id)
                         {
                             func_obj
@@ -931,7 +958,9 @@ impl Interpreter {
                     if let PropertyKey::Private(name) = &p.key {
                         let branded = self.resolve_private_name(name, &class_env);
                         if !p.is_static {
-                            if let JsValue::Object(ref o) = ctor_val
+                            if let Some(o) = (ctor_val)
+                                .as_object_id()
+                                .map(|id| crate::types::JsObject { id })
                                 && let Some(func_obj) = self.get_object(o.id)
                             {
                                 func_obj.borrow_mut().class_instance_field_defs.push(
@@ -954,7 +983,7 @@ impl Interpreter {
                         PropertyKey::Identifier(s) => JsPropertyKey::from(s.clone()),
                         PropertyKey::String(s) => literal_string_property_key(s),
                         PropertyKey::Number(n) => {
-                            JsPropertyKey::from(to_js_string(&JsValue::Number(*n)))
+                            JsPropertyKey::from(to_js_string(&JsValue::number(*n)))
                         }
                         PropertyKey::Computed(expr) => match self.eval_expr(expr, &class_env) {
                             Completion::Normal(v) => match self.to_property_key(&v) {
@@ -974,13 +1003,10 @@ impl Interpreter {
                         String::new(),
                         0,
                         move |interp, this, _args| {
-                            let obj_id = match this {
-                                JsValue::Object(o) => o.id,
-                                _ => {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "Cannot read private member from an object whose class did not declare it",
-                                    ));
-                                }
+                            let Some(obj_id) = this.as_object_id() else {
+                                return Completion::Throw(interp.create_type_error(
+                                    "Cannot read private member from an object whose class did not declare it",
+                                ));
                             };
                             if let Some(obj) = interp.get_object_cell(obj_id)
                                 && let Some(PrivateElement::Field(v)) =
@@ -1001,22 +1027,19 @@ impl Interpreter {
                         String::new(),
                         1,
                         move |interp, this, args| {
-                            let obj_id = match this {
-                                JsValue::Object(o) => o.id,
-                                _ => {
-                                    return Completion::Throw(interp.create_type_error(
-                                        "Cannot write private member to an object whose class did not declare it",
-                                    ));
-                                }
+                            let Some(obj_id) = this.as_object_id() else {
+                                return Completion::Throw(interp.create_type_error(
+                                    "Cannot write private member to an object whose class did not declare it",
+                                ));
                             };
-                            let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                            let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                             if let Some(obj) = interp.get_object_cell(obj_id)
                                 && obj.borrow().private_fields.contains_key(&setter_slot)
                             {
                                 obj.borrow_mut()
                                     .private_fields
                                     .insert(setter_slot.clone(), PrivateElement::Field(val));
-                                return Completion::Normal(JsValue::Undefined);
+                                return Completion::Normal(JsValue::UNDEFINED);
                             }
                             Completion::Throw(interp.create_type_error(
                                 "Cannot write private member to an object whose class did not declare it",
@@ -1027,7 +1050,10 @@ impl Interpreter {
                     self.set_function_name(&setter_val, &prefixed_function_name("set ", &key));
 
                     let target = if p.is_static {
-                        if let JsValue::Object(ref o) = ctor_val {
+                        if let Some(o) = (ctor_val)
+                            .as_object_id()
+                            .map(|id| crate::types::JsObject { id })
+                        {
                             self.get_object(o.id)
                         } else {
                             None
@@ -1053,7 +1079,9 @@ impl Interpreter {
                             storage_slot,
                             p.value.clone(),
                         ));
-                    } else if let JsValue::Object(ref o) = ctor_val
+                    } else if let Some(o) = (ctor_val)
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
                         && let Some(func_obj) = self.get_object_cell(o.id)
                     {
                         func_obj.borrow_mut().class_instance_field_defs.push(
@@ -1090,9 +1118,11 @@ impl Interpreter {
                             other => return other,
                         }
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     };
-                    if let JsValue::Object(ref o) = ctor_val
+                    if let Some(o) = (ctor_val)
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
                         && let Some(func_obj) = self.get_object_cell(o.id)
                     {
                         func_obj.borrow_mut().insert_value(key, val);
@@ -1111,9 +1141,11 @@ impl Interpreter {
                             other => return other,
                         }
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     };
-                    if let JsValue::Object(ref o) = ctor_val
+                    if let Some(o) = (ctor_val)
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
                         && let Some(func_obj) = self.get_object_cell(o.id)
                     {
                         if !func_obj.borrow().extensible {
@@ -1139,9 +1171,11 @@ impl Interpreter {
                             other => return other,
                         }
                     } else {
-                        JsValue::Undefined
+                        JsValue::UNDEFINED
                     };
-                    if let JsValue::Object(ref o) = ctor_val
+                    if let Some(o) = (ctor_val)
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
                         && let Some(func_obj) = self.get_object_cell(o.id)
                     {
                         func_obj
@@ -1215,7 +1249,8 @@ impl Interpreter {
                         if v.is_undefined() {
                             continue;
                         }
-                        if let JsValue::Object(ref dobj) = v
+                        if let Some(dobj) =
+                            (v).as_object_id().map(|id| crate::types::JsObject { id })
                             && let Some(desc_rc) = self.get_object_cell(dobj.id)
                         {
                             match desc_rc.borrow().get_property_value("enumerable") {
@@ -1254,7 +1289,7 @@ impl Interpreter {
             let val = match self.get_object_property(src_id, &key_str, src_val) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             result.push((key_str, val));
         }
@@ -1288,8 +1323,8 @@ impl Interpreter {
                                 other => return other,
                             };
                             self.gc_root_value(&v);
-                            let is_symbol = matches!(&v, JsValue::Symbol(_));
-                            let fn_name = if let JsValue::Symbol(ref sym) = v {
+                            let is_symbol = v.is_symbol();
+                            let fn_name = if let Some(sym) = v.as_symbol() {
                                 match sym.description() {
                                     Some(desc) => format!("[{}]", desc),
                                     None => String::new(),
@@ -1333,7 +1368,10 @@ impl Interpreter {
                             other => return other,
                         };
                         self.gc_root_value(&spread_val);
-                        if let JsValue::Object(ref o) = spread_val {
+                        if let Some(o) = (spread_val)
+                            .as_object_id()
+                            .map(|id| crate::types::JsObject { id })
+                        {
                             let src_id = o.id;
                             match self.copy_data_properties(src_id, &spread_val, &[]) {
                                 Ok(pairs) => {
@@ -1398,16 +1436,10 @@ impl Interpreter {
                                 && !prop.shorthand
                                 && !prop.method
                             {
-                                match &value {
-                                    JsValue::Object(o) => {
-                                        obj_data.prototype_id = Some(o.id);
-                                    }
-                                    JsValue::Null => {
-                                        obj_data.prototype_id = None;
-                                    }
-                                    _ => {
-                                        // Non-object, non-null values are ignored per spec
-                                    }
+                                if let Some(id) = value.as_object_id() {
+                                    obj_data.prototype_id = Some(id);
+                                } else if value.is_null() {
+                                    obj_data.prototype_id = None;
                                 }
                             } else {
                                 if prop.value.is_anonymous_function_definition() {
@@ -1423,11 +1455,12 @@ impl Interpreter {
                 }
                 let id = self.alloc_object(obj_data);
                 // Set __home_object__ for concise methods, getters, and setters
-                let obj_val = JsValue::Object(crate::types::JsObject { id });
+                let obj_val = JsValue::object(id);
                 self.gc_root_value(&obj_val);
                 {
                     for val in &method_values {
-                        if let JsValue::Object(fo) = val
+                        if let Some(fo) =
+                            (val).as_object_id().map(|id| crate::types::JsObject { id })
                             && let Some(func_obj) = self.get_object_cell(fo.id)
                         {
                             let old_closure =
