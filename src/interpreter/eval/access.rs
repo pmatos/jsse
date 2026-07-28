@@ -10,8 +10,8 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Result<(JsValue, JsValue), Completion> {
         let (base_val, base_this) = self.eval_oc_base(base, chain, env)?;
-        if matches!(base_val, JsValue::Null | JsValue::Undefined) {
-            return Ok((JsValue::Undefined, JsValue::Undefined));
+        if (base_val).is_nullish() {
+            return Ok((JsValue::UNDEFINED, JsValue::UNDEFINED));
         }
         self.eval_oc_tail_with_this_ctx(&base_val, &base_this, chain, env)
     }
@@ -27,7 +27,7 @@ impl Interpreter {
             Expression::Member(obj_expr, member_prop, _) => {
                 if matches!(obj_expr.as_ref(), Expression::Super) {
                     // §13.3.7.1: super property in optional chain — use HomeObject.__proto__
-                    let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+                    let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
                     let key = match member_prop {
                         MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
                         MemberProperty::Computed(expr) => {
@@ -42,7 +42,9 @@ impl Interpreter {
                         }
                         MemberProperty::Private(name) => {
                             let branded = self.resolve_private_name(name, env);
-                            if let JsValue::Object(ref o) = this_val
+                            if let Some(o) = (this_val)
+                                .as_object_id()
+                                .map(|id| crate::types::JsObject { id })
                                 && let Some(obj) = self.get_object_cell(o.id)
                             {
                                 let elem = obj.borrow().private_fields.get(&branded).cloned();
@@ -69,7 +71,7 @@ impl Interpreter {
                                     }
                                 }
                             }
-                            return Ok((JsValue::Undefined, this_val));
+                            return Ok((JsValue::UNDEFINED, this_val));
                         }
                     };
                     let super_base_id = self.get_super_base_id(env);
@@ -104,15 +106,17 @@ impl Interpreter {
                         }
                         MemberProperty::Private(name) => {
                             let branded = self.resolve_private_name(name, env);
-                            if let JsValue::Object(ref o) = obj_val
+                            if let Some(o) = (obj_val)
+                                .as_object_id()
+                                .map(|id| crate::types::JsObject { id })
                                 && let Some(obj) = self.get_object_cell(o.id)
                             {
                                 let elem = obj.borrow().private_fields.get(&branded).cloned();
                                 match elem {
                                     Some(PrivateElement::Field(v))
                                     | Some(PrivateElement::Method(v)) => {
-                                        if matches!(v, JsValue::Null | JsValue::Undefined) {
-                                            return Ok((JsValue::Undefined, JsValue::Undefined));
+                                        if (v).is_nullish() {
+                                            return Ok((JsValue::UNDEFINED, JsValue::UNDEFINED));
                                         }
                                         return self.eval_oc_tail_with_this(&v, chain, env);
                                     }
@@ -123,15 +127,15 @@ impl Interpreter {
                                                 Completion::Normal(v) => v,
                                                 other => return Err(other),
                                             };
-                                            if matches!(v, JsValue::Null | JsValue::Undefined) {
+                                            if (v).is_nullish() {
                                                 return Ok((
-                                                    JsValue::Undefined,
-                                                    JsValue::Undefined,
+                                                    JsValue::UNDEFINED,
+                                                    JsValue::UNDEFINED,
                                                 ));
                                             }
                                             return self.eval_oc_tail_with_this(&v, chain, env);
                                         }
-                                        return Ok((JsValue::Undefined, JsValue::Undefined));
+                                        return Ok((JsValue::UNDEFINED, JsValue::UNDEFINED));
                                     }
                                     None => {
                                         return Err(Completion::Throw(self.create_type_error(
@@ -140,7 +144,7 @@ impl Interpreter {
                                     }
                                 }
                             } else {
-                                return Ok((JsValue::Undefined, JsValue::Undefined));
+                                return Ok((JsValue::UNDEFINED, JsValue::UNDEFINED));
                             }
                         }
                     };
@@ -160,7 +164,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return Err(other),
                 };
-                Ok((val, JsValue::Undefined))
+                Ok((val, JsValue::UNDEFINED))
             }
         }
     }
@@ -188,7 +192,7 @@ impl Interpreter {
         prop: &Expression,
         env: &EnvRef,
     ) -> Result<(JsValue, JsValue), Completion> {
-        self.eval_oc_tail_with_this_ctx(base_val, &JsValue::Undefined, prop, env)
+        self.eval_oc_tail_with_this_ctx(base_val, &JsValue::UNDEFINED, prop, env)
     }
 
     /// Core optional chain tail evaluator with explicit this context.
@@ -224,7 +228,7 @@ impl Interpreter {
                     Err(e) => return Err(Completion::Throw(e)),
                 };
                 match self.call_function(&func_val, &this_val, &evaluated_args) {
-                    Completion::Normal(v) => Ok((v, JsValue::Undefined)),
+                    Completion::Normal(v) => Ok((v, JsValue::UNDEFINED)),
                     other => Err(other),
                 }
             }
@@ -232,7 +236,7 @@ impl Interpreter {
                 let (inner_val, _) =
                     self.eval_oc_tail_with_this_ctx(base_val, chain_this, inner, env)?;
                 // Non-optional member access within optional chain: null/undefined throws
-                if matches!(&inner_val, JsValue::Null | JsValue::Undefined) {
+                if inner_val.is_nullish() {
                     let key_str = match mp {
                         MemberProperty::Dot(name) => name.clone(),
                         MemberProperty::Computed(_) => "property".to_string(),
@@ -240,7 +244,7 @@ impl Interpreter {
                     };
                     return Err(Completion::Throw(self.create_type_error(&format!(
                         "Cannot read properties of {} (reading '{key_str}')",
-                        if matches!(&inner_val, JsValue::Null) {
+                        if inner_val.is_null() {
                             "null"
                         } else {
                             "undefined"
@@ -272,7 +276,9 @@ impl Interpreter {
                     }
                     MemberProperty::Private(name) => {
                         let branded = self.resolve_private_name(name, env);
-                        if let JsValue::Object(o) = &inner_val
+                        if let Some(o) = inner_val
+                            .as_object_id()
+                            .map(|id| crate::types::JsObject { id })
                             && let Some(obj) = self.get_object_cell(o.id)
                         {
                             let elem = obj.borrow().private_fields.get(&branded).cloned();
@@ -298,7 +304,7 @@ impl Interpreter {
                                 )))),
                             }
                         } else {
-                            Ok((JsValue::Undefined, inner_val))
+                            Ok((JsValue::UNDEFINED, inner_val))
                         }
                     }
                 }
@@ -335,8 +341,8 @@ impl Interpreter {
             Err(c) => return c,
         };
         // If base is null/undefined, short-circuit to true
-        if matches!(base_val, JsValue::Null | JsValue::Undefined) {
-            return Completion::Normal(JsValue::Boolean(true));
+        if (base_val).is_nullish() {
+            return Completion::Normal(JsValue::boolean(true));
         }
         // Walk the chain to find the object and key to delete from
         self.eval_delete_oc_tail(&base_val, chain, env)
@@ -357,14 +363,14 @@ impl Interpreter {
                 // Evaluate inner to get the object, then delete the last property
                 let (inner_val, _) = match self.eval_oc_tail_with_this_ctx(
                     base_val,
-                    &JsValue::Undefined,
+                    &JsValue::UNDEFINED,
                     inner,
                     env,
                 ) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                if matches!(&inner_val, JsValue::Null | JsValue::Undefined) {
+                if inner_val.is_nullish() {
                     let key_str = match mp {
                         MemberProperty::Dot(name) => name.clone(),
                         MemberProperty::Computed(_) => "property".to_string(),
@@ -372,7 +378,7 @@ impl Interpreter {
                     };
                     return Completion::Throw(self.create_type_error(&format!(
                         "Cannot read properties of {} (reading '{key_str}')",
-                        if matches!(&inner_val, JsValue::Null) {
+                        if inner_val.is_null() {
                             "null"
                         } else {
                             "undefined"
@@ -403,7 +409,7 @@ impl Interpreter {
                 // delete obj?.method() — evaluate the call for side effects, return true
                 let (func_val, this_val) = match self.eval_oc_tail_with_this_ctx(
                     base_val,
-                    &JsValue::Undefined,
+                    &JsValue::UNDEFINED,
                     callee,
                     env,
                 ) {
@@ -415,7 +421,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 match self.call_function(&func_val, &this_val, &evaluated_args) {
-                    Completion::Normal(_) => Completion::Normal(JsValue::Boolean(true)),
+                    Completion::Normal(_) => Completion::Normal(JsValue::boolean(true)),
                     other => other,
                 }
             }
@@ -423,11 +429,11 @@ impl Interpreter {
                 // Fallback: evaluate the chain for side effects, return true
                 match self.eval_optional_chain_tail_with_base_this(
                     base_val,
-                    &JsValue::Undefined,
+                    &JsValue::UNDEFINED,
                     chain,
                     env,
                 ) {
-                    Completion::Normal(_) => Completion::Normal(JsValue::Boolean(true)),
+                    Completion::Normal(_) => Completion::Normal(JsValue::boolean(true)),
                     other => other,
                 }
             }
@@ -441,16 +447,18 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Completion {
         let key = key.to_js_property_key();
-        let obj_val = if !matches!(obj_val, JsValue::Object(_)) {
+        let obj_val = if !(obj_val).is_object() {
             match self.to_object(obj_val) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Completion::Throw(e),
-                _ => return Completion::Normal(JsValue::Boolean(true)),
+                _ => return Completion::Normal(JsValue::boolean(true)),
             }
         } else {
             obj_val.clone()
         };
-        if let JsValue::Object(ref o) = obj_val
+        if let Some(o) = (obj_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && let Some(obj) = self.get_object_cell(o.id)
         {
             if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
@@ -461,9 +469,9 @@ impl Interpreter {
                                 "Cannot delete property '{key}' of object"
                             )));
                         }
-                        return Completion::Normal(JsValue::Boolean(false));
+                        return Completion::Normal(JsValue::boolean(false));
                     }
-                    Ok(result) => return Completion::Normal(JsValue::Boolean(result)),
+                    Ok(result) => return Completion::Normal(JsValue::boolean(result)),
                     Err(e) => return Completion::Throw(e),
                 }
             }
@@ -480,7 +488,7 @@ impl Interpreter {
                         )),
                     );
                 }
-                return Completion::Normal(JsValue::Boolean(false));
+                return Completion::Normal(JsValue::boolean(false));
             }
             obj_mut.remove_property(&key);
             if let Some(map) = obj_mut.parameter_map_mut()
@@ -492,10 +500,10 @@ impl Interpreter {
                 && let Some(elems) = obj_mut.array_elements_mut()
                 && idx < elems.len()
             {
-                elems[idx] = JsValue::Undefined;
+                elems[idx] = JsValue::UNDEFINED;
             }
         }
-        Completion::Normal(JsValue::Boolean(true))
+        Completion::Normal(JsValue::boolean(true))
     }
 
     /// Serve a property-access IC hit for a cached `kind`, assuming the
@@ -524,7 +532,7 @@ impl Interpreter {
                 .and_then(|d| d.value.clone()),
             PropIcKind::Missing { proto_id, .. } => {
                 if obj_rc.borrow().prototype_id == proto_id {
-                    Some(JsValue::Undefined)
+                    Some(JsValue::UNDEFINED)
                 } else {
                     None
                 }
@@ -667,33 +675,31 @@ impl Interpreter {
                     other => return other,
                 };
                 let branded = self.resolve_private_name(name, env);
-                return match &obj_val {
-                    JsValue::Object(o) => {
-                        if let Some(obj_rc) = self.get_object_cell(o.id) {
-                            let elem = obj_rc.borrow().private_fields.get(&branded).cloned();
-                            match elem {
-                                Some(PrivateElement::Field(v))
-                                | Some(PrivateElement::Method(v)) => Completion::Normal(v),
-                                Some(PrivateElement::Accessor { get, .. }) => {
-                                    if let Some(getter) = get {
-                                        self.call_function(&getter, &obj_val, &[])
-                                    } else {
-                                        Completion::Throw(self.create_type_error(&format!(
-                                            "Cannot read private member #{name} which has no getter"
-                                        )))
-                                    }
-                                }
-                                None => Completion::Throw(self.create_type_error(&format!(
-                                    "Cannot read private member #{name} from an object whose class did not declare it"
-                                ))),
-                            }
-                        } else {
-                            Completion::Normal(JsValue::Undefined)
-                        }
-                    }
-                    _ => Completion::Throw(self.create_type_error(&format!(
+                let Some(obj_id) = obj_val.as_object_id() else {
+                    return Completion::Throw(self.create_type_error(&format!(
                         "Cannot read private member #{name} from a non-object"
-                    ))),
+                    )));
+                };
+                return if let Some(obj_rc) = self.get_object_cell(obj_id) {
+                    let elem = obj_rc.borrow().private_fields.get(&branded).cloned();
+                    match elem {
+                        Some(PrivateElement::Field(v))
+                        | Some(PrivateElement::Method(v)) => Completion::Normal(v),
+                        Some(PrivateElement::Accessor { get, .. }) => {
+                            if let Some(getter) = get {
+                                self.call_function(&getter, &obj_val, &[])
+                            } else {
+                                Completion::Throw(self.create_type_error(&format!(
+                                    "Cannot read private member #{name} which has no getter"
+                                )))
+                            }
+                        }
+                        None => Completion::Throw(self.create_type_error(&format!(
+                            "Cannot read private member #{name} from an object whose class did not declare it"
+                        ))),
+                    }
+                } else {
+                    Completion::Normal(JsValue::UNDEFINED)
                 };
             }
 
@@ -703,12 +709,12 @@ impl Interpreter {
                     "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
                 ));
             }
-            let this_val = env.borrow().get("this").unwrap_or(JsValue::Undefined);
+            let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
 
             // Steps 3-4: Evaluate key expression (without ToPropertyKey yet)
             let raw_key = match prop {
                 MemberProperty::Dot(name) => {
-                    JsValue::String(crate::types::JsString::from_str(name))
+                    JsValue::string(crate::types::JsString::from_str(name))
                 }
                 MemberProperty::Computed(expr) => match self.eval_expr(expr, env) {
                     Completion::Normal(v) => v,
@@ -745,34 +751,32 @@ impl Interpreter {
         };
         if let MemberProperty::Private(name) = prop {
             let branded = self.resolve_private_name(name, env);
-            return match &obj_val {
-                JsValue::Object(o) => {
-                    if let Some(obj) = self.get_object_cell(o.id) {
-                        let elem = obj.borrow().private_fields.get(&branded).cloned();
-                        match elem {
-                            Some(PrivateElement::Field(v)) | Some(PrivateElement::Method(v)) => {
-                                Completion::Normal(v)
-                            }
-                            Some(PrivateElement::Accessor { get, .. }) => {
-                                if let Some(getter) = get {
-                                    self.call_function(&getter, &obj_val, &[])
-                                } else {
-                                    Completion::Throw(self.create_type_error(&format!(
-                                        "Cannot read private member #{name} which has no getter"
-                                    )))
-                                }
-                            }
-                            None => Completion::Throw(self.create_type_error(&format!(
-                                "Cannot read private member #{name} from an object whose class did not declare it"
-                            ))),
-                        }
-                    } else {
-                        Completion::Normal(JsValue::Undefined)
-                    }
-                }
-                _ => Completion::Throw(self.create_type_error(&format!(
+            let Some(obj_id) = obj_val.as_object_id() else {
+                return Completion::Throw(self.create_type_error(&format!(
                     "Cannot read private member #{name} from a non-object"
-                ))),
+                )));
+            };
+            return if let Some(obj) = self.get_object_cell(obj_id) {
+                let elem = obj.borrow().private_fields.get(&branded).cloned();
+                match elem {
+                    Some(PrivateElement::Field(v)) | Some(PrivateElement::Method(v)) => {
+                        Completion::Normal(v)
+                    }
+                    Some(PrivateElement::Accessor { get, .. }) => {
+                        if let Some(getter) = get {
+                            self.call_function(&getter, &obj_val, &[])
+                        } else {
+                            Completion::Throw(self.create_type_error(&format!(
+                                "Cannot read private member #{name} which has no getter"
+                            )))
+                        }
+                    }
+                    None => Completion::Throw(self.create_type_error(&format!(
+                        "Cannot read private member #{name} from an object whose class did not declare it"
+                    ))),
+                }
+            } else {
+                Completion::Normal(JsValue::UNDEFINED)
             };
         }
         // For computed properties, evaluate the expression but defer ToPropertyKey
@@ -785,15 +789,17 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if matches!(&obj_val, JsValue::Null | JsValue::Undefined) {
+                if obj_val.is_nullish() {
                     let err = self.create_type_error(&format!(
                         "Cannot read properties of {obj_val} (reading property)"
                     ));
                     return Completion::Throw(err);
                 }
                 // Fast path: numeric index on typed array or array object
-                if let JsValue::Number(index) = &v
-                    && let JsValue::Object(o) = &obj_val
+                if let Some(index) = v.as_number()
+                    && let Some(o) = obj_val
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
                     && let Some(obj_rc) = self.get_object_cell(o.id)
                 {
                     let obj_borrow = obj_rc.borrow();
@@ -802,25 +808,25 @@ impl Interpreter {
                         use crate::interpreter::types::{
                             is_valid_integer_index, typed_array_get_index,
                         };
-                        if is_valid_integer_index(ta, *index) {
-                            let result = typed_array_get_index(ta, *index as usize);
+                        if is_valid_integer_index(ta, index) {
+                            let result = typed_array_get_index(ta, index as usize);
                             return Completion::Normal(result);
                         }
                         // Any canonical numeric index on typed array that's
                         // out of range returns undefined (no prototype walk)
                         let trunc = index.trunc();
-                        if *index == trunc && !index.is_nan() && !index.is_sign_negative() {
-                            return Completion::Normal(JsValue::Undefined);
+                        if index == trunc && !index.is_nan() && !index.is_sign_negative() {
+                            return Completion::Normal(JsValue::UNDEFINED);
                         }
                     }
                     // Array: direct element access (skip if index overridden by defineProperty)
                     if let Some(elems) = obj_borrow.array_elements() {
                         let trunc = index.trunc();
-                        if *index == trunc && *index >= 0.0 && (*index as usize) < elems.len() {
-                            let idx = *index as usize;
+                        if index == trunc && index >= 0.0 && (index as usize) < elems.len() {
+                            let idx = index as usize;
                             let key_str = (idx as u32).to_string();
                             if !obj_borrow.properties.contains_key(&key_str)
-                                && !matches!(elems[idx], JsValue::Undefined)
+                                && !(elems[idx]).is_undefined()
                             {
                                 return Completion::Normal(elems[idx].clone());
                             }
@@ -836,101 +842,103 @@ impl Interpreter {
             MemberProperty::Private(_) => unreachable!(),
         };
         let _ = computed_raw;
-        match &obj_val {
-            JsValue::Object(o) => {
-                // Phase 2 IC: probe + record for Dot access only (v1 scope).
-                // Computed access goes straight to the slow path; caching it
-                // requires extra logic for non-string keys and is deferred.
-                if matches!(prop, MemberProperty::Dot(_))
-                    && site_id != PropSiteId::UNASSIGNED
-                    && self.with_scope_depth == 0
+        if let Some(obj_id) = obj_val.as_object_id() {
+            let o = crate::types::JsObject { id: obj_id };
+            // Phase 2 IC: probe + record for Dot access only (v1 scope).
+            // Computed access goes straight to the slow path; caching it
+            // requires extra logic for non-string keys and is deferred.
+            if matches!(prop, MemberProperty::Dot(_))
+                && site_id != PropSiteId::UNASSIGNED
+                && self.with_scope_depth == 0
+            {
+                use crate::interpreter::ic::{PropIcKind, PropIcSlot};
+                // Probe: find the cached entry whose object identity matches
+                // the current receiver, without copying the slot (the `Poly`
+                // variant owns a heap `Vec`). Extract just the Copy fields we
+                // need for the shape check + dispatch, then release the
+                // borrow before touching any object.
+                let cached: Option<(u64, PropIcKind)> = match self.prop_slot(site_id) {
+                    PropIcSlot::Mono {
+                        obj_id,
+                        obj_shape_id,
+                        kind,
+                    } if *obj_id == o.id => Some((*obj_shape_id, *kind)),
+                    PropIcSlot::Poly(entries) => entries
+                        .iter()
+                        .find(|e| e.obj_id == o.id)
+                        .map(|e| (e.obj_shape_id, e.kind)),
+                    _ => None,
+                };
+                if let Some((want_shape, kind)) = cached
+                    && let Some(obj_rc) = self.get_object(o.id)
+                    && obj_rc.borrow().shape_id == want_shape
+                    && let Some(v) = self.ic_probe_prop_kind(&obj_rc, &key, kind)
                 {
-                    use crate::interpreter::ic::{PropIcKind, PropIcSlot};
-                    // Probe: find the cached entry whose object identity matches
-                    // the current receiver, without copying the slot (the `Poly`
-                    // variant owns a heap `Vec`). Extract just the Copy fields we
-                    // need for the shape check + dispatch, then release the
-                    // borrow before touching any object.
-                    let cached: Option<(u64, PropIcKind)> = match self.prop_slot(site_id) {
-                        PropIcSlot::Mono {
-                            obj_id,
-                            obj_shape_id,
-                            kind,
-                        } if *obj_id == o.id => Some((*obj_shape_id, *kind)),
-                        PropIcSlot::Poly(entries) => entries
-                            .iter()
-                            .find(|e| e.obj_id == o.id)
-                            .map(|e| (e.obj_shape_id, e.kind)),
-                        _ => None,
-                    };
-                    if let Some((want_shape, kind)) = cached
-                        && let Some(obj_rc) = self.get_object(o.id)
-                        && obj_rc.borrow().shape_id == want_shape
-                        && let Some(v) = self.ic_probe_prop_kind(&obj_rc, &key, kind)
-                    {
-                        // Shape match + confirmed dispatch — IC hit.
-                        self.ic_hit_count.set(self.ic_hit_count.get() + 1);
-                        return Completion::Normal(v);
-                    }
-                    // Probe miss — snapshot the pre-miss slot BEFORE the slow
-                    // path, then record afterwards. `get_object_property` can
-                    // run user code (an accessor getter or a proxy `get` trap)
-                    // that re-enters this same body + `PropSiteId` and mutates
-                    // the slot; capturing here keeps the state-machine
-                    // transition operating on the slot as it stood before this
-                    // access, honoring `PropIcSlot::advance`'s contract. The
-                    // clone is on the cold miss path only and allocates nothing
-                    // unless the slot was already `Poly`.
-                    self.ic_slow_path_count
-                        .set(self.ic_slow_path_count.get() + 1);
-                    let prev = self.prop_slot(site_id).clone();
-                    let result = self.get_object_property(o.id, &key, &obj_val.clone());
-                    if let Completion::Normal(_) = &result {
-                        // Classify for IC recording. Cheap one-borrow walk.
-                        let observed = self.classify_for_prop_ic(o.id, &key);
-                        // Drive the Empty → Mono → Poly → Megamorphic machine.
-                        *self.prop_slot(site_id) = prev.advance(observed);
-                    }
-                    return result;
+                    // Shape match + confirmed dispatch — IC hit.
+                    self.ic_hit_count.set(self.ic_hit_count.get() + 1);
+                    return Completion::Normal(v);
                 }
-                self.get_object_property(o.id, &key, &obj_val.clone())
-            }
-            JsValue::String(s) => {
-                if key.eq_str("length") {
-                    Completion::Normal(JsValue::Number(s.len() as f64))
-                } else if let Some(idx) =
-                    crate::interpreter::types::string_exotic_index(&key, s.code_units.len())
-                {
-                    Completion::Normal(JsValue::String(JsString::from_vec(vec![s.code_units[idx]])))
-                } else {
-                    let wrapper = match self.to_object(&obj_val) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    if let JsValue::Object(ref o) = wrapper {
-                        self.get_object_property(o.id, &key, &obj_val)
-                    } else {
-                        Completion::Normal(JsValue::Undefined)
-                    }
+                // Probe miss — snapshot the pre-miss slot BEFORE the slow
+                // path, then record afterwards. `get_object_property` can
+                // run user code (an accessor getter or a proxy `get` trap)
+                // that re-enters this same body + `PropSiteId` and mutates
+                // the slot; capturing here keeps the state-machine
+                // transition operating on the slot as it stood before this
+                // access, honoring `PropIcSlot::advance`'s contract. The
+                // clone is on the cold miss path only and allocates nothing
+                // unless the slot was already `Poly`.
+                self.ic_slow_path_count
+                    .set(self.ic_slow_path_count.get() + 1);
+                let prev = self.prop_slot(site_id).clone();
+                let result = self.get_object_property(o.id, &key, &obj_val.clone());
+                if let Completion::Normal(_) = &result {
+                    // Classify for IC recording. Cheap one-borrow walk.
+                    let observed = self.classify_for_prop_ic(o.id, &key);
+                    // Drive the Empty → Mono → Poly → Megamorphic machine.
+                    *self.prop_slot(site_id) = prev.advance(observed);
                 }
+                return result;
             }
-            JsValue::Symbol(_) | JsValue::Number(_) | JsValue::Boolean(_) | JsValue::BigInt(_) => {
+            self.get_object_property(o.id, &key, &obj_val.clone())
+        } else if let Some(s) = obj_val.as_string() {
+            if key.eq_str("length") {
+                Completion::Normal(JsValue::number(s.len() as f64))
+            } else if let Some(idx) =
+                crate::interpreter::types::string_exotic_index(&key, s.code_units.len())
+            {
+                Completion::Normal(JsValue::string(JsString::from_vec(vec![s.code_units[idx]])))
+            } else {
                 let wrapper = match self.to_object(&obj_val) {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if let JsValue::Object(ref o) = wrapper {
+                if let Some(o) = (wrapper)
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                {
                     self.get_object_property(o.id, &key, &obj_val)
                 } else {
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 }
             }
-            JsValue::Undefined | JsValue::Null => {
-                let err = self.create_type_error(&format!(
-                    "Cannot read properties of {obj_val} (reading '{key}')"
-                ));
-                Completion::Throw(err)
+        } else if !obj_val.is_nullish() {
+            let wrapper = match self.to_object(&obj_val) {
+                Completion::Normal(v) => v,
+                other => return other,
+            };
+            if let Some(o) = (wrapper)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+            {
+                self.get_object_property(o.id, &key, &obj_val)
+            } else {
+                Completion::Normal(JsValue::UNDEFINED)
             }
+        } else {
+            let err = self.create_type_error(&format!(
+                "Cannot read properties of {obj_val} (reading '{key}')"
+            ));
+            Completion::Throw(err)
         }
     }
 }

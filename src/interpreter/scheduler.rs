@@ -147,7 +147,7 @@ mod tests {
             "fresh scheduler must be idle"
         );
 
-        let job: MicrotaskJob = Box::new(|_interp| Completion::Normal(JsValue::Undefined));
+        let job: MicrotaskJob = Box::new(|_interp| Completion::Normal(JsValue::UNDEFINED));
         sched.enqueue_microtask((Vec::new(), job));
 
         assert!(
@@ -172,10 +172,10 @@ mod tests {
     fn microtask_queue_drains_in_fifo_order() {
         // Tag each job via its roots — the roots vector holds a single Number.
         fn job() -> MicrotaskJob {
-            Box::new(|_interp| Completion::Normal(JsValue::Undefined))
+            Box::new(|_interp| Completion::Normal(JsValue::UNDEFINED))
         }
         fn tag(n: f64) -> Vec<JsValue> {
-            vec![JsValue::Number(n)]
+            vec![JsValue::number(n)]
         }
 
         let mut sched = JobScheduler::default();
@@ -185,7 +185,7 @@ mod tests {
 
         let popped_tags: Vec<f64> = std::iter::from_fn(|| sched.pop_microtask())
             .map(|(roots, _)| match roots.as_slice() {
-                [JsValue::Number(n)] => *n,
+                [value] => value.as_number().expect("root must be a Number"),
                 _ => panic!("unexpected roots shape"),
             })
             .collect();
@@ -196,10 +196,10 @@ mod tests {
     fn next_request(tag: f64) -> super::super::AsyncGenRequest {
         super::super::AsyncGenRequest {
             kind: super::super::AsyncGenRequestKind::Next,
-            value: JsValue::Number(tag),
-            promise: JsValue::Undefined,
-            resolve_fn: JsValue::Undefined,
-            reject_fn: JsValue::Undefined,
+            value: JsValue::number(tag),
+            promise: JsValue::UNDEFINED,
+            resolve_fn: JsValue::UNDEFINED,
+            reject_fn: JsValue::UNDEFINED,
         }
     }
 
@@ -233,10 +233,7 @@ mod tests {
             .async_gen_queue_mut(42)
             .expect("gen 42 must have a queue");
         let tags: Vec<f64> = std::iter::from_fn(|| q.pop_front())
-            .map(|r| match r.value {
-                JsValue::Number(n) => n,
-                _ => panic!("unexpected value type"),
-            })
+            .map(|r| r.value.as_number().expect("request value must be a Number"))
             .collect();
 
         assert_eq!(tags, vec![1.0, 2.0, 3.0]);

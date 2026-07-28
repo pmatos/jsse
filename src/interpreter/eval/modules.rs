@@ -49,7 +49,7 @@ impl Interpreter {
             {
                 return Ok(val.clone());
             }
-            return Ok(JsValue::Undefined);
+            return Ok(JsValue::UNDEFINED);
         }
 
         // Handle *reexport:source:name — follow the chain recursively
@@ -89,7 +89,7 @@ impl Interpreter {
                     }
                 }
             }
-            return Ok(JsValue::Undefined);
+            return Ok(JsValue::UNDEFINED);
         }
 
         // Local binding: look up in the provided environment
@@ -103,7 +103,7 @@ impl Interpreter {
             return Ok(val);
         }
 
-        Ok(JsValue::Undefined)
+        Ok(JsValue::UNDEFINED)
     }
 
     /// Check if accessing `key` on a module namespace object would hit TDZ.
@@ -271,15 +271,18 @@ impl Interpreter {
         name: &str,
     ) -> Result<bool, JsValue> {
         let unscopables_val = {
-            let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
+            let this_val = JsValue::object(obj_id);
             let key = JsPropertyKey::well_known_symbol("unscopables");
             match self.get_object_property(obj_id, &key, &this_val) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             }
         };
-        if let JsValue::Object(u_ref) = &unscopables_val {
+        if let Some(u_ref) = unscopables_val
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             let u_this = unscopables_val.clone();
             match self.get_object_property(u_ref.id, name, &u_this) {
                 Completion::Normal(v) => Ok(self.to_boolean_val(&v)),
@@ -340,7 +343,7 @@ impl Interpreter {
     ) -> Completion {
         match self.proxy_has_property(obj_id, name) {
             Ok(true) => {
-                let this_val = JsValue::Object(crate::types::JsObject { id: obj_id });
+                let this_val = JsValue::object(obj_id);
                 self.get_object_property(obj_id, name, &this_val)
             }
             Ok(false) => {
@@ -349,7 +352,7 @@ impl Interpreter {
                         self.create_reference_error(&format!("{name} is not defined")),
                     )
                 } else {
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 }
             }
             Err(e) => Completion::Throw(e),
@@ -367,7 +370,7 @@ impl Interpreter {
     ) -> Result<(), JsValue> {
         match self.proxy_has_property(obj_id, name) {
             Ok(true) => {
-                let receiver = JsValue::Object(crate::types::JsObject { id: obj_id });
+                let receiver = JsValue::object(obj_id);
                 let success = self.proxy_set(obj_id, name, value, &receiver)?;
                 if !success && strict {
                     return Err(self.create_type_error(&format!(
@@ -380,7 +383,7 @@ impl Interpreter {
                 if strict {
                     Err(self.create_reference_error(&format!("{name} is not defined")))
                 } else {
-                    let receiver = JsValue::Object(crate::types::JsObject { id: obj_id });
+                    let receiver = JsValue::object(obj_id);
                     self.proxy_set(obj_id, name, value, &receiver)?;
                     Ok(())
                 }
@@ -477,10 +480,10 @@ impl Interpreter {
                             }
                             let _ = interp.call_function(
                                 &reject_root,
-                                &JsValue::Undefined,
+                                &JsValue::UNDEFINED,
                                 std::slice::from_ref(e),
                             );
-                            return Completion::Normal(JsValue::Undefined);
+                            return Completion::Normal(JsValue::UNDEFINED);
                         }
                         let _ = interp.settle_dynamic_import_promise(
                             &m,
@@ -490,10 +493,10 @@ impl Interpreter {
                         );
                     }
                     Err(e) => {
-                        let _ = interp.call_function(&reject_root, &JsValue::Undefined, &[e]);
+                        let _ = interp.call_function(&reject_root, &JsValue::UNDEFINED, &[e]);
                     }
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             }),
         ));
 
@@ -508,14 +511,14 @@ impl Interpreter {
         reject: JsValue,
     ) -> Completion {
         if let Some(err) = module.borrow().error.clone() {
-            let _ = self.call_function(&reject, &JsValue::Undefined, &[err]);
+            let _ = self.call_function(&reject, &JsValue::UNDEFINED, &[err]);
             return Completion::Normal(promise);
         }
 
         let evaluation_promise = match self.ensure_module_evaluation_promise(module) {
             Ok(promise) => promise,
             Err(err) => {
-                let _ = self.call_function(&reject, &JsValue::Undefined, &[err]);
+                let _ = self.call_function(&reject, &JsValue::UNDEFINED, &[err]);
                 return Completion::Normal(promise);
             }
         };
@@ -532,7 +535,7 @@ impl Interpreter {
             return self.perform_promise_then(
                 &eval_promise,
                 &on_fulfilled,
-                &JsValue::Undefined,
+                &JsValue::UNDEFINED,
                 promise,
                 resolve,
                 reject,
@@ -540,7 +543,7 @@ impl Interpreter {
         }
 
         let ns = self.create_module_namespace(module);
-        let _ = self.call_function(&resolve, &JsValue::Undefined, &[ns]);
+        let _ = self.call_function(&resolve, &JsValue::UNDEFINED, &[ns]);
         Completion::Normal(promise)
     }
 
@@ -594,25 +597,17 @@ impl Interpreter {
         caller_realm_id: usize,
         value: &JsValue,
     ) -> Result<JsValue, JsValue> {
-        match value {
-            JsValue::Undefined
-            | JsValue::Null
-            | JsValue::Boolean(_)
-            | JsValue::Number(_)
-            | JsValue::String(_)
-            | JsValue::Symbol(_)
-            | JsValue::BigInt(_) => Ok(value.clone()),
-            JsValue::Object(_) => {
-                if !self.is_callable(value) {
-                    return Err(self.create_error_in_realm(
-                        caller_realm_id,
-                        "TypeError",
-                        "ShadowRealm can only pass callable and primitive values across realm boundaries",
-                    ));
-                }
-                self.wrapped_function_create(caller_realm_id, value)
-            }
+        if !value.is_object() {
+            return Ok(value.clone());
         }
+        if !self.is_callable(value) {
+            return Err(self.create_error_in_realm(
+                caller_realm_id,
+                "TypeError",
+                "ShadowRealm can only pass callable and primitive values across realm boundaries",
+            ));
+        }
+        self.wrapped_function_create(caller_realm_id, value)
     }
 
     pub(crate) fn wrapped_function_create(
@@ -631,9 +626,12 @@ impl Interpreter {
             o.prototype_id = fp_id;
             o.class_name = "Function".to_string();
             o.callable = Some(JsFunction::native("".to_string(), 0, |_, _, _| {
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             }));
-            if let JsValue::Object(tf) = target_func {
+            if let Some(tf) = (target_func)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+            {
                 o.kind = crate::interpreter::types::ObjectKind::WrappedFunction(
                     crate::interpreter::types::WrappedFunctionData {
                         target_id: tf.id,
@@ -647,10 +645,13 @@ impl Interpreter {
         self.current_realm_id = old_realm;
 
         // CopyNameAndLength (spec §10.4.2.4) — any error becomes TypeError from callerRealm
-        let length_val = if let JsValue::Object(tf) = target_func {
+        let length_val = if let Some(tf) = (target_func)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             // HasOwnProperty via [[GetOwnProperty]] (invokes proxy trap if proxy)
             let has_own_length = match self.proxy_get_own_property_descriptor(tf.id, "length") {
-                Ok(JsValue::Undefined) => false,
+                Ok(v) if v.is_undefined() => false,
                 Ok(_) => true,
                 Err(_) => {
                     return Err(self.create_error_in_realm(
@@ -670,17 +671,17 @@ impl Interpreter {
                             "WrappedFunctionCreate: error getting length",
                         ));
                     }
-                    _ => JsValue::Number(0.0),
+                    _ => JsValue::number(0.0),
                 }
             } else {
-                JsValue::Number(0.0)
+                JsValue::number(0.0)
             }
         } else {
-            JsValue::Number(0.0)
+            JsValue::number(0.0)
         };
 
-        let computed_length = match length_val {
-            JsValue::Number(n) => {
+        let computed_length = match length_val.as_number() {
+            Some(n) => {
                 if n == f64::INFINITY {
                     f64::INFINITY
                 } else if n == f64::NEG_INFINITY || n < 0.0 {
@@ -689,13 +690,15 @@ impl Interpreter {
                     n.trunc().max(0.0)
                 }
             }
-            _ => 0.0,
+            None => 0.0,
         };
 
-        let name_str = if let JsValue::Object(tf) = target_func {
+        let name_str = if let Some(tf) = (target_func)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             match self.get_object_property(tf.id, "name", target_func) {
-                Completion::Normal(JsValue::String(s)) => s.to_string(),
-                Completion::Normal(_) => String::new(),
+                Completion::Normal(v) => v.as_string().map_or_else(String::new, |s| s.to_string()),
                 Completion::Throw(_) => {
                     return Err(self.create_error_in_realm(
                         caller_realm_id,
@@ -712,12 +715,12 @@ impl Interpreter {
         if let Some(obj) = self.get_object_cell(func_id) {
             obj.borrow_mut().insert_property(
                 "length".to_string(),
-                PropertyDescriptor::data(JsValue::Number(computed_length), false, false, true),
+                PropertyDescriptor::data(JsValue::number(computed_length), false, false, true),
             );
             obj.borrow_mut().insert_property(
                 "name".to_string(),
                 PropertyDescriptor::data(
-                    JsValue::String(crate::types::JsString::from_str(&name_str)),
+                    JsValue::string(crate::types::JsString::from_str(&name_str)),
                     false,
                     false,
                     true,
@@ -725,7 +728,7 @@ impl Interpreter {
             );
         }
 
-        Ok(JsValue::Object(crate::types::JsObject { id: func_id }))
+        Ok(JsValue::object(func_id))
     }
 
     pub(crate) fn call_wrapped_function(
@@ -749,10 +752,7 @@ impl Interpreter {
                     self.create_type_error("WrappedFunction: missing target"),
                 );
             };
-            (
-                JsValue::Object(crate::types::JsObject { id: w.target_id }),
-                w.caller_realm_id,
-            )
+            (JsValue::object(w.target_id), w.caller_realm_id)
         };
 
         let target_realm_id = match self.get_function_realm(&target) {
@@ -778,12 +778,12 @@ impl Interpreter {
         // Call target in its realm
         let old_realm = self.current_realm_id;
         self.current_realm_id = target_realm_id;
-        let result = self.call_function(&target, &JsValue::Undefined, &wrapped_args);
+        let result = self.call_function(&target, &JsValue::UNDEFINED, &wrapped_args);
         self.current_realm_id = old_realm;
 
         let result_val = match result {
             Completion::Normal(v) => v,
-            Completion::Empty => JsValue::Undefined,
+            Completion::Empty => JsValue::UNDEFINED,
             _ => {
                 return Completion::Throw(self.create_error_in_realm(
                     caller_realm_id,
@@ -874,7 +874,7 @@ impl Interpreter {
 
         let result_val = match result {
             Completion::Normal(v) => v,
-            Completion::Empty => JsValue::Undefined,
+            Completion::Empty => JsValue::UNDEFINED,
             _ => {
                 return Completion::Throw(self.create_error_in_realm(
                     caller_realm_id,

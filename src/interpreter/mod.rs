@@ -341,9 +341,9 @@ impl Interpreter {
         {
             let mut env = global.borrow_mut();
             for (name, value) in [
-                ("undefined", JsValue::Undefined),
-                ("NaN", JsValue::Number(f64::NAN)),
-                ("Infinity", JsValue::Number(f64::INFINITY)),
+                ("undefined", JsValue::UNDEFINED),
+                ("NaN", JsValue::number(f64::NAN)),
+                ("Infinity", JsValue::number(f64::INFINITY)),
             ] {
                 env.bindings.insert(
                     name.to_string(),
@@ -456,9 +456,9 @@ impl Interpreter {
         {
             let mut env = new_global_env.borrow_mut();
             for (name, value) in [
-                ("undefined", JsValue::Undefined),
-                ("NaN", JsValue::Number(f64::NAN)),
-                ("Infinity", JsValue::Number(f64::INFINITY)),
+                ("undefined", JsValue::UNDEFINED),
+                ("NaN", JsValue::number(f64::NAN)),
+                ("Infinity", JsValue::number(f64::INFINITY)),
             ] {
                 env.bindings.insert(
                     name.to_string(),
@@ -489,7 +489,7 @@ impl Interpreter {
             "detachArrayBuffer".to_string(),
             1,
             |interp, _this, args| {
-                let buf = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let buf = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 interp.detach_arraybuffer(&buf)
             },
         ));
@@ -504,7 +504,7 @@ impl Interpreter {
             |interp, _this, _args| {
                 interp.gc.request();
                 interp.gc_safepoint();
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(dollar_262_id)
@@ -516,10 +516,7 @@ impl Interpreter {
         if let Some(go_id) = global_env.borrow().global_object_id {
             self.get_object_cell_expect(dollar_262_id)
                 .borrow_mut()
-                .insert_builtin(
-                    "global".to_string(),
-                    JsValue::Object(crate::types::JsObject { id: go_id }),
-                );
+                .insert_builtin("global".to_string(), JsValue::object(go_id));
         }
 
         // $262.createRealm
@@ -542,8 +539,8 @@ impl Interpreter {
             "evalScript".to_string(),
             1,
             move |interp, _this, args| {
-                let code_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let code = if let JsValue::String(ref s) = code_val {
+                let code_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let code = if let Some(s) = (code_val).as_string() {
                     crate::interpreter::builtins::regexp::js_string_to_regex_input(&s.code_units)
                 } else {
                     match interp.to_string_value(&code_val) {
@@ -573,7 +570,7 @@ impl Interpreter {
                 interp.current_realm_id = old_realm;
                 match result {
                     Completion::Normal(v) => Completion::Normal(v),
-                    Completion::Empty => Completion::Normal(JsValue::Undefined),
+                    Completion::Empty => Completion::Normal(JsValue::UNDEFINED),
                     other => other,
                 }
             },
@@ -589,12 +586,12 @@ impl Interpreter {
             .callable = Some(JsFunction::native(
             "".to_string(),
             0,
-            |_interp, _this, _args| Completion::Normal(JsValue::Null),
+            |_interp, _this, _args| Completion::Normal(JsValue::NULL),
         ));
         self.get_object_cell_expect(htmldda_obj_id)
             .borrow_mut()
             .is_htmldda = true;
-        let htmldda_val = JsValue::Object(crate::types::JsObject { id: htmldda_obj_id });
+        let htmldda_val = JsValue::object(htmldda_obj_id);
         self.get_object_cell_expect(dollar_262_id)
             .borrow_mut()
             .insert_builtin("IsHTMLDDA".to_string(), htmldda_val);
@@ -608,7 +605,7 @@ impl Interpreter {
             "start".to_string(),
             1,
             move |interp, _this, args| {
-                let script_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let script_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let script = match interp.to_string_value(&script_val) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
@@ -641,7 +638,7 @@ impl Interpreter {
                 });
                 interp.agent_handles.push(handle);
 
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(agent_obj_id)
@@ -653,8 +650,10 @@ impl Interpreter {
             "broadcast".to_string(),
             1,
             |interp, _this, args| {
-                let sab_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let JsValue::Object(o) = &sab_val
+                let sab_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if let Some(o) = sab_val
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
                     && let Some(cell) = interp.get_object_cell(o.id)
                 {
                     let sab_shared = cell.borrow().sab_shared().cloned();
@@ -666,7 +665,7 @@ impl Interpreter {
                         }
                     }
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(agent_obj_id)
@@ -681,9 +680,9 @@ impl Interpreter {
                 let (ref reports_lock, _) = *interp.agent_reports;
                 let mut reports = reports_lock.lock().unwrap();
                 if let Some(report) = reports.pop_front() {
-                    Completion::Normal(JsValue::String(JsString::from_str(&report)))
+                    Completion::Normal(JsValue::string(JsString::from_str(&report)))
                 } else {
-                    Completion::Normal(JsValue::Null)
+                    Completion::Normal(JsValue::NULL)
                 }
             },
         ));
@@ -704,8 +703,8 @@ impl Interpreter {
                     reports_lock.lock().unwrap().pop_front()
                 };
                 if let Some(report) = immediate_report {
-                    let report_val = JsValue::String(JsString::from_str(&report));
-                    let _ = interp.call_function(&resolve_fn, &JsValue::Undefined, &[report_val]);
+                    let report_val = JsValue::string(JsString::from_str(&report));
+                    let _ = interp.call_function(&resolve_fn, &JsValue::UNDEFINED, &[report_val]);
                     interp.gc_unroot_value(&resolve_fn);
                     return Completion::Normal(promise_val);
                 }
@@ -716,7 +715,10 @@ impl Interpreter {
                 let pending = interp.agent_async_completions.clone();
                 let pending_jobs = interp.scheduler.pending_async_jobs_handle();
                 let pending_promise_ids = interp.scheduler.pending_async_promise_ids_handle();
-                let promise_id = if let JsValue::Object(ref o) = promise_val {
+                let promise_id = if let Some(o) = (promise_val)
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
+                {
                     o.id
                 } else {
                     0
@@ -736,13 +738,13 @@ impl Interpreter {
                             queue = reports_cvar.wait(queue).unwrap();
                         }
                     };
-                    let report_val = JsValue::String(JsString::from_str(&report));
+                    let report_val = JsValue::string(JsString::from_str(&report));
                     let (ref mtx, ref completion_cvar) = *pending;
                     mtx.lock()
                         .unwrap()
                         .push(Box::new(move |interp: &mut Interpreter| {
                             let _ =
-                                interp.call_function(&resolve, &JsValue::Undefined, &[report_val]);
+                                interp.call_function(&resolve, &JsValue::UNDEFINED, &[report_val]);
                             interp.gc_unroot_value(&resolve);
                             if promise_id != 0 {
                                 pending_promise_ids.lock().unwrap().remove(&promise_id);
@@ -764,13 +766,13 @@ impl Interpreter {
             "sleep".to_string(),
             1,
             |interp, _this, args| {
-                let ms_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let ms_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let ms = match interp.to_number_value(&ms_val) {
                     Ok(n) => n.max(0.0) as u64,
                     Err(e) => return Completion::Throw(e),
                 };
                 std::thread::sleep(std::time::Duration::from_millis(ms));
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(agent_obj_id)
@@ -784,7 +786,7 @@ impl Interpreter {
             0,
             move |_interp, _this, _args| {
                 let elapsed = start_time.elapsed().as_millis() as f64;
-                Completion::Normal(JsValue::Number(elapsed))
+                Completion::Normal(JsValue::number(elapsed))
             },
         ));
         self.get_object_cell_expect(agent_obj_id)
@@ -795,13 +797,13 @@ impl Interpreter {
         let leaving_fn = self.create_function(JsFunction::native(
             "leaving".to_string(),
             0,
-            |_interp, _this, _args| Completion::Normal(JsValue::Undefined),
+            |_interp, _this, _args| Completion::Normal(JsValue::UNDEFINED),
         ));
         self.get_object_cell_expect(agent_obj_id)
             .borrow_mut()
             .insert_builtin("leaving".to_string(), leaving_fn);
 
-        let agent_val = JsValue::Object(crate::types::JsObject { id: agent_obj_id });
+        let agent_val = JsValue::object(agent_obj_id);
         self.get_object_cell_expect(dollar_262_id)
             .borrow_mut()
             .insert_builtin("agent".to_string(), agent_val);
@@ -812,7 +814,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_builtin("AbstractModuleSource".to_string(), ams_fn);
 
-        JsValue::Object(crate::types::JsObject { id: dollar_262_id })
+        JsValue::object(dollar_262_id)
     }
 
     /// Get (or lazily mint) the per-realm %AbstractModuleSource% constructor.
@@ -832,7 +834,10 @@ impl Interpreter {
                 )
             },
         ));
-        let ams_fn_id = if let JsValue::Object(o) = &ams_fn {
+        let ams_fn_id = if let Some(o) = ams_fn
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+        {
             o.id
         } else {
             unreachable!()
@@ -849,10 +854,10 @@ impl Interpreter {
             "get [Symbol.toStringTag]".to_string(),
             0,
             |_interp, this_val, _args| {
-                if let JsValue::Object(_) = this_val {
-                    return Completion::Normal(JsValue::Undefined);
+                if (this_val).is_object() {
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(ams_proto_id)
@@ -868,7 +873,7 @@ impl Interpreter {
                     configurable: Some(true),
                 },
             );
-        let ams_proto_val = JsValue::Object(crate::types::JsObject { id: ams_proto_id });
+        let ams_proto_val = JsValue::object(ams_proto_id);
 
         // Wire prototype on the constructor: {writable: false, enumerable: false, configurable: false}
         if let Some(obj) = self.get_object_cell(ams_fn_id) {
@@ -886,8 +891,12 @@ impl Interpreter {
     /// objects — i.e. `%AbstractModuleSource.prototype%` in the current realm.
     fn abstract_module_source_prototype_id(&mut self) -> Option<u64> {
         let ctor = self.abstract_module_source_constructor(self.current_realm_id);
-        if let JsValue::Object(o) = ctor
-            && let JsValue::Object(p) = self.get_property_on_id(o.id, "prototype")
+        if let Some(o) = (ctor)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
+            && let Some(p) = (self.get_property_on_id(o.id, "prototype"))
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
         {
             return Some(p.id);
         }
@@ -912,7 +921,7 @@ impl Interpreter {
             obj.prototype_id = proto_id;
             obj.class_name = "AbstractModuleSource".to_string();
         }
-        let source_val = JsValue::Object(crate::types::JsObject { id: source_id });
+        let source_val = JsValue::object(source_id);
 
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
@@ -977,7 +986,7 @@ impl Interpreter {
     }
 
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
-        if let JsValue::Object(o) = val {
+        if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id }) {
             self.gc_temp_roots.push(o.id);
         }
     }
@@ -996,7 +1005,7 @@ impl Interpreter {
     }
 
     pub(crate) fn gc_unroot_value(&mut self, val: &JsValue) {
-        if let JsValue::Object(o) = val
+        if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id })
             && let Some(pos) = self.gc_temp_roots.iter().rposition(|&id| id == o.id)
         {
             self.gc_temp_roots.remove(pos);
@@ -1023,19 +1032,23 @@ impl Interpreter {
     }
 
     pub(crate) fn can_be_held_weakly(&self, val: &JsValue) -> bool {
-        match val {
-            JsValue::Object(_) => true,
-            JsValue::Symbol(sym) => !self
+        if val.is_object() {
+            true
+        } else if let Some(sym) = val.as_symbol() {
+            !self
                 .global_symbol_registry
                 .values()
-                .any(|reg| reg.id() == sym.id()),
-            _ => false,
+                .any(|reg| reg.id() == sym.id())
+        } else {
+            false
         }
     }
 
     // GetFunctionRealm — §10.2.4
     pub(crate) fn get_function_realm(&mut self, func_val: &JsValue) -> Result<usize, JsValue> {
-        if let JsValue::Object(o) = func_val
+        if let Some(o) = (func_val)
+            .as_object_id()
+            .map(|id| crate::types::JsObject { id })
             && let Some(obj) = self.get_object_cell(o.id)
         {
             let obj_ref = obj.borrow();
@@ -1052,9 +1065,7 @@ impl Interpreter {
             }
             if let Some(target_id) = obj_ref.proxy_target_id() {
                 drop(obj_ref);
-                return self.get_function_realm(&JsValue::Object(crate::types::JsObject {
-                    id: target_id,
-                }));
+                return self.get_function_realm(&JsValue::object(target_id));
             }
             drop(obj_ref);
             // Check function_realm_map
@@ -1079,17 +1090,20 @@ impl Interpreter {
                 return Ok(get_realm_proto(&self.realms[self.current_realm_id]));
             }
         };
-        if let JsValue::Object(nt_o) = &nt {
+        if let Some(nt_o) = nt.as_object_id().map(|id| crate::types::JsObject { id }) {
             let proto_val = match self.get_object_property(nt_o.id, "prototype", &nt) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
-            if let JsValue::Object(po) = proto_val {
+            if let Some(po) = (proto_val)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
+            {
                 return Ok(Some(po.id));
             }
             // proto is not an object: use realm of newTarget
-            let nt_realm_id = self.get_function_realm(&JsValue::Object(nt_o.clone()))?;
+            let nt_realm_id = self.get_function_realm(&JsValue::object(nt_o.id))?;
             return Ok(get_realm_proto(&self.realms[nt_realm_id]));
         }
         Ok(get_realm_proto(&self.realms[self.current_realm_id]))
@@ -1107,7 +1121,7 @@ impl Interpreter {
         &mut self,
         val: &JsValue,
     ) -> Result<PropertyDescriptor, Option<JsValue>> {
-        if let JsValue::Object(d) = val {
+        if let Some(d) = (val).as_object_id().map(|id| crate::types::JsObject { id }) {
             let obj_id = d.id;
             let mut desc = PropertyDescriptor {
                 value: None,
@@ -1149,9 +1163,11 @@ impl Interpreter {
 
             // Validate: get must be callable or undefined
             if let Some(ref getter) = desc.get
-                && !matches!(getter, JsValue::Undefined)
+                && !(getter).is_undefined()
             {
-                let is_callable = if let JsValue::Object(o) = getter
+                let is_callable = if let Some(o) = (getter)
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
                     && let Some(obj) = self.get_object_cell(o.id)
                 {
                     obj.borrow().callable.is_some()
@@ -1163,9 +1179,11 @@ impl Interpreter {
                 }
             }
             if let Some(ref setter) = desc.set
-                && !matches!(setter, JsValue::Undefined)
+                && !(setter).is_undefined()
             {
-                let is_callable = if let JsValue::Object(o) = setter
+                let is_callable = if let Some(o) = (setter)
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
                     && let Some(obj) = self.get_object_cell(o.id)
                 {
                     obj.borrow().callable.is_some()
@@ -1210,7 +1228,7 @@ impl Interpreter {
                 r.insert_value("value".to_string(), val.clone());
             }
             if let Some(w) = desc.writable {
-                r.insert_value("writable".to_string(), JsValue::Boolean(w));
+                r.insert_value("writable".to_string(), JsValue::boolean(w));
             }
             if let Some(ref getter) = desc.get {
                 r.insert_value("get".to_string(), getter.clone());
@@ -1219,18 +1237,18 @@ impl Interpreter {
                 r.insert_value("set".to_string(), setter.clone());
             }
             if let Some(e) = desc.enumerable {
-                r.insert_value("enumerable".to_string(), JsValue::Boolean(e));
+                r.insert_value("enumerable".to_string(), JsValue::boolean(e));
             }
             if let Some(c) = desc.configurable {
-                r.insert_value("configurable".to_string(), JsValue::Boolean(c));
+                r.insert_value("configurable".to_string(), JsValue::boolean(c));
             }
         }
         let id = result_id;
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 
     pub(crate) fn to_boolean_val(&self, val: &JsValue) -> bool {
-        if let JsValue::Object(o) = val
+        if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id })
             && let Some(obj) = self.objects.get(o.id)
             && obj.borrow().is_htmldda
         {
@@ -1332,12 +1350,12 @@ impl Interpreter {
         };
         obj_data.insert_property(
             "length".to_string(),
-            PropertyDescriptor::data(JsValue::Number(fn_length as f64), false, false, true),
+            PropertyDescriptor::data(JsValue::number(fn_length as f64), false, false, true),
         );
         obj_data.insert_property(
             "name".to_string(),
             PropertyDescriptor::data(
-                JsValue::String(JsString::from_str(&fn_name)),
+                JsValue::string(JsString::from_str(&fn_name)),
                 false,
                 false,
                 true,
@@ -1365,7 +1383,7 @@ impl Interpreter {
             } else {
                 obj_data.insert_property(
                     "caller".to_string(),
-                    PropertyDescriptor::data(JsValue::Null, false, false, true),
+                    PropertyDescriptor::data(JsValue::NULL, false, false, true),
                 );
             }
             if let Some(ref getter) = self.realm().sloppy_arguments_getter.clone() {
@@ -1376,7 +1394,7 @@ impl Interpreter {
             } else {
                 obj_data.insert_property(
                     "arguments".to_string(),
-                    PropertyDescriptor::data(JsValue::Null, false, false, true),
+                    PropertyDescriptor::data(JsValue::NULL, false, false, true),
                 );
             }
         }
@@ -1405,7 +1423,7 @@ impl Interpreter {
                     .borrow_mut()
                     .prototype_id = self.realm().generator_prototype;
             }
-            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            let proto_val = JsValue::object(proto_id);
             obj_data.insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val.clone(), true, false, false),
@@ -1414,15 +1432,17 @@ impl Interpreter {
         let func_id = self.alloc_object(obj_data);
         self.function_realm_map
             .insert(func_id, self.current_realm_id);
-        let func_val = JsValue::Object(crate::types::JsObject { id: func_id });
+        let func_val = JsValue::object(func_id);
         // Set prototype.constructor = func (not for generators)
         if is_constructable
             && !is_gen
-            && let Some(JsValue::Object(proto_ref)) = self
+            && let Some(proto_id) = self
                 .get_object_cell_expect(func_id)
                 .borrow()
                 .get_property_value("prototype")
-            && let Some(proto_obj) = self.get_object_cell(proto_ref.id)
+                .as_ref()
+                .and_then(JsValue::as_object_id)
+            && let Some(proto_obj) = self.get_object_cell(proto_id)
         {
             proto_obj
                 .borrow_mut()
@@ -1496,7 +1516,7 @@ impl Interpreter {
             .insert_property(
                 JsPropertyKey::well_known_symbol("toStringTag"),
                 PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str(tag)),
+                    JsValue::string(JsString::from_str(tag)),
                     false,
                     false,
                     true,
@@ -1590,7 +1610,7 @@ impl Interpreter {
     }
 
     pub(crate) fn set_function_name<K: PropertyKeyLike + ?Sized>(&self, val: &JsValue, name: &K) {
-        if let JsValue::Object(o) = val
+        if let Some(o) = (val).as_object_id().map(|id| crate::types::JsObject { id })
             && let Some(obj) = self.get_object_cell(o.id)
         {
             let obj_ref = obj.borrow();
@@ -1600,7 +1620,7 @@ impl Interpreter {
             if let Some(prop) = obj_ref.properties.get("name")
                 && let Some(ref v) = prop.value
             {
-                if let JsValue::String(s) = v {
+                if let Some(s) = (v).as_string() {
                     if !s.code_units.is_empty() {
                         return;
                     }
@@ -1612,7 +1632,7 @@ impl Interpreter {
             obj.borrow_mut().insert_property(
                 "name".to_string(),
                 PropertyDescriptor::data(
-                    JsValue::String(name.to_js_property_key().to_js_string()),
+                    JsValue::string(name.to_js_property_key().to_js_string()),
                     false,
                     false,
                     true,
@@ -1650,7 +1670,7 @@ impl Interpreter {
     pub(crate) fn materialize_call_frame_arguments(&mut self, frame_index: usize) -> JsValue {
         let frame = &self.call_stack_frames[frame_index];
         let (args, func_env, mapped, func_obj_id) = match &frame.arguments {
-            CallFrameArguments::None => return JsValue::Null,
+            CallFrameArguments::None => return JsValue::NULL,
             CallFrameArguments::Materialized(arguments) => return arguments.clone(),
             CallFrameArguments::Deferred {
                 args,
@@ -1680,7 +1700,7 @@ impl Interpreter {
         } else {
             Vec::new()
         };
-        let callee = JsValue::Object(crate::types::JsObject { id: func_obj_id });
+        let callee = JsValue::object(func_obj_id);
         let arguments = self.create_arguments_object(
             &args,
             callee,
@@ -1710,7 +1730,7 @@ impl Interpreter {
             o.define_own_property(
                 "length".to_string(),
                 PropertyDescriptor {
-                    value: Some(JsValue::Number(args.len() as f64)),
+                    value: Some(JsValue::number(args.len() as f64)),
                     writable: Some(true),
                     enumerable: Some(false),
                     configurable: Some(true),
@@ -1767,7 +1787,7 @@ impl Interpreter {
         }
 
         let result_id = obj_id;
-        let result = JsValue::Object(crate::types::JsObject { id: result_id });
+        let result = JsValue::object(result_id);
 
         // Unmapped (strict OR non-simple params): callee is a throw accessor
         if func_env.is_none() {
@@ -1776,7 +1796,9 @@ impl Interpreter {
                 .throw_type_error
                 .clone()
                 .unwrap_or_else(|| self.create_thrower_function());
-            if let JsValue::Object(ref o) = result
+            if let Some(o) = (result)
+                .as_object_id()
+                .map(|id| crate::types::JsObject { id })
                 && let Some(obj_rc) = self.get_object_cell(o.id)
             {
                 obj_rc.borrow_mut().define_own_property(
@@ -1801,8 +1823,10 @@ impl Interpreter {
                 .array_prototype
                 .map(|id| self.get_property_on_id(id, &key));
             if let Some(iter_fn) = array_iter_fn
-                && !matches!(iter_fn, JsValue::Undefined)
-                && let JsValue::Object(ref o) = result
+                && !(iter_fn).is_undefined()
+                && let Some(o) = (result)
+                    .as_object_id()
+                    .map(|id| crate::types::JsObject { id })
                 && let Some(obj_rc) = self.get_object_cell(o.id)
             {
                 obj_rc
@@ -1821,7 +1845,7 @@ impl Interpreter {
     ) -> JsValue {
         let exact_key = property_key.to_js_property_key();
         let Some(key) = exact_key.symbol_encoding() else {
-            return JsValue::String(exact_key.to_js_string());
+            return JsValue::string(exact_key.to_js_string());
         };
         // Well-known symbols: "Symbol(Symbol.xyz)" — recover the intrinsic Symbol value.
         if key.starts_with("Symbol(Symbol.") && key.ends_with(')') && !key.contains('#') {
@@ -1829,7 +1853,7 @@ impl Interpreter {
             let inner = &key[7..key.len() - 1]; // "Symbol.toStringTag"
             let name = &inner[7..]; // "toStringTag"
             if let Some(symbol) = self.well_known_symbols.get(name) {
-                return JsValue::Symbol(symbol.clone());
+                return JsValue::symbol(symbol.clone());
             }
         }
         // User symbols with id: "Symbol(desc)#id" or "Symbol()#id"
@@ -1850,13 +1874,13 @@ impl Interpreter {
             // Check global_symbol_registry for Symbol.for() symbols
             for sym in self.global_symbol_registry.values() {
                 if sym.id() == id {
-                    return JsValue::Symbol(sym.clone());
+                    return JsValue::symbol(sym.clone());
                 }
             }
-            return JsValue::Symbol(crate::types::JsSymbol::new(id, desc));
+            return JsValue::symbol(crate::types::JsSymbol::new(id, desc));
         }
         // Fallback: return as string
-        JsValue::String(exact_key.to_js_string())
+        JsValue::string(exact_key.to_js_string())
     }
 
     pub(crate) fn run(&mut self, program: &Program) -> Completion {
@@ -1985,7 +2009,7 @@ impl Interpreter {
                     loaded_module
                         .borrow_mut()
                         .exports
-                        .insert(export_name.clone(), JsValue::Undefined);
+                        .insert(export_name.clone(), JsValue::UNDEFINED);
                     loaded_module
                         .borrow_mut()
                         .export_bindings
@@ -2153,7 +2177,7 @@ impl Interpreter {
         }
 
         self.current_module_path = prev_module_path;
-        Completion::Normal(JsValue::Undefined)
+        Completion::Normal(JsValue::UNDEFINED)
     }
 
     fn process_import(&mut self, import: &ImportDeclaration, env: &EnvRef) -> Result<(), JsValue> {
@@ -2180,7 +2204,7 @@ impl Interpreter {
                 .get(&key)
                 .cloned()
                 .ok_or_else(|| {
-                    JsValue::String(JsString::from_str(&format!(
+                    JsValue::string(JsString::from_str(&format!(
                         "Synthetic module not found for '{}'",
                         import.source
                     )))
@@ -2193,7 +2217,7 @@ impl Interpreter {
                             .exports
                             .get("default")
                             .cloned()
-                            .unwrap_or(JsValue::Undefined);
+                            .unwrap_or(JsValue::UNDEFINED);
                         env.borrow_mut().declare(local, BindingKind::Const);
                         env.borrow_mut().initialize_binding(local, val);
                     }
@@ -2382,8 +2406,8 @@ impl Interpreter {
     /// a star path that resolves to null is skipped, but one that resolves to
     /// AMBIGUOUS propagates ambiguity.
     fn is_ambiguous_export_error(&self, err: &JsValue) -> bool {
-        if let JsValue::Object(o) = err
-            && let JsValue::String(s) = self.get_property_on_id(o.id, "message")
+        if let Some(o) = (err).as_object_id().map(|id| crate::types::JsObject { id })
+            && let Some(s) = (self.get_property_on_id(o.id, "message")).as_string()
         {
             return s.to_string().contains("Ambiguous export");
         }
@@ -2527,12 +2551,12 @@ impl Interpreter {
                 if resolved.exists() {
                     return Ok(resolved.canonicalize().unwrap_or(resolved));
                 }
-                return Err(JsValue::String(JsString::from_str(&format!(
+                return Err(JsValue::string(JsString::from_str(&format!(
                     "Cannot find module '{}'",
                     specifier
                 ))));
             } else {
-                return Err(JsValue::String(JsString::from_str(
+                return Err(JsValue::string(JsString::from_str(
                     "Relative imports require a referrer path",
                 )));
             }
@@ -2545,7 +2569,7 @@ impl Interpreter {
         }
 
         // Bare specifiers not supported
-        Err(JsValue::String(JsString::from_str(&format!(
+        Err(JsValue::string(JsString::from_str(&format!(
             "Cannot resolve bare module specifier '{}'",
             specifier
         ))))
@@ -2582,7 +2606,7 @@ impl Interpreter {
         // Handle JSON modules: parse JSON and expose as default export
         if path.extension().and_then(|e| e.to_str()) == Some("json") {
             let source = std::fs::read_to_string(path).map_err(|e| {
-                JsValue::String(JsString::from_str(&format!(
+                JsValue::string(JsString::from_str(&format!(
                     "Cannot read module '{}': {}",
                     path.display(),
                     e
@@ -2592,7 +2616,7 @@ impl Interpreter {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
                 _other => {
-                    return Err(JsValue::String(JsString::from_str(&format!(
+                    return Err(JsValue::string(JsString::from_str(&format!(
                         "JSON parse error in '{}'",
                         path.display()
                     ))));
@@ -2646,7 +2670,7 @@ impl Interpreter {
 
         // Read and parse the module
         let source = std::fs::read_to_string(path).map_err(|e| {
-            JsValue::String(JsString::from_str(&format!(
+            JsValue::string(JsString::from_str(&format!(
                 "Cannot read module '{}': {}",
                 path.display(),
                 e
@@ -2716,7 +2740,7 @@ impl Interpreter {
                     loaded_module
                         .borrow_mut()
                         .exports
-                        .insert(export_name.clone(), JsValue::Undefined);
+                        .insert(export_name.clone(), JsValue::UNDEFINED);
                     loaded_module
                         .borrow_mut()
                         .export_bindings
@@ -2915,7 +2939,7 @@ impl Interpreter {
         }
 
         let source = std::fs::read_to_string(path).map_err(|e| {
-            JsValue::String(JsString::from_str(&format!(
+            JsValue::string(JsString::from_str(&format!(
                 "Cannot read module '{}': {}",
                 path.display(),
                 e
@@ -2985,7 +3009,7 @@ impl Interpreter {
                     loaded_module
                         .borrow_mut()
                         .exports
-                        .insert(export_name.clone(), JsValue::Undefined);
+                        .insert(export_name.clone(), JsValue::UNDEFINED);
                     loaded_module
                         .borrow_mut()
                         .export_bindings
@@ -3170,13 +3194,13 @@ impl Interpreter {
             return Ok(existing.clone());
         }
         let source = std::fs::read_to_string(path).map_err(|e| {
-            JsValue::String(JsString::from_str(&format!(
+            JsValue::string(JsString::from_str(&format!(
                 "Cannot read module '{}': {}",
                 path.display(),
                 e
             )))
         })?;
-        let value = JsValue::String(JsString::from_str(&source));
+        let value = JsValue::string(JsString::from_str(&source));
         let module = self.create_synthetic_default_module(canon, value);
         self.synthetic_module_registry.insert(key, module.clone());
         Ok(module)
@@ -3189,7 +3213,7 @@ impl Interpreter {
             return Ok(existing.clone());
         }
         let bytes = std::fs::read(path).map_err(|e| {
-            JsValue::String(JsString::from_str(&format!(
+            JsValue::string(JsString::from_str(&format!(
                 "Cannot read module '{}': {}",
                 path.display(),
                 e
@@ -3225,7 +3249,7 @@ impl Interpreter {
         }
         self.gc_track_external_bytes(len);
         let ab_id = ab_obj_id;
-        let buf_val = JsValue::Object(crate::types::JsObject { id: ab_id });
+        let buf_val = JsValue::object(ab_id);
 
         let ta_info = TypedArrayInfo {
             kind: TypedArrayKind::Uint8,
@@ -3240,7 +3264,7 @@ impl Interpreter {
 
         let proto_id = self.realm().uint8array_prototype.unwrap();
         let ta_id = self.create_typed_array_object_with_proto(ta_info, buf_val, proto_id);
-        JsValue::Object(crate::types::JsObject { id: ta_id })
+        JsValue::object(ta_id)
     }
 
     /// Execute a module's body synchronously (no DFS into dependencies).
@@ -3387,16 +3411,16 @@ impl Interpreter {
                 interp.current_module_path = Some(path_for_resolve.clone());
                 interp.async_module_execution_fulfilled(&path_for_resolve.clone());
                 interp.current_module_path = prev;
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         let reject_fn = self.create_function(JsFunction::native(
             "asyncModuleReject".to_string(),
             1,
             move |interp, _this, args| {
-                let error = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let error = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 interp.async_module_execution_rejected(&path_for_reject.clone(), &error);
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         let async_id = self.scheduler.alloc_async_function_id();
@@ -3427,7 +3451,7 @@ impl Interpreter {
         // `__host_exit` from top-level module code is recorded in the terminal
         // `pending_exit` sink rather than carried as a completion.
         if let Completion::Exit(code) =
-            self.async_function_resume(async_id, JsValue::Undefined, false)
+            self.async_function_resume(async_id, JsValue::UNDEFINED, false)
         {
             self.pending_exit = Some(code);
         }
@@ -3656,7 +3680,7 @@ impl Interpreter {
             m.is_evaluating = false;
         }
         if let Some((_promise, _resolve, reject)) = module.borrow().top_level_capability.clone() {
-            let _ = self.call_function(&reject, &JsValue::Undefined, std::slice::from_ref(error));
+            let _ = self.call_function(&reject, &JsValue::UNDEFINED, std::slice::from_ref(error));
         }
         let parents = module.borrow().async_parent_modules.clone();
         for parent in parents {
@@ -3679,7 +3703,7 @@ impl Interpreter {
         }
         self.collect_all_exports(module_path);
         if let Some((_promise, resolve, _reject)) = module.borrow().top_level_capability.clone() {
-            let _ = self.call_function(&resolve, &JsValue::Undefined, &[JsValue::Undefined]);
+            let _ = self.call_function(&resolve, &JsValue::UNDEFINED, &[JsValue::UNDEFINED]);
         }
         let mut exec_list = self.gather_available_ancestors(module_path);
         let mut i = 0;
@@ -3705,8 +3729,8 @@ impl Interpreter {
                         {
                             let _ = self.call_function(
                                 &resolve,
-                                &JsValue::Undefined,
-                                &[JsValue::Undefined],
+                                &JsValue::UNDEFINED,
+                                &[JsValue::UNDEFINED],
                             );
                         }
                     }
@@ -3983,7 +4007,7 @@ impl Interpreter {
                 return Ok(index.canonicalize().unwrap_or(index));
             }
         }
-        Err(JsValue::Undefined)
+        Err(JsValue::UNDEFINED)
     }
 
     /// Check if a module and all its transitive deps are ready for synchronous execution
@@ -4526,7 +4550,7 @@ impl Interpreter {
                 .borrow_mut()
                 .insert_property(
                     name.clone(),
-                    PropertyDescriptor::data(JsValue::Undefined, true, true, false),
+                    PropertyDescriptor::data(JsValue::UNDEFINED, true, true, false),
                 );
         }
 
@@ -4540,7 +4564,7 @@ impl Interpreter {
             .insert_property(
                 sym_key,
                 PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("Module")),
+                    JsValue::string(JsString::from_str("Module")),
                     false,
                     false,
                     false,
@@ -4548,7 +4572,7 @@ impl Interpreter {
             );
 
         let id = obj_id;
-        let ns = JsValue::Object(crate::types::JsObject { id });
+        let ns = JsValue::object(id);
         module.borrow_mut().cached_namespace = Some(ns.clone());
         ns
     }
@@ -4604,7 +4628,7 @@ impl Interpreter {
                 .borrow_mut()
                 .insert_property(
                     name.clone(),
-                    PropertyDescriptor::data(JsValue::Undefined, true, true, false),
+                    PropertyDescriptor::data(JsValue::UNDEFINED, true, true, false),
                 );
         }
 
@@ -4616,7 +4640,7 @@ impl Interpreter {
             .insert_property(
                 sym_key,
                 PropertyDescriptor::data(
-                    JsValue::String(JsString::from_str("Deferred Module")),
+                    JsValue::string(JsString::from_str("Deferred Module")),
                     false,
                     false,
                     false,
@@ -4624,7 +4648,7 @@ impl Interpreter {
             );
 
         let id = obj_id;
-        let ns = JsValue::Object(crate::types::JsObject { id });
+        let ns = JsValue::object(id);
         module.borrow_mut().cached_deferred_namespace = Some(ns.clone());
         ns
     }
@@ -4641,7 +4665,7 @@ impl Interpreter {
         if let Some(module) = found {
             return self.create_module_namespace(&module);
         }
-        JsValue::Undefined
+        JsValue::UNDEFINED
     }
 
     /// Find the [[ModuleSource]] of the module whose environment is `target_env`.
@@ -4876,7 +4900,7 @@ impl Interpreter {
             } => self.exec_statement(decl, env),
             ExportDeclaration::Named {
                 declaration: None, ..
-            } => Completion::Normal(JsValue::Undefined),
+            } => Completion::Normal(JsValue::UNDEFINED),
             ExportDeclaration::Default(expr) => {
                 let val = if let Expression::Class(ce) = expr.as_ref()
                     && ce.name.is_none()
@@ -4904,7 +4928,7 @@ impl Interpreter {
                 };
                 env.borrow_mut().declare("*default*", BindingKind::Const);
                 env.borrow_mut().initialize_binding("*default*", val);
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             }
             ExportDeclaration::DefaultFunction(func) => {
                 let name = if func.name.is_empty() {
@@ -4936,7 +4960,7 @@ impl Interpreter {
                 }
                 env.borrow_mut().declare("*default*", BindingKind::Let);
                 env.borrow_mut().initialize_binding("*default*", fn_obj);
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             }
             ExportDeclaration::DefaultClass(class) => {
                 let name = if class.name.is_empty() {
@@ -4962,11 +4986,11 @@ impl Interpreter {
                 }
                 env.borrow_mut().declare("*default*", BindingKind::Const);
                 env.borrow_mut().initialize_binding("*default*", class_val);
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             }
             ExportDeclaration::All { .. } => {
                 // Re-exports handled in Phase 3
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             }
         }
     }
@@ -5181,33 +5205,28 @@ impl Interpreter {
     }
 
     pub(crate) fn format_value(&self, val: &JsValue) -> String {
-        match val {
-            JsValue::Object(o) => {
-                if self.get_object_cell(o.id).is_some() {
-                    let name = self.get_property_on_id(o.id, "name");
-                    let message = self.get_property_on_id(o.id, "message");
-                    if let JsValue::String(ref msg) = message {
-                        let msg_str = msg.to_rust_string();
-                        if let JsValue::String(ref n) = name {
-                            let n_str = n.to_rust_string();
-                            if n_str.is_empty() {
-                                return msg_str;
-                            }
-                            return format!("{n_str}: {msg_str}");
-                        }
+        if let Some(id) = val.as_object_id()
+            && self.get_object_cell(id).is_some()
+        {
+            let name = self.get_property_on_id(id, "name");
+            let message = self.get_property_on_id(id, "message");
+            if let Some(msg) = message.as_string() {
+                let msg_str = msg.to_rust_string();
+                if let Some(n) = name.as_string() {
+                    let n_str = n.to_rust_string();
+                    if n_str.is_empty() {
                         return msg_str;
                     }
+                    return format!("{n_str}: {msg_str}");
                 }
-                format!("{val}")
+                return msg_str;
             }
-            _ => format!("{val}"),
         }
+        format!("{val}")
     }
 }
 
 fn setup_agent_side_262(interp: &mut Interpreter) {
-    use crate::types::JsObject;
-
     let dollar_262_id = interp.create_object_id();
 
     let agent_obj_id = interp.create_object_id();
@@ -5217,7 +5236,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
         "receiveBroadcast".to_string(),
         1,
         |interp, _this, args| {
-            let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
             let rx = interp.agent_broadcast_rx.take();
             if let Some(rx) = rx {
                 if let Ok(msg) = rx.recv() {
@@ -5241,15 +5260,15 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
                             },
                         );
                     }
-                    let sab_val = JsValue::Object(JsObject { id: sab_obj_id });
+                    let sab_val = JsValue::object(sab_obj_id);
                     interp.agent_broadcast_rx = Some(rx);
-                    let _ = interp.call_function(&callback, &JsValue::Undefined, &[sab_val]);
+                    let _ = interp.call_function(&callback, &JsValue::UNDEFINED, &[sab_val]);
                     interp.drain_microtasks();
                 } else {
                     interp.agent_broadcast_rx = Some(rx);
                 }
             }
-            Completion::Normal(JsValue::Undefined)
+            Completion::Normal(JsValue::UNDEFINED)
         },
     ));
     interp
@@ -5262,7 +5281,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
         "report".to_string(),
         1,
         |interp, _this, args| {
-            let val = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
             let s = match interp.to_string_value(&val) {
                 Ok(s) => s,
                 Err(e) => return Completion::Throw(e),
@@ -5270,7 +5289,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
             let (ref reports_lock, ref reports_cvar) = *interp.agent_reports;
             reports_lock.lock().unwrap().push_back(s);
             reports_cvar.notify_one();
-            Completion::Normal(JsValue::Undefined)
+            Completion::Normal(JsValue::UNDEFINED)
         },
     ));
     interp
@@ -5283,13 +5302,13 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
         "sleep".to_string(),
         1,
         |interp, _this, args| {
-            let ms_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+            let ms_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
             let ms = match interp.to_number_value(&ms_val) {
                 Ok(n) => n.max(0.0) as u64,
                 Err(e) => return Completion::Throw(e),
             };
             std::thread::sleep(std::time::Duration::from_millis(ms));
-            Completion::Normal(JsValue::Undefined)
+            Completion::Normal(JsValue::UNDEFINED)
         },
     ));
     interp
@@ -5301,7 +5320,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
     let leaving_fn = interp.create_function(JsFunction::native(
         "leaving".to_string(),
         0,
-        |_interp, _this, _args| Completion::Normal(JsValue::Undefined),
+        |_interp, _this, _args| Completion::Normal(JsValue::UNDEFINED),
     ));
     interp
         .get_object_cell_expect(agent_obj_id)
@@ -5315,7 +5334,7 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
         0,
         move |_interp, _this, _args| {
             let elapsed = start_time.elapsed().as_millis() as f64;
-            Completion::Normal(JsValue::Number(elapsed))
+            Completion::Normal(JsValue::number(elapsed))
         },
     ));
     interp
@@ -5323,13 +5342,13 @@ fn setup_agent_side_262(interp: &mut Interpreter) {
         .borrow_mut()
         .insert_builtin("monotonicNow".to_string(), monotonic_fn);
 
-    let agent_val = JsValue::Object(JsObject { id: agent_obj_id });
+    let agent_val = JsValue::object(agent_obj_id);
     interp
         .get_object_cell_expect(dollar_262_id)
         .borrow_mut()
         .insert_builtin("agent".to_string(), agent_val);
 
-    let dollar_262_val = JsValue::Object(JsObject { id: dollar_262_id });
+    let dollar_262_val = JsValue::object(dollar_262_id);
     interp
         .realm()
         .global_env
