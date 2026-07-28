@@ -1,4 +1,5 @@
 use super::*;
+use crate::types::ValueKind;
 
 // Resolves a spec "relative index" argument (already passed through ToIntegerOrInfinity)
 // against a length, per the clamp used by e.g. Array.prototype.slice, String.prototype.slice,
@@ -89,24 +90,29 @@ pub(crate) fn format_radix(mut n: i64, radix: u32) -> String {
 
 // §7.1.3 ToBoolean
 pub(crate) fn to_boolean(val: &JsValue) -> bool {
-    match val {
-        JsValue::Undefined | JsValue::Null => false,
-        JsValue::Boolean(b) => *b,
-        JsValue::Number(n) => *n != 0.0 && !n.is_nan(),
-        JsValue::String(s) => !s.is_empty(),
-        JsValue::BigInt(b) => *b.value != num_bigint::BigInt::from(0),
-        JsValue::Symbol(_) | JsValue::Object(_) => true,
+    match val.kind() {
+        ValueKind::Undefined | ValueKind::Null => false,
+        ValueKind::Boolean => val.as_boolean().unwrap(),
+        ValueKind::Number => {
+            let n = val.as_number().unwrap();
+            n != 0.0 && !n.is_nan()
+        }
+        ValueKind::String => !val.as_string().unwrap().is_empty(),
+        ValueKind::BigInt => val
+            .with_bigint(|b| *b != num_bigint::BigInt::from(0))
+            .unwrap(),
+        ValueKind::Symbol | ValueKind::Object => true,
     }
 }
 
 // §7.1.4 ToNumber
 pub(crate) fn to_number(val: &JsValue) -> f64 {
-    match val {
-        JsValue::Undefined => f64::NAN,
-        JsValue::Null => 0.0,
-        JsValue::Boolean(b) => *b as u8 as f64,
-        JsValue::Number(n) => *n,
-        JsValue::String(s) => string_to_number(s),
+    match val.kind() {
+        ValueKind::Undefined => f64::NAN,
+        ValueKind::Null => 0.0,
+        ValueKind::Boolean => val.as_boolean().unwrap() as u8 as f64,
+        ValueKind::Number => val.as_number().unwrap(),
+        ValueKind::String => string_to_number(&val.as_string().unwrap()),
         _ => f64::NAN,
     }
 }
@@ -192,87 +198,96 @@ fn string_to_number(s: &JsString) -> f64 {
 }
 
 pub(crate) fn to_js_string(val: &JsValue) -> String {
-    match val {
-        JsValue::BigInt(b) => b.value.to_string(),
-        _ => format!("{val}"),
-    }
+    val.with_bigint(|b| b.to_string())
+        .unwrap_or_else(|| format!("{val}"))
 }
 
 /// Convert a JsValue to UTF-16 code units, preserving lone surrogates for strings.
 pub(crate) fn js_value_to_code_units(val: &JsValue) -> Vec<u16> {
-    match val {
-        JsValue::String(s) => s.code_units.to_vec(),
-        _ => to_js_string(val).encode_utf16().collect(),
-    }
+    val.with_string(|units| units.to_vec())
+        .unwrap_or_else(|| to_js_string(val).encode_utf16().collect())
 }
 
 /// Convert a JsValue to a property key string. For symbols, uses the id-based
 /// format to ensure uniqueness. For other types, same as to_js_string.
 pub(crate) fn to_property_key_string(val: &JsValue) -> JsPropertyKey {
-    match val {
-        JsValue::String(s) => JsPropertyKey::from_js_string(s),
-        JsValue::Symbol(s) => s.to_property_key(),
-        _ => JsPropertyKey::from(format!("{val}")),
+    if let Some(s) = val.as_string() {
+        return JsPropertyKey::from_js_string(&s);
     }
+    if let Some(key) = val.with_symbol(|s| s.to_property_key()) {
+        return key;
+    }
+    JsPropertyKey::from(format!("{val}"))
 }
 
 pub(crate) fn is_string(val: &JsValue) -> bool {
-    matches!(val, JsValue::String(_))
+    val.is_string()
 }
 
 pub(crate) fn same_value(left: &JsValue, right: &JsValue) -> bool {
-    match (left, right) {
-        (JsValue::Number(a), JsValue::Number(b)) => {
-            if a.is_nan() && b.is_nan() {
-                return true;
-            }
-            if *a == 0.0 && *b == 0.0 {
-                return a.is_sign_positive() == b.is_sign_positive();
-            }
-            a == b
+    if let (Some(a), Some(b)) = (left.as_number(), right.as_number()) {
+        if a.is_nan() && b.is_nan() {
+            return true;
         }
-        _ => strict_equality(left, right),
+        if a == 0.0 && b == 0.0 {
+            return a.is_sign_positive() == b.is_sign_positive();
+        }
+        return a == b;
     }
+    strict_equality(left, right)
 }
 
 pub(crate) fn same_value_zero(left: &JsValue, right: &JsValue) -> bool {
-    match (left, right) {
-        (JsValue::Number(a), JsValue::Number(b)) => {
-            if a.is_nan() && b.is_nan() {
-                return true;
-            }
-            // -0 === +0
-            a == b
+    if let (Some(a), Some(b)) = (left.as_number(), right.as_number()) {
+        if a.is_nan() && b.is_nan() {
+            return true;
         }
-        _ => strict_equality(left, right),
+        // -0 === +0
+        return a == b;
     }
+    strict_equality(left, right)
 }
 
 pub(crate) fn strict_equality(left: &JsValue, right: &JsValue) -> bool {
-    match (left, right) {
-        (JsValue::Undefined, JsValue::Undefined) => true,
-        (JsValue::Null, JsValue::Null) => true,
-        (JsValue::Boolean(a), JsValue::Boolean(b)) => a == b,
-        (JsValue::Number(a), JsValue::Number(b)) => number_ops::equal(*a, *b),
-        (JsValue::String(a), JsValue::String(b)) => a == b,
-        (JsValue::Symbol(a), JsValue::Symbol(b)) => a.id() == b.id(),
-        (JsValue::BigInt(a), JsValue::BigInt(b)) => bigint_ops::equal(&a.value, &b.value),
-        (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
-        _ => false,
+    if left.kind() != right.kind() {
+        return false;
+    }
+    match left.kind() {
+        ValueKind::Undefined | ValueKind::Null => true,
+        ValueKind::Boolean => left.as_boolean() == right.as_boolean(),
+        ValueKind::Number => {
+            number_ops::equal(left.as_number().unwrap(), right.as_number().unwrap())
+        }
+        ValueKind::String => left
+            .with_string(|a| right.with_string(|b| a == b).unwrap_or(false))
+            .unwrap_or(false),
+        ValueKind::Symbol => left
+            .with_symbol(|a| right.with_symbol(|b| a.id() == b.id()).unwrap_or(false))
+            .unwrap_or(false),
+        ValueKind::BigInt => left
+            .with_bigint(|a| {
+                right
+                    .with_bigint(|b| bigint_ops::equal(a, b))
+                    .unwrap_or(false)
+            })
+            .unwrap_or(false),
+        ValueKind::Object => left.as_object_id() == right.as_object_id(),
     }
 }
 
 pub(crate) fn typeof_val<'a>(val: &JsValue, objects: &super::object_arena::ObjectArena) -> &'a str {
-    match val {
-        JsValue::Undefined => "undefined",
-        JsValue::Null => "object",
-        JsValue::Boolean(_) => "boolean",
-        JsValue::Number(_) => "number",
-        JsValue::String(_) => "string",
-        JsValue::Symbol(_) => "symbol",
-        JsValue::BigInt(_) => "bigint",
-        JsValue::Object(o) => {
-            if let Some(obj) = objects.get(o.id) {
+    match val.kind() {
+        ValueKind::Undefined => "undefined",
+        ValueKind::Null => "object",
+        ValueKind::Boolean => "boolean",
+        ValueKind::Number => "number",
+        ValueKind::String => "string",
+        ValueKind::Symbol => "symbol",
+        ValueKind::BigInt => "bigint",
+        ValueKind::Object => {
+            if let Some(id) = val.as_object_id()
+                && let Some(obj) = objects.get(id)
+            {
                 let b = obj.borrow();
                 if b.is_htmldda {
                     return "undefined";
@@ -405,10 +420,10 @@ pub(crate) fn enumerable_own_keys(
                 Ok(Some(v)) => {
                     interp.validate_ownkeys_invariant(&v, &target_val)?;
                     let mut keys = Vec::new();
-                    if let JsValue::Object(arr) = &v {
+                    if let Some(arr_id) = v.as_object_id() {
                         const MAX_PROXY_OWNKEYS_RESULT_LEN: usize = 1_000_000;
-                        let len = match interp.get_property_on_id(arr.id, "length") {
-                            JsValue::Number(n) if n.is_finite() && n > 0.0 => {
+                        let len = match interp.get_property_on_id(arr_id, "length").as_number() {
+                            Some(n) if n.is_finite() && n > 0.0 => {
                                 let len = n.floor() as usize;
                                 if len > MAX_PROXY_OWNKEYS_RESULT_LEN {
                                     return Err(interp.create_type_error(
@@ -420,27 +435,27 @@ pub(crate) fn enumerable_own_keys(
                             _ => 0,
                         };
                         for i in 0..len {
-                            let k = interp.get_property_on_id(arr.id, &i.to_string());
-                            if let JsValue::String(s) = k {
+                            let k = interp.get_property_on_id(arr_id, &i.to_string());
+                            if let Some(s) = k.into_string() {
                                 let key = JsPropertyKey::from_js_string(&s);
-                                let key_val = JsValue::String(s);
+                                let key_val = JsValue::string(s);
                                 match interp.invoke_proxy_trap(
                                     obj_id,
                                     "getOwnPropertyDescriptor",
                                     vec![target_val.clone(), key_val],
                                 ) {
                                     Ok(Some(desc_val)) => {
-                                        if let JsValue::Object(dobj) = &desc_val {
+                                        if let Some(desc_id) = desc_val.as_object_id() {
                                             let enum_val =
-                                                interp.get_property_on_id(dobj.id, "enumerable");
+                                                interp.get_property_on_id(desc_id, "enumerable");
                                             if interp.to_boolean_val(&enum_val) {
                                                 keys.push(key.clone());
                                             }
                                         }
                                     }
                                     Ok(None) => {
-                                        if let JsValue::Object(ref t) = target_val
-                                            && let Some(tobj) = interp.get_object_cell(t.id)
+                                        if let Some(target_id) = target_val.as_object_id()
+                                            && let Some(tobj) = interp.get_object_cell(target_id)
                                             && let Some(d) = tobj.borrow().properties.get(&key)
                                             && d.enumerable != Some(false)
                                         {
@@ -456,8 +471,8 @@ pub(crate) fn enumerable_own_keys(
                 }
                 Ok(None) => {
                     // No ownKeys trap — delegate to the target
-                    if let JsValue::Object(ref t) = target_val {
-                        return enumerable_own_keys(interp, t.id);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return enumerable_own_keys(interp, target_id);
                     }
                     return Ok(Vec::new());
                 }
@@ -467,8 +482,11 @@ pub(crate) fn enumerable_own_keys(
         let b = obj.borrow();
         // String exotic object: character indices come first
         let mut result: Vec<JsPropertyKey> = Vec::new();
-        if let Some(JsValue::String(ref s)) = b.primitive_value {
-            let len = s.len();
+        if let Some(len) = b
+            .primitive_value
+            .as_ref()
+            .and_then(|pv| pv.with_string(|units| units.len()))
+        {
             for i in 0..len {
                 result.push(JsPropertyKey::from(i.to_string()));
             }
@@ -479,7 +497,7 @@ pub(crate) fn enumerable_own_keys(
                 result.push(JsPropertyKey::from(i.to_string()));
             }
         }
-        let is_string_wrapper = matches!(b.primitive_value, Some(JsValue::String(_)));
+        let is_string_wrapper = b.primitive_value.as_ref().is_some_and(|pv| pv.is_string());
         let keys: Vec<JsPropertyKey> = b
             .property_order
             .iter()
@@ -517,48 +535,47 @@ pub(crate) fn json_stringify_full(
     let mut replacer_fn: Option<JsValue> = None;
 
     if let Some(rep) = replacer
-        && let JsValue::Object(o) = rep
-        && let Some(obj) = interp.get_object_cell(o.id)
+        && let Some(rep_id) = rep.as_object_id()
+        && let Some(obj) = interp.get_object_cell(rep_id)
     {
         if obj.borrow().callable.is_some() {
             replacer_fn = Some(rep.clone());
-        } else if is_array_value(interp, o.id)? {
+        } else if is_array_value(interp, rep_id)? {
             let mut keys = Vec::new();
-            let obj_val = JsValue::Object(crate::types::JsObject { id: o.id });
-            let len_val = match interp.get_object_property(o.id, "length", &obj_val) {
+            let obj_val = JsValue::object(rep_id);
+            let len_val = match interp.get_object_property(rep_id, "length", &obj_val) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             let len = {
                 let n = interp.to_number_value(&len_val)?;
                 n as usize
             };
             for i in 0..len {
-                let item = match interp.get_object_property(o.id, &i.to_string(), &obj_val) {
+                let item = match interp.get_object_property(rep_id, &i.to_string(), &obj_val) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 };
-                let key_str = match &item {
-                    JsValue::String(s) => Some(JsPropertyKey::from_js_string(s)),
-                    JsValue::Number(n) => Some(JsPropertyKey::from(number_ops::to_string(*n))),
-                    JsValue::Object(oo) => {
-                        if let Some(inner) = interp.get_object_cell(oo.id) {
-                            let cn = inner.borrow().class_name.clone();
-                            if cn == "String" || cn == "Number" {
-                                {
-                                    let s = interp.to_string_value(&item)?;
-                                    Some(JsPropertyKey::from(s))
-                                }
-                            } else {
-                                None
-                            }
+                let key_str = if let Some(s) = item.as_string() {
+                    Some(JsPropertyKey::from_js_string(&s))
+                } else if let Some(n) = item.as_number() {
+                    Some(JsPropertyKey::from(number_ops::to_string(n)))
+                } else if let Some(item_id) = item.as_object_id() {
+                    if let Some(inner) = interp.get_object_cell(item_id) {
+                        let cn = inner.borrow().class_name.clone();
+                        if cn == "String" || cn == "Number" {
+                            let s = interp.to_string_value(&item)?;
+                            Some(JsPropertyKey::from(s))
                         } else {
                             None
                         }
+                    } else {
+                        None
                     }
-                    _ => None,
+                } else {
+                    None
                 };
                 if let Some(k) = key_str
                     && !keys.contains(&k)
@@ -606,37 +623,37 @@ fn json_stringify_internal(
     let mut value = val.clone();
 
     // Step 2: If Type(value) is Object or BigInt, check for toJSON
-    let check_tojson = matches!(&value, JsValue::Object(_) | JsValue::BigInt(_));
+    let check_tojson = value.is_object() || value.is_bigint();
     if check_tojson {
-        let to_json = if let JsValue::Object(o) = &value {
-            match interp.get_object_property(o.id, "toJSON", &value) {
+        let to_json = if let Some(value_id) = value.as_object_id() {
+            match interp.get_object_property(value_id, "toJSON", &value) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             }
-        } else if let JsValue::BigInt(_) = &value {
+        } else if value.is_bigint() {
             let obj_val = match interp.to_object(&value) {
                 Completion::Normal(v) => v,
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
-            if let JsValue::Object(o) = &obj_val {
+            if let Some(wrapper_id) = obj_val.as_object_id() {
                 // Use original BigInt value as receiver for proper getter behavior
-                match interp.get_object_property(o.id, "toJSON", &value) {
+                match interp.get_object_property(wrapper_id, "toJSON", &value) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 }
             } else {
-                JsValue::Undefined
+                JsValue::UNDEFINED
             }
         } else {
-            JsValue::Undefined
+            JsValue::UNDEFINED
         };
-        if let JsValue::Object(fobj) = &to_json
-            && let Some(fdata) = interp.get_object_cell(fobj.id)
+        if let Some(to_json_id) = to_json.as_object_id()
+            && let Some(fdata) = interp.get_object_cell(to_json_id)
             && fdata.borrow().callable.is_some()
         {
-            let key_val = JsValue::String(key.to_js_string());
+            let key_val = JsValue::string(key.to_js_string());
             match interp.call_function(&to_json, &value, &[key_val]) {
                 Completion::Normal(v) => value = v,
                 Completion::Throw(e) => return Err(e),
@@ -647,8 +664,8 @@ fn json_stringify_internal(
 
     // Step 3: Apply replacer function
     if let Some(rep) = replacer_fn {
-        let holder_val = JsValue::Object(crate::types::JsObject { id: holder_id });
-        let key_val = JsValue::String(key.to_js_string());
+        let holder_val = JsValue::object(holder_id);
+        let key_val = JsValue::string(key.to_js_string());
         match interp.call_function(rep, &holder_val, &[key_val, value.clone()]) {
             Completion::Normal(v) => value = v,
             Completion::Throw(e) => return Err(e),
@@ -657,8 +674,8 @@ fn json_stringify_internal(
     }
 
     // Step 4: Unwrap wrapper objects per spec (ToNumber/ToString trigger valueOf/toString)
-    if let JsValue::Object(o) = &value {
-        let class = if let Some(cell) = interp.get_object_cell(o.id) {
+    if let Some(value_id) = value.as_object_id() {
+        let class = if let Some(cell) = interp.get_object_cell(value_id) {
             cell.borrow().class_name.clone()
         } else {
             String::new()
@@ -666,21 +683,21 @@ fn json_stringify_internal(
         match class.as_str() {
             "Number" => {
                 let n = interp.to_number_value(&value)?;
-                value = JsValue::Number(n)
+                value = JsValue::number(n)
             }
             "String" => {
                 let s = interp.to_string_value(&value)?;
-                value = JsValue::String(JsString::from_str(&s))
+                value = JsValue::from_str(&s)
             }
             "Boolean" => {
-                if let Some(cell) = interp.get_object_cell(o.id)
+                if let Some(cell) = interp.get_object_cell(value_id)
                     && let Some(pv) = cell.borrow().primitive_value.clone()
                 {
                     value = pv;
                 }
             }
             "BigInt" => {
-                if let Some(cell) = interp.get_object_cell(o.id)
+                if let Some(cell) = interp.get_object_cell(value_id)
                     && let Some(pv) = cell.borrow().primitive_value.clone()
                 {
                     value = pv;
@@ -690,22 +707,23 @@ fn json_stringify_internal(
         }
     }
 
-    match &value {
-        JsValue::Null => Ok(Some("null".to_string())),
-        JsValue::Boolean(b) => Ok(Some(b.to_string())),
-        JsValue::Number(n) => {
+    match value.kind() {
+        ValueKind::Null => Ok(Some("null".to_string())),
+        ValueKind::Boolean => Ok(Some(value.as_boolean().unwrap().to_string())),
+        ValueKind::Number => {
+            let n = value.as_number().unwrap();
             if n.is_nan() || n.is_infinite() {
                 Ok(Some("null".to_string()))
             } else {
-                Ok(Some(number_ops::to_string(*n)))
+                Ok(Some(number_ops::to_string(n)))
             }
         }
-        JsValue::String(s) => Ok(Some(json_quote_js_string(s))),
-        JsValue::BigInt(_) => {
+        ValueKind::String => Ok(Some(value.with_string(json_quote_units).unwrap())),
+        ValueKind::BigInt => {
             Err(interp.create_error("TypeError", "Do not know how to serialize a BigInt"))
         }
-        JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object_cell(o.id) {
+        ValueKind::Object => {
+            if let Some(obj) = interp.get_object_cell(value.as_object_id().unwrap()) {
                 if obj.borrow().is_raw_json
                     && let Some(raw) = obj.borrow().get_property_value("rawJSON")
                 {
@@ -723,7 +741,7 @@ fn json_stringify_internal(
                 stack.push(obj_id);
 
                 let is_array = is_array_value(interp, obj_id)?;
-                let obj_val = JsValue::Object(crate::types::JsObject { id: obj_id });
+                let obj_val = JsValue::object(obj_id);
                 let new_indent = format!("{}{}", indent, gap);
 
                 let result = if is_array {
@@ -733,7 +751,7 @@ fn json_stringify_internal(
                             stack.pop();
                             return Err(e);
                         }
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
                     let len = match interp.to_number_value(&len_val) {
                         Ok(n) => n as usize,
@@ -751,7 +769,7 @@ fn json_stringify_internal(
                                 stack.pop();
                                 return Err(e);
                             }
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         match json_stringify_internal(
                             interp,
@@ -801,7 +819,7 @@ fn json_stringify_internal(
                                 stack.pop();
                                 return Err(e);
                             }
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         if let Some(sv) = json_stringify_internal(
                             interp,
@@ -842,7 +860,7 @@ fn json_stringify_internal(
                 Ok(Some("null".to_string()))
             }
         }
-        JsValue::Undefined | JsValue::Symbol(_) => Ok(None),
+        ValueKind::Undefined | ValueKind::Symbol => Ok(None),
     }
 }
 
@@ -888,13 +906,13 @@ fn json_parse_value_inner(
 ) -> Completion {
     let s = json_trim(s);
     if s == "null" {
-        return Completion::Normal(JsValue::Null);
+        return Completion::Normal(JsValue::NULL);
     }
     if s == "true" {
-        return Completion::Normal(JsValue::Boolean(true));
+        return Completion::Normal(JsValue::TRUE);
     }
     if s == "false" {
-        return Completion::Normal(JsValue::Boolean(false));
+        return Completion::Normal(JsValue::FALSE);
     }
     if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
         let inner = &s[1..s.len() - 1];
@@ -902,12 +920,12 @@ fn json_parse_value_inner(
             let err = interp.create_error("SyntaxError", &msg);
             return Completion::Throw(err);
         }
-        return Completion::Normal(JsValue::String(json_unescape_js_string(inner)));
+        return Completion::Normal(JsValue::string(json_unescape_js_string(inner)));
     }
     if json_is_valid_number(s)
         && let Ok(n) = s.parse::<f64>()
     {
-        return Completion::Normal(JsValue::Number(n));
+        return Completion::Normal(JsValue::number(n));
     }
     if s.starts_with('[') && s.ends_with(']') {
         let inner = &s[1..s.len() - 1];
@@ -925,10 +943,9 @@ fn json_parse_value_inner(
         }
         let vals: Vec<JsValue> = parsed_items.iter().map(|(v, _)| v.clone()).collect();
         let arr_val = interp.create_array(vals);
-        if let JsValue::Object(ref arr_obj) = arr_val
+        if let Some(arr_id) = arr_val.as_object_id()
             && let Some(ref mut smap) = source_map
         {
-            let arr_id = arr_obj.id;
             for (i, (v, src)) in parsed_items.iter().enumerate() {
                 if is_json_primitive(v) {
                     smap.insert((arr_id, JsPropertyKey::from(i.to_string())), src.clone());
@@ -985,7 +1002,7 @@ fn json_parse_value_inner(
                 other => return other,
             }
         }
-        return Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }));
+        return Completion::Normal(JsValue::object(obj_id));
     }
     if let Some(token) = s.chars().next() {
         return json_unexpected_token_error(interp, token, root_source);
@@ -1016,8 +1033,8 @@ fn json_unexpected_token_error(interp: &mut Interpreter, token: char, source: &s
 
 pub(crate) fn is_json_primitive(val: &JsValue) -> bool {
     matches!(
-        val,
-        JsValue::Null | JsValue::Boolean(_) | JsValue::Number(_) | JsValue::String(_)
+        val.kind(),
+        ValueKind::Null | ValueKind::Boolean | ValueKind::Number | ValueKind::String
     )
 }
 
@@ -1091,9 +1108,9 @@ fn json_internalize_apply<K: PropertyKeyLike + ?Sized>(
 
     if is_proxy {
         let target_val = interp.get_proxy_target_val(obj_id);
-        if let JsValue::Undefined = &new_val {
+        if new_val.is_undefined() {
             // Delete via proxy deleteProperty trap
-            let key_val = JsValue::String(key.to_js_property_key().to_js_string());
+            let key_val = JsValue::string(key.to_js_property_key().to_js_string());
             match interp.invoke_proxy_trap(obj_id, "deleteProperty", vec![target_val, key_val]) {
                 Ok(Some(v)) => {
                     if !interp.to_boolean_val(&v) {
@@ -1104,8 +1121,8 @@ fn json_internalize_apply<K: PropertyKeyLike + ?Sized>(
                 }
                 Ok(None) => {
                     // No trap, delete on target directly
-                    if let JsValue::Object(t) = &interp.get_proxy_target_val(obj_id)
-                        && let Some(tobj) = interp.get_object_cell(t.id)
+                    if let Some(target_id) = interp.get_proxy_target_val(obj_id).as_object_id()
+                        && let Some(tobj) = interp.get_object_cell(target_id)
                     {
                         tobj.borrow_mut().remove_property(key);
                     }
@@ -1114,7 +1131,7 @@ fn json_internalize_apply<K: PropertyKeyLike + ?Sized>(
             }
         } else {
             // CreateDataProperty via proxy defineProperty trap
-            let key_val = JsValue::String(key.to_js_property_key().to_js_string());
+            let key_val = JsValue::string(key.to_js_property_key().to_js_string());
             let desc_obj_id = interp.create_object_id();
             interp
                 .get_object_cell_expect(desc_obj_id)
@@ -1123,16 +1140,16 @@ fn json_internalize_apply<K: PropertyKeyLike + ?Sized>(
             interp
                 .get_object_cell_expect(desc_obj_id)
                 .borrow_mut()
-                .insert_value("writable".to_string(), JsValue::Boolean(true));
+                .insert_value("writable".to_string(), JsValue::TRUE);
             interp
                 .get_object_cell_expect(desc_obj_id)
                 .borrow_mut()
-                .insert_value("enumerable".to_string(), JsValue::Boolean(true));
+                .insert_value("enumerable".to_string(), JsValue::TRUE);
             interp
                 .get_object_cell_expect(desc_obj_id)
                 .borrow_mut()
-                .insert_value("configurable".to_string(), JsValue::Boolean(true));
-            let desc_val = JsValue::Object(crate::types::JsObject { id: desc_obj_id });
+                .insert_value("configurable".to_string(), JsValue::TRUE);
+            let desc_val = JsValue::object(desc_obj_id);
             match interp.invoke_proxy_trap(
                 obj_id,
                 "defineProperty",
@@ -1147,8 +1164,8 @@ fn json_internalize_apply<K: PropertyKeyLike + ?Sized>(
                 }
                 Ok(None) => {
                     // No trap, define on target directly
-                    if let JsValue::Object(t) = &interp.get_proxy_target_val(obj_id)
-                        && let Some(tobj) = interp.get_object_cell(t.id)
+                    if let Some(target_id) = interp.get_proxy_target_val(obj_id).as_object_id()
+                        && let Some(tobj) = interp.get_object_cell(target_id)
                     {
                         tobj.borrow_mut()
                             .insert_value(key.to_js_property_key(), new_val);
@@ -1171,7 +1188,7 @@ fn json_internalize_apply<K: PropertyKeyLike + ?Sized>(
         if !configurable {
             return Ok(());
         }
-        if let JsValue::Undefined = &new_val {
+        if new_val.is_undefined() {
             cell.borrow_mut().remove_property(key);
             // Also clear dense array storage so get_property doesn't find stale values
             if let Some(key_str) = key.as_property_key_str()
@@ -1181,7 +1198,7 @@ fn json_internalize_apply<K: PropertyKeyLike + ?Sized>(
                 if let Some(elems) = b.array_elements_mut()
                     && idx < elems.len()
                 {
-                    elems[idx] = JsValue::Undefined;
+                    elems[idx] = JsValue::UNDEFINED;
                 }
             }
         } else {
@@ -1199,18 +1216,17 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
     reviver: &JsValue,
     source_map: &Option<SourceTextMap>,
 ) -> Completion {
-    let val = if let JsValue::Object(o) = holder {
-        match interp.get_object_property(o.id, name, holder) {
+    let val = if let Some(holder_id) = holder.as_object_id() {
+        match interp.get_object_property(holder_id, name, holder) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Completion::Throw(e),
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         }
     } else {
-        JsValue::Undefined
+        JsValue::UNDEFINED
     };
 
-    let walked = if let JsValue::Object(o) = &val {
-        let obj_id = o.id;
+    let walked = if let Some(obj_id) = val.as_object_id() {
         let is_array = match is_array_value(interp, obj_id) {
             Ok(v) => v,
             Err(e) => return Completion::Throw(e),
@@ -1219,7 +1235,7 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
             let len_val = match interp.get_object_property(obj_id, "length", &val) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Completion::Throw(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             let len = match interp.to_number_value(&len_val) {
                 Ok(n) => n as usize,
@@ -1264,40 +1280,40 @@ pub(crate) fn json_internalize<K: PropertyKeyLike + ?Sized>(
         let ctx_id = interp.create_object_id();
         if is_json_primitive(&walked)
             && let Some(smap) = source_map
-            && let JsValue::Object(o) = holder
-            && let Some(src) = smap.get(&(o.id, name.to_js_property_key()))
+            && let Some(holder_id) = holder.as_object_id()
+            && let Some(src) = smap.get(&(holder_id, name.to_js_property_key()))
         {
             // Verify the source text matches the actual value
             // (forward modifications make source invalid)
-            let source_matches = match &walked {
-                JsValue::Null => src == "null",
-                JsValue::Boolean(true) => src == "true",
-                JsValue::Boolean(false) => src == "false",
-                JsValue::Number(n) => src
-                    .parse::<f64>()
-                    .is_ok_and(|parsed| (parsed.is_nan() && n.is_nan()) || parsed == *n),
-                JsValue::String(s)
-                    // Source includes quotes, parse it to compare
-                    if src.starts_with('"') && src.ends_with('"') => {
+            let source_matches = if walked.is_null() {
+                src == "null"
+            } else if let Some(b) = walked.as_boolean() {
+                src == if b { "true" } else { "false" }
+            } else if let Some(n) = walked.as_number() {
+                src.parse::<f64>()
+                    .is_ok_and(|parsed| (parsed.is_nan() && n.is_nan()) || parsed == n)
+            } else {
+                walked
+                    .with_string(|units| {
+                        if !(src.starts_with('"') && src.ends_with('"')) {
+                            return false;
+                        }
+                        // Source includes quotes, parse it to compare
                         let inner = &src[1..src.len() - 1];
-                        json_unescape_js_string(inner) == *s
-                    }
-                _ => false,
+                        json_unescape_js_string(inner).code_units.as_slice() == units
+                    })
+                    .unwrap_or(false)
             };
             if source_matches {
                 interp
                     .get_object_cell_expect(ctx_id)
                     .borrow_mut()
-                    .insert_value(
-                        "source".to_string(),
-                        JsValue::String(JsString::from_str(src)),
-                    );
+                    .insert_value("source".to_string(), JsValue::from_str(src));
             }
         }
-        let id = ctx_id;
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(ctx_id)
     };
-    let key_val = JsValue::String(name.to_js_property_key().to_js_string());
+    let key_val = JsValue::string(name.to_js_property_key().to_js_string());
     interp.call_function(reviver, holder, &[key_val, walked, context])
 }
 

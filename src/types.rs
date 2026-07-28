@@ -817,21 +817,24 @@ pub(crate) mod bigint_ops {
 
 impl fmt::Display for JsValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            JsValue::Undefined => write!(f, "undefined"),
-            JsValue::Null => write!(f, "null"),
-            JsValue::Boolean(b) => write!(f, "{b}"),
-            JsValue::Number(n) => write!(f, "{}", number_ops::to_string(*n)),
-            JsValue::String(s) => write!(f, "{s}"),
-            JsValue::Symbol(s) => {
-                if let Some(desc) = s.description() {
-                    write!(f, "Symbol({desc})")
-                } else {
-                    write!(f, "Symbol()")
-                }
+        match self.kind() {
+            ValueKind::Undefined => write!(f, "undefined"),
+            ValueKind::Null => write!(f, "null"),
+            ValueKind::Boolean => write!(f, "{}", self.as_boolean().unwrap()),
+            ValueKind::Number => {
+                write!(f, "{}", number_ops::to_string(self.as_number().unwrap()))
             }
-            JsValue::BigInt(b) => write!(f, "{}n", b.value),
-            JsValue::Object(_) => write!(f, "[object Object]"),
+            ValueKind::String => self
+                .with_string(|units| write!(f, "{}", String::from_utf16_lossy(units)))
+                .unwrap(),
+            ValueKind::Symbol => self
+                .with_symbol(|s| match s.description() {
+                    Some(desc) => write!(f, "Symbol({desc})"),
+                    None => write!(f, "Symbol()"),
+                })
+                .unwrap(),
+            ValueKind::BigInt => self.with_bigint(|b| write!(f, "{b}n")).unwrap(),
+            ValueKind::Object => write!(f, "[object Object]"),
         }
     }
 }

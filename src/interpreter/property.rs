@@ -80,24 +80,22 @@ impl Interpreter {
                     if is_valid_integer_index(ta, index) {
                         return Completion::Normal(typed_array_get_index(ta, index as usize));
                     }
-                    return Completion::Normal(JsValue::Undefined);
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
 
                 // Check own property
                 let own_desc = b.get_own_property_full(key);
                 match own_desc {
-                    Some(ref d)
-                        if d.get.is_some() && !matches!(d.get, Some(JsValue::Undefined)) =>
-                    {
+                    Some(ref d) if d.get.as_ref().is_some_and(|g| !g.is_undefined()) => {
                         let getter = d.get.clone().unwrap();
                         drop(b);
                         return self.call_function(&getter, this_val, &[]);
                     }
                     Some(ref d) if d.get.is_some() => {
-                        return Completion::Normal(JsValue::Undefined);
+                        return Completion::Normal(JsValue::UNDEFINED);
                     }
                     Some(ref d) => {
-                        return Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined));
+                        return Completion::Normal(d.value.clone().unwrap_or(JsValue::UNDEFINED));
                     }
                     None => {}
                 }
@@ -109,7 +107,7 @@ impl Interpreter {
                     let proto_id = proto_rc;
                     return self.get_object_property(proto_id, key, this_val);
                 }
-                return Completion::Normal(JsValue::Undefined);
+                return Completion::Normal(JsValue::UNDEFINED);
             }
             drop(b);
         }
@@ -133,8 +131,8 @@ impl Interpreter {
             {
                 Ok(Some(v)) => {
                     // Invariant checks
-                    if let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object_cell(t.id)
+                    if let Some(target_id) = target_val.as_object_id()
+                        && let Some(tobj) = self.get_object_cell(target_id)
                     {
                         let target_desc = tobj.borrow().get_own_property(key);
                         if let Some(ref desc) = target_desc
@@ -144,7 +142,7 @@ impl Interpreter {
                                 && desc.writable == Some(false)
                                 && !same_value(
                                     &v,
-                                    desc.value.as_ref().unwrap_or(&JsValue::Undefined),
+                                    desc.value.as_ref().unwrap_or(&JsValue::UNDEFINED),
                                 )
                             {
                                 return Completion::Throw(self.create_type_error(
@@ -152,11 +150,8 @@ impl Interpreter {
                                     ));
                             }
                             if desc.is_accessor_descriptor()
-                                && matches!(
-                                    desc.get.as_ref().unwrap_or(&JsValue::Undefined),
-                                    JsValue::Undefined
-                                )
-                                && !matches!(v, JsValue::Undefined)
+                                && desc.get.as_ref().is_none_or(|g| g.is_undefined())
+                                && !v.is_undefined()
                             {
                                 return Completion::Throw(self.create_type_error(
                                         "'get' on proxy: property is a non-configurable accessor property on the proxy target and does not have a getter function, but the trap did not return 'undefined'",
@@ -168,10 +163,10 @@ impl Interpreter {
                 }
                 Ok(None) => {
                     // No trap, fall through to target
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.get_object_property(t.id, key, this_val);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.get_object_property(target_id, key, this_val);
                     }
-                    return Completion::Normal(JsValue::Undefined);
+                    return Completion::Normal(JsValue::UNDEFINED);
                 }
                 Err(e) => return Completion::Throw(e),
             }
@@ -222,12 +217,12 @@ impl Interpreter {
             None
         };
         match own_desc {
-            Some(ref d) if d.get.is_some() && !matches!(d.get, Some(JsValue::Undefined)) => {
+            Some(ref d) if d.get.as_ref().is_some_and(|g| !g.is_undefined()) => {
                 let getter = d.get.clone().unwrap();
                 self.call_function(&getter, this_val, &[])
             }
-            Some(ref d) if d.get.is_some() => Completion::Normal(JsValue::Undefined),
-            Some(ref d) => Completion::Normal(d.value.clone().unwrap_or(JsValue::Undefined)),
+            Some(ref d) if d.get.is_some() => Completion::Normal(JsValue::UNDEFINED),
+            Some(ref d) => Completion::Normal(d.value.clone().unwrap_or(JsValue::UNDEFINED)),
             None => {
                 let proto = if let Some(obj) = self.get_object_cell(obj_id) {
                     obj.borrow().prototype_id
@@ -238,7 +233,7 @@ impl Interpreter {
                     let proto_id = proto_rc;
                     self.get_object_property(proto_id, key, this_val)
                 } else {
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 }
             }
         }
@@ -257,8 +252,8 @@ impl Interpreter {
                 Ok(Some(v)) => {
                     let trap_result = self.to_boolean_val(&v);
                     if !trap_result
-                        && let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object_cell(t.id)
+                        && let Some(target_id) = target_val.as_object_id()
+                        && let Some(tobj) = self.get_object_cell(target_id)
                     {
                         let target_desc = tobj.borrow().get_own_property(key);
                         if let Some(ref desc) = target_desc {
@@ -277,8 +272,8 @@ impl Interpreter {
                     Ok(trap_result)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_has_property(t.id, key);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_has_property(target_id, key);
                     }
                     Ok(false)
                 }
@@ -341,7 +336,7 @@ impl Interpreter {
             drop(b);
             current = next;
         }
-        JsValue::Undefined
+        JsValue::UNDEFINED
     }
 
     /// Iterative prototype-chain walk of `get_property_descriptor`.
@@ -447,7 +442,7 @@ impl Interpreter {
         }
 
         // 5. Set newLenDesc.[[Value]] to newLen (as a Number).
-        new_len_desc.value = Some(JsValue::Number(new_len as f64));
+        new_len_desc.value = Some(JsValue::number(new_len as f64));
 
         // 6. Let oldLenDesc be OrdinaryGetOwnProperty(A, "length").
         let (old_len, old_len_writable) = {
@@ -459,13 +454,8 @@ impl Interpreter {
                     let ol = d
                         .value
                         .as_ref()
-                        .and_then(|v| {
-                            if let JsValue::Number(n) = v {
-                                Some(*n as u32)
-                            } else {
-                                None
-                            }
-                        })
+                        .and_then(JsValue::as_number)
+                        .map(|n| n as u32)
                         .unwrap_or(0);
                     let w = d.writable.unwrap_or(true);
                     (ol, w)
@@ -556,7 +546,7 @@ impl Interpreter {
             let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
             let mut obj = obj_rc.borrow_mut();
             if let Some(len_desc) = obj.properties.get_mut("length") {
-                len_desc.value = Some(JsValue::Number(actual_new_len as f64));
+                len_desc.value = Some(JsValue::number(actual_new_len as f64));
             }
             // 13.d.iii.2. If newWritable is false, set length writable to false.
             if !new_writable && let Some(len_desc) = obj.properties.get_mut("length") {
@@ -604,13 +594,8 @@ impl Interpreter {
                 let len_desc = obj.properties.get("length");
                 let ol = len_desc
                     .and_then(|d| d.value.as_ref())
-                    .and_then(|v| {
-                        if let JsValue::Number(n) = v {
-                            Some(*n as u32)
-                        } else {
-                            None
-                        }
-                    })
+                    .and_then(JsValue::as_number)
+                    .map(|n| n as u32)
                     .unwrap_or(0);
                 let w = len_desc.and_then(|d| d.writable).unwrap_or(true);
                 (ol, w)
@@ -640,16 +625,16 @@ impl Interpreter {
                 let obj_rc = self.get_object_cell(obj_id as u64).unwrap();
                 let mut obj = obj_rc.borrow_mut();
                 if let Some(len_desc) = obj.properties.get_mut("length") {
-                    len_desc.value = Some(JsValue::Number(new_len as f64));
+                    len_desc.value = Some(JsValue::number(new_len as f64));
                 }
                 if let Some(elems) = obj.array_elements_mut() {
-                    let val = desc.value.unwrap_or(JsValue::Undefined);
+                    let val = desc.value.unwrap_or(JsValue::UNDEFINED);
                     let idx = index_u32 as usize;
                     if idx < elems.len() {
                         elems[idx] = val;
                     } else if idx <= elems.len() + 1024 {
                         while elems.len() < idx {
-                            elems.push(JsValue::Undefined);
+                            elems.push(JsValue::UNDEFINED);
                         }
                         elems.push(val);
                     }
@@ -695,8 +680,8 @@ impl Interpreter {
             ) {
                 Ok(Some(v)) => {
                     if self.to_boolean_val(&v) {
-                        if let JsValue::Object(ref t) = target_val
-                            && let Some(tobj) = self.get_object(t.id)
+                        if let Some(target_id) = target_val.as_object_id()
+                            && let Some(tobj) = self.get_object(target_id)
                         {
                             let target_desc = tobj.borrow().get_own_property(key);
                             if let Some(ref desc) = target_desc
@@ -706,7 +691,7 @@ impl Interpreter {
                                     && desc.writable == Some(false)
                                     && !same_value(
                                         &value,
-                                        desc.value.as_ref().unwrap_or(&JsValue::Undefined),
+                                        desc.value.as_ref().unwrap_or(&JsValue::UNDEFINED),
                                     )
                                 {
                                     return Err(self.create_type_error(
@@ -714,10 +699,7 @@ impl Interpreter {
                                         ));
                                 }
                                 if desc.is_accessor_descriptor()
-                                    && matches!(
-                                        desc.set.as_ref().unwrap_or(&JsValue::Undefined),
-                                        JsValue::Undefined
-                                    )
+                                    && desc.set.as_ref().is_none_or(|s| s.is_undefined())
                                 {
                                     return Err(self.create_type_error(
                                             "'set' on proxy: trap returned truish for property which exists in the proxy target as a non-configurable and non-writable accessor property without a setter",
@@ -731,8 +713,8 @@ impl Interpreter {
                     }
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_set(t.id, key, value, receiver);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_set(target_id, key, value, receiver);
                     }
                     Ok(false)
                 }
@@ -742,11 +724,7 @@ impl Interpreter {
             // TypedArray [[Set]] §10.4.5.5
             let is_ta = obj.borrow().typed_array_info().is_some();
             if is_ta && let Some(index) = canonical_numeric_index_string(key) {
-                let same_val = if let JsValue::Object(ref r) = *receiver {
-                    r.id == obj_id
-                } else {
-                    false
-                };
+                let same_val = receiver.as_object_id() == Some(obj_id);
                 if same_val {
                     // SameValue(O, Receiver): IntegerIndexedElementSet
                     let is_bigint = obj
@@ -757,7 +735,7 @@ impl Interpreter {
                     let num_val = if is_bigint {
                         self.to_bigint_value(&value)?
                     } else {
-                        JsValue::Number(self.to_number_value(&value)?)
+                        JsValue::number(self.to_number_value(&value)?)
                     };
                     let obj_ref = obj.borrow();
                     let ta = obj_ref.typed_array_info().unwrap();
@@ -788,7 +766,7 @@ impl Interpreter {
                 if desc.is_accessor_descriptor() {
                     // Call setter with receiver as this
                     if let Some(ref setter) = desc.set
-                        && !matches!(setter, JsValue::Undefined)
+                        && !setter.is_undefined()
                     {
                         let setter = setter.clone();
                         match self.call_function(&setter, receiver, &[value]) {
@@ -804,11 +782,7 @@ impl Interpreter {
                     return Ok(false);
                 }
                 // OrdinarySetWithOwnDescriptor step 3.c: use Receiver.[[GetOwnProperty]] / [[DefineOwnProperty]]
-                let recv_id = if let JsValue::Object(r) = receiver {
-                    Some(r.id)
-                } else {
-                    None
-                };
+                let recv_id = receiver.as_object_id();
                 if recv_id == Some(obj_id) {
                     // Common case: receiver is the same object, direct set
                     self.gc_write_barrier_value(&obj, &value);
@@ -817,7 +791,7 @@ impl Interpreter {
                 // Receiver differs: call Receiver.[[GetOwnProperty]](P) and [[DefineOwnProperty]]
                 if let Some(rid) = recv_id {
                     let existing = self.proxy_get_own_property_descriptor(rid, key)?;
-                    if matches!(existing, JsValue::Undefined) {
+                    if existing.is_undefined() {
                         // CreateDataProperty(Receiver, P, V)
                         let desc = crate::interpreter::types::PropertyDescriptor {
                             value: Some(value),
@@ -874,14 +848,13 @@ impl Interpreter {
             }
             // No prototype: OrdinarySetWithOwnDescriptor with synthetic {writable:true,...} ownDesc.
             // Per spec step 1.c.i + 2.c: call Receiver.[[GetOwnProperty]](P) then act on result.
-            if let JsValue::Object(recv_o) = receiver {
-                let recv_id = recv_o.id;
+            if let Some(recv_id) = receiver.as_object_id() {
                 let is_proxy_recv = self
                     .get_object_cell(recv_id)
                     .is_some_and(|o| o.borrow().is_proxy() || o.borrow().is_proxy_revoked());
                 if is_proxy_recv {
                     let existing = self.proxy_get_own_property_descriptor(recv_id, key)?;
-                    if matches!(existing, JsValue::Undefined) {
+                    if existing.is_undefined() {
                         // CreateDataProperty(Receiver, P, V)
                         let create_desc = crate::interpreter::types::PropertyDescriptor {
                             value: Some(value),
@@ -971,8 +944,8 @@ impl Interpreter {
                 Ok(Some(v)) => {
                     let trap_result = self.to_boolean_val(&v);
                     if trap_result
-                        && let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object_cell(t.id)
+                        && let Some(target_id) = target_val.as_object_id()
+                        && let Some(tobj) = self.get_object_cell(target_id)
                     {
                         let target_desc = tobj.borrow().get_own_property(key);
                         if let Some(ref desc) = target_desc {
@@ -991,8 +964,8 @@ impl Interpreter {
                     Ok(trap_result)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_delete_property(t.id, key);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_delete_property(target_id, key);
                     }
                     Ok(true)
                 }
@@ -1003,14 +976,15 @@ impl Interpreter {
             {
                 let borrow = obj.borrow();
                 if borrow.class_name == "String"
-                    && let Some(JsValue::String(ref s)) = borrow.primitive_value
+                    && let Some(len) = borrow
+                        .primitive_value
+                        .as_ref()
+                        .and_then(|v| v.with_string(|s| s.len()))
                 {
                     if key.as_property_key_str() == Some("length") {
                         return Ok(false);
                     }
-                    if crate::interpreter::types::string_exotic_index(key, s.code_units.len())
-                        .is_some()
-                    {
+                    if crate::interpreter::types::string_exotic_index(key, len).is_some() {
                         return Ok(false);
                     }
                 }
@@ -1027,7 +1001,7 @@ impl Interpreter {
                 && let Ok(idx) = key_str.parse::<usize>()
                 && idx < elems.len()
             {
-                elems[idx] = JsValue::Undefined;
+                elems[idx] = JsValue::UNDEFINED;
             }
             Ok(true)
         } else {
@@ -1108,7 +1082,7 @@ impl Interpreter {
             let num_val = if is_bigint {
                 self.to_bigint_value(value)?
             } else {
-                JsValue::Number(self.to_number_value(value)?)
+                JsValue::number(self.to_number_value(value)?)
             };
             // After conversion, re-read ta info (buffer may have been detached during conversion)
             if let Some(obj) = self.get_object_cell(obj_id) {
@@ -1151,8 +1125,8 @@ impl Interpreter {
                     if !trap_result {
                         return Ok(false);
                     }
-                    if let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object_cell(t.id)
+                    if let Some(target_id) = target_val.as_object_id()
+                        && let Some(tobj) = self.get_object_cell(target_id)
                     {
                         let target_desc = tobj.borrow().get_own_property(&key);
                         let target_extensible = tobj.borrow().extensible;
@@ -1204,8 +1178,8 @@ impl Interpreter {
                     Ok(true)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_define_own_property(t.id, key, desc_val);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_define_own_property(target_id, key, desc_val);
                     }
                     Ok(false)
                 }
@@ -1257,17 +1231,17 @@ impl Interpreter {
             ) {
                 Ok(Some(v)) => {
                     // Step 11: If Type(trapResultObj) is neither Object nor Undefined, throw TypeError
-                    if !matches!(v, JsValue::Object(_) | JsValue::Undefined) {
+                    if !v.is_object() && !v.is_undefined() {
                         return Err(self.create_type_error(
                             "'getOwnPropertyDescriptor' on proxy: trap returned neither Object nor undefined",
                         ));
                     }
-                    if let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object_cell(t.id)
+                    if let Some(target_id) = target_val.as_object_id()
+                        && let Some(tobj) = self.get_object_cell(target_id)
                     {
                         let target_desc = tobj.borrow().get_own_property(key);
                         let target_extensible = tobj.borrow().extensible;
-                        if matches!(v, JsValue::Undefined) {
+                        if v.is_undefined() {
                             if let Some(ref td) = target_desc {
                                 if td.configurable == Some(false) {
                                     return Err(self.create_type_error(
@@ -1280,11 +1254,11 @@ impl Interpreter {
                                     ));
                                 }
                             }
-                        } else if matches!(v, JsValue::Object(_)) {
+                        } else if v.is_object() {
                             let result_desc = match self.to_property_descriptor(&v) {
                                 Ok(d) => d,
                                 Err(Some(e)) => return Err(e),
-                                Err(None) => return Ok(JsValue::Undefined),
+                                Err(None) => return Ok(JsValue::UNDEFINED),
                             };
                             // Step 22: If resultDesc.[[Configurable]] is false
                             if result_desc.configurable == Some(false) {
@@ -1391,10 +1365,10 @@ impl Interpreter {
                     Ok(v)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_get_own_property_descriptor(t.id, key);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_get_own_property_descriptor(target_id, key);
                     }
-                    Ok(JsValue::Undefined)
+                    Ok(JsValue::UNDEFINED)
                 }
                 Err(e) => Err(e),
             }
@@ -1404,10 +1378,10 @@ impl Interpreter {
             let desc = obj.borrow().get_own_property(key);
             match desc {
                 Some(d) => Ok(self.from_property_descriptor(&d)),
-                None => Ok(JsValue::Undefined),
+                None => Ok(JsValue::UNDEFINED),
             }
         } else {
-            Ok(JsValue::Undefined)
+            Ok(JsValue::UNDEFINED)
         }
     }
 
@@ -1420,21 +1394,20 @@ impl Interpreter {
             let target_val = self.get_proxy_target_val(obj_id);
             match self.invoke_proxy_trap(obj_id, "ownKeys", vec![target_val.clone()]) {
                 Ok(Some(v)) => {
-                    if !matches!(v, JsValue::Object(_)) {
+                    if !v.is_object() {
                         return Err(
                             self.create_type_error("CreateListFromArrayLike called on non-object")
                         );
                     }
-                    if let JsValue::Object(arr) = &v {
-                        let arr_id = arr.id;
+                    if let Some(arr_id) = v.as_object_id() {
                         // Use [[Get]] for length (spec: CreateListFromArrayLike)
                         let len_val = match self.get_object_property(arr_id, "length", &v) {
                             Completion::Normal(lv) => lv,
                             Completion::Throw(e) => return Err(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
-                        let len = match len_val {
-                            JsValue::Number(n) if n.is_finite() && n > 0.0 => {
+                        let len = match len_val.as_number() {
+                            Some(n) if n.is_finite() && n > 0.0 => {
                                 let len = n.floor() as usize;
                                 if len > MAX_PROXY_OWNKEYS_RESULT_LEN {
                                     return Err(self.create_type_error(
@@ -1443,8 +1416,8 @@ impl Interpreter {
                                 }
                                 len
                             }
-                            JsValue::Number(_) => 0,
-                            _ => {
+                            Some(_) => 0,
+                            None => {
                                 return Err(self.create_type_error(
                                     "ownKeys trap result length is not a number",
                                 ));
@@ -1456,12 +1429,12 @@ impl Interpreter {
                             let elem = match self.get_object_property(arr_id, &i.to_string(), &v) {
                                 Completion::Normal(ev) => ev,
                                 Completion::Throw(e) => return Err(e),
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             };
                             keys.push(elem);
                         }
                         for key in &keys {
-                            if !matches!(key, JsValue::String(_) | JsValue::Symbol(_)) {
+                            if !key.is_string() && !key.is_symbol() {
                                 return Err(self.create_type_error(
                                     "'ownKeys' on proxy: trap returned non-string/symbol key",
                                 ));
@@ -1483,8 +1456,8 @@ impl Interpreter {
                     }
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_own_keys(t.id);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_own_keys(target_id);
                     }
                     Ok(vec![])
                 }
@@ -1507,14 +1480,13 @@ impl Interpreter {
             let b = obj.borrow();
 
             // String exotic objects (§10.4.3.3): virtual char indices included
-            let is_string_wrapper =
-                b.class_name == "String" && matches!(b.primitive_value, Some(JsValue::String(_)));
+            let is_string_wrapper = b.class_name == "String"
+                && b.primitive_value.as_ref().is_some_and(JsValue::is_string);
             let string_len = if is_string_wrapper {
-                if let Some(JsValue::String(ref s)) = b.primitive_value {
-                    s.code_units.len()
-                } else {
-                    0
-                }
+                b.primitive_value
+                    .as_ref()
+                    .and_then(|v| v.with_string(|s| s.len()))
+                    .unwrap_or(0)
             } else {
                 0
             };
@@ -1544,7 +1516,7 @@ impl Interpreter {
 
             if let Some(elems) = b.array_elements() {
                 for (i, value) in elems.iter().enumerate() {
-                    if matches!(value, JsValue::Undefined) || i > 0xFFFF_FFFE {
+                    if value.is_undefined() || i > 0xFFFF_FFFE {
                         continue;
                     }
                     int_keys_set.insert(i as u64, i.to_string());
@@ -1572,14 +1544,14 @@ impl Interpreter {
 
             let mut result: Vec<JsValue> = Vec::new();
             for (_, k) in int_keys_set {
-                result.push(JsValue::String(JsString::from_str(&k)));
+                result.push(JsValue::from_str(&k));
             }
             for k in str_keys {
-                result.push(JsValue::String(k.to_js_string()));
+                result.push(JsValue::string(k.to_js_string()));
             }
             // String exotic: "length" is a virtual non-enumerable string key (after other str keys, before symbols)
             if is_string_wrapper {
-                result.push(JsValue::String(JsString::from_str("length")));
+                result.push(JsValue::from_str("length"));
             }
             for k in sym_keys {
                 result.push(self.symbol_key_to_jsvalue(&k));
@@ -1603,15 +1575,15 @@ impl Interpreter {
             // Get own keys for current object (proxy-aware)
             let own_keys = self.proxy_own_keys(cid)?;
             for key in &own_keys {
-                if let JsValue::String(s) = key {
-                    let key_str = JsPropertyKey::from_js_string(s);
+                if let Some(s) = key.as_string() {
+                    let key_str = JsPropertyKey::from_js_string(&s);
                     if seen.contains(&key_str) {
                         continue;
                     }
                     // Check enumerability via proxy-aware [[GetOwnProperty]]
                     let desc_val = self.proxy_get_own_property_descriptor(cid, &key_str)?;
                     seen.insert(key_str.clone());
-                    if !matches!(desc_val, JsValue::Undefined)
+                    if !desc_val.is_undefined()
                         && let Ok(desc) = self.to_property_descriptor(&desc_val)
                         && desc.enumerable != Some(false)
                     {
@@ -1621,13 +1593,7 @@ impl Interpreter {
             }
 
             // Walk prototype chain (proxy-aware)
-            match self.proxy_get_prototype_of(cid) {
-                Ok(JsValue::Object(proto_ref)) => {
-                    current_id = Some(proto_ref.id);
-                }
-                Ok(_) => current_id = None,
-                Err(e) => return Err(e),
-            }
+            current_id = self.proxy_get_prototype_of(cid)?.as_object_id();
         }
         Ok(keys)
     }
@@ -1638,20 +1604,20 @@ impl Interpreter {
             let target_val = self.get_proxy_target_val(obj_id);
             match self.invoke_proxy_trap(obj_id, "getPrototypeOf", vec![target_val.clone()]) {
                 Ok(Some(v)) => {
-                    if !matches!(v, JsValue::Object(_) | JsValue::Null) {
+                    if !v.is_object() && !v.is_null() {
                         return Err(self.create_type_error(
                             "'getPrototypeOf' on proxy: trap returned neither object nor null",
                         ));
                     }
                     // Step 8: extensibleTarget = ? IsExtensible(target)
-                    if let JsValue::Object(ref t) = target_val {
-                        let extensible_target = self.proxy_is_extensible(t.id)?;
+                    if let Some(target_id) = target_val.as_object_id() {
+                        let extensible_target = self.proxy_is_extensible(target_id)?;
                         if !extensible_target {
                             // Step 10: targetProto = ? target.[[GetPrototypeOf]]()
-                            let actual_proto = self.proxy_get_prototype_of(t.id)?;
-                            let same = match (&v, &actual_proto) {
-                                (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
-                                (JsValue::Null, JsValue::Null) => true,
+                            let actual_proto = self.proxy_get_prototype_of(target_id)?;
+                            let same = match (v.as_object_id(), actual_proto.as_object_id()) {
+                                (Some(a), Some(b)) => a == b,
+                                (None, None) => v.is_null() && actual_proto.is_null(),
                                 _ => false,
                             };
                             if !same {
@@ -1664,21 +1630,21 @@ impl Interpreter {
                     Ok(v)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_get_prototype_of(t.id);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_get_prototype_of(target_id);
                     }
-                    Ok(JsValue::Null)
+                    Ok(JsValue::NULL)
                 }
                 Err(e) => Err(e),
             }
         } else if let Some(obj) = self.get_object_cell(obj_id) {
             if let Some(id) = obj.borrow().prototype_id {
-                Ok(JsValue::Object(crate::types::JsObject { id }))
+                Ok(JsValue::object(id))
             } else {
-                Ok(JsValue::Null)
+                Ok(JsValue::NULL)
             }
         } else {
-            Ok(JsValue::Null)
+            Ok(JsValue::NULL)
         }
     }
 
@@ -1700,9 +1666,7 @@ impl Interpreter {
                         return Ok(false);
                     }
                     // Step 8: IsExtensible(target) — may throw, must use proxy-aware check
-                    let target_id = if let JsValue::Object(ref t) = target_val {
-                        t.id
-                    } else {
+                    let Some(target_id) = target_val.as_object_id() else {
                         return Ok(true);
                     };
                     let extensible_target = self.proxy_is_extensible(target_id)?;
@@ -1712,9 +1676,9 @@ impl Interpreter {
                     }
                     // Step 10: GetPrototypeOf(target) — may throw
                     let actual_proto = self.proxy_get_prototype_of(target_id)?;
-                    let same = match (proto, &actual_proto) {
-                        (JsValue::Object(a), JsValue::Object(b)) => a.id == b.id,
-                        (JsValue::Null, JsValue::Null) => true,
+                    let same = match (proto.as_object_id(), actual_proto.as_object_id()) {
+                        (Some(a), Some(b)) => a == b,
+                        (None, None) => proto.is_null() && actual_proto.is_null(),
                         _ => false,
                     };
                     if !same {
@@ -1725,8 +1689,8 @@ impl Interpreter {
                     Ok(true)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_set_prototype_of(t.id, proto);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_set_prototype_of(target_id, proto);
                     }
                     Ok(true)
                 }
@@ -1735,12 +1699,8 @@ impl Interpreter {
         } else if let Some(obj) = self.get_object_cell(obj_id) {
             // OrdinarySetPrototypeOf
             let current_proto_id = obj.borrow().prototype_id;
-            let new_proto_id = if let JsValue::Object(p) = proto {
-                Some(p.id)
-            } else {
-                None
-            };
-            let same = (matches!(proto, JsValue::Null) && current_proto_id.is_none())
+            let new_proto_id = proto.as_object_id();
+            let same = (proto.is_null() && current_proto_id.is_none())
                 || matches!((new_proto_id, current_proto_id), (Some(a), Some(b)) if a == b);
             if same {
                 return Ok(true);
@@ -1749,8 +1709,8 @@ impl Interpreter {
                 return Ok(false);
             }
             // Cycle check
-            if let JsValue::Object(p) = proto {
-                let mut check_id = Some(p.id);
+            if let Some(proto_id) = proto.as_object_id() {
+                let mut check_id = Some(proto_id);
                 while let Some(cid) = check_id {
                     if cid == obj_id {
                         return Ok(false);
@@ -1760,16 +1720,12 @@ impl Interpreter {
                         .and_then(|o| o.borrow().prototype_id.as_ref().copied());
                 }
             }
-            match proto {
-                JsValue::Null => {
-                    obj.borrow_mut().prototype_id = None;
-                }
-                JsValue::Object(p) => {
-                    if let Some(po) = self.get_object_cell(p.id) {
-                        obj.borrow_mut().prototype_id = Some(po.borrow().id.unwrap());
-                    }
-                }
-                _ => {}
+            if proto.is_null() {
+                obj.borrow_mut().prototype_id = None;
+            } else if let Some(new_id) = proto.as_object_id()
+                && let Some(po) = self.get_object_cell(new_id)
+            {
+                obj.borrow_mut().prototype_id = Some(po.borrow().id.unwrap());
             }
             Ok(true)
         } else {
@@ -1784,8 +1740,8 @@ impl Interpreter {
             match self.invoke_proxy_trap(obj_id, "isExtensible", vec![target_val.clone()]) {
                 Ok(Some(v)) => {
                     let trap_result = self.to_boolean_val(&v);
-                    if let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object_cell(t.id)
+                    if let Some(target_id) = target_val.as_object_id()
+                        && let Some(tobj) = self.get_object_cell(target_id)
                     {
                         let target_extensible = tobj.borrow().extensible;
                         if trap_result != target_extensible {
@@ -1797,8 +1753,8 @@ impl Interpreter {
                     Ok(trap_result)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_is_extensible(t.id);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_is_extensible(target_id);
                     }
                     Ok(false)
                 }
@@ -1819,8 +1775,8 @@ impl Interpreter {
                 Ok(Some(v)) => {
                     let trap_result = self.to_boolean_val(&v);
                     if trap_result
-                        && let JsValue::Object(ref t) = target_val
-                        && let Some(tobj) = self.get_object_cell(t.id)
+                        && let Some(target_id) = target_val.as_object_id()
+                        && let Some(tobj) = self.get_object_cell(target_id)
                         && tobj.borrow().extensible
                     {
                         return Err(self.create_type_error(
@@ -1830,8 +1786,8 @@ impl Interpreter {
                     Ok(trap_result)
                 }
                 Ok(None) => {
-                    if let JsValue::Object(ref t) = target_val {
-                        return self.proxy_prevent_extensions(t.id);
+                    if let Some(target_id) = target_val.as_object_id() {
+                        return self.proxy_prevent_extensions(target_id);
                     }
                     Ok(false)
                 }
@@ -1887,11 +1843,13 @@ fn is_compatible_property_desc(
                 return false;
             }
             // 6a.ii: If Desc has [[Value]] and SameValue(Desc.[[Value]], current.[[Value]]) is false
-            if let Some(ref desc_val) = desc.value {
-                let current_val = current.value.as_ref().unwrap_or(&JsValue::Undefined);
-                if !same_value(desc_val, current_val) {
-                    return false;
-                }
+            if let Some(ref desc_val) = desc.value
+                && !same_value(
+                    desc_val,
+                    current.value.as_ref().unwrap_or(&JsValue::UNDEFINED),
+                )
+            {
+                return false;
             }
         }
         return true;
@@ -1899,18 +1857,22 @@ fn is_compatible_property_desc(
     // Step 7: Both are accessor descriptors
     if current.configurable == Some(false) {
         // 7a.i: If Desc has [[Set]] and SameValue(Desc.[[Set]], current.[[Set]]) is false
-        if let Some(ref desc_set) = desc.set {
-            let current_set = current.set.as_ref().unwrap_or(&JsValue::Undefined);
-            if !same_value(desc_set, current_set) {
-                return false;
-            }
+        if let Some(ref desc_set) = desc.set
+            && !same_value(
+                desc_set,
+                current.set.as_ref().unwrap_or(&JsValue::UNDEFINED),
+            )
+        {
+            return false;
         }
         // 7a.ii: If Desc has [[Get]] and SameValue(Desc.[[Get]], current.[[Get]]) is false
-        if let Some(ref desc_get) = desc.get {
-            let current_get = current.get.as_ref().unwrap_or(&JsValue::Undefined);
-            if !same_value(desc_get, current_get) {
-                return false;
-            }
+        if let Some(ref desc_get) = desc.get
+            && !same_value(
+                desc_get,
+                current.get.as_ref().unwrap_or(&JsValue::UNDEFINED),
+            )
+        {
+            return false;
         }
     }
     true

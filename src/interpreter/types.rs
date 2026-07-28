@@ -3,7 +3,7 @@ use crate::interpreter::PropertyMap;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
 use crate::interpreter::helpers::same_value;
 use crate::interpreter::key_intern::intern_js_key;
-use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, number_ops};
+use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, ValueKind, number_ops};
 use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -638,21 +638,37 @@ impl Realm {
             &self.typed_array_constructor,
             &self.abstract_module_source_ctor,
         ] {
-            if let Some(JsValue::Object(o)) = ctor {
-                worklist.push(o.id);
+            if let Some(id) = ctor.as_ref().and_then(JsValue::as_object_id) {
+                worklist.push(id);
             }
         }
-        if let Some(JsValue::Object(o)) = &self.throw_type_error {
-            worklist.push(o.id);
+        if let Some(id) = self
+            .throw_type_error
+            .as_ref()
+            .and_then(JsValue::as_object_id)
+        {
+            worklist.push(id);
         }
-        if let Some(JsValue::Object(o)) = &self.object_prototype_tostring {
-            worklist.push(o.id);
+        if let Some(id) = self
+            .object_prototype_tostring
+            .as_ref()
+            .and_then(JsValue::as_object_id)
+        {
+            worklist.push(id);
         }
-        if let Some(JsValue::Object(o)) = &self.sloppy_caller_getter {
-            worklist.push(o.id);
+        if let Some(id) = self
+            .sloppy_caller_getter
+            .as_ref()
+            .and_then(JsValue::as_object_id)
+        {
+            worklist.push(id);
         }
-        if let Some(JsValue::Object(o)) = &self.sloppy_arguments_getter {
-            worklist.push(o.id);
+        if let Some(id) = self
+            .sloppy_arguments_getter
+            .as_ref()
+            .and_then(JsValue::as_object_id)
+        {
+            worklist.push(id);
         }
         for &obj_id in self.template_cache.values() {
             worklist.push(obj_id);
@@ -860,7 +876,7 @@ impl Environment {
         self.bindings.insert(
             name.to_string(),
             Binding {
-                value: JsValue::Undefined,
+                value: JsValue::UNDEFINED,
                 kind,
                 initialized: kind == BindingKind::Var,
                 deletable: false,
@@ -928,7 +944,7 @@ impl Environment {
         self.bindings.insert(
             name.to_string(),
             Binding {
-                value: JsValue::Undefined,
+                value: JsValue::UNDEFINED,
                 kind,
                 initialized: kind == BindingKind::Var,
                 deletable: true,
@@ -974,31 +990,25 @@ impl Environment {
     pub(crate) fn set(&mut self, name: &str, value: JsValue) -> Result<(), JsValue> {
         // Indirect bindings (module imports) are immutable
         if self.is_indirect_binding(name) {
-            return Err(JsValue::String(JsString::from_str(
-                "Assignment to constant variable.",
-            )));
+            return Err(JsValue::from_str("Assignment to constant variable."));
         }
         if let Some(binding) = self.bindings.get_mut(name) {
             // TDZ: let/const bindings that haven't been initialized yet
             if !binding.initialized && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
             {
-                return Err(JsValue::String(JsString::from_str(&format!(
+                return Err(JsValue::from_str(&format!(
                     "Cannot access '{name}' before initialization"
-                ))));
+                )));
             }
             if binding.kind == BindingKind::Const && binding.initialized {
-                return Err(JsValue::String(JsString::from_str(
-                    "Assignment to constant variable.",
-                )));
+                return Err(JsValue::from_str("Assignment to constant variable."));
             }
             if (binding.kind == BindingKind::FunctionName
                 || binding.kind == BindingKind::ImmutableValue)
                 && binding.initialized
             {
                 if self.strict {
-                    return Err(JsValue::String(JsString::from_str(
-                        "Assignment to constant variable.",
-                    )));
+                    return Err(JsValue::from_str("Assignment to constant variable."));
                 }
                 return Ok(());
             }
@@ -2073,15 +2083,15 @@ impl JsObjectData {
 
     fn string_exotic_value<K: PropertyKeyLike + ?Sized>(&self, key: &K) -> Option<JsValue> {
         let key = key.as_property_key_str()?;
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
+        if self.class_name == "String"
+            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
             let units = &s.code_units;
             if key == "length" {
-                return Some(JsValue::Number(units.len() as f64));
+                return Some(JsValue::number(units.len() as f64));
             }
             if let Some(idx) = string_exotic_index(key, units.len()) {
-                return Some(JsValue::String(crate::types::JsString::from_vec(vec![
+                return Some(JsValue::string(crate::types::JsString::from_vec(vec![
                     units[idx],
                 ])));
             }
@@ -2115,7 +2125,7 @@ impl JsObjectData {
             && let Some(elems) = self.array_elements()
             && let Ok(idx) = key_str.parse::<usize>()
             && idx < elems.len()
-            && !matches!(elems[idx], JsValue::Undefined)
+            && !elems[idx].is_undefined()
         {
             return Some(PropertyDescriptor {
                 value: Some(elems[idx].clone()),
@@ -2141,13 +2151,13 @@ impl JsObjectData {
             }
             return None;
         }
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
+        if self.class_name == "String"
+            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
             let units = &s.code_units;
             if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor {
-                    value: Some(JsValue::Number(units.len() as f64)),
+                    value: Some(JsValue::number(units.len() as f64)),
                     writable: Some(false),
                     enumerable: Some(false),
                     configurable: Some(false),
@@ -2157,7 +2167,7 @@ impl JsObjectData {
             }
             if let Some(idx) = string_exotic_index(key, units.len()) {
                 return Some(PropertyDescriptor {
-                    value: Some(JsValue::String(crate::types::JsString::from_vec(vec![
+                    value: Some(JsValue::string(crate::types::JsString::from_vec(vec![
                         units[idx],
                     ]))),
                     writable: Some(false),
@@ -2185,9 +2195,9 @@ impl JsObjectData {
                         .env
                         .borrow()
                         .get(binding_name)
-                        .unwrap_or(JsValue::Undefined)
+                        .unwrap_or(JsValue::UNDEFINED)
                 } else {
-                    JsValue::Undefined
+                    JsValue::UNDEFINED
                 };
                 return Some(PropertyDescriptor {
                     value: Some(val),
@@ -2215,10 +2225,10 @@ impl JsObjectData {
             // OrdinaryGetOwnProperty: complete accessor descriptors
             if d.is_accessor_descriptor() {
                 if d.get.is_none() {
-                    d.get = Some(JsValue::Undefined);
+                    d.get = Some(JsValue::UNDEFINED);
                 }
                 if d.set.is_none() {
-                    d.set = Some(JsValue::Undefined);
+                    d.set = Some(JsValue::UNDEFINED);
                 }
             }
             return Some(d);
@@ -2226,7 +2236,7 @@ impl JsObjectData {
         if let Some(elems) = self.array_elements()
             && let Some(idx) = parse_array_index(key)
             && (idx as usize) < elems.len()
-            && !matches!(elems[idx as usize], JsValue::Undefined)
+            && !elems[idx as usize].is_undefined()
         {
             return Some(PropertyDescriptor {
                 value: Some(elems[idx as usize].clone()),
@@ -2254,12 +2264,12 @@ impl JsObjectData {
             return None;
         }
         // String exotic: §10.4.3.1
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
+        if self.class_name == "String"
+            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
             if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor::data(
-                    JsValue::Number(s.code_units.len() as f64),
+                    JsValue::number(s.code_units.len() as f64),
                     false,
                     false,
                     false,
@@ -2267,7 +2277,7 @@ impl JsObjectData {
             }
             if let Some(idx) = string_exotic_index(key, s.code_units.len()) {
                 return Some(PropertyDescriptor::data(
-                    JsValue::String(JsString::from_vec(vec![s.code_units[idx]])),
+                    JsValue::string(JsString::from_vec(vec![s.code_units[idx]])),
                     false,
                     true,
                     false,
@@ -2290,7 +2300,7 @@ impl JsObjectData {
         if let Some(elems) = self.array_elements()
             && let Some(idx) = parse_array_index(key)
             && (idx as usize) < elems.len()
-            && !matches!(elems[idx as usize], JsValue::Undefined)
+            && !elems[idx as usize].is_undefined()
         {
             return true;
         }
@@ -2300,8 +2310,8 @@ impl JsObjectData {
         {
             return is_valid_integer_index(ta, index);
         }
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
+        if self.class_name == "String"
+            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
             if key.as_property_key_str() == Some("length") {
                 return true;
@@ -2324,7 +2334,7 @@ impl JsObjectData {
         let key = intern_js_key(key.into());
         // String exotic §10.4.3.3 [[DefineOwnProperty]]: reject changes to character index properties
         if self.class_name == "String"
-            && let Some(JsValue::String(ref s)) = self.primitive_value
+            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
             && let Some(idx) = string_exotic_index(&key, s.code_units.len())
         {
             // String index property: {value: char, writable: false, enumerable: true, configurable: false}
@@ -2343,7 +2353,7 @@ impl JsObjectData {
             }
             if let Some(ref v) = desc.value {
                 let char_val =
-                    JsValue::String(crate::types::JsString::from_vec(vec![s.code_units[idx]]));
+                    JsValue::string(crate::types::JsString::from_vec(vec![s.code_units[idx]]));
                 if !same_value(v, &char_val) {
                     return false;
                 }
@@ -2492,13 +2502,13 @@ impl JsObjectData {
                 } else if current_is_accessor {
                     // Non-configurable accessor property
                     if let Some(ref new_get) = desc.get {
-                        let cur_get = current.get.as_ref().unwrap_or(&JsValue::Undefined);
+                        let cur_get = current.get.as_ref().unwrap_or(&JsValue::UNDEFINED);
                         if !same_value(new_get, cur_get) {
                             return false;
                         }
                     }
                     if let Some(ref new_set) = desc.set {
-                        let cur_set = current.set.as_ref().unwrap_or(&JsValue::Undefined);
+                        let cur_set = current.set.as_ref().unwrap_or(&JsValue::UNDEFINED);
                         if !same_value(new_set, cur_set) {
                             return false;
                         }
@@ -2546,7 +2556,7 @@ impl JsObjectData {
             {
                 // Changing from accessor to data
                 PropertyDescriptor {
-                    value: desc.value.or(Some(JsValue::Undefined)),
+                    value: desc.value.or(Some(JsValue::UNDEFINED)),
                     writable: desc.writable.or(Some(false)),
                     get: None,
                     set: None,
@@ -2558,8 +2568,8 @@ impl JsObjectData {
                 PropertyDescriptor {
                     value: None,
                     writable: None,
-                    get: desc.get.or(Some(JsValue::Undefined)),
-                    set: desc.set.or(Some(JsValue::Undefined)),
+                    get: desc.get.or(Some(JsValue::UNDEFINED)),
+                    set: desc.set.or(Some(JsValue::UNDEFINED)),
                     enumerable: desc.enumerable.or(current.enumerable),
                     configurable: desc.configurable.or(current.configurable),
                 }
@@ -2657,7 +2667,7 @@ impl JsObjectData {
             let is_accessor = desc.is_accessor_descriptor();
             let new_desc = PropertyDescriptor {
                 value: desc.value.or(if !is_accessor {
-                    Some(JsValue::Undefined)
+                    Some(JsValue::UNDEFINED)
                 } else {
                     None
                 }),
@@ -2706,9 +2716,9 @@ impl JsObjectData {
             if !len_writable {
                 return false;
             }
-            if let JsValue::Number(new_len_f) = &value {
-                let new_len_u32 = *new_len_f as u32;
-                if (new_len_u32 as f64) != *new_len_f {
+            if let Some(new_len_f) = value.as_number() {
+                let new_len_u32 = new_len_f as u32;
+                if (new_len_u32 as f64) != new_len_f {
                     // ArraySetLength §10.4.2.4 step 5: invalid length
                     return false;
                 }
@@ -2717,13 +2727,8 @@ impl JsObjectData {
                     .properties
                     .get("length")
                     .and_then(|d| d.value.as_ref())
-                    .and_then(|v| {
-                        if let JsValue::Number(n) = v {
-                            Some(*n as u32)
-                        } else {
-                            None
-                        }
-                    });
+                    .and_then(JsValue::as_number)
+                    .map(|n| n as u32);
                 if let Some(old_len) = old_len
                     && new_len_u32 < old_len
                 {
@@ -2769,7 +2774,7 @@ impl JsObjectData {
                     }
                 }
                 if let Some(desc) = self.properties.get_mut("length") {
-                    desc.value = Some(JsValue::Number(actual_new_len as f64));
+                    desc.value = Some(JsValue::number(actual_new_len as f64));
                     return true;
                 }
             }
@@ -2781,7 +2786,7 @@ impl JsObjectData {
             let _ = env_ref.borrow_mut().set(param_name, value.clone());
         }
         if self.class_name == "Array"
-            && !matches!(value, JsValue::Undefined)
+            && !value.is_undefined()
             && !self.properties.contains_key(key)
             && let Some(idx_u32) = parse_array_index(key)
             && self.array_elements().is_some()
@@ -2791,13 +2796,8 @@ impl JsObjectData {
                 .properties
                 .get("length")
                 .and_then(|d| d.value.as_ref())
-                .and_then(|v| {
-                    if let JsValue::Number(n) = v {
-                        Some(*n as u32)
-                    } else {
-                        None
-                    }
-                })
+                .and_then(JsValue::as_number)
+                .map(|n| n as u32)
                 .unwrap_or(0);
             let length_writable = self
                 .properties
@@ -2807,7 +2807,7 @@ impl JsObjectData {
             let extensible = self.extensible;
             let elements = self.array_elements_mut().unwrap();
             if idx <= elements.len() + 1024 {
-                let existed = idx < elements.len() && !matches!(elements[idx], JsValue::Undefined);
+                let existed = idx < elements.len() && !elements[idx].is_undefined();
                 if !existed && !extensible {
                     return false;
                 }
@@ -2818,14 +2818,14 @@ impl JsObjectData {
                     elements[idx] = value;
                 } else {
                     while elements.len() < idx {
-                        elements.push(JsValue::Undefined);
+                        elements.push(JsValue::UNDEFINED);
                     }
                     elements.push(value);
                 }
                 if idx_u32 >= old_len
                     && let Some(len_desc) = self.properties.get_mut("length")
                 {
-                    len_desc.value = Some(JsValue::Number((idx_u32 + 1) as f64));
+                    len_desc.value = Some(JsValue::number((idx_u32 + 1) as f64));
                 }
                 if !existed {
                     self.shape_id = fresh_shape_id();
@@ -2844,7 +2844,7 @@ impl JsObjectData {
             } else if idx < 0xFFFF_FFFF && idx <= elements.len() + 1024 {
                 // Extend for small gaps and valid array indices only
                 while elements.len() < idx {
-                    elements.push(JsValue::Undefined);
+                    elements.push(JsValue::UNDEFINED);
                 }
                 elements.push(value.clone());
                 // Issue #71 (Step 5): array_elements grew — structural mutation.
@@ -2852,19 +2852,19 @@ impl JsObjectData {
                 // Only update length if idx+1 exceeds the current property length
                 let new_idx_len = (idx + 1) as f64;
                 if let Some(len_desc) = self.properties.get_mut("length")
-                    && let Some(JsValue::Number(cur_len)) = &len_desc.value
-                    && new_idx_len > *cur_len
+                    && let Some(cur_len) = len_desc.value.as_ref().and_then(JsValue::as_number)
+                    && new_idx_len > cur_len
                 {
-                    len_desc.value = Some(JsValue::Number(new_idx_len));
+                    len_desc.value = Some(JsValue::number(new_idx_len));
                 }
             } else if idx < 0xFFFF_FFFF {
                 // Valid array index but too sparse for array_elements — update length
                 let new_len = (idx + 1) as f64;
                 if let Some(len_desc) = self.properties.get_mut("length")
-                    && let Some(JsValue::Number(cur_len)) = &len_desc.value
-                    && new_len > *cur_len
+                    && let Some(cur_len) = len_desc.value.as_ref().and_then(JsValue::as_number)
+                    && new_len > cur_len
                 {
-                    len_desc.value = Some(JsValue::Number(new_len));
+                    len_desc.value = Some(JsValue::number(new_len));
                 }
             }
             // idx >= 0xFFFFFFFF: not a valid array index, stored as named property
@@ -2877,8 +2877,8 @@ impl JsObjectData {
             true
         } else {
             // String exotic: length and index properties are non-writable (§10.4.3.2)
-            if let Some(JsValue::String(ref s)) = self.primitive_value
-                && self.class_name == "String"
+            if self.class_name == "String"
+                && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
                 && (key.as_property_key_str() == Some("length")
                     || string_exotic_index(key, s.code_units.len()).is_some())
             {
@@ -2971,7 +2971,7 @@ impl JsObjectData {
                     .env
                     .borrow()
                     .get(binding_name)
-                    .unwrap_or(JsValue::Undefined),
+                    .unwrap_or(JsValue::UNDEFINED),
             );
         }
         if let Some(key_str) = key.as_property_key_str()
@@ -2985,13 +2985,13 @@ impl JsObjectData {
             if let Some(ref val) = desc.value {
                 return Some(val.clone());
             }
-            return Some(JsValue::Undefined);
+            return Some(JsValue::UNDEFINED);
         }
         if let Some(key_str) = key.as_property_key_str()
             && let Some(elems) = self.array_elements()
             && let Ok(idx) = key_str.parse::<usize>()
             && idx < elems.len()
-            && !matches!(elems[idx], JsValue::Undefined)
+            && !elems[idx].is_undefined()
         {
             return Some(elems[idx].clone());
         }
@@ -3001,7 +3001,7 @@ impl JsObjectData {
             if is_valid_integer_index(ta, index) {
                 return Some(typed_array_get_index(ta, index as usize));
             }
-            return Some(JsValue::Undefined);
+            return Some(JsValue::UNDEFINED);
         }
         if let Some(val) = self.string_exotic_value(key) {
             return Some(val);
@@ -3028,10 +3028,10 @@ impl JsObjectData {
             }
             if d.is_accessor_descriptor() {
                 if d.get.is_none() {
-                    d.get = Some(JsValue::Undefined);
+                    d.get = Some(JsValue::UNDEFINED);
                 }
                 if d.set.is_none() {
-                    d.set = Some(JsValue::Undefined);
+                    d.set = Some(JsValue::UNDEFINED);
                 }
             }
             return Some(d);
@@ -3040,7 +3040,7 @@ impl JsObjectData {
             && let Some(elems) = self.array_elements()
             && let Ok(idx) = key_str.parse::<usize>()
             && idx < elems.len()
-            && !matches!(elems[idx], JsValue::Undefined)
+            && !elems[idx].is_undefined()
         {
             return Some(PropertyDescriptor {
                 value: Some(elems[idx].clone()),
@@ -3066,13 +3066,13 @@ impl JsObjectData {
             }
             return None;
         }
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
+        if self.class_name == "String"
+            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
             let units = &s.code_units;
             if key.as_property_key_str() == Some("length") {
                 return Some(PropertyDescriptor {
-                    value: Some(JsValue::Number(units.len() as f64)),
+                    value: Some(JsValue::number(units.len() as f64)),
                     writable: Some(false),
                     enumerable: Some(false),
                     configurable: Some(false),
@@ -3082,7 +3082,7 @@ impl JsObjectData {
             }
             if let Some(idx) = string_exotic_index(key, units.len()) {
                 return Some(PropertyDescriptor {
-                    value: Some(JsValue::String(crate::types::JsString::from_vec(vec![
+                    value: Some(JsValue::string(crate::types::JsString::from_vec(vec![
                         units[idx],
                     ]))),
                     writable: Some(false),
@@ -3125,8 +3125,8 @@ impl JsObjectData {
         let mut index_keys: Vec<(u32, JsPropertyKey)> = Vec::new();
         let mut string_keys: Vec<JsPropertyKey> = Vec::new();
 
-        if let Some(JsValue::String(ref s)) = self.primitive_value
-            && self.class_name == "String"
+        if self.class_name == "String"
+            && let Some(s) = self.primitive_value.as_ref().and_then(JsValue::as_string)
         {
             let utf16_len = s.code_units.len();
             for i in 0..utf16_len {
@@ -3149,7 +3149,7 @@ impl JsObjectData {
 
         if let Some(elems) = self.array_elements() {
             for (i, value) in elems.iter().enumerate() {
-                if matches!(value, JsValue::Undefined) || i > 0xFFFF_FFFE {
+                if value.is_undefined() || i > 0xFFFF_FFFE {
                     continue;
                 }
                 let k = JsPropertyKey::from(i.to_string());
@@ -3336,33 +3336,33 @@ fn typed_array_get_index_shared(
     match kind {
         TypedArrayKind::Int8 => sab.with_read(|buf| {
             if offset + 1 > buf.len() {
-                return JsValue::Undefined;
+                return JsValue::UNDEFINED;
             }
-            JsValue::Number(buf[offset] as i8 as f64)
+            JsValue::number(buf[offset] as i8 as f64)
         }),
         TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => sab.with_read(|buf| {
             if offset + 1 > buf.len() {
-                return JsValue::Undefined;
+                return JsValue::UNDEFINED;
             }
-            JsValue::Number(buf[offset] as f64)
+            JsValue::number(buf[offset] as f64)
         }),
         TypedArrayKind::Int16 => sab.with_read(|buf| {
             if offset + 2 > buf.len() {
-                return JsValue::Undefined;
+                return JsValue::UNDEFINED;
             }
             let v = i16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-            JsValue::Number(v as f64)
+            JsValue::number(v as f64)
         }),
         TypedArrayKind::Uint16 => sab.with_read(|buf| {
             if offset + 2 > buf.len() {
-                return JsValue::Undefined;
+                return JsValue::UNDEFINED;
             }
             let v = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-            JsValue::Number(v as f64)
+            JsValue::number(v as f64)
         }),
         TypedArrayKind::Int32 => sab.with_read(|buf| {
             if offset + 4 > buf.len() {
-                return JsValue::Undefined;
+                return JsValue::UNDEFINED;
             }
             let v = i32::from_ne_bytes([
                 buf[offset],
@@ -3370,11 +3370,11 @@ fn typed_array_get_index_shared(
                 buf[offset + 2],
                 buf[offset + 3],
             ]);
-            JsValue::Number(v as f64)
+            JsValue::number(v as f64)
         }),
         TypedArrayKind::Uint32 => sab.with_read(|buf| {
             if offset + 4 > buf.len() {
-                return JsValue::Undefined;
+                return JsValue::UNDEFINED;
             }
             let v = u32::from_ne_bytes([
                 buf[offset],
@@ -3382,31 +3382,31 @@ fn typed_array_get_index_shared(
                 buf[offset + 2],
                 buf[offset + 3],
             ]);
-            JsValue::Number(v as f64)
+            JsValue::number(v as f64)
         }),
         TypedArrayKind::BigInt64 => sab.with_read(|buf| {
             if offset + 8 > buf.len() {
-                return JsValue::Undefined;
+                return JsValue::UNDEFINED;
             }
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::BigInt(crate::types::JsBigInt::new(num_bigint::BigInt::from(
+            JsValue::bigint(crate::types::JsBigInt::new(num_bigint::BigInt::from(
                 i64::from_ne_bytes(bytes),
             )))
         }),
         TypedArrayKind::BigUint64 => sab.with_read(|buf| {
             if offset + 8 > buf.len() {
-                return JsValue::Undefined;
+                return JsValue::UNDEFINED;
             }
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::BigInt(crate::types::JsBigInt::new(num_bigint::BigInt::from(
+            JsValue::bigint(crate::types::JsBigInt::new(num_bigint::BigInt::from(
                 u64::from_ne_bytes(bytes),
             )))
         }),
         TypedArrayKind::Float16 => sab.with_read(|buf| {
             if offset + 2 > buf.len() {
-                return JsValue::Undefined;
+                return JsValue::UNDEFINED;
             }
             let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
             JsValue::number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
@@ -3415,7 +3415,7 @@ fn typed_array_get_index_shared(
         }),
         TypedArrayKind::Float32 => sab.with_read(|buf| {
             if offset + 4 > buf.len() {
-                return JsValue::Undefined;
+                return JsValue::UNDEFINED;
             }
             let v = f32::from_ne_bytes([
                 buf[offset],
@@ -3427,7 +3427,7 @@ fn typed_array_get_index_shared(
         }),
         TypedArrayKind::Float64 => sab.with_read(|buf| {
             if offset + 8 > buf.len() {
-                return JsValue::Undefined;
+                return JsValue::UNDEFINED;
             }
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&buf[offset..offset + 8]);
@@ -3438,7 +3438,7 @@ fn typed_array_get_index_shared(
 
 pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue {
     if ta.is_detached.get() || is_typed_array_out_of_bounds(ta) {
-        return JsValue::Undefined;
+        return JsValue::UNDEFINED;
     }
     let offset = ta.byte_offset + idx * ta.kind.bytes_per_element();
     let buf_borrow = ta.buffer.borrow();
@@ -3447,20 +3447,20 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
     }
     buf_borrow.with_read(|buf| {
         if offset + ta.kind.bytes_per_element() > buf.len() {
-            return JsValue::Undefined;
+            return JsValue::UNDEFINED;
         }
         match ta.kind {
-            TypedArrayKind::Int8 => JsValue::Number(buf[offset] as i8 as f64),
+            TypedArrayKind::Int8 => JsValue::number(buf[offset] as i8 as f64),
             TypedArrayKind::Uint8 | TypedArrayKind::Uint8Clamped => {
-                JsValue::Number(buf[offset] as f64)
+                JsValue::number(buf[offset] as f64)
             }
             TypedArrayKind::Int16 => {
                 let v = i16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-                JsValue::Number(v as f64)
+                JsValue::number(v as f64)
             }
             TypedArrayKind::Uint16 => {
                 let v = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-                JsValue::Number(v as f64)
+                JsValue::number(v as f64)
             }
             TypedArrayKind::Int32 => {
                 let v = i32::from_ne_bytes([
@@ -3469,7 +3469,7 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
                     buf[offset + 2],
                     buf[offset + 3],
                 ]);
-                JsValue::Number(v as f64)
+                JsValue::number(v as f64)
             }
             TypedArrayKind::Uint32 => {
                 let v = u32::from_ne_bytes([
@@ -3478,7 +3478,7 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
                     buf[offset + 2],
                     buf[offset + 3],
                 ]);
-                JsValue::Number(v as f64)
+                JsValue::number(v as f64)
             }
             TypedArrayKind::Float32 => {
                 let v = f32::from_ne_bytes([
@@ -3497,14 +3497,14 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
             TypedArrayKind::BigInt64 => {
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&buf[offset..offset + 8]);
-                JsValue::BigInt(crate::types::JsBigInt::new(num_bigint::BigInt::from(
+                JsValue::bigint(crate::types::JsBigInt::new(num_bigint::BigInt::from(
                     i64::from_ne_bytes(bytes),
                 )))
             }
             TypedArrayKind::BigUint64 => {
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&buf[offset..offset + 8]);
-                JsValue::BigInt(crate::types::JsBigInt::new(num_bigint::BigInt::from(
+                JsValue::bigint(crate::types::JsBigInt::new(num_bigint::BigInt::from(
                     u64::from_ne_bytes(bytes),
                 )))
             }
@@ -3692,13 +3692,25 @@ pub(crate) fn typed_array_set_index(ta: &TypedArrayInfo, idx: usize, value: &JsV
 }
 
 fn to_number(v: &JsValue) -> f64 {
-    match v {
-        JsValue::Number(n) => *n,
-        JsValue::Boolean(true) => 1.0,
-        JsValue::Boolean(false) | JsValue::Null => 0.0,
-        JsValue::Undefined => f64::NAN,
-        JsValue::String(s) => s.to_string().parse::<f64>().unwrap_or(f64::NAN),
-        _ => f64::NAN,
+    match v.kind() {
+        ValueKind::Number => v.as_number().expect("kind checked"),
+        ValueKind::Boolean => {
+            if v.as_boolean().expect("kind checked") {
+                1.0
+            } else {
+                0.0
+            }
+        }
+        ValueKind::Null => 0.0,
+        ValueKind::Undefined => f64::NAN,
+        ValueKind::String => v
+            .with_string(|units| {
+                String::from_utf16_lossy(units)
+                    .parse::<f64>()
+                    .unwrap_or(f64::NAN)
+            })
+            .expect("kind checked"),
+        ValueKind::Symbol | ValueKind::BigInt | ValueKind::Object => f64::NAN,
     }
 }
 
@@ -3741,29 +3753,27 @@ fn to_uint32(v: &JsValue) -> u32 {
     number_ops::to_uint32(to_number(v))
 }
 fn to_bigint64(v: &JsValue) -> i64 {
-    match v {
-        JsValue::BigInt(b) => {
-            i64::try_from(b.value.as_ref()).unwrap_or_else(|_| {
-                // Truncate to 64 bits
-                let bytes = b.value.to_signed_bytes_le();
-                let mut result = [0u8; 8];
-                let len = bytes.len().min(8);
-                result[..len].copy_from_slice(&bytes[..len]);
-                if bytes.len() < 8 && !bytes.is_empty() && (bytes[bytes.len() - 1] & 0x80) != 0 {
-                    for byte in result.iter_mut().skip(len) {
-                        *byte = 0xFF;
-                    }
+    v.with_bigint(|b| {
+        i64::try_from(b).unwrap_or_else(|_| {
+            // Truncate to 64 bits
+            let bytes = b.to_signed_bytes_le();
+            let mut result = [0u8; 8];
+            let len = bytes.len().min(8);
+            result[..len].copy_from_slice(&bytes[..len]);
+            if bytes.len() < 8 && !bytes.is_empty() && (bytes[bytes.len() - 1] & 0x80) != 0 {
+                for byte in result.iter_mut().skip(len) {
+                    *byte = 0xFF;
                 }
-                i64::from_le_bytes(result)
-            })
-        }
-        _ => 0,
-    }
+            }
+            i64::from_le_bytes(result)
+        })
+    })
+    .unwrap_or(0)
 }
 fn to_biguint64(v: &JsValue) -> u64 {
-    match v {
-        JsValue::BigInt(b) => u64::try_from(b.value.as_ref()).unwrap_or_else(|_| {
-            let bytes = b.value.to_signed_bytes_le();
+    v.with_bigint(|b| {
+        u64::try_from(b).unwrap_or_else(|_| {
+            let bytes = b.to_signed_bytes_le();
             let mut result = [0u8; 8];
             let len = bytes.len().min(8);
             result[..len].copy_from_slice(&bytes[..len]);
@@ -3774,9 +3784,9 @@ fn to_biguint64(v: &JsValue) -> u64 {
                 }
             }
             u64::from_le_bytes(result)
-        }),
-        _ => 0,
-    }
+        })
+    })
+    .unwrap_or(0)
 }
 
 #[derive(Debug, Clone)]

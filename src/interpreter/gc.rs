@@ -200,10 +200,10 @@ impl Interpreter {
         owner: &crate::interpreter::object_arena::ObjectHandle,
         value: &JsValue,
     ) {
-        if let JsValue::Object(object) = value
+        if let Some(object_id) = value.as_object_id()
             && self
                 .objects
-                .get_cell(object.id)
+                .get_cell(object_id)
                 .is_some_and(crate::interpreter::object_arena::ObjectHandle::is_young)
         {
             owner.remember_if_old();
@@ -256,8 +256,8 @@ impl Interpreter {
         for realm in &self.realms {
             realm.collect_roots(&mut roots, &mut seen_envs);
         }
-        if let Some(JsValue::Object(o)) = &self.new_target {
-            roots.push(o.id);
+        if let Some(id) = self.new_target.as_ref().and_then(JsValue::as_object_id) {
+            roots.push(id);
         }
         // Module environments are not necessarily reachable from global_env.
         for module in self.module_registry.values() {
@@ -393,11 +393,11 @@ impl Interpreter {
             obj.map_data().is_some_and(|entries| {
                 entries.iter().flatten().any(|(key, value)| {
                     [key, value].iter().any(|candidate| {
-                        let JsValue::Object(object) = candidate else {
+                        let Some(object_id) = candidate.as_object_id() else {
                             return false;
                         };
                         self.objects
-                            .get_cell(object.id)
+                            .get_cell(object_id)
                             .is_some_and(|handle| handle.is_young())
                     })
                 })
@@ -405,11 +405,11 @@ impl Interpreter {
         } else if obj.class_name == "WeakSet" {
             obj.set_data().is_some_and(|entries| {
                 entries.iter().flatten().any(|value| {
-                    let JsValue::Object(object) = value else {
+                    let Some(object_id) = value.as_object_id() else {
                         return false;
                     };
                     self.objects
-                        .get_cell(object.id)
+                        .get_cell(object_id)
                         .is_some_and(|handle| handle.is_young())
                 })
             })
@@ -501,15 +501,15 @@ impl Interpreter {
                 }
                 if let Some(entries) = obj.map_data() {
                     for entry in entries.iter().flatten() {
-                        if let JsValue::Object(key_obj) = &entry.0
-                            && self.minor_value_is_live(key_obj.id)
-                            && let JsValue::Object(value_obj) = &entry.1
+                        if let Some(key_id) = entry.0.as_object_id()
+                            && self.minor_value_is_live(key_id)
+                            && let Some(value_id) = entry.1.as_object_id()
                             && self
                                 .objects
-                                .get_cell(value_obj.id)
+                                .get_cell(value_id)
                                 .is_some_and(|value_handle| value_handle.mark_young())
                         {
-                            worklist.push(value_obj.id);
+                            worklist.push(value_id);
                             new_marks = true;
                         }
                     }
@@ -536,10 +536,10 @@ impl Interpreter {
             if obj.class_name == "WeakMap" {
                 if let Some(entries) = obj.map_data_mut() {
                     for entry in entries.iter_mut() {
-                        let dead = matches!(
-                            entry,
-                            Some((JsValue::Object(key), _)) if !self.minor_value_is_live(key.id)
-                        );
+                        let dead = entry.as_ref().is_some_and(|(key, _)| {
+                            key.as_object_id()
+                                .is_some_and(|id| !self.minor_value_is_live(id))
+                        });
                         if dead {
                             *entry = None;
                         }
@@ -549,10 +549,11 @@ impl Interpreter {
                 && let Some(entries) = obj.set_data_mut()
             {
                 for entry in entries.iter_mut() {
-                    let dead = matches!(
-                        entry,
-                        Some(JsValue::Object(value)) if !self.minor_value_is_live(value.id)
-                    );
+                    let dead = entry.as_ref().is_some_and(|value| {
+                        value
+                            .as_object_id()
+                            .is_some_and(|id| !self.minor_value_is_live(id))
+                    });
                     if dead {
                         *entry = None;
                     }
@@ -635,18 +636,17 @@ impl Interpreter {
                 }
                 if let Some(entries) = obj.map_data() {
                     for entry in entries.iter().flatten() {
-                        if let JsValue::Object(key_obj) = &entry.0 {
-                            let kid = key_obj.id as usize;
-                            if kid < obj_count && marks[kid] {
-                                // Key is reachable — mark the value
-                                if let JsValue::Object(val_obj) = &entry.1 {
-                                    let vid = val_obj.id as usize;
-                                    if vid < obj_count && !marks[vid] {
-                                        marks[vid] = true;
-                                        new_marks = true;
-                                        worklist.push(val_obj.id);
-                                    }
-                                }
+                        // Key is reachable — mark the value
+                        if let Some(key_id) = entry.0.as_object_id()
+                            && (key_id as usize) < obj_count
+                            && marks[key_id as usize]
+                            && let Some(value_id) = entry.1.as_object_id()
+                        {
+                            let vid = value_id as usize;
+                            if vid < obj_count && !marks[vid] {
+                                marks[vid] = true;
+                                new_marks = true;
+                                worklist.push(value_id);
                             }
                         }
                     }
@@ -688,11 +688,9 @@ impl Interpreter {
             if obj.class_name == "WeakMap" {
                 if let Some(entries) = obj.map_data_mut() {
                     for entry in entries.iter_mut() {
-                        let dead = if let Some((JsValue::Object(key_obj), _)) = entry {
-                            let kid = key_obj.id as usize;
-                            kid >= obj_count || !marks[kid]
-                        } else {
-                            false
+                        let dead = match entry.as_ref().and_then(|(key, _)| key.as_object_id()) {
+                            Some(kid) => (kid as usize) >= obj_count || !marks[kid as usize],
+                            None => false,
                         };
                         if dead {
                             *entry = None;
@@ -703,11 +701,9 @@ impl Interpreter {
                 && let Some(entries) = obj.set_data_mut()
             {
                 for entry in entries.iter_mut() {
-                    let dead = if let Some(JsValue::Object(val_obj)) = entry {
-                        let vid = val_obj.id as usize;
-                        vid >= obj_count || !marks[vid]
-                    } else {
-                        false
+                    let dead = match entry.as_ref().and_then(JsValue::as_object_id) {
+                        Some(vid) => (vid as usize) >= obj_count || !marks[vid as usize],
+                        None => false,
                     };
                     if dead {
                         *entry = None;
@@ -727,8 +723,8 @@ impl Interpreter {
     }
 
     fn collect_value_roots(val: &JsValue, worklist: &mut Vec<u64>) {
-        if let JsValue::Object(o) = val {
-            worklist.push(o.id);
+        if let Some(id) = val.as_object_id() {
+            worklist.push(id);
         }
     }
 
