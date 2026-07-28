@@ -3409,7 +3409,7 @@ fn typed_array_get_index_shared(
                 return JsValue::Undefined;
             }
             let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-            JsValue::Number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
+            JsValue::number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
                 bits,
             ))
         }),
@@ -3423,7 +3423,7 @@ fn typed_array_get_index_shared(
                 buf[offset + 2],
                 buf[offset + 3],
             ]);
-            JsValue::Number(v as f64)
+            JsValue::number(v as f64)
         }),
         TypedArrayKind::Float64 => sab.with_read(|buf| {
             if offset + 8 > buf.len() {
@@ -3431,7 +3431,7 @@ fn typed_array_get_index_shared(
             }
             let mut bytes = [0u8; 8];
             bytes.copy_from_slice(&buf[offset..offset + 8]);
-            JsValue::Number(f64::from_ne_bytes(bytes))
+            JsValue::number(f64::from_ne_bytes(bytes))
         }),
     }
 }
@@ -3487,12 +3487,12 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
                     buf[offset + 2],
                     buf[offset + 3],
                 ]);
-                JsValue::Number(v as f64)
+                JsValue::number(v as f64)
             }
             TypedArrayKind::Float64 => {
                 let mut bytes = [0u8; 8];
                 bytes.copy_from_slice(&buf[offset..offset + 8]);
-                JsValue::Number(f64::from_ne_bytes(bytes))
+                JsValue::number(f64::from_ne_bytes(bytes))
             }
             TypedArrayKind::BigInt64 => {
                 let mut bytes = [0u8; 8];
@@ -3510,7 +3510,7 @@ pub(crate) fn typed_array_get_index(ta: &TypedArrayInfo, idx: usize) -> JsValue 
             }
             TypedArrayKind::Float16 => {
                 let bits = u16::from_ne_bytes([buf[offset], buf[offset + 1]]);
-                JsValue::Number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
+                JsValue::number(crate::interpreter::builtins::typedarray::dv_f16_to_f64(
                     bits,
                 ))
             }
