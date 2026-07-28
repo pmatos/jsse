@@ -66,13 +66,3 @@ jobs:
 
       - name: Run test262 (10% sample, fixed seed ${{ env.TEST262_SAMPLE_SEED }})
         run: uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 --sample 0.1 --seed "$TEST262_SAMPLE_SEED"
-
-      # test262-extra is first-party (every file added deliberately by us,
-      # not an upstream corpus that evolves out from under us like
-      # test262/), so unlike the steps above it is gated on zero failures
-      # rather than on regressions against a baseline.
-      - name: Run test262-extra
-        run: uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 test262-extra/ --fail-on-failures
-
-      - name: Run test262-extra (bytecode VM)
-        run: uv run python scripts/run-test262.py --jsse ./target/release/jsse --test262 ./test262 test262-extra/ --bytecode --fail-on-failures

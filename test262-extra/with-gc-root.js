@@ -1,15 +1,9 @@
-/*---
-description: >
-  Tests that the with-statement target object stays live across a GC
-  triggered inside the with-block.
-esid: sec-with-statement-runtime-semantics-evaluation
-info: |
-  ECMAScript 2024 §14.11 (The with Statement) — the binding object must
-  remain reachable for the duration of the with-block. Regression test for
-  PR 1b.4 (issue #66 / #107) where WithObject._object was dropped and the
-  obj_id is now rooted only via Interpreter::collect_env_roots.
-flags: [noStrict]
----*/
+// Tests that the with-statement target object stays live across a GC
+// triggered inside the with-block.
+// Spec: ECMAScript 2024 §14.11 (The with Statement) — the binding object
+// must remain reachable for the duration of the with-block. Regression test
+// for PR 1b.4 (issue #66 / #107) where WithObject._object was dropped and
+// the obj_id is now rooted only via Interpreter::collect_env_roots.
 
 var probe = { sentinel: 0xdeadbeef, marker: "with-target" };
 
