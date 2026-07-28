@@ -5336,7 +5336,7 @@ impl Interpreter {
             } else {
                 f32::from_be_bytes([buf[0], buf[1], buf[2], buf[3]])
             };
-            JsValue::Number(v as f64)
+            JsValue::number(v as f64)
         });
         dv_get_method!("getFloat64", 8, |buf: &[u8], le: bool| -> JsValue {
             let mut bytes = [0u8; 8];
@@ -5346,7 +5346,7 @@ impl Interpreter {
             } else {
                 f64::from_be_bytes(bytes)
             };
-            JsValue::Number(v)
+            JsValue::number(v)
         });
         dv_get_method!("getBigInt64", 8, |buf: &[u8], le: bool| -> JsValue {
             let mut bytes = [0u8; 8];
@@ -5374,7 +5374,7 @@ impl Interpreter {
             } else {
                 u16::from_be_bytes([buf[0], buf[1]])
             };
-            JsValue::Number(dv_f16_to_f64(bits))
+            JsValue::number(dv_f16_to_f64(bits))
         });
 
         // DataView set methods
