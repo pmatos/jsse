@@ -1556,28 +1556,14 @@ impl Interpreter {
                 Ok(v) => v,
                 Err(c) => return c,
             } as i64;
-            let relative_start = if let Some(v) = args.first() {
-                match interp.to_integer_or_infinity_value(v) {
-                    Ok(n) => n,
-                    Err(e) => return Completion::Throw(e),
-                }
-            } else {
-                0.0
+            let k = match resolve_start_index(interp, args.first(), len as usize) {
+                Ok(k) => k,
+                Err(c) => return c,
             };
-            let k = resolve_relative_index(relative_start, len as usize);
-            let relative_end = if let Some(v) = args.get(1) {
-                if (v).is_undefined() {
-                    len as f64
-                } else {
-                    match interp.to_integer_or_infinity_value(v) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    }
-                }
-            } else {
-                len as f64
+            let fin = match resolve_end_index(interp, args.get(1), len as usize) {
+                Ok(f) => f,
+                Err(c) => return c,
             };
-            let fin = resolve_relative_index(relative_end, len as usize);
             let count = fin.saturating_sub(k);
             let a = match array_species_create(interp, &o, count) {
                 Ok(v) => v,
@@ -2273,15 +2259,10 @@ impl Interpreter {
                 Ok(v) => v as i64,
                 Err(c) => return c,
             };
-            let relative_start = if let Some(v) = args.first() {
-                match interp.to_integer_or_infinity_value(v) {
-                    Ok(n) => n,
-                    Err(e) => return Completion::Throw(e),
-                }
-            } else {
-                0.0
+            let actual_start = match resolve_start_index(interp, args.first(), len as usize) {
+                Ok(k) => k,
+                Err(c) => return c,
             };
-            let actual_start = resolve_relative_index(relative_start, len as usize);
             let insert_count = if args.len() > 2 { args.len() - 2 } else { 0 };
             let actual_delete_count = if args.is_empty() {
                 0usize
@@ -2433,15 +2414,10 @@ impl Interpreter {
                 Ok(v) => v as i64,
                 Err(c) => return c,
             };
-            let relative_start = if let Some(v) = args.first() {
-                match interp.to_integer_or_infinity_value(v) {
-                    Ok(n) => n,
-                    Err(e) => return Completion::Throw(e),
-                }
-            } else {
-                0.0
+            let actual_start = match resolve_start_index(interp, args.first(), len as usize) {
+                Ok(k) => k,
+                Err(c) => return c,
             };
-            let actual_start = resolve_relative_index(relative_start, len as usize);
             let actual_delete_count = if args.is_empty() {
                 0usize
             } else if args.len() == 1 {
@@ -2494,28 +2470,14 @@ impl Interpreter {
                 Err(c) => return c,
             };
             let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-            let relative_start = if let Some(v) = args.get(1) {
-                match interp.to_integer_or_infinity_value(v) {
-                    Ok(n) => n,
-                    Err(e) => return Completion::Throw(e),
-                }
-            } else {
-                0.0
+            let k = match resolve_start_index(interp, args.get(1), len as usize) {
+                Ok(k) => k,
+                Err(c) => return c,
             };
-            let k = resolve_relative_index(relative_start, len as usize);
-            let relative_end = if let Some(v) = args.get(2) {
-                if (v).is_undefined() {
-                    len as f64
-                } else {
-                    match interp.to_integer_or_infinity_value(v) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    }
-                }
-            } else {
-                len as f64
+            let fin = match resolve_end_index(interp, args.get(2), len as usize) {
+                Ok(f) => f,
+                Err(c) => return c,
             };
-            let fin = resolve_relative_index(relative_end, len as usize);
             for i in k..fin {
                 if let Err(e) = obj_set_throw(interp, &o, &i.to_string(), value.clone()) {
                     return Completion::Throw(e);
@@ -2950,37 +2912,18 @@ impl Interpreter {
                 Ok(v) => v as i64,
                 Err(c) => return c,
             };
-            let relative_target = if let Some(v) = args.first() {
-                match interp.to_integer_or_infinity_value(v) {
-                    Ok(n) => n,
-                    Err(e) => return Completion::Throw(e),
-                }
-            } else {
-                0.0
+            let to_val = match resolve_start_index(interp, args.first(), len as usize) {
+                Ok(k) => k as i64,
+                Err(c) => return c,
             };
-            let to_val = resolve_relative_index(relative_target, len as usize) as i64;
-            let relative_start = if let Some(v) = args.get(1) {
-                match interp.to_integer_or_infinity_value(v) {
-                    Ok(n) => n,
-                    Err(e) => return Completion::Throw(e),
-                }
-            } else {
-                0.0
+            let from = match resolve_start_index(interp, args.get(1), len as usize) {
+                Ok(k) => k as i64,
+                Err(c) => return c,
             };
-            let from = resolve_relative_index(relative_start, len as usize) as i64;
-            let relative_end = if let Some(v) = args.get(2) {
-                if (v).is_undefined() {
-                    len as f64
-                } else {
-                    match interp.to_integer_or_infinity_value(v) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    }
-                }
-            } else {
-                len as f64
+            let fin = match resolve_end_index(interp, args.get(2), len as usize) {
+                Ok(f) => f as i64,
+                Err(c) => return c,
             };
-            let fin = resolve_relative_index(relative_end, len as usize) as i64;
             let count = (fin - from).min(len - to_val);
             if count <= 0 {
                 return Completion::Normal(o);

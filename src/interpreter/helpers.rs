@@ -13,6 +13,47 @@ pub(crate) fn resolve_relative_index(n: f64, len: usize) -> usize {
     }
 }
 
+// Resolves a spec "start"-style relative-index argument for the range-based
+// Array methods (slice, fill, copyWithin, splice, toSpliced). An absent
+// argument defaults to index 0; otherwise the argument is passed through
+// ToIntegerOrInfinity and clamped against `len` by `resolve_relative_index`.
+// Unlike the "end" argument, an explicit `undefined` is NOT special-cased —
+// it coerces to 0 like any other non-numeric value.
+// `len` must be the array length captured *before* this coercion runs, since a
+// user-supplied `valueOf` observes it (the spec computes both `start` and `end`
+// against the single length captured at the top of the method).
+pub(crate) fn resolve_start_index(
+    interp: &mut Interpreter,
+    arg: Option<&JsValue>,
+    len: usize,
+) -> Result<usize, Completion> {
+    let relative = match arg {
+        Some(v) => interp
+            .to_integer_or_infinity_value(v)
+            .map_err(Completion::Throw)?,
+        None => 0.0,
+    };
+    Ok(resolve_relative_index(relative, len))
+}
+
+// Resolves a spec "end"-style relative-index argument for the range-based Array
+// methods. An absent argument *or* an explicit `undefined` defaults to `len`;
+// otherwise the argument is passed through ToIntegerOrInfinity and clamped
+// against `len`. See `resolve_start_index` for the `len` capture invariant.
+pub(crate) fn resolve_end_index(
+    interp: &mut Interpreter,
+    arg: Option<&JsValue>,
+    len: usize,
+) -> Result<usize, Completion> {
+    let relative = match arg {
+        Some(v) if !v.is_undefined() => interp
+            .to_integer_or_infinity_value(v)
+            .map_err(Completion::Throw)?,
+        _ => len as f64,
+    };
+    Ok(resolve_relative_index(relative, len))
+}
+
 pub(crate) fn to_integer_or_infinity(n: f64) -> f64 {
     if n.is_nan() || n == 0.0 {
         0.0
@@ -2529,6 +2570,152 @@ fn hex_val(b: u8) -> Result<u8, String> {
         b'a'..=b'f' => Ok(b - b'a' + 10),
         b'A'..=b'F' => Ok(b - b'A' + 10),
         _ => Err("URI malformed".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod resolve_index_arg_tests {
+    use super::{resolve_end_index, resolve_start_index};
+    use crate::interpreter::{Completion, Interpreter};
+    use crate::types::{JsBigInt, JsValue};
+
+    fn num(n: f64) -> JsValue {
+        JsValue::Number(n)
+    }
+
+    // A value whose ToNumber (and thus ToIntegerOrInfinity) throws a TypeError:
+    // BigInt cannot be converted to a Number (ECMAScript, sec-tonumber).
+    fn throwing_arg() -> JsValue {
+        JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(1)))
+    }
+
+    // --- resolve_start_index: absent defaults to 0, no undefined special-case ---
+
+    #[test]
+    fn start_absent_defaults_to_zero() {
+        let mut interp = Interpreter::new();
+        assert_eq!(resolve_start_index(&mut interp, None, 10).unwrap(), 0);
+    }
+
+    #[test]
+    fn start_undefined_coerces_to_zero_not_length() {
+        // ToIntegerOrInfinity(undefined) is NaN -> 0; start does NOT treat
+        // undefined as "use length" (that is the end-index behavior).
+        let mut interp = Interpreter::new();
+        let u = JsValue::UNDEFINED;
+        assert_eq!(resolve_start_index(&mut interp, Some(&u), 10).unwrap(), 0);
+    }
+
+    #[test]
+    fn start_positive_in_range_is_unchanged() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            resolve_start_index(&mut interp, Some(&num(3.0)), 10).unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn start_negative_counts_back_from_length() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            resolve_start_index(&mut interp, Some(&num(-3.0)), 10).unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn start_negative_beyond_length_clamps_to_zero() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            resolve_start_index(&mut interp, Some(&num(-100.0)), 10).unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn start_positive_beyond_length_clamps_to_length() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            resolve_start_index(&mut interp, Some(&num(100.0)), 10).unwrap(),
+            10
+        );
+    }
+
+    // --- resolve_end_index: absent OR undefined defaults to length ---
+
+    #[test]
+    fn end_absent_defaults_to_length() {
+        let mut interp = Interpreter::new();
+        assert_eq!(resolve_end_index(&mut interp, None, 10).unwrap(), 10);
+    }
+
+    #[test]
+    fn end_undefined_defaults_to_length() {
+        let mut interp = Interpreter::new();
+        let u = JsValue::UNDEFINED;
+        assert_eq!(resolve_end_index(&mut interp, Some(&u), 10).unwrap(), 10);
+    }
+
+    #[test]
+    fn end_positive_in_range_is_unchanged() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            resolve_end_index(&mut interp, Some(&num(3.0)), 10).unwrap(),
+            3
+        );
+    }
+
+    #[test]
+    fn end_negative_counts_back_from_length() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            resolve_end_index(&mut interp, Some(&num(-3.0)), 10).unwrap(),
+            7
+        );
+    }
+
+    #[test]
+    fn end_negative_beyond_length_clamps_to_zero() {
+        let mut interp = Interpreter::new();
+        assert_eq!(
+            resolve_end_index(&mut interp, Some(&num(-100.0)), 10).unwrap(),
+            0
+        );
+    }
+
+    // --- error propagation: the coercion's own TypeError must survive ---
+
+    #[test]
+    fn start_propagates_coercion_throw_verbatim() {
+        let mut interp = Interpreter::new();
+        let bad = throwing_arg();
+        match resolve_start_index(&mut interp, Some(&bad), 10) {
+            Err(Completion::Throw(e)) => {
+                assert!(
+                    interp.format_value(&e).contains("TypeError"),
+                    "expected the ToNumber TypeError to propagate, got {}",
+                    interp.format_value(&e)
+                );
+            }
+            other => panic!("expected a propagated Throw, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn end_propagates_coercion_throw_verbatim() {
+        let mut interp = Interpreter::new();
+        let bad = throwing_arg();
+        match resolve_end_index(&mut interp, Some(&bad), 10) {
+            Err(Completion::Throw(e)) => {
+                assert!(
+                    interp.format_value(&e).contains("TypeError"),
+                    "expected the ToNumber TypeError to propagate, got {}",
+                    interp.format_value(&e)
+                );
+            }
+            other => panic!("expected a propagated Throw, got {other:?}"),
+        }
     }
 }
 
