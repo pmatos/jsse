@@ -26,13 +26,11 @@ impl Interpreter {
             "getCanonicalLocales".to_string(),
             1,
             |interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]| {
-                let locales = args.first().unwrap_or(&JsValue::Undefined);
+                let locales = args.first().unwrap_or(&JsValue::UNDEFINED);
                 match interp.intl_canonicalize_locale_list(locales) {
                     Ok(list) => {
-                        let values: Vec<JsValue> = list
-                            .into_iter()
-                            .map(|s| JsValue::String(JsString::from_str(&s)))
-                            .collect();
+                        let values: Vec<JsValue> =
+                            list.into_iter().map(|s| JsValue::from_str(&s)).collect();
                         Completion::Normal(interp.create_array(values))
                     }
                     Err(e) => Completion::Throw(e),
@@ -260,10 +258,7 @@ impl Interpreter {
                     }
                 };
 
-                let js_values: Vec<JsValue> = values
-                    .into_iter()
-                    .map(|s| JsValue::String(JsString::from_str(s)))
-                    .collect();
+                let js_values: Vec<JsValue> = values.into_iter().map(JsValue::from_str).collect();
                 Completion::Normal(interp.create_array(js_values))
             },
         ));
@@ -301,7 +296,7 @@ impl Interpreter {
         // Intl.DurationFormat
         self.setup_intl_duration_format(intl_obj_id);
 
-        let intl_val = JsValue::Object(crate::types::JsObject { id: intl_id });
+        let intl_val = JsValue::object(intl_id);
         self.realm()
             .global_env
             .borrow_mut()
@@ -419,14 +414,14 @@ impl Interpreter {
         &mut self,
         locales: &JsValue,
     ) -> Result<Vec<String>, JsValue> {
-        if matches!(locales, JsValue::Undefined) {
+        if locales.is_undefined() {
             return Ok(Vec::new());
         }
 
         let mut seen = Vec::new();
 
         // Step 3: If Type(locales) is String or locales has [[InitializedLocale]]
-        if let JsValue::String(s) = locales {
+        if let Some(s) = locales.as_string() {
             let tag = s.to_rust_string();
             match tag.parse::<IcuLocale>() {
                 Ok(mut locale) => {
@@ -448,8 +443,8 @@ impl Interpreter {
         }
 
         // Check if locales is an Intl.Locale object itself (treat as single-element list)
-        if let JsValue::Object(o) = locales
-            && let Some(cell) = self.get_object_cell(o.id)
+        if let Some(o) = locales.as_object_id()
+            && let Some(cell) = self.get_object_cell(o)
         {
             let b = cell.borrow();
             if let Some(IntlData::Locale { tag, .. }) = b.intl_data() {
@@ -466,14 +461,14 @@ impl Interpreter {
             _ => return Ok(Vec::new()),
         };
 
-        let len_val = if let JsValue::Object(o) = &obj {
-            match self.get_object_property(o.id, "length", &obj) {
+        let len_val = if let Some(o) = obj.as_object_id() {
+            match self.get_object_property(o, "length", &obj) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             }
         } else {
-            JsValue::Undefined
+            JsValue::UNDEFINED
         };
 
         // Step 5: Let len be ? ToLength(? Get(O, "length")).
@@ -491,8 +486,8 @@ impl Interpreter {
             let key = i.to_string();
 
             // Step 7b: Let kPresent be ? HasProperty(O, Pk).
-            let k_present = if let JsValue::Object(o) = &obj {
-                self.proxy_has_property(o.id, &key)?
+            let k_present = if let Some(o) = obj.as_object_id() {
+                self.proxy_has_property(o, &key)?
             } else {
                 false
             };
@@ -503,27 +498,24 @@ impl Interpreter {
             }
 
             // Step 7c.i: Let kValue be ? Get(O, Pk).
-            let k_value = if let JsValue::Object(o) = &obj {
-                match self.get_object_property(o.id, &key, &obj) {
+            let k_value = if let Some(o) = obj.as_object_id() {
+                match self.get_object_property(o, &key, &obj) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 }
             } else {
-                JsValue::Undefined
+                JsValue::UNDEFINED
             };
 
             // Step 7c.ii: If Type(kValue) is not String or Object, throw TypeError.
-            match &k_value {
-                JsValue::String(_) | JsValue::Object(_) => {}
-                _ => {
-                    return Err(self.create_type_error("Language tag must be a string or object"));
-                }
+            if !k_value.is_string() && !k_value.is_object() {
+                return Err(self.create_type_error("Language tag must be a string or object"));
             }
 
             // Step 7c.iii-iv: If kValue has [[InitializedLocale]], use [[Locale]] directly
-            let tag = if let JsValue::Object(o) = &k_value {
-                let cached = self.get_object_cell(o.id).and_then(|cell| {
+            let tag = if let Some(o) = k_value.as_object_id() {
+                let cached = self.get_object_cell(o).and_then(|cell| {
                     if let Some(IntlData::Locale { tag, .. }) = cell.borrow().intl_data() {
                         Some(tag.clone())
                     } else {
@@ -535,7 +527,7 @@ impl Interpreter {
                 } else {
                     self.to_string_value(&k_value)?
                 }
-            } else if let JsValue::String(s) = &k_value {
+            } else if let Some(s) = k_value.as_string() {
                 s.to_rust_string()
             } else {
                 unreachable!()
@@ -571,13 +563,13 @@ impl Interpreter {
         &mut self,
         options: &JsValue,
     ) -> Result<JsValue, JsValue> {
-        if matches!(options, JsValue::Undefined) {
+        if options.is_undefined() {
             let obj_id = self.create_object_id();
             self.get_object_cell_expect(obj_id)
                 .borrow_mut()
                 .prototype_id = None; // ObjectCreate(null)
             let id = obj_id;
-            return Ok(JsValue::Object(crate::types::JsObject { id }));
+            return Ok(JsValue::object(id));
         }
         match self.to_object(options) {
             Completion::Normal(v) => Ok(v),
@@ -585,7 +577,7 @@ impl Interpreter {
             _ => {
                 let obj_id = self.create_object_id();
                 let id = obj_id;
-                Ok(JsValue::Object(crate::types::JsObject { id }))
+                Ok(JsValue::object(id))
             }
         }
     }
@@ -595,15 +587,15 @@ impl Interpreter {
         &mut self,
         options: &JsValue,
     ) -> Result<JsValue, JsValue> {
-        if matches!(options, JsValue::Undefined) {
+        if options.is_undefined() {
             let obj_id = self.create_object_id();
             self.get_object_cell_expect(obj_id)
                 .borrow_mut()
                 .prototype_id = None;
             let id = obj_id;
-            return Ok(JsValue::Object(crate::types::JsObject { id }));
+            return Ok(JsValue::object(id));
         }
-        if matches!(options, JsValue::Object(_)) {
+        if options.is_object() {
             return Ok(options.clone());
         }
         Err(self.create_type_error("Options argument must be an object or undefined"))
@@ -617,17 +609,17 @@ impl Interpreter {
         valid_values: &[&str],
         fallback: Option<&str>,
     ) -> Result<Option<String>, JsValue> {
-        let value = if let JsValue::Object(o) = options {
-            match self.get_object_property(o.id, property, options) {
+        let value = if let Some(o) = options.as_object_id() {
+            match self.get_object_property(o, property, options) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             }
         } else {
-            JsValue::Undefined
+            JsValue::UNDEFINED
         };
 
-        if matches!(value, JsValue::Undefined) {
+        if value.is_undefined() {
             return Ok(fallback.map(|s| s.to_string()));
         }
 
@@ -652,17 +644,17 @@ impl Interpreter {
         maximum: f64,
         fallback: Option<f64>,
     ) -> Result<Option<f64>, JsValue> {
-        let value = if let JsValue::Object(o) = options {
-            match self.get_object_property(o.id, property, options) {
+        let value = if let Some(o) = options.as_object_id() {
+            match self.get_object_property(o, property, options) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             }
         } else {
-            JsValue::Undefined
+            JsValue::UNDEFINED
         };
 
-        if matches!(value, JsValue::Undefined) {
+        if value.is_undefined() {
             return Ok(fallback);
         }
 
@@ -683,15 +675,15 @@ impl Interpreter {
         requested: &[String],
         options: &JsValue,
     ) -> Result<JsValue, JsValue> {
-        if !matches!(options, JsValue::Undefined) {
+        if !options.is_undefined() {
             // Step 1: If options is not undefined, let options be ToObject(options)
-            if matches!(options, JsValue::Null) {
+            if options.is_null() {
                 return Err(self.create_type_error("Cannot convert null to object"));
             }
             let opts = match self.to_object(options) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             // Validate localeMatcher option
             let _matcher = self.intl_get_option(
@@ -708,7 +700,7 @@ impl Interpreter {
                 let locale: IcuLocale = tag.parse().ok()?;
                 let canonical = locale.to_string();
                 if Self::intl_best_available_locale(&canonical) {
-                    Some(JsValue::String(JsString::from_str(&canonical)))
+                    Some(JsValue::from_str(&canonical))
                 } else {
                     None
                 }
@@ -842,7 +834,7 @@ impl Interpreter {
         }
         let id = self.next_symbol_id;
         self.next_symbol_id += 1;
-        let sym = JsValue::Symbol(crate::types::JsSymbol::new(
+        let sym = JsValue::symbol(crate::types::JsSymbol::new(
             id,
             Some(crate::types::JsString::from_str(
                 "IntlLegacyConstructedSymbol",
@@ -866,7 +858,7 @@ impl Interpreter {
         self.new_target = Some(nf_ctor.clone());
         let result = self.call_function(
             &nf_ctor,
-            &JsValue::Undefined,
+            &JsValue::UNDEFINED,
             &[locales.clone(), options.clone()],
         );
         self.new_target = old_new_target;
@@ -882,13 +874,13 @@ impl Interpreter {
         nf: &JsValue,
         value: &JsValue,
     ) -> Completion {
-        if let JsValue::Object(nf_obj) = nf {
-            let format_fn = match self.get_object_property(nf_obj.id, "format", nf) {
+        if let Some(nf_obj) = nf.as_object_id() {
+            let format_fn = match self.get_object_property(nf_obj, "format", nf) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Completion::Throw(e),
                 _ => return Completion::Throw(self.create_type_error("format not found")),
             };
-            self.call_function(&format_fn, &JsValue::Undefined, std::slice::from_ref(value))
+            self.call_function(&format_fn, &JsValue::UNDEFINED, std::slice::from_ref(value))
         } else {
             Completion::Throw(self.create_type_error("NumberFormat is not an object"))
         }

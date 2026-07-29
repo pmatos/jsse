@@ -34,7 +34,7 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let ms = floor_div_bigint(&ns, NS_PER_MS);
-                    Completion::Normal(JsValue::Number(bigint_to_f64(&ms)))
+                    Completion::Normal(JsValue::number(bigint_to_f64(&ms)))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -62,7 +62,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    Completion::Normal(JsValue::BigInt(crate::types::JsBigInt::new(ns)))
+                    Completion::Normal(JsValue::bigint(crate::types::JsBigInt::new(ns)))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -91,12 +91,12 @@ impl Interpreter {
                 };
                 let other = match to_temporal_instant(
                     interp,
-                    args.first().cloned().unwrap_or(JsValue::Undefined),
+                    args.first().cloned().unwrap_or(JsValue::UNDEFINED),
                 ) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                Completion::Normal(JsValue::Boolean(ns == other))
+                Completion::Normal(JsValue::boolean(ns == other))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -114,7 +114,7 @@ impl Interpreter {
                 };
                 let dur = match super::duration::to_temporal_duration_record(
                     interp,
-                    args.first().cloned().unwrap_or(JsValue::Undefined),
+                    args.first().cloned().unwrap_or(JsValue::UNDEFINED),
                 ) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -152,7 +152,7 @@ impl Interpreter {
                 };
                 let dur = match super::duration::to_temporal_duration_record(
                     interp,
-                    args.first().cloned().unwrap_or(JsValue::Undefined),
+                    args.first().cloned().unwrap_or(JsValue::UNDEFINED),
                 ) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -191,7 +191,7 @@ impl Interpreter {
                     };
                     let ns2 = match to_temporal_instant(
                         interp,
-                        args.first().cloned().unwrap_or(JsValue::Undefined),
+                        args.first().cloned().unwrap_or(JsValue::UNDEFINED),
                     ) {
                         Ok(v) => v,
                         Err(c) => return c,
@@ -203,7 +203,7 @@ impl Interpreter {
                     };
 
                     // Parse options
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let time_units: &[&str] = &[
                         "hour",
                         "minute",
@@ -284,11 +284,11 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let round_to = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let round_to = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 if is_undefined(&round_to) {
                     return Completion::Throw(interp.create_type_error("round requires options"));
                 }
-                let (unit, rounding_mode, increment) = if let JsValue::String(ref su) = round_to {
+                let (unit, rounding_mode, increment) = if let Some(su) = round_to.as_string() {
                     let su_str = su.to_rust_string();
                     match temporal_unit_singular(&su_str) {
                         Some(u) if is_valid_instant_round_unit(u) => (u, "halfExpand", 1.0),
@@ -303,7 +303,7 @@ impl Interpreter {
                             );
                         }
                     }
-                } else if matches!(round_to, JsValue::Object(_)) {
+                } else if round_to.is_object() {
                     // Read all options in alphabetical order first, then validate
                     // 1. roundingIncrement
                     let inc_val = match get_prop(interp, &round_to, "roundingIncrement") {
@@ -420,7 +420,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let options = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let options = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let (tz_id, tz_offset_ns, tz_explicit, frac_digits, smallest_unit, rounding_mode) =
                     match parse_to_string_options(interp, &options) {
                         Ok(v) => v,
@@ -463,7 +463,7 @@ impl Interpreter {
                     precision,
                     tz_explicit,
                 );
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                Completion::Normal(JsValue::from_str(&result))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -480,7 +480,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let result = instant_to_string_with_tz(&ns, "UTC", 0, None, false);
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                Completion::Normal(JsValue::from_str(&result))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -500,15 +500,15 @@ impl Interpreter {
                     Some(v) => v,
                     None => {
                         let result = instant_to_string_with_tz(&_ns, "UTC", 0, None, false);
-                        return Completion::Normal(JsValue::String(JsString::from_str(&result)));
+                        return Completion::Normal(JsValue::from_str(&result));
                     }
                 };
-                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, options_arg]) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Completion::Throw(e),
-                    _ => return Completion::Normal(JsValue::Undefined),
+                    _ => return Completion::Normal(JsValue::UNDEFINED),
                 };
                 super::temporal_format_with_dtf(interp, &dtf_instance, this)
             },
@@ -541,7 +541,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let tz_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let tz_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 if super::is_undefined(&tz_arg) {
                     return Completion::Throw(
                         interp.create_type_error("timeZone argument is required"),
@@ -570,7 +570,7 @@ impl Interpreter {
                         interp.create_type_error("Temporal.Instant must be called with new"),
                     );
                 }
-                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let epoch_ns = match to_bigint_arg(interp, &arg) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -579,19 +579,21 @@ impl Interpreter {
                     return Completion::Throw(interp.create_range_error("Instant out of range"));
                 }
                 let result = create_instant_result(interp, epoch_ns);
-                if let Completion::Normal(JsValue::Object(ref o)) = result {
+                if let Completion::Normal(ref v) = result
+                    && let Some(o) = v.as_object_id()
+                {
                     let dp = interp.realm().temporal_instant_prototype;
-                    interp.apply_new_target_prototype(o.id, dp, |r| r.temporal_instant_prototype);
+                    interp.apply_new_target_prototype(o, dp, |r| r.temporal_instant_prototype);
                 }
                 result
             },
         ));
 
         // Constructor.prototype_id
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            let proto_val = JsValue::object(proto_id);
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
@@ -609,7 +611,7 @@ impl Interpreter {
             "from".to_string(),
             1,
             |interp, _this, args| {
-                let item = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let item = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let ns = match to_temporal_instant(interp, item) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -617,8 +619,8 @@ impl Interpreter {
                 create_instant_result(interp, ns)
             },
         ));
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
         }
@@ -628,7 +630,7 @@ impl Interpreter {
             "fromEpochMilliseconds".to_string(),
             1,
             |interp, _this, args| {
-                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let ms = match interp.to_number_value(&arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -645,8 +647,8 @@ impl Interpreter {
                 create_instant_result(interp, ns)
             },
         ));
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut()
                 .insert_builtin("fromEpochMilliseconds".to_string(), from_ms_fn);
@@ -657,7 +659,7 @@ impl Interpreter {
             "fromEpochNanoseconds".to_string(),
             1,
             |interp, _this, args| {
-                let arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let ns = match to_bigint_arg(interp, &arg) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -668,8 +670,8 @@ impl Interpreter {
                 create_instant_result(interp, ns)
             },
         ));
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut()
                 .insert_builtin("fromEpochNanoseconds".to_string(), from_ns_fn);
@@ -682,14 +684,14 @@ impl Interpreter {
             |interp, _this, args| {
                 let one = match to_temporal_instant(
                     interp,
-                    args.first().cloned().unwrap_or(JsValue::Undefined),
+                    args.first().cloned().unwrap_or(JsValue::UNDEFINED),
                 ) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
                 let two = match to_temporal_instant(
                     interp,
-                    args.get(1).cloned().unwrap_or(JsValue::Undefined),
+                    args.get(1).cloned().unwrap_or(JsValue::UNDEFINED),
                 ) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -701,11 +703,11 @@ impl Interpreter {
                 } else {
                     0.0
                 };
-                Completion::Normal(JsValue::Number(result))
+                Completion::Normal(JsValue::number(result))
             },
         ));
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut()
                 .insert_builtin("compare".to_string(), compare_fn);
@@ -797,11 +799,12 @@ fn is_valid_instant_round_unit(unit: &str) -> bool {
 }
 
 fn get_instant_ns(interp: &mut Interpreter, this: &JsValue) -> Result<BigInt, Completion> {
-    let snapshot = match this {
-        JsValue::Object(o) => interp
-            .get_object_cell(o.id)
-            .map(|cell| cell.borrow().temporal_data().cloned()),
-        _ => None,
+    let snapshot = if let Some(o) = this.as_object_id() {
+        interp
+            .get_object_cell(o)
+            .map(|cell| cell.borrow().temporal_data().cloned())
+    } else {
+        None
     };
     match snapshot {
         Some(Some(TemporalData::Instant { epoch_nanoseconds })) => Ok(epoch_nanoseconds),
@@ -828,16 +831,17 @@ fn create_instant_result(interp: &mut Interpreter, epoch_ns: BigInt) -> Completi
             epoch_nanoseconds: epoch_ns,
         });
     let id = obj_id;
-    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+    Completion::Normal(JsValue::object(id))
 }
 
 pub(super) fn to_temporal_instant(
     interp: &mut Interpreter,
     item: JsValue,
 ) -> Result<BigInt, Completion> {
-    match &item {
-        JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object_cell(o.id) {
+    match item.kind() {
+        ValueKind::Object => {
+            let oid = item.as_object_id().expect("checked Object kind");
+            if let Some(obj) = interp.get_object_cell(oid) {
                 let data = obj.borrow();
                 if let Some(TemporalData::Instant { epoch_nanoseconds }) = data.temporal_data() {
                     return Ok(epoch_nanoseconds.clone());
@@ -856,15 +860,18 @@ pub(super) fn to_temporal_instant(
             };
             parse_instant_string(interp, &s)
         }
-        JsValue::String(s) => parse_instant_string(interp, &s.to_rust_string()),
-        JsValue::Undefined
-        | JsValue::Null
-        | JsValue::Boolean(_)
-        | JsValue::Number(_)
-        | JsValue::BigInt(_) => Err(Completion::Throw(
+        ValueKind::String => {
+            let s = item.as_string().expect("checked String kind");
+            parse_instant_string(interp, &s.to_rust_string())
+        }
+        ValueKind::Undefined
+        | ValueKind::Null
+        | ValueKind::Boolean
+        | ValueKind::Number
+        | ValueKind::BigInt => Err(Completion::Throw(
             interp.create_type_error("Cannot convert to Temporal.Instant"),
         )),
-        JsValue::Symbol(_) => Err(Completion::Throw(
+        ValueKind::Symbol => Err(Completion::Throw(
             interp.create_type_error("Cannot convert a Symbol to a string"),
         )),
     }
@@ -904,36 +911,38 @@ fn parse_instant_string(interp: &mut Interpreter, s: &str) -> Result<BigInt, Com
 }
 
 pub(super) fn to_bigint_arg(interp: &mut Interpreter, val: &JsValue) -> Result<BigInt, Completion> {
-    match val {
-        JsValue::BigInt(n) => Ok((*n.value).clone()),
-        JsValue::String(s) => {
-            let s_str = s.to_rust_string();
-            match s_str.parse::<BigInt>() {
-                Ok(v) => Ok(v),
-                Err(_) => Err(Completion::Throw(interp.create_error(
-                    "SyntaxError",
-                    &format!("Cannot convert {s_str} to a BigInt"),
-                ))),
-            }
+    if let Some(n) = val.as_bigint() {
+        Ok((*n.value).clone())
+    } else if let Some(s) = val.as_string() {
+        let s_str = s.to_rust_string();
+        match s_str.parse::<BigInt>() {
+            Ok(v) => Ok(v),
+            Err(_) => Err(Completion::Throw(interp.create_error(
+                "SyntaxError",
+                &format!("Cannot convert {s_str} to a BigInt"),
+            ))),
         }
-        JsValue::Boolean(b) => Ok(BigInt::from(if *b { 1 } else { 0 })),
-        JsValue::Number(_) => Err(Completion::Throw(
+    } else if let Some(b) = val.as_boolean() {
+        Ok(BigInt::from(if b { 1 } else { 0 }))
+    } else if val.is_number() {
+        Err(Completion::Throw(
             interp.create_type_error("Cannot convert a Number to a BigInt"),
-        )),
-        JsValue::Undefined | JsValue::Null => Err(Completion::Throw(
+        ))
+    } else if val.is_nullish() {
+        Err(Completion::Throw(
             interp.create_type_error("Cannot convert to BigInt"),
-        )),
-        JsValue::Symbol(_) => Err(Completion::Throw(
-            interp.create_type_error("Cannot convert a Symbol value to a BigInt"),
-        )),
-        _ => {
-            // ToBigInt via ToPrimitive
-            let prim = match interp.to_primitive(val, "number") {
-                Ok(v) => v,
-                Err(e) => return Err(Completion::Throw(e)),
-            };
-            to_bigint_arg(interp, &prim)
-        }
+        ))
+    } else if val.is_symbol() {
+        Err(Completion::Throw(interp.create_type_error(
+            "Cannot convert a Symbol value to a BigInt",
+        )))
+    } else {
+        // ToBigInt via ToPrimitive
+        let prim = match interp.to_primitive(val, "number") {
+            Ok(v) => v,
+            Err(e) => return Err(Completion::Throw(e)),
+        };
+        to_bigint_arg(interp, &prim)
     }
 }
 
@@ -1172,7 +1181,7 @@ fn parse_to_string_options(
     if is_undefined(options) {
         return Ok(("UTC".to_string(), 0, false, None, None, "trunc"));
     }
-    if !matches!(options, JsValue::Object(_)) {
+    if !options.is_object() {
         return Err(Completion::Throw(
             interp.create_type_error("options must be an object"),
         ));
@@ -1188,7 +1197,7 @@ fn parse_to_string_options(
     };
     let frac_digits = if is_undefined(&fsd_val) {
         None
-    } else if matches!(fsd_val, JsValue::Number(_)) {
+    } else if fsd_val.is_number() {
         let n = match interp.to_number_value(&fsd_val) {
             Ok(v) => v,
             Err(e) => return Err(Completion::Throw(e)),
@@ -1273,9 +1282,9 @@ fn parse_to_string_options(
         ("UTC".to_string(), 0i64, false)
     } else {
         // Per spec, must be a string (not coerced from other types)
-        let tz_str = match &tz_val {
-            JsValue::String(s) => s.to_string(),
-            _ => {
+        let tz_str = match tz_val.as_string() {
+            Some(s) => s.to_string(),
+            None => {
                 return Err(Completion::Throw(
                     interp.create_type_error("timeZone must be a string"),
                 ));

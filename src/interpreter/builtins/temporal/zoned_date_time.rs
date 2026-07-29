@@ -152,10 +152,11 @@ fn get_zdt_fields(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<(BigInt, String, String), Completion> {
-    match this {
-        JsValue::Object(o) => {
+    match this.kind() {
+        ValueKind::Object => {
+            let o = this.as_object_id().expect("checked Object kind");
             let snapshot = interp
-                .get_object_cell(o.id)
+                .get_object_cell(o)
                 .map(|cell| cell.borrow().temporal_data().cloned());
             match snapshot {
                 Some(Some(TemporalData::ZonedDateTime {
@@ -707,7 +708,7 @@ fn create_zdt(interp: &mut Interpreter, ns: BigInt, tz: String, cal: String) -> 
             calendar: cal,
         });
     let id = obj_id;
-    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+    Completion::Normal(JsValue::object(id))
 }
 
 pub(super) fn get_tz_offset_ns_pub(tz: &str, epoch_ns: &BigInt) -> i64 {
@@ -745,9 +746,10 @@ fn to_temporal_zoned_date_time_with_options(
     offset_option: &str,
     deferred_options: Option<(&JsValue, &str)>,
 ) -> Completion {
-    match item {
-        JsValue::Object(o) => {
-            let obj = match interp.get_object_cell(o.id) {
+    match item.kind() {
+        ValueKind::Object => {
+            let o = item.as_object_id().expect("checked Object kind");
+            let obj = match interp.get_object_cell(o) {
                 Some(o) => o,
                 None => return Completion::Throw(interp.create_type_error("invalid object")),
             };
@@ -1291,7 +1293,8 @@ fn to_temporal_zoned_date_time_with_options(
             };
             create_zdt(interp, epoch_ns, tz, calendar)
         }
-        JsValue::String(s) => {
+        ValueKind::String => {
+            let s = item.as_string().expect("checked String kind");
             let s_str = s.to_string();
             match super::parse_temporal_date_time_string(&s_str) {
                 Some(parsed) => {
@@ -1451,9 +1454,9 @@ fn from_string_with_options(
     item: &JsValue,
     options: &JsValue,
 ) -> Completion {
-    let s_str = match item {
-        JsValue::String(s) => s.to_string(),
-        _ => unreachable!(),
+    let s_str = match item.as_string() {
+        Some(s) => s.to_string(),
+        None => unreachable!(),
     };
     let parsed = match super::parse_temporal_date_time_string(&s_str) {
         Some(p) => p,
@@ -1838,20 +1841,20 @@ impl Interpreter {
         }
 
         zdt_getter!("calendarId", |_ns, _tz, cal| {
-            Completion::Normal(JsValue::String(JsString::from_str(cal)))
+            Completion::Normal(JsValue::from_str(cal))
         });
 
         zdt_getter!("timeZoneId", |_ns, tz, _cal| {
-            Completion::Normal(JsValue::String(JsString::from_str(tz)))
+            Completion::Normal(JsValue::from_str(tz))
         });
 
         zdt_getter!("epochMilliseconds", |ns, _tz, _cal| {
             let ms = floor_div_bigint(ns, NS_PER_MS);
-            Completion::Normal(JsValue::Number(bigint_to_f64(&ms)))
+            Completion::Normal(JsValue::number(bigint_to_f64(&ms)))
         });
 
         zdt_getter!("epochNanoseconds", |ns, _tz, _cal| {
-            Completion::Normal(JsValue::BigInt(crate::types::JsBigInt::new(ns.clone())))
+            Completion::Normal(JsValue::bigint(crate::types::JsBigInt::new(ns.clone())))
         });
 
         zdt_getter!("year", |ns, tz, cal| {
@@ -1859,9 +1862,9 @@ impl Interpreter {
             if cal != "iso8601"
                 && let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal)
             {
-                return Completion::Normal(JsValue::Number(cf.year as f64));
+                return Completion::Normal(JsValue::number(cf.year as f64));
             }
-            Completion::Normal(JsValue::Number(y as f64))
+            Completion::Normal(JsValue::number(y as f64))
         });
 
         zdt_getter!("month", |ns, tz, cal| {
@@ -1869,9 +1872,9 @@ impl Interpreter {
             if cal != "iso8601"
                 && let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal)
             {
-                return Completion::Normal(JsValue::Number(cf.month_ordinal as f64));
+                return Completion::Normal(JsValue::number(cf.month_ordinal as f64));
             }
-            Completion::Normal(JsValue::Number(m as f64))
+            Completion::Normal(JsValue::number(m as f64))
         });
 
         zdt_getter!("monthCode", |ns, tz, cal| {
@@ -1879,9 +1882,9 @@ impl Interpreter {
             if cal != "iso8601"
                 && let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal)
             {
-                return Completion::Normal(JsValue::String(JsString::from_str(&cf.month_code)));
+                return Completion::Normal(JsValue::from_str(&cf.month_code));
             }
-            Completion::Normal(JsValue::String(JsString::from_str(&format!("M{m:02}"))))
+            Completion::Normal(JsValue::from_str(&format!("M{m:02}")))
         });
 
         zdt_getter!("day", |ns, tz, cal| {
@@ -1889,44 +1892,44 @@ impl Interpreter {
             if cal != "iso8601"
                 && let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal)
             {
-                return Completion::Normal(JsValue::Number(cf.day as f64));
+                return Completion::Normal(JsValue::number(cf.day as f64));
             }
-            Completion::Normal(JsValue::Number(d as f64))
+            Completion::Normal(JsValue::number(d as f64))
         });
 
         zdt_getter!("hour", |ns, tz, _cal| {
             let (_, _, _, h, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
-            Completion::Normal(JsValue::Number(h as f64))
+            Completion::Normal(JsValue::number(h as f64))
         });
 
         zdt_getter!("minute", |ns, tz, _cal| {
             let (_, _, _, _, mi, _, _, _, _) = epoch_ns_to_components(ns, tz);
-            Completion::Normal(JsValue::Number(mi as f64))
+            Completion::Normal(JsValue::number(mi as f64))
         });
 
         zdt_getter!("second", |ns, tz, _cal| {
             let (_, _, _, _, _, s, _, _, _) = epoch_ns_to_components(ns, tz);
-            Completion::Normal(JsValue::Number(s as f64))
+            Completion::Normal(JsValue::number(s as f64))
         });
 
         zdt_getter!("millisecond", |ns, tz, _cal| {
             let (_, _, _, _, _, _, ms, _, _) = epoch_ns_to_components(ns, tz);
-            Completion::Normal(JsValue::Number(ms as f64))
+            Completion::Normal(JsValue::number(ms as f64))
         });
 
         zdt_getter!("microsecond", |ns, tz, _cal| {
             let (_, _, _, _, _, _, _, us, _) = epoch_ns_to_components(ns, tz);
-            Completion::Normal(JsValue::Number(us as f64))
+            Completion::Normal(JsValue::number(us as f64))
         });
 
         zdt_getter!("nanosecond", |ns, tz, _cal| {
             let (_, _, _, _, _, _, _, _, nanos) = epoch_ns_to_components(ns, tz);
-            Completion::Normal(JsValue::Number(nanos as f64))
+            Completion::Normal(JsValue::number(nanos as f64))
         });
 
         zdt_getter!("dayOfWeek", |ns, tz, _cal| {
             let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
-            Completion::Normal(JsValue::Number(super::iso_day_of_week(y, m, d) as f64))
+            Completion::Normal(JsValue::number(super::iso_day_of_week(y, m, d) as f64))
         });
 
         zdt_getter!("dayOfYear", |ns, tz, cal| {
@@ -1934,31 +1937,31 @@ impl Interpreter {
             if cal != "iso8601"
                 && let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal)
             {
-                return Completion::Normal(JsValue::Number(cf.day_of_year as f64));
+                return Completion::Normal(JsValue::number(cf.day_of_year as f64));
             }
-            Completion::Normal(JsValue::Number(super::iso_day_of_year(y, m, d) as f64))
+            Completion::Normal(JsValue::number(super::iso_day_of_year(y, m, d) as f64))
         });
 
         zdt_getter!("weekOfYear", |ns, tz, cal| {
             if cal != "iso8601" {
-                return Completion::Normal(JsValue::Undefined);
+                return Completion::Normal(JsValue::UNDEFINED);
             }
             let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
             let (woy, _) = super::iso_week_of_year(y, m, d);
-            Completion::Normal(JsValue::Number(woy as f64))
+            Completion::Normal(JsValue::number(woy as f64))
         });
 
         zdt_getter!("yearOfWeek", |ns, tz, cal| {
             if cal != "iso8601" {
-                return Completion::Normal(JsValue::Undefined);
+                return Completion::Normal(JsValue::UNDEFINED);
             }
             let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
             let (_, yow) = super::iso_week_of_year(y, m, d);
-            Completion::Normal(JsValue::Number(yow as f64))
+            Completion::Normal(JsValue::number(yow as f64))
         });
 
         zdt_getter!("daysInWeek", |_ns, _tz, _cal| {
-            Completion::Normal(JsValue::Number(7.0))
+            Completion::Normal(JsValue::number(7.0))
         });
 
         zdt_getter!("daysInMonth", |ns, tz, cal| {
@@ -1966,9 +1969,9 @@ impl Interpreter {
             if cal != "iso8601"
                 && let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal)
             {
-                return Completion::Normal(JsValue::Number(cf.days_in_month as f64));
+                return Completion::Normal(JsValue::number(cf.days_in_month as f64));
             }
-            Completion::Normal(JsValue::Number(super::iso_days_in_month(y, m) as f64))
+            Completion::Normal(JsValue::number(super::iso_days_in_month(y, m) as f64))
         });
 
         zdt_getter!("daysInYear", |ns, tz, cal| {
@@ -1976,10 +1979,10 @@ impl Interpreter {
             if cal != "iso8601"
                 && let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal)
             {
-                return Completion::Normal(JsValue::Number(cf.days_in_year as f64));
+                return Completion::Normal(JsValue::number(cf.days_in_year as f64));
             }
             let days = if super::iso_is_leap_year(y) { 366 } else { 365 };
-            Completion::Normal(JsValue::Number(days as f64))
+            Completion::Normal(JsValue::number(days as f64))
         });
 
         zdt_getter!("monthsInYear", |ns, tz, cal| {
@@ -1987,9 +1990,9 @@ impl Interpreter {
             if cal != "iso8601"
                 && let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal)
             {
-                return Completion::Normal(JsValue::Number(cf.months_in_year as f64));
+                return Completion::Normal(JsValue::number(cf.months_in_year as f64));
             }
-            Completion::Normal(JsValue::Number(12.0))
+            Completion::Normal(JsValue::number(12.0))
         });
 
         zdt_getter!("inLeapYear", |ns, tz, cal| {
@@ -1997,21 +2000,19 @@ impl Interpreter {
             if cal != "iso8601"
                 && let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal)
             {
-                return Completion::Normal(JsValue::Boolean(cf.in_leap_year));
+                return Completion::Normal(JsValue::boolean(cf.in_leap_year));
             }
-            Completion::Normal(JsValue::Boolean(super::iso_is_leap_year(y)))
+            Completion::Normal(JsValue::boolean(super::iso_is_leap_year(y)))
         });
 
         zdt_getter!("offset", |ns, tz, _cal| {
             let offset_ns = get_tz_offset_ns(tz, ns);
-            Completion::Normal(JsValue::String(JsString::from_str(&format_offset_string(
-                offset_ns,
-            ))))
+            Completion::Normal(JsValue::from_str(&format_offset_string(offset_ns)))
         });
 
         zdt_getter!("offsetNanoseconds", |ns, tz, _cal| {
             let offset_ns = get_tz_offset_ns(tz, ns);
-            Completion::Normal(JsValue::Number(offset_ns as f64))
+            Completion::Normal(JsValue::number(offset_ns as f64))
         });
 
         {
@@ -2057,7 +2058,7 @@ impl Interpreter {
 
                     let diff_ns = next_utc - start_utc;
                     let hours = diff_ns as f64 / NS_PER_HOUR as f64;
-                    Completion::Normal(JsValue::Number(hours))
+                    Completion::Normal(JsValue::number(hours))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -2080,12 +2081,12 @@ impl Interpreter {
                 let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
                 if let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal) {
                     return Completion::Normal(match cf.era {
-                        Some(e) => JsValue::String(JsString::from_str(&e)),
-                        None => JsValue::Undefined,
+                        Some(e) => JsValue::from_str(&e),
+                        None => JsValue::UNDEFINED,
                     });
                 }
             }
-            Completion::Normal(JsValue::Undefined)
+            Completion::Normal(JsValue::UNDEFINED)
         });
 
         zdt_getter!("eraYear", |ns, tz, cal| {
@@ -2093,12 +2094,12 @@ impl Interpreter {
                 let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(ns, tz);
                 if let Some(cf) = super::iso_to_calendar_fields(y, m, d, cal) {
                     return Completion::Normal(match cf.era_year {
-                        Some(ey) => JsValue::Number(ey as f64),
-                        None => JsValue::Undefined,
+                        Some(ey) => JsValue::number(ey as f64),
+                        None => JsValue::UNDEFINED,
                     });
                 }
             }
-            Completion::Normal(JsValue::Undefined)
+            Completion::Normal(JsValue::UNDEFINED)
         });
 
         self.realm_mut().temporal_zoned_date_time_prototype = Some(proto_id);
@@ -2115,7 +2116,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    let options = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let options = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let (precision, rounding_mode, offset_display, tz_display, cal_display) =
                         match parse_zdt_to_string_options(interp, &options) {
                             Ok(v) => v,
@@ -2131,7 +2132,7 @@ impl Interpreter {
                         precision,
                         &rounding_mode,
                     );
-                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                    Completion::Normal(JsValue::from_str(&result))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -2151,7 +2152,7 @@ impl Interpreter {
                     };
                     let result =
                         zdt_to_string(&ns, &tz, &cal, "auto", "auto", "auto", None, "trunc");
-                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                    Completion::Normal(JsValue::from_str(&result))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -2175,22 +2176,19 @@ impl Interpreter {
                             let result = zdt_to_string(
                                 &ns, &tz, &_cal, "auto", "auto", "auto", None, "trunc",
                             );
-                            return Completion::Normal(JsValue::String(JsString::from_str(
-                                &result,
-                            )));
+                            return Completion::Normal(JsValue::from_str(&result));
                         }
                     };
-                    let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     // Reject user-provided timeZone option
-                    if let JsValue::Object(ref o) = options_arg {
-                        let tz_val =
-                            match interp.get_object_property(o.id, "timeZone", &options_arg) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
-                            };
-                        if !matches!(tz_val, JsValue::Undefined) {
+                    if let Some(o) = options_arg.as_object_id() {
+                        let tz_val = match interp.get_object_property(o, "timeZone", &options_arg) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::UNDEFINED,
+                        };
+                        if !tz_val.is_undefined() {
                             return Completion::Throw(interp.create_type_error(
                                 "ZonedDateTime toLocaleString does not accept a timeZone option",
                             ));
@@ -2206,17 +2204,16 @@ impl Interpreter {
                                 .prototype_id = Some(op_id);
                         }
                         // Copy properties from user options if present
-                        if let JsValue::Object(ref o) = options_arg {
+                        if let Some(o) = options_arg.as_object_id() {
                             let keys: Vec<JsPropertyKey> = interp
-                                .get_object_cell(o.id)
+                                .get_object_cell(o)
                                 .map(|rc| rc.borrow().properties.keys().cloned().collect())
                                 .unwrap_or_default();
                             for key in keys {
-                                let val = match interp.get_object_property(o.id, &key, &options_arg)
-                                {
+                                let val = match interp.get_object_property(o, &key, &options_arg) {
                                     Completion::Normal(v) => v,
                                     Completion::Throw(e) => return Completion::Throw(e),
-                                    _ => JsValue::Undefined,
+                                    _ => JsValue::UNDEFINED,
                                 };
                                 interp
                                     .get_object_cell_expect(opts_obj_id)
@@ -2236,7 +2233,7 @@ impl Interpreter {
                             .insert_property(
                                 "timeZone".to_string(),
                                 crate::interpreter::types::PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&tz)),
+                                    JsValue::from_str(&tz),
                                     true,
                                     true,
                                     true,
@@ -2262,7 +2259,7 @@ impl Interpreter {
                             .iter()
                             .any(|k| {
                                 b.properties.get(k).is_some_and(|pd| {
-                                    !matches!(pd.value, Some(JsValue::Undefined) | None)
+                                    pd.value.as_ref().is_some_and(|v| !v.is_undefined())
                                 })
                             })
                         };
@@ -2270,7 +2267,7 @@ impl Interpreter {
                             let has_tz_name = {
                                 let b = interp.get_object_cell_expect(opts_obj_id).borrow();
                                 b.properties.get("timeZoneName").is_some_and(|pd| {
-                                    !matches!(pd.value, Some(JsValue::Undefined) | None)
+                                    pd.value.as_ref().is_some_and(|v| !v.is_undefined())
                                 })
                             };
                             for (k, v) in [
@@ -2287,7 +2284,7 @@ impl Interpreter {
                                     .insert_property(
                                         k.to_string(),
                                         crate::interpreter::types::PropertyDescriptor::data(
-                                            JsValue::String(JsString::from_str(v)),
+                                            JsValue::from_str(v),
                                             true,
                                             true,
                                             true,
@@ -2301,7 +2298,7 @@ impl Interpreter {
                                     .insert_property(
                                         "timeZoneName".to_string(),
                                         crate::interpreter::types::PropertyDescriptor::data(
-                                            JsValue::String(JsString::from_str("short")),
+                                            JsValue::from_str("short"),
                                             true,
                                             true,
                                             true,
@@ -2310,13 +2307,13 @@ impl Interpreter {
                             }
                         }
                         let oid = opts_obj_id;
-                        JsValue::Object(crate::types::JsObject { id: oid })
+                        JsValue::object(oid)
                     };
                     let dtf_instance =
                         match interp.construct(&dtf_val, &[locales_arg, effective_opts]) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => return Completion::Normal(JsValue::Undefined),
+                            _ => return Completion::Normal(JsValue::UNDEFINED),
                         };
                     if let Err(e) =
                         super::check_calendar_mismatch(interp, &dtf_instance, &_cal, true)
@@ -2329,7 +2326,7 @@ impl Interpreter {
                         let ms_bigint = &ns / BigInt::from(1_000_000i64);
                         ms_bigint.to_string().parse::<f64>().unwrap_or(f64::NAN)
                     };
-                    let ms_val = JsValue::Number(epoch_ms);
+                    let ms_val = JsValue::number(epoch_ms);
                     super::temporal_format_with_dtf(interp, &dtf_instance, &ms_val)
                 },
             ));
@@ -2364,7 +2361,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    let other_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let other_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let other_val = match to_temporal_zoned_date_time(interp, &other_arg) {
                         Completion::Normal(v) => v,
                         c => return c,
@@ -2375,7 +2372,7 @@ impl Interpreter {
                     };
                     let tz_equal = tz.eq_ignore_ascii_case(&otz)
                         || super::canonicalize_iana_tz(&tz) == super::canonicalize_iana_tz(&otz);
-                    Completion::Normal(JsValue::Boolean(ns == ons && tz_equal && cal == ocal))
+                    Completion::Normal(JsValue::boolean(ns == ons && tz_equal && cal == ocal))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -2409,7 +2406,7 @@ impl Interpreter {
                             epoch_nanoseconds: ns,
                         });
                     let id = obj_id;
-                    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+                    Completion::Normal(JsValue::object(id))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -2507,8 +2504,8 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    let cal_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if matches!(&cal_arg, JsValue::Undefined) {
+                    let cal_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    if cal_arg.is_undefined() {
                         return Completion::Throw(
                             interp.create_type_error("withCalendar requires a calendar argument"),
                         );
@@ -2535,7 +2532,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    let tz_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let tz_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let new_tz = match to_temporal_time_zone_identifier(interp, &tz_arg) {
                         Ok(t) => t,
                         Err(c) => return c,
@@ -2559,7 +2556,7 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let (y, m, d, _, _, _, _, _, _) = epoch_ns_to_components(&ns, &tz);
-                    let time_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let time_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let epoch_days = super::iso_date_to_epoch_days(y, m, d) as i128;
                     if is_undefined(&time_arg) {
                         // Per spec: use GetStartOfDay
@@ -2600,7 +2597,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    let bag = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let bag = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     if let Err(c) = is_partial_temporal_object(interp, &bag) {
                         return c;
                     }
@@ -2680,8 +2677,9 @@ impl Interpreter {
                         let mut cached_offset_str_cal: Option<String> = None;
                         if !is_undefined(&offset_prop) {
                             has_any = true;
-                            match &offset_prop {
-                                JsValue::String(sv) => {
+                            match offset_prop.kind() {
+                                ValueKind::String => {
+                                    let sv = offset_prop.as_string().expect("checked String kind");
                                     let s_str = sv.to_rust_string();
                                     if super::parse_utc_offset_timezone(&s_str).is_none() {
                                         return Completion::Throw(interp.create_range_error(
@@ -2690,7 +2688,7 @@ impl Interpreter {
                                     }
                                     cached_offset_str_cal = Some(s_str);
                                 }
-                                JsValue::Object(_) => {
+                                ValueKind::Object => {
                                     let s_str = match interp.to_string_value(&offset_prop) {
                                         Ok(sv) => sv,
                                         Err(c) => return Completion::Throw(c),
@@ -2789,7 +2787,7 @@ impl Interpreter {
                         };
 
                         // Read options
-                        let opts = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                        let opts = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                         let (disambiguation_cal, offset_opt, overflow) =
                             match parse_zdt_options(interp, &opts, "prefer") {
                                 Ok(v) => v,
@@ -2985,8 +2983,9 @@ impl Interpreter {
                     let mut cached_offset_str: Option<String> = None;
                     if !is_undefined(&offset_prop) {
                         has_any = true;
-                        match &offset_prop {
-                            JsValue::String(s) => {
+                        match offset_prop.kind() {
+                            ValueKind::String => {
+                                let s = offset_prop.as_string().expect("checked String kind");
                                 let s_str = s.to_rust_string();
                                 if super::parse_utc_offset_timezone(&s_str).is_none() {
                                     return Completion::Throw(interp.create_range_error(&format!(
@@ -2995,7 +2994,7 @@ impl Interpreter {
                                 }
                                 cached_offset_str = Some(s_str);
                             }
-                            JsValue::Object(_) => {
+                            ValueKind::Object => {
                                 let s_str = match interp.to_string_value(&offset_prop) {
                                     Ok(s) => s,
                                     Err(c) => return Completion::Throw(c),
@@ -3029,7 +3028,7 @@ impl Interpreter {
                     }
 
                     // Read options: disambiguation (default "compatible"), offset (default "prefer"), overflow (default "constrain")
-                    let opts = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let opts = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let (disambiguation, offset_opt, overflow) =
                         match parse_zdt_options(interp, &opts, "prefer") {
                             Ok(v) => v,
@@ -3237,7 +3236,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    let options_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let options_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     if is_undefined(&options_arg) {
                         return Completion::Throw(
                             interp.create_type_error("round requires options"),
@@ -3253,8 +3252,8 @@ impl Interpreter {
                         "microsecond",
                         "nanosecond",
                     ];
-                    let (smallest_unit, rounding_mode, increment) = if let JsValue::String(s) =
-                        &options_arg
+                    let (smallest_unit, rounding_mode, increment) = if let Some(s) =
+                        options_arg.as_string()
                     {
                         let su = s.to_rust_string();
                         let unit = match temporal_unit_singular(&su) {
@@ -3271,7 +3270,7 @@ impl Interpreter {
                             }
                         };
                         (unit, "halfExpand".to_string(), 1.0)
-                    } else if matches!(options_arg, JsValue::Object(_)) {
+                    } else if options_arg.is_object() {
                         // Per spec: read roundingIncrement first, then roundingMode, then smallestUnit
                         let ri_val = match get_prop(interp, &options_arg, "roundingIncrement") {
                             Completion::Normal(v) => v,
@@ -3437,16 +3436,16 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    let options_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let options_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     if is_undefined(&options_arg) {
                         return Completion::Throw(
                             interp.create_type_error("getTimeZoneTransition requires an argument"),
                         );
                     }
                     // Accept string shorthand or options object
-                    let direction = if let JsValue::String(s) = &options_arg {
+                    let direction = if let Some(s) = options_arg.as_string() {
                         s.to_rust_string()
-                    } else if matches!(options_arg, JsValue::Object(_)) {
+                    } else if options_arg.is_object() {
                         let dir_val = match get_prop(interp, &options_arg, "direction") {
                             Completion::Normal(v) => v,
                             c => return c,
@@ -3476,7 +3475,7 @@ impl Interpreter {
                     let epoch_ns_i128: i128 = ns.try_into().unwrap_or(0);
                     // Offset time zones have no transitions
                     if tz.starts_with('+') || tz.starts_with('-') || tz == "UTC" {
-                        return Completion::Normal(JsValue::Null);
+                        return Completion::Normal(JsValue::NULL);
                     }
                     let transition = if direction == "next" {
                         get_next_transition(&tz, epoch_ns_i128)
@@ -3487,12 +3486,12 @@ impl Interpreter {
                         Some(t) => {
                             let t_bi = BigInt::from(t);
                             if !is_valid_epoch_ns(&t_bi) {
-                                Completion::Normal(JsValue::Null)
+                                Completion::Normal(JsValue::NULL)
                             } else {
                                 create_zdt(interp, t_bi, tz, cal)
                             }
                         }
-                        None => Completion::Normal(JsValue::Null),
+                        None => Completion::Normal(JsValue::NULL),
                     }
                 },
             ));
@@ -3511,28 +3510,30 @@ impl Interpreter {
                         interp.create_type_error("Temporal.ZonedDateTime must be called with new"),
                     );
                 }
-                let ns_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let ns_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let ns_bigint = match to_bigint_arg(interp, &ns_arg) {
                     Ok(n) => n,
                     Err(c) => return c,
                 };
 
-                let tz_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let tz_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let tz = match validate_timezone_identifier_strict(interp, &tz_arg) {
                     Ok(t) => t,
                     Err(c) => return c,
                 };
 
-                let cal_arg = args.get(2).cloned().unwrap_or(JsValue::Undefined);
+                let cal_arg = args.get(2).cloned().unwrap_or(JsValue::UNDEFINED);
                 let cal = match validate_calendar_strict(interp, &cal_arg) {
                     Ok(c) => c,
                     Err(c) => return c,
                 };
 
                 let result = create_zdt(interp, ns_bigint, tz, cal);
-                if let Completion::Normal(JsValue::Object(ref o)) = result {
+                if let Completion::Normal(ref v) = result
+                    && let Some(o) = v.as_object_id()
+                {
                     let dp = interp.realm().temporal_zoned_date_time_prototype;
-                    interp.apply_new_target_prototype(o.id, dp, |r| {
+                    interp.apply_new_target_prototype(o, dp, |r| {
                         r.temporal_zoned_date_time_prototype
                     });
                 }
@@ -3540,10 +3541,10 @@ impl Interpreter {
             },
         ));
 
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            let proto_val = JsValue::object(proto_id);
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
@@ -3564,20 +3565,20 @@ impl Interpreter {
                 "from".to_string(),
                 1,
                 |interp, _this, args| {
-                    let item = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                    if matches!(&item, JsValue::String(_)) {
+                    let item = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                    if item.is_string() {
                         return from_string_with_options(interp, &item, &options);
                     }
-                    if !matches!(&item, JsValue::Object(_)) {
+                    if !item.is_object() {
                         return Completion::Throw(
                             interp.create_type_error("invalid type for ZonedDateTime.from"),
                         );
                     }
                     // Check if item is already a ZDT — read options then clone
-                    let is_zdt = if let JsValue::Object(o) = &item {
+                    let is_zdt = if let Some(o) = item.as_object_id() {
                         interp
-                            .get_object_cell(o.id)
+                            .get_object_cell(o)
                             .map(|obj| {
                                 matches!(
                                     obj.borrow().temporal_data(),
@@ -3614,8 +3615,8 @@ impl Interpreter {
                     )
                 },
             ));
-            if let JsValue::Object(ref o) = constructor
-                && let Some(obj) = self.get_object_cell(o.id)
+            if let Some(o) = constructor.as_object_id()
+                && let Some(obj) = self.get_object_cell(o)
             {
                 obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
             }
@@ -3627,8 +3628,8 @@ impl Interpreter {
                 "compare".to_string(),
                 2,
                 |interp, _this, args| {
-                    let one_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let two_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let one_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    let two_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let one_val = match to_temporal_zoned_date_time(interp, &one_arg) {
                         Completion::Normal(v) => v,
                         c => return c,
@@ -3652,11 +3653,11 @@ impl Interpreter {
                     } else {
                         0.0
                     };
-                    Completion::Normal(JsValue::Number(result))
+                    Completion::Normal(JsValue::number(result))
                 },
             ));
-            if let JsValue::Object(ref o) = constructor
-                && let Some(obj) = self.get_object_cell(o.id)
+            if let Some(o) = constructor.as_object_id()
+                && let Some(obj) = self.get_object_cell(o)
             {
                 obj.borrow_mut()
                     .insert_builtin("compare".to_string(), compare_fn);
@@ -3682,12 +3683,12 @@ fn zdt_add_subtract(
         Ok(v) => v,
         Err(c) => return c,
     };
-    let dur_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+    let dur_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
     let dur = match super::duration::to_temporal_duration_record(interp, dur_arg) {
         Ok(d) => d,
         Err(c) => return c,
     };
-    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
     let overflow = match parse_overflow_option(interp, &options) {
         Ok(v) => v,
         Err(c) => return c,
@@ -3779,7 +3780,7 @@ fn zdt_until_since(
         Ok(v) => v,
         Err(c) => return c,
     };
-    let other_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+    let other_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
     let other_val = match to_temporal_zoned_date_time(interp, &other_arg) {
         Completion::Normal(v) => v,
         c => return c,
@@ -3795,7 +3796,7 @@ fn zdt_until_since(
         )));
     }
 
-    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
     let all_units: &[&str] = &[
         "year",
         "month",
@@ -4185,7 +4186,7 @@ fn parse_zdt_to_string_options(
             "auto".to_string(),
         ));
     }
-    if !matches!(options, JsValue::Object(_)) {
+    if !options.is_object() {
         return Err(Completion::Throw(
             interp.create_type_error("options must be an object"),
         ));
@@ -4220,7 +4221,7 @@ fn parse_zdt_to_string_options(
     };
     let fsd_precision = if is_undefined(&fsd_val) {
         None
-    } else if matches!(&fsd_val, JsValue::Number(_)) {
+    } else if fsd_val.is_number() {
         let n = match interp.to_number_value(&fsd_val) {
             Ok(n) => n,
             Err(c) => return Err(Completion::Throw(c)),

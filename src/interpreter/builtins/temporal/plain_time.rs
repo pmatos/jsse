@@ -40,7 +40,7 @@ impl Interpreter {
                         5 => fields.5 as f64,
                         _ => 0.0,
                     };
-                    Completion::Normal(JsValue::Number(val))
+                    Completion::Normal(JsValue::number(val))
                 },
             ));
             self.get_object_cell_expect(proto_id)
@@ -67,7 +67,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let item = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let item = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 // IsPartialTemporalObject
                 if let Err(c) = is_partial_temporal_object(interp, &item) {
                     return c;
@@ -114,7 +114,7 @@ impl Interpreter {
                             .create_type_error("with() requires at least one recognized property"),
                     );
                 }
-                let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let overflow = match parse_overflow_option(interp, &options) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -159,7 +159,7 @@ impl Interpreter {
                     };
                     let dur = match super::duration::to_temporal_duration_record(
                         interp,
-                        args.first().cloned().unwrap_or(JsValue::Undefined),
+                        args.first().cloned().unwrap_or(JsValue::UNDEFINED),
                     ) {
                         Ok(v) => v,
                         Err(c) => return c,
@@ -194,7 +194,7 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(c) => return c,
                     };
-                    let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let other = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let (h2, m2, s2, ms2, us2, ns2) = match to_temporal_plain_time(interp, other) {
                         Ok(v) => v,
                         Err(c) => return c,
@@ -207,7 +207,7 @@ impl Interpreter {
                         ns_this - ns_other
                     };
 
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let (largest_unit, smallest_unit, rounding_mode, rounding_increment) =
                         match parse_time_diff_options(interp, &options, "hour") {
                             Ok(v) => v,
@@ -262,11 +262,11 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let round_to = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let round_to = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 if is_undefined(&round_to) {
                     return Completion::Throw(interp.create_type_error("round requires options"));
                 }
-                let (unit, rounding_mode, increment) = if let JsValue::String(ref su) = round_to {
+                let (unit, rounding_mode, increment) = if let Some(su) = round_to.as_string() {
                     let su_str = su.to_rust_string();
                     match temporal_unit_singular(&su_str) {
                         Some(u) if is_valid_time_round_unit(u) => (u, "halfExpand", 1.0),
@@ -281,7 +281,7 @@ impl Interpreter {
                             );
                         }
                     }
-                } else if matches!(round_to, JsValue::Object(_)) {
+                } else if round_to.is_object() {
                     // Read all options in alphabetical order first, then validate
                     // 1. roundingIncrement: get + coerce
                     let inc_val = match get_prop(interp, &round_to, "roundingIncrement") {
@@ -395,13 +395,13 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let other = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let other = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let (h2, m2, s2, ms2, us2, ns2) = match to_temporal_plain_time(interp, other) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
                 let eq = h1 == h2 && m1 == m2 && s1 == s2 && ms1 == ms2 && us1 == us2 && ns1 == ns2;
-                Completion::Normal(JsValue::Boolean(eq))
+                Completion::Normal(JsValue::boolean(eq))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -417,7 +417,7 @@ impl Interpreter {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
-                let options = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let options = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let (precision, rounding_mode) =
                     match parse_time_to_string_options(interp, &options) {
                         Ok(v) => v,
@@ -449,7 +449,7 @@ impl Interpreter {
                 };
 
                 let result = format_plain_time(rh, rm, rs, rms, rus, rns, precision);
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                Completion::Normal(JsValue::from_str(&result))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -466,7 +466,7 @@ impl Interpreter {
                     Err(c) => return c,
                 };
                 let result = format_plain_time(h, m, s, ms, us, ns, None);
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                Completion::Normal(JsValue::from_str(&result))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -486,11 +486,11 @@ impl Interpreter {
                     Some(v) => v,
                     None => {
                         let result = format_plain_time(h, m, s, ms, us, ns, None);
-                        return Completion::Normal(JsValue::String(JsString::from_str(&result)));
+                        return Completion::Normal(JsValue::from_str(&result));
                     }
                 };
-                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 // PlainTime has time but not date
                 if let Err(e) =
                     super::check_locale_string_style_conflict(interp, &options_arg, false, true)
@@ -500,7 +500,7 @@ impl Interpreter {
                 let dtf_instance = match interp.construct(&dtf_val, &[locales_arg, options_arg]) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Completion::Throw(e),
-                    _ => return Completion::Normal(JsValue::Undefined),
+                    _ => return Completion::Normal(JsValue::UNDEFINED),
                 };
                 super::temporal_format_with_dtf(interp, &dtf_instance, this)
             },
@@ -695,20 +695,21 @@ impl Interpreter {
                     microsecond,
                     nanosecond,
                 );
-                if let Completion::Normal(JsValue::Object(ref o)) = result {
+                if let Completion::Normal(ref v) = result
+                    && let Some(o) = v.as_object_id()
+                {
                     let dp = interp.realm().temporal_plain_time_prototype;
-                    interp
-                        .apply_new_target_prototype(o.id, dp, |r| r.temporal_plain_time_prototype);
+                    interp.apply_new_target_prototype(o, dp, |r| r.temporal_plain_time_prototype);
                 }
                 result
             },
         ));
 
         // Constructor.prototype_id
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
-            let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+            let proto_val = JsValue::object(proto_id);
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
                 PropertyDescriptor::data(proto_val, false, false, false),
@@ -726,10 +727,10 @@ impl Interpreter {
             "from".to_string(),
             1,
             |interp, _this, args| {
-                let item = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let item = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 // Per spec: if item is a string, parse first, then validate overflow (but don't use it)
-                if matches!(&item, JsValue::String(_)) {
+                if item.is_string() {
                     let (h, m, s, ms, us, ns) =
                         match to_temporal_plain_time_with_overflow(interp, item, "constrain") {
                             Ok(v) => v,
@@ -768,8 +769,8 @@ impl Interpreter {
                 }
             },
         ));
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
         }
@@ -781,14 +782,14 @@ impl Interpreter {
             |interp, _this, args| {
                 let one = match to_temporal_plain_time(
                     interp,
-                    args.first().cloned().unwrap_or(JsValue::Undefined),
+                    args.first().cloned().unwrap_or(JsValue::UNDEFINED),
                 ) {
                     Ok(v) => v,
                     Err(c) => return c,
                 };
                 let two = match to_temporal_plain_time(
                     interp,
-                    args.get(1).cloned().unwrap_or(JsValue::Undefined),
+                    args.get(1).cloned().unwrap_or(JsValue::UNDEFINED),
                 ) {
                     Ok(v) => v,
                     Err(c) => return c,
@@ -802,11 +803,11 @@ impl Interpreter {
                 } else {
                     0.0
                 };
-                Completion::Normal(JsValue::Number(result))
+                Completion::Normal(JsValue::number(result))
             },
         ));
-        if let JsValue::Object(ref o) = constructor
-            && let Some(obj) = self.get_object_cell(o.id)
+        if let Some(o) = constructor.as_object_id()
+            && let Some(obj) = self.get_object_cell(o)
         {
             obj.borrow_mut()
                 .insert_builtin("compare".to_string(), compare_fn);
@@ -825,12 +826,11 @@ fn get_plain_time_fields(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<(u8, u8, u8, u16, u16, u16), Completion> {
-    let snapshot = match this {
-        JsValue::Object(o) => interp
-            .get_object_cell(o.id)
-            .map(|cell| cell.borrow().temporal_data().cloned()),
-        _ => None,
-    };
+    let snapshot = this.as_object_id().and_then(|o| {
+        interp
+            .get_object_cell(o)
+            .map(|cell| cell.borrow().temporal_data().cloned())
+    });
     match snapshot {
         Some(Some(TemporalData::PlainTime {
             hour,
@@ -876,7 +876,7 @@ pub(super) fn create_plain_time_result(
             nanosecond: ns,
         });
     let id = obj_id;
-    Completion::Normal(JsValue::Object(crate::types::JsObject { id }))
+    Completion::Normal(JsValue::object(id))
 }
 
 pub(super) fn to_temporal_plain_time_with_overflow(
@@ -926,129 +926,126 @@ fn to_temporal_plain_time_raw(
     interp: &mut Interpreter,
     item: JsValue,
 ) -> Result<(u8, u8, u8, u16, u16, u16), Completion> {
-    match &item {
-        JsValue::Object(o) => {
-            if let Some(obj) = interp.get_object_cell(o.id) {
-                let data = obj.borrow();
-                if let Some(TemporalData::PlainTime {
-                    hour,
-                    minute,
-                    second,
-                    millisecond,
-                    microsecond,
-                    nanosecond,
-                }) = data.temporal_data()
-                {
-                    return Ok((
-                        *hour,
-                        *minute,
-                        *second,
-                        *millisecond,
-                        *microsecond,
-                        *nanosecond,
-                    ));
-                }
-                if let Some(TemporalData::PlainDateTime {
-                    hour,
-                    minute,
-                    second,
-                    millisecond,
-                    microsecond,
-                    nanosecond,
-                    ..
-                }) = data.temporal_data()
-                {
-                    return Ok((
-                        *hour,
-                        *minute,
-                        *second,
-                        *millisecond,
-                        *microsecond,
-                        *nanosecond,
-                    ));
-                }
-                if let Some(TemporalData::ZonedDateTime {
-                    epoch_nanoseconds,
-                    time_zone,
-                    ..
-                }) = data.temporal_data()
-                {
-                    let (_, _, _, h, mi, s, ms, us, ns) =
-                        super::zoned_date_time::epoch_ns_to_components(
-                            epoch_nanoseconds,
-                            time_zone,
-                        );
-                    return Ok((h, mi, s, ms, us, ns));
-                }
-            }
-            // Property bag: read and coerce each field in alphabetical order per spec:
-            // hour, microsecond, millisecond, minute, nanosecond, second
-            let h_val = match get_prop(interp, &item, "hour") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let (h, h_present) = if is_undefined(&h_val) {
-                (0u8, false)
-            } else {
-                (to_integer_with_truncation(interp, &h_val)? as u8, true)
-            };
-            let us_val = match get_prop(interp, &item, "microsecond") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let (us, us_present) = if is_undefined(&us_val) {
-                (0u16, false)
-            } else {
-                (to_integer_with_truncation(interp, &us_val)? as u16, true)
-            };
-            let ms_val = match get_prop(interp, &item, "millisecond") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let (ms, ms_present) = if is_undefined(&ms_val) {
-                (0u16, false)
-            } else {
-                (to_integer_with_truncation(interp, &ms_val)? as u16, true)
-            };
-            let m_val = match get_prop(interp, &item, "minute") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let (m, m_present) = if is_undefined(&m_val) {
-                (0u8, false)
-            } else {
-                (to_integer_with_truncation(interp, &m_val)? as u8, true)
-            };
-            let ns_val = match get_prop(interp, &item, "nanosecond") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let (ns, ns_present) = if is_undefined(&ns_val) {
-                (0u16, false)
-            } else {
-                (to_integer_with_truncation(interp, &ns_val)? as u16, true)
-            };
-            let s_val = match get_prop(interp, &item, "second") {
-                Completion::Normal(v) => v,
-                other => return Err(other),
-            };
-            let (s, s_present) = if is_undefined(&s_val) {
-                (0u8, false)
-            } else {
-                (to_integer_with_truncation(interp, &s_val)? as u8, true)
-            };
-            // Per spec: if no time properties exist, throw TypeError
-            if !h_present && !m_present && !s_present && !ms_present && !us_present && !ns_present {
-                return Err(Completion::Throw(
-                    interp.create_type_error("Property bag has no time fields"),
+    if let Some(o) = item.as_object_id() {
+        if let Some(obj) = interp.get_object_cell(o) {
+            let data = obj.borrow();
+            if let Some(TemporalData::PlainTime {
+                hour,
+                minute,
+                second,
+                millisecond,
+                microsecond,
+                nanosecond,
+            }) = data.temporal_data()
+            {
+                return Ok((
+                    *hour,
+                    *minute,
+                    *second,
+                    *millisecond,
+                    *microsecond,
+                    *nanosecond,
                 ));
             }
-            Ok((h, m, s, ms, us, ns))
+            if let Some(TemporalData::PlainDateTime {
+                hour,
+                minute,
+                second,
+                millisecond,
+                microsecond,
+                nanosecond,
+                ..
+            }) = data.temporal_data()
+            {
+                return Ok((
+                    *hour,
+                    *minute,
+                    *second,
+                    *millisecond,
+                    *microsecond,
+                    *nanosecond,
+                ));
+            }
+            if let Some(TemporalData::ZonedDateTime {
+                epoch_nanoseconds,
+                time_zone,
+                ..
+            }) = data.temporal_data()
+            {
+                let (_, _, _, h, mi, s, ms, us, ns) =
+                    super::zoned_date_time::epoch_ns_to_components(epoch_nanoseconds, time_zone);
+                return Ok((h, mi, s, ms, us, ns));
+            }
         }
-        JsValue::String(s) => parse_time_string(interp, &s.to_rust_string()),
-        _ => Err(Completion::Throw(
+        // Property bag: read and coerce each field in alphabetical order per spec:
+        // hour, microsecond, millisecond, minute, nanosecond, second
+        let h_val = match get_prop(interp, &item, "hour") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let (h, h_present) = if is_undefined(&h_val) {
+            (0u8, false)
+        } else {
+            (to_integer_with_truncation(interp, &h_val)? as u8, true)
+        };
+        let us_val = match get_prop(interp, &item, "microsecond") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let (us, us_present) = if is_undefined(&us_val) {
+            (0u16, false)
+        } else {
+            (to_integer_with_truncation(interp, &us_val)? as u16, true)
+        };
+        let ms_val = match get_prop(interp, &item, "millisecond") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let (ms, ms_present) = if is_undefined(&ms_val) {
+            (0u16, false)
+        } else {
+            (to_integer_with_truncation(interp, &ms_val)? as u16, true)
+        };
+        let m_val = match get_prop(interp, &item, "minute") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let (m, m_present) = if is_undefined(&m_val) {
+            (0u8, false)
+        } else {
+            (to_integer_with_truncation(interp, &m_val)? as u8, true)
+        };
+        let ns_val = match get_prop(interp, &item, "nanosecond") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let (ns, ns_present) = if is_undefined(&ns_val) {
+            (0u16, false)
+        } else {
+            (to_integer_with_truncation(interp, &ns_val)? as u16, true)
+        };
+        let s_val = match get_prop(interp, &item, "second") {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        let (s, s_present) = if is_undefined(&s_val) {
+            (0u8, false)
+        } else {
+            (to_integer_with_truncation(interp, &s_val)? as u8, true)
+        };
+        // Per spec: if no time properties exist, throw TypeError
+        if !h_present && !m_present && !s_present && !ms_present && !us_present && !ns_present {
+            return Err(Completion::Throw(
+                interp.create_type_error("Property bag has no time fields"),
+            ));
+        }
+        Ok((h, m, s, ms, us, ns))
+    } else if let Some(s) = item.as_string() {
+        parse_time_string(interp, &s.to_rust_string())
+    } else {
+        Err(Completion::Throw(
             interp.create_type_error("Cannot convert to Temporal.PlainTime"),
-        )),
+        ))
     }
 }
 
@@ -1292,7 +1289,7 @@ fn parse_time_to_string_options(
     if is_undefined(options) {
         return Ok((None, "trunc"));
     }
-    if !matches!(options, JsValue::Object(_)) {
+    if !options.is_object() {
         return Err(Completion::Throw(
             interp.create_type_error("options must be an object"),
         ));
@@ -1304,7 +1301,7 @@ fn parse_time_to_string_options(
     };
     let mut precision = None;
     if !is_undefined(&fsd_val) {
-        if matches!(fsd_val, JsValue::Number(_)) {
+        if fsd_val.is_number() {
             // GetStringOrNumberOption: value is Number → floor then range check
             let n = match interp.to_number_value(&fsd_val) {
                 Ok(v) => v,
