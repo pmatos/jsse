@@ -10,7 +10,7 @@
 
 use super::types::*;
 use super::*;
-use crate::types::{JsString, JsValue};
+use crate::types::JsValue;
 
 impl Interpreter {
     /// Read a name from the current realm's global env, falling through to
@@ -54,9 +54,7 @@ impl Interpreter {
             let action = {
                 let mut e = current.borrow_mut();
                 if e.is_indirect_binding(name) {
-                    return Err(JsValue::String(JsString::from_str(
-                        "Assignment to constant variable.",
-                    )));
+                    return Err(JsValue::from_str("Assignment to constant variable."));
                 }
                 let strict = e.strict;
                 let global_object_id = e.global_object_id;
@@ -64,23 +62,19 @@ impl Interpreter {
                     if !binding.initialized
                         && matches!(binding.kind, BindingKind::Let | BindingKind::Const)
                     {
-                        return Err(JsValue::String(JsString::from_str(&format!(
+                        return Err(JsValue::from_str(&format!(
                             "Cannot access '{name}' before initialization"
-                        ))));
+                        )));
                     }
                     if binding.kind == BindingKind::Const && binding.initialized {
-                        return Err(JsValue::String(JsString::from_str(
-                            "Assignment to constant variable.",
-                        )));
+                        return Err(JsValue::from_str("Assignment to constant variable."));
                     }
                     if (binding.kind == BindingKind::FunctionName
                         || binding.kind == BindingKind::ImmutableValue)
                         && binding.initialized
                     {
                         if strict {
-                            return Err(JsValue::String(JsString::from_str(
-                                "Assignment to constant variable.",
-                            )));
+                            return Err(JsValue::from_str("Assignment to constant variable."));
                         }
                         return Ok(());
                     }
@@ -116,9 +110,9 @@ impl Interpreter {
                                 .set_property_value(name, value.clone());
                             if !ok {
                                 if strict {
-                                    return Err(JsValue::String(JsString::from_str(&format!(
+                                    return Err(JsValue::from_str(&format!(
                                         "Cannot assign to read only property '{name}' of object '#<Object>'"
-                                    ))));
+                                    )));
                                 }
                                 return Ok(());
                             }
@@ -230,7 +224,7 @@ impl Interpreter {
                     g.property_order.push(key.clone());
                     g.properties.insert(
                         key,
-                        PropertyDescriptor::data(JsValue::Undefined, true, true, false),
+                        PropertyDescriptor::data(JsValue::UNDEFINED, true, true, false),
                     );
                 }
             }
@@ -258,7 +252,7 @@ impl Interpreter {
                     g.property_order.push(key.clone());
                     g.properties.insert(
                         key,
-                        PropertyDescriptor::data(JsValue::Undefined, true, true, true),
+                        PropertyDescriptor::data(JsValue::UNDEFINED, true, true, true),
                     );
                 }
             }
