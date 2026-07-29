@@ -104,7 +104,7 @@ fn create_segment_object(
         .insert_property(
             "segment".to_string(),
             PropertyDescriptor::data(
-                JsValue::String(JsString::from_vec(segment.to_vec())),
+                JsValue::string(JsString::from_vec(segment.to_vec())),
                 true,
                 true,
                 true,
@@ -115,7 +115,7 @@ fn create_segment_object(
         .borrow_mut()
         .insert_property(
             "index".to_string(),
-            PropertyDescriptor::data(JsValue::Number(index as f64), true, true, true),
+            PropertyDescriptor::data(JsValue::number(index as f64), true, true, true),
         );
     interp
         .get_object_cell_expect(obj_id)
@@ -123,7 +123,7 @@ fn create_segment_object(
         .insert_property(
             "input".to_string(),
             PropertyDescriptor::data(
-                JsValue::String(JsString::from_vec(input.to_vec())),
+                JsValue::string(JsString::from_vec(input.to_vec())),
                 true,
                 true,
                 true,
@@ -135,19 +135,18 @@ fn create_segment_object(
             .borrow_mut()
             .insert_property(
                 "isWordLike".to_string(),
-                PropertyDescriptor::data(JsValue::Boolean(wl), true, true, true),
+                PropertyDescriptor::data(JsValue::boolean(wl), true, true, true),
             );
     }
-    let id = obj_id;
-    JsValue::Object(crate::types::JsObject { id })
+    JsValue::object(obj_id)
 }
 
 fn extract_segmenter_data(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<(String, String), JsValue> {
-    if let JsValue::Object(o) = this
-        && let Some(obj) = interp.get_object_cell(o.id)
+    if let Some(o) = this.as_object_id()
+        && let Some(obj) = interp.get_object_cell(o)
     {
         let b = obj.borrow();
         if let Some(IntlData::Segmenter {
@@ -186,7 +185,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let str_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let str_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let input_js = match interp.to_js_string(&str_arg) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
@@ -212,7 +211,7 @@ impl Interpreter {
                     .borrow_mut()
                     .insert_property(
                         "[[SegmenterInput]]".to_string(),
-                        PropertyDescriptor::data(JsValue::String(input_js), false, false, false),
+                        PropertyDescriptor::data(JsValue::string(input_js), false, false, false),
                     );
                 interp
                     .get_object_cell_expect(segments_obj_id)
@@ -220,7 +219,7 @@ impl Interpreter {
                     .insert_property(
                         "[[SegmenterGranularity]]".to_string(),
                         PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str(&granularity)),
+                            JsValue::from_str(&granularity),
                             false,
                             false,
                             false,
@@ -231,16 +230,11 @@ impl Interpreter {
                     .borrow_mut()
                     .insert_property(
                         "[[SegmenterLocale]]".to_string(),
-                        PropertyDescriptor::data(
-                            JsValue::String(JsString::from_str(&locale)),
-                            false,
-                            false,
-                            false,
-                        ),
+                        PropertyDescriptor::data(JsValue::from_str(&locale), false, false, false),
                     );
 
                 let breaks_vals: Vec<JsValue> =
-                    breaks.iter().map(|&b| JsValue::Number(b as f64)).collect();
+                    breaks.iter().map(|&b| JsValue::number(b as f64)).collect();
                 let breaks_arr = interp.create_array(breaks_vals);
                 interp
                     .get_object_cell_expect(segments_obj_id)
@@ -256,8 +250,8 @@ impl Interpreter {
                     1,
                     |interp, this, args| {
                         // RequireInternalSlot(segments, [[SegmentsSegmenter]])
-                        let is_segments = if let JsValue::Object(o) = this {
-                            if let Some(obj) = interp.get_object_cell(o.id) {
+                        let is_segments = if let Some(o) = this.as_object_id() {
+                            if let Some(obj) = interp.get_object_cell(o) {
                                 let b = obj.borrow();
                                 b.class_name == "Segmenter Segments"
                                     && b.properties.contains_key("[[SegmenterInput]]")
@@ -273,7 +267,7 @@ impl Interpreter {
                             ));
                         }
 
-                        let idx_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let idx_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         let idx = match interp.to_number_value(&idx_arg) {
                             Ok(n) => n,
                             Err(e) => return Completion::Throw(e),
@@ -287,35 +281,24 @@ impl Interpreter {
                         };
 
                         if idx < 0.0 {
-                            return Completion::Normal(JsValue::Undefined);
+                            return Completion::Normal(JsValue::UNDEFINED);
                         }
                         let idx = idx as usize;
 
-                        let (input_u16, granularity, breaks) = if let JsValue::Object(o) = this {
-                            if let Some(obj) = interp.get_object_cell(o.id) {
+                        let (input_u16, granularity, breaks) = if let Some(o) = this.as_object_id()
+                        {
+                            if let Some(obj) = interp.get_object_cell(o) {
                                 let b = obj.borrow();
                                 let input_u16 = b
                                     .properties
                                     .get("[[SegmenterInput]]")
                                     .and_then(|pd| pd.value.as_ref())
-                                    .and_then(|v| {
-                                        if let JsValue::String(s) = v {
-                                            Some(s.code_units.clone())
-                                        } else {
-                                            None
-                                        }
-                                    });
+                                    .and_then(|v| v.as_string().map(|s| s.code_units));
                                 let granularity = b
                                     .properties
                                     .get("[[SegmenterGranularity]]")
                                     .and_then(|pd| pd.value.as_ref())
-                                    .and_then(|v| {
-                                        if let JsValue::String(s) = v {
-                                            Some(s.to_rust_string())
-                                        } else {
-                                            None
-                                        }
-                                    });
+                                    .and_then(|v| v.as_string().map(|s| s.to_rust_string()));
                                 let breaks_val = b
                                     .properties
                                     .get("[[SegmenterBreaks]]")
@@ -323,14 +306,14 @@ impl Interpreter {
                                 drop(b);
 
                                 let mut break_points = Vec::new();
-                                if let Some(JsValue::Object(arr_obj)) = breaks_val
-                                    && let Some(arr) = interp.get_object_cell(arr_obj.id)
+                                if let Some(arr_obj) = breaks_val.and_then(|v| v.as_object_id())
+                                    && let Some(arr) = interp.get_object_cell(arr_obj)
                                 {
                                     let ab = arr.borrow();
                                     if let Some(elems) = ab.array_elements() {
                                         for elem in elems {
-                                            if let JsValue::Number(n) = elem {
-                                                break_points.push(*n as usize);
+                                            if let Some(n) = elem.as_number() {
+                                                break_points.push(n as usize);
                                             }
                                         }
                                     }
@@ -346,12 +329,12 @@ impl Interpreter {
 
                         let input_u16 = match input_u16 {
                             Some(s) => s,
-                            None => return Completion::Normal(JsValue::Undefined),
+                            None => return Completion::Normal(JsValue::UNDEFINED),
                         };
                         let granularity = granularity.unwrap_or_else(|| "grapheme".to_string());
 
                         if idx >= input_u16.len() {
-                            return Completion::Normal(JsValue::Undefined);
+                            return Completion::Normal(JsValue::UNDEFINED);
                         }
 
                         // Find the segment containing idx (UTF-16 index)
@@ -429,7 +412,7 @@ impl Interpreter {
                             .insert_property(
                                 "[[HasWordLike]]".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::Boolean(has_word_like),
+                                    JsValue::boolean(has_word_like),
                                     false,
                                     false,
                                     false,
@@ -440,10 +423,10 @@ impl Interpreter {
                             "next".to_string(),
                             0,
                             |interp, this, _args| {
-                                if let JsValue::Object(o) = this
-                                    && interp.get_object_cell(o.id).is_some()
+                                if let Some(o) = this.as_object_id()
+                                    && interp.get_object_cell(o).is_some()
                                 {
-                                    let iter_id = o.id;
+                                    let iter_id = o;
                                     enum Step {
                                         Done,
                                         Yield {
@@ -462,7 +445,7 @@ impl Interpreter {
                                             .properties
                                             .get("[[HasWordLike]]")
                                             .and_then(|pd| pd.value.as_ref())
-                                            .map(|v| matches!(v, JsValue::Boolean(true)))
+                                            .map(|v| v.as_boolean() == Some(true))
                                             .unwrap_or(false);
                                         let mut b = cell.borrow_mut();
                                         if let Some(IteratorState::SegmentIterator {
@@ -494,7 +477,7 @@ impl Interpreter {
                                         Step::Done => {
                                             return Completion::Normal(
                                                 interp.create_iter_result_object(
-                                                    JsValue::Undefined,
+                                                    JsValue::UNDEFINED,
                                                     true,
                                                 ),
                                             );
@@ -523,7 +506,7 @@ impl Interpreter {
                                     }
                                 }
                                 Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 )
                             },
                         ));
@@ -532,8 +515,7 @@ impl Interpreter {
                             .borrow_mut()
                             .insert_builtin("next".to_string(), next_fn);
 
-                        let iter_id = iter_obj_id;
-                        Completion::Normal(JsValue::Object(crate::types::JsObject { id: iter_id }))
+                        Completion::Normal(JsValue::object(iter_obj_id))
                     },
                 ));
 
@@ -545,8 +527,7 @@ impl Interpreter {
                         PropertyDescriptor::data(iter_fn, true, false, true),
                     );
 
-                let segments_id = segments_obj_id;
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: segments_id }))
+                Completion::Normal(JsValue::object(segments_obj_id))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -572,11 +553,8 @@ impl Interpreter {
                 }
 
                 let props = vec![
-                    ("locale", JsValue::String(JsString::from_str(&locale))),
-                    (
-                        "granularity",
-                        JsValue::String(JsString::from_str(&granularity)),
-                    ),
+                    ("locale", JsValue::from_str(&locale)),
+                    ("granularity", JsValue::from_str(&granularity)),
                 ];
                 for (key, val) in props {
                     interp
@@ -588,7 +566,7 @@ impl Interpreter {
                         );
                 }
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
+                Completion::Normal(JsValue::object(result_id))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -598,7 +576,7 @@ impl Interpreter {
         self.realm_mut().intl_segmenter_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+        let proto_val = JsValue::object(proto_id);
         let proto_clone_id = proto_id;
 
         let segmenter_ctor = self.create_function(JsFunction::constructor(
@@ -611,8 +589,8 @@ impl Interpreter {
                     );
                 }
 
-                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 let requested = match interp.intl_canonicalize_locale_list(&locales_arg) {
                     Ok(list) => list,
@@ -668,15 +646,14 @@ impl Interpreter {
                         granularity,
                     }));
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                Completion::Normal(JsValue::object(obj_id))
             },
         ));
 
         // Set Segmenter.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &segmenter_ctor
-            && self.get_object_cell(ctor_ref.id).is_some()
+        if let Some(ctor_id) = segmenter_ctor.as_object_id()
+            && self.get_object_cell(ctor_id).is_some()
         {
-            let ctor_id = ctor_ref.id;
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
@@ -689,8 +666,8 @@ impl Interpreter {
                 "supportedLocalesOf".to_string(),
                 1,
                 |interp, _this, args| {
-                    let locales = args.first().unwrap_or(&JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let locales = args.first().unwrap_or(&JsValue::UNDEFINED);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let requested = match interp.intl_canonicalize_locale_list(locales) {
                         Ok(list) => list,
                         Err(e) => return Completion::Throw(e),

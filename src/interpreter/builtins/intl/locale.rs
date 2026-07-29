@@ -165,7 +165,7 @@ fn create_locale_object_from_icu(interp: &mut Interpreter, locale: &IcuLocale) -
         .class_name = "Intl.Locale".to_string();
     interp.get_object_cell_expect(obj_id).borrow_mut().kind =
         crate::interpreter::types::ObjectKind::Intl(Box::new(build_intl_data_from_locale(locale)));
-    JsValue::Object(crate::types::JsObject { id: obj_id })
+    JsValue::object(obj_id)
 }
 
 fn get_locale_intl_data_field<F>(
@@ -177,8 +177,8 @@ fn get_locale_intl_data_field<F>(
 where
     F: FnOnce(&IntlData) -> Completion,
 {
-    if let JsValue::Object(o) = this
-        && let Some(obj) = interp.get_object_cell(o.id)
+    if let Some(o) = this.as_object_id()
+        && let Some(obj) = interp.get_object_cell(o)
     {
         let b = obj.borrow();
         if let Some(data @ IntlData::Locale { .. }) = b.intl_data() {
@@ -235,7 +235,7 @@ impl Interpreter {
                             result.push('-');
                             result.push_str(v);
                         }
-                        Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                        Completion::Normal(JsValue::from_str(&result))
                     } else {
                         unreachable!()
                     }
@@ -257,8 +257,8 @@ impl Interpreter {
                 get_locale_intl_data_field(interp, this, "calendar", |data| {
                     if let IntlData::Locale { calendar, .. } = data {
                         Completion::Normal(match calendar {
-                            Some(s) => JsValue::String(JsString::from_str(s)),
-                            None => JsValue::Undefined,
+                            Some(s) => JsValue::from_str(s),
+                            None => JsValue::UNDEFINED,
                         })
                     } else {
                         unreachable!()
@@ -281,8 +281,8 @@ impl Interpreter {
                 get_locale_intl_data_field(interp, this, "caseFirst", |data| {
                     if let IntlData::Locale { case_first, .. } = data {
                         Completion::Normal(match case_first {
-                            Some(s) => JsValue::String(JsString::from_str(s)),
-                            None => JsValue::Undefined,
+                            Some(s) => JsValue::from_str(s),
+                            None => JsValue::UNDEFINED,
                         })
                     } else {
                         unreachable!()
@@ -305,8 +305,8 @@ impl Interpreter {
                 get_locale_intl_data_field(interp, this, "collation", |data| {
                     if let IntlData::Locale { collation, .. } = data {
                         Completion::Normal(match collation {
-                            Some(s) => JsValue::String(JsString::from_str(s)),
-                            None => JsValue::Undefined,
+                            Some(s) => JsValue::from_str(s),
+                            None => JsValue::UNDEFINED,
                         })
                     } else {
                         unreachable!()
@@ -329,8 +329,8 @@ impl Interpreter {
                 get_locale_intl_data_field(interp, this, "hourCycle", |data| {
                     if let IntlData::Locale { hour_cycle, .. } = data {
                         Completion::Normal(match hour_cycle {
-                            Some(s) => JsValue::String(JsString::from_str(s)),
-                            None => JsValue::Undefined,
+                            Some(s) => JsValue::from_str(s),
+                            None => JsValue::UNDEFINED,
                         })
                     } else {
                         unreachable!()
@@ -352,7 +352,7 @@ impl Interpreter {
             |interp, this, _args| {
                 get_locale_intl_data_field(interp, this, "language", |data| {
                     if let IntlData::Locale { language, .. } = data {
-                        Completion::Normal(JsValue::String(JsString::from_str(language)))
+                        Completion::Normal(JsValue::from_str(language))
                     } else {
                         unreachable!()
                     }
@@ -377,8 +377,8 @@ impl Interpreter {
                     } = data
                     {
                         Completion::Normal(match numbering_system {
-                            Some(s) => JsValue::String(JsString::from_str(s)),
-                            None => JsValue::Undefined,
+                            Some(s) => JsValue::from_str(s),
+                            None => JsValue::UNDEFINED,
                         })
                     } else {
                         unreachable!()
@@ -400,7 +400,7 @@ impl Interpreter {
             |interp, this, _args| {
                 get_locale_intl_data_field(interp, this, "numeric", |data| {
                     if let IntlData::Locale { numeric, .. } = data {
-                        Completion::Normal(JsValue::Boolean(numeric.unwrap_or(false)))
+                        Completion::Normal(JsValue::boolean(numeric.unwrap_or(false)))
                     } else {
                         unreachable!()
                     }
@@ -422,8 +422,8 @@ impl Interpreter {
                 get_locale_intl_data_field(interp, this, "region", |data| {
                     if let IntlData::Locale { region, .. } = data {
                         Completion::Normal(match region {
-                            Some(s) => JsValue::String(JsString::from_str(s)),
-                            None => JsValue::Undefined,
+                            Some(s) => JsValue::from_str(s),
+                            None => JsValue::UNDEFINED,
                         })
                     } else {
                         unreachable!()
@@ -446,8 +446,8 @@ impl Interpreter {
                 get_locale_intl_data_field(interp, this, "script", |data| {
                     if let IntlData::Locale { script, .. } = data {
                         Completion::Normal(match script {
-                            Some(s) => JsValue::String(JsString::from_str(s)),
-                            None => JsValue::Undefined,
+                            Some(s) => JsValue::from_str(s),
+                            None => JsValue::UNDEFINED,
                         })
                     } else {
                         unreachable!()
@@ -470,8 +470,8 @@ impl Interpreter {
                 get_locale_intl_data_field(interp, this, "variants", |data| {
                     if let IntlData::Locale { variants, .. } = data {
                         Completion::Normal(match variants {
-                            Some(s) => JsValue::String(JsString::from_str(s)),
-                            None => JsValue::Undefined,
+                            Some(s) => JsValue::from_str(s),
+                            None => JsValue::UNDEFINED,
                         })
                     } else {
                         unreachable!()
@@ -497,8 +497,8 @@ impl Interpreter {
                     } = data
                     {
                         Completion::Normal(match first_day_of_week {
-                            Some(s) => JsValue::String(JsString::from_str(s)),
-                            None => JsValue::Undefined,
+                            Some(s) => JsValue::from_str(s),
+                            None => JsValue::UNDEFINED,
                         })
                     } else {
                         unreachable!()
@@ -522,7 +522,7 @@ impl Interpreter {
             |interp, this, _args| {
                 get_locale_intl_data_field(interp, this, "toString", |data| {
                     if let IntlData::Locale { tag, .. } = data {
-                        Completion::Normal(JsValue::String(JsString::from_str(tag)))
+                        Completion::Normal(JsValue::from_str(tag))
                     } else {
                         unreachable!()
                     }
@@ -540,7 +540,7 @@ impl Interpreter {
             |interp, this, _args| {
                 get_locale_intl_data_field(interp, this, "toJSON", |data| {
                     if let IntlData::Locale { tag, .. } = data {
-                        Completion::Normal(JsValue::String(JsString::from_str(tag)))
+                        Completion::Normal(JsValue::from_str(tag))
                     } else {
                         unreachable!()
                     }
@@ -556,8 +556,8 @@ impl Interpreter {
             "maximize".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    let tag_opt = interp.get_object_cell(o.id).and_then(|cell| {
+                if let Some(o) = this.as_object_id() {
+                    let tag_opt = interp.get_object_cell(o).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::Locale { tag, .. }) = b.intl_data() {
                             Some(tag.clone())
@@ -584,9 +584,7 @@ impl Interpreter {
                         Err(_) => {
                             // For tags ICU4X can't parse (like "posix"),
                             // maximize returns the same tag
-                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
-                                id: o.id,
-                            }));
+                            return Completion::Normal(JsValue::object(o));
                         }
                     }
                 }
@@ -604,8 +602,8 @@ impl Interpreter {
             "minimize".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    let tag_opt = interp.get_object_cell(o.id).and_then(|cell| {
+                if let Some(o) = this.as_object_id() {
+                    let tag_opt = interp.get_object_cell(o).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::Locale { tag, .. }) = b.intl_data() {
                             Some(tag.clone())
@@ -630,9 +628,7 @@ impl Interpreter {
                             ));
                         }
                         Err(_) => {
-                            return Completion::Normal(JsValue::Object(crate::types::JsObject {
-                                id: o.id,
-                            }));
+                            return Completion::Normal(JsValue::object(o));
                         }
                     }
                 }
@@ -652,8 +648,8 @@ impl Interpreter {
             "getCalendars".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    let cal_opt = interp.get_object_cell(o.id).and_then(|cell| {
+                if let Some(o) = this.as_object_id() {
+                    let cal_opt = interp.get_object_cell(o).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::Locale { calendar, .. }) = b.intl_data() {
                             Some(calendar.clone())
@@ -669,9 +665,9 @@ impl Interpreter {
                             )),
                         };
                     let calendars = if let Some(ca) = cal {
-                        vec![JsValue::String(JsString::from_str(&ca))]
+                        vec![JsValue::from_str(&ca)]
                     } else {
-                        vec![JsValue::String(JsString::from_str("gregory"))]
+                        vec![JsValue::from_str("gregory")]
                     };
                     return Completion::Normal(interp.create_array(calendars));
                 }
@@ -689,8 +685,8 @@ impl Interpreter {
             "getCollations".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    let col_opt = interp.get_object_cell(o.id).and_then(|cell| {
+                if let Some(o) = this.as_object_id() {
+                    let col_opt = interp.get_object_cell(o).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::Locale { collation, .. }) = b.intl_data() {
                             Some(collation.clone())
@@ -706,12 +702,12 @@ impl Interpreter {
                     };
                     let collations = if let Some(co) = col {
                         if co == "standard" || co == "search" {
-                            vec![JsValue::String(JsString::from_str("emoji"))]
+                            vec![JsValue::from_str("emoji")]
                         } else {
-                            vec![JsValue::String(JsString::from_str(&co))]
+                            vec![JsValue::from_str(&co)]
                         }
                     } else {
-                        vec![JsValue::String(JsString::from_str("emoji"))]
+                        vec![JsValue::from_str("emoji")]
                     };
                     return Completion::Normal(interp.create_array(collations));
                 }
@@ -729,8 +725,8 @@ impl Interpreter {
             "getHourCycles".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    let snapshot = interp.get_object_cell(o.id).and_then(|cell| {
+                if let Some(o) = this.as_object_id() {
+                    let snapshot = interp.get_object_cell(o).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::Locale {
                             hour_cycle,
@@ -752,7 +748,7 @@ impl Interpreter {
                         }
                     };
                     let cycles = if let Some(h) = hc {
-                        vec![JsValue::String(JsString::from_str(&h))]
+                        vec![JsValue::from_str(&h)]
                     } else {
                         let h12_regions = ["US", "CA", "AU", "NZ", "PH", "IN", "EG", "SA", "CO", "PK", "MY"];
                         let default = if let Some(ref r) = region {
@@ -760,7 +756,7 @@ impl Interpreter {
                         } else {
                             "h23"
                         };
-                        vec![JsValue::String(JsString::from_str(default))]
+                        vec![JsValue::from_str(default)]
                     };
                     return Completion::Normal(interp.create_array(cycles));
                 }
@@ -780,8 +776,8 @@ impl Interpreter {
             "getNumberingSystems".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    let nu_opt = interp.get_object_cell(o.id).and_then(|cell| {
+                if let Some(o) = this.as_object_id() {
+                    let nu_opt = interp.get_object_cell(o).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::Locale {
                             numbering_system,
@@ -802,9 +798,9 @@ impl Interpreter {
                         }
                     };
                     let systems = if let Some(n) = nu {
-                        vec![JsValue::String(JsString::from_str(&n))]
+                        vec![JsValue::from_str(&n)]
                     } else {
-                        vec![JsValue::String(JsString::from_str("latn"))]
+                        vec![JsValue::from_str("latn")]
                     };
                     return Completion::Normal(interp.create_array(systems));
                 }
@@ -824,8 +820,8 @@ impl Interpreter {
             "getTextInfo".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    let tag_opt = interp.get_object_cell(o.id).and_then(|cell| {
+                if let Some(o) = this.as_object_id() {
+                    let tag_opt = interp.get_object_cell(o).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::Locale { tag, .. }) = b.intl_data() {
                             Some(tag.clone())
@@ -864,16 +860,14 @@ impl Interpreter {
                         .insert_property(
                             "direction".to_string(),
                             PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(direction)),
+                                JsValue::from_str(direction),
                                 true,
                                 true,
                                 true,
                             ),
                         );
                     let info_id = info_obj_id;
-                    return Completion::Normal(JsValue::Object(crate::types::JsObject {
-                        id: info_id,
-                    }));
+                    return Completion::Normal(JsValue::object(info_id));
                 }
                 Completion::Throw(interp.create_type_error(
                     "Intl.Locale.prototype.getTextInfo requires an Intl.Locale object",
@@ -889,8 +883,8 @@ impl Interpreter {
             "getTimeZones".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    let region_opt = interp.get_object_cell(o.id).and_then(|cell| {
+                if let Some(o) = this.as_object_id() {
+                    let region_opt = interp.get_object_cell(o).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::Locale { region, .. }) = b.intl_data() {
                             Some(region.clone())
@@ -906,15 +900,12 @@ impl Interpreter {
                             )),
                         };
                     if region.is_none() {
-                        return Completion::Normal(JsValue::Undefined);
+                        return Completion::Normal(JsValue::UNDEFINED);
                     }
 
                     let region_str = region.unwrap();
                     let tzs = get_timezones_for_region(&region_str);
-                    let values: Vec<JsValue> = tzs
-                        .iter()
-                        .map(|tz| JsValue::String(JsString::from_str(tz)))
-                        .collect();
+                    let values: Vec<JsValue> = tzs.iter().map(|tz| JsValue::from_str(tz)).collect();
                     return Completion::Normal(interp.create_array(values));
                 }
                 Completion::Throw(interp.create_type_error(
@@ -931,8 +922,8 @@ impl Interpreter {
             "getWeekInfo".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    let snapshot = interp.get_object_cell(o.id).and_then(|cell| {
+                if let Some(o) = this.as_object_id() {
+                    let snapshot = interp.get_object_cell(o).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::Locale {
                             tag,
@@ -1010,7 +1001,7 @@ impl Interpreter {
                         .insert_property(
                             "firstDay".to_string(),
                             PropertyDescriptor::data(
-                                JsValue::Number(first_day as f64),
+                                JsValue::number(first_day as f64),
                                 true,
                                 true,
                                 true,
@@ -1018,7 +1009,7 @@ impl Interpreter {
                         );
                     let weekend_values: Vec<JsValue> = weekend_days
                         .iter()
-                        .map(|&d| JsValue::Number(d as f64))
+                        .map(|&d| JsValue::number(d as f64))
                         .collect();
                     let weekend_arr = interp.create_array(weekend_values);
                     interp
@@ -1029,9 +1020,7 @@ impl Interpreter {
                             PropertyDescriptor::data(weekend_arr, true, true, true),
                         );
                     let info_id = info_obj_id;
-                    return Completion::Normal(JsValue::Object(crate::types::JsObject {
-                        id: info_id,
-                    }));
+                    return Completion::Normal(JsValue::object(info_id));
                 }
                 Completion::Throw(interp.create_type_error(
                     "Intl.Locale.prototype.getWeekInfo requires an Intl.Locale object",
@@ -1046,7 +1035,7 @@ impl Interpreter {
         self.realm_mut().intl_locale_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+        let proto_val = JsValue::object(proto_id);
         let proto_clone_id = proto_id;
 
         let locale_ctor = self.create_function(JsFunction::constructor(
@@ -1059,21 +1048,18 @@ impl Interpreter {
                     );
                 }
 
-                let tag_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let tag_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
 
                 // Step 7: If Type(tag) is not String or Object, throw a TypeError
-                match &tag_arg {
-                    JsValue::String(_) | JsValue::Object(_) => {}
-                    _ => {
-                        return Completion::Throw(interp.create_type_error(
-                            "First argument to Intl.Locale must be a string or object",
-                        ));
-                    }
+                if !tag_arg.is_string() && !tag_arg.is_object() {
+                    return Completion::Throw(interp.create_type_error(
+                        "First argument to Intl.Locale must be a string or object",
+                    ));
                 }
 
                 // If tag_arg is an Intl.Locale, get its tag string
-                let tag_string = if let JsValue::Object(o) = &tag_arg {
-                    if let Some(obj) = interp.get_object_cell(o.id) {
+                let tag_string = if let Some(o) = tag_arg.as_object_id() {
+                    if let Some(obj) = interp.get_object_cell(o) {
                         let b = obj.borrow();
                         if let Some(IntlData::Locale { tag, .. }) = b.intl_data() {
                             tag.clone()
@@ -1123,20 +1109,19 @@ impl Interpreter {
                 }
 
                 // Apply options if provided
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 if !options_arg.is_undefined() {
                     let options = match interp.intl_coerce_options_to_object(&options_arg) {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
 
-                    if let JsValue::Object(o) = &options {
+                    if let Some(o) = options.as_object_id() {
                         // language override
-                        let lang_val = match interp.get_object_property(o.id, "language", &options)
-                        {
+                        let lang_val = match interp.get_object_property(o, "language", &options) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         if !lang_val.is_undefined() {
                             let lang_str = match interp.to_string_value(&lang_val) {
@@ -1154,11 +1139,10 @@ impl Interpreter {
                         }
 
                         // script override
-                        let script_val = match interp.get_object_property(o.id, "script", &options)
-                        {
+                        let script_val = match interp.get_object_property(o, "script", &options) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         if !script_val.is_undefined() {
                             let script_str = match interp.to_string_value(&script_val) {
@@ -1176,11 +1160,10 @@ impl Interpreter {
                         }
 
                         // region override
-                        let region_val = match interp.get_object_property(o.id, "region", &options)
-                        {
+                        let region_val = match interp.get_object_property(o, "region", &options) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         if !region_val.is_undefined() {
                             let region_str = match interp.to_string_value(&region_val) {
@@ -1198,12 +1181,12 @@ impl Interpreter {
                         }
 
                         // variants override
-                        let variants_val =
-                            match interp.get_object_property(o.id, "variants", &options) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
-                            };
+                        let variants_val = match interp.get_object_property(o, "variants", &options)
+                        {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::UNDEFINED,
+                        };
                         if !variants_val.is_undefined() {
                             let variants_str = match interp.to_string_value(&variants_val) {
                                 Ok(s) => s,
@@ -1249,10 +1232,10 @@ impl Interpreter {
                         }
 
                         // calendar (ca)
-                        let cal_val = match interp.get_object_property(o.id, "calendar", &options) {
+                        let cal_val = match interp.get_object_property(o, "calendar", &options) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         if !cal_val.is_undefined() {
                             let s = match interp.to_string_value(&cal_val) {
@@ -1269,11 +1252,10 @@ impl Interpreter {
                         }
 
                         // collation (co)
-                        let col_val = match interp.get_object_property(o.id, "collation", &options)
-                        {
+                        let col_val = match interp.get_object_property(o, "collation", &options) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         if !col_val.is_undefined() {
                             let s = match interp.to_string_value(&col_val) {
@@ -1290,12 +1272,12 @@ impl Interpreter {
                         }
 
                         // firstDayOfWeek (fw)
-                        let fw_val =
-                            match interp.get_object_property(o.id, "firstDayOfWeek", &options) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
-                            };
+                        let fw_val = match interp.get_object_property(o, "firstDayOfWeek", &options)
+                        {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::UNDEFINED,
+                        };
                         if !fw_val.is_undefined() {
                             let fw_string = match interp.to_string_value(&fw_val) {
                                 Ok(s) => s,
@@ -1320,10 +1302,10 @@ impl Interpreter {
                         }
 
                         // hourCycle (hc)
-                        let hc_val = match interp.get_object_property(o.id, "hourCycle", &options) {
+                        let hc_val = match interp.get_object_property(o, "hourCycle", &options) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         if !hc_val.is_undefined() {
                             let s = match interp.to_string_value(&hc_val) {
@@ -1340,10 +1322,10 @@ impl Interpreter {
                         }
 
                         // caseFirst (kf)
-                        let kf_val = match interp.get_object_property(o.id, "caseFirst", &options) {
+                        let kf_val = match interp.get_object_property(o, "caseFirst", &options) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
                         if !kf_val.is_undefined() {
                             let s = match interp.to_string_value(&kf_val) {
@@ -1360,12 +1342,11 @@ impl Interpreter {
                         }
 
                         // numeric (kn)
-                        let numeric_val =
-                            match interp.get_object_property(o.id, "numeric", &options) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
-                            };
+                        let numeric_val = match interp.get_object_property(o, "numeric", &options) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => JsValue::UNDEFINED,
+                        };
                         if !numeric_val.is_undefined() {
                             let b = interp.to_boolean_val(&numeric_val);
                             let kn_val = if b { "true" } else { "false" };
@@ -1374,10 +1355,10 @@ impl Interpreter {
 
                         // numberingSystem (nu)
                         let nu_val =
-                            match interp.get_object_property(o.id, "numberingSystem", &options) {
+                            match interp.get_object_property(o, "numberingSystem", &options) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             };
                         if !nu_val.is_undefined() {
                             let s = match interp.to_string_value(&nu_val) {
@@ -1428,7 +1409,7 @@ impl Interpreter {
                             numbering_system: None,
                             first_day_of_week: None,
                         }));
-                    Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                    Completion::Normal(JsValue::object(obj_id))
                 } else {
                     // Canonicalize again after applying options
                     let canonicalizer = LocaleCanonicalizer::new_extended();
@@ -1448,16 +1429,15 @@ impl Interpreter {
                         crate::interpreter::types::ObjectKind::Intl(Box::new(
                             build_intl_data_from_locale(&locale),
                         ));
-                    Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                    Completion::Normal(JsValue::object(obj_id))
                 }
             },
         ));
 
         // Set Locale.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &locale_ctor
-            && self.get_object_cell(ctor_ref.id).is_some()
+        if let Some(ctor_id) = locale_ctor.as_object_id()
+            && self.get_object_cell(ctor_id).is_some()
         {
-            let ctor_id = ctor_ref.id;
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
@@ -1470,8 +1450,8 @@ impl Interpreter {
                 "supportedLocalesOf".to_string(),
                 1,
                 |interp, _this, args| {
-                    let locales = args.first().unwrap_or(&JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let locales = args.first().unwrap_or(&JsValue::UNDEFINED);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let requested = match interp.intl_canonicalize_locale_list(locales) {
                         Ok(list) => list,
                         Err(e) => return Completion::Throw(e),

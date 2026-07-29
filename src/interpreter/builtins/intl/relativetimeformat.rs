@@ -439,8 +439,8 @@ fn extract_rtf_data(
     interp: &mut Interpreter,
     this: &JsValue,
 ) -> Result<(String, String, String, String), JsValue> {
-    if let JsValue::Object(o) = this
-        && let Some(cell) = interp.get_object_cell(o.id)
+    if let Some(o) = this.as_object_id()
+        && let Some(cell) = interp.get_object_cell(o)
     {
         let b = cell.borrow();
         if let Some(IntlData::RelativeTimeFormat {
@@ -487,7 +487,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
 
-                    let value_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let value_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let value = match interp.to_number_value(&value_arg) {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
@@ -499,7 +499,7 @@ impl Interpreter {
                         ));
                     }
 
-                    let unit_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let unit_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let unit_str = match interp.to_string_value(&unit_arg) {
                         Ok(s) => s,
                         Err(e) => return Completion::Throw(e),
@@ -517,7 +517,7 @@ impl Interpreter {
 
                     let result =
                         replace_number_in_rtf_output(&locale, &ns, &style, unit, &numeric, value);
-                    Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                    Completion::Normal(JsValue::from_str(&result))
                 },
             ));
         self.get_object_cell_expect(proto_id)
@@ -534,7 +534,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let value_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let value_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let value = match interp.to_number_value(&value_arg) {
                     Ok(v) => v,
                     Err(e) => return Completion::Throw(e),
@@ -546,7 +546,7 @@ impl Interpreter {
                     ));
                 }
 
-                let unit_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let unit_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                 let unit_str = match interp.to_string_value(&unit_arg) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
@@ -584,7 +584,7 @@ impl Interpreter {
                             .insert_property(
                                 "type".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&ptype)),
+                                    JsValue::from_str(&ptype),
                                     true,
                                     true,
                                     true,
@@ -596,7 +596,7 @@ impl Interpreter {
                             .insert_property(
                                 "value".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&pvalue)),
+                                    JsValue::from_str(&pvalue),
                                     true,
                                     true,
                                     true,
@@ -609,15 +609,14 @@ impl Interpreter {
                                 .insert_property(
                                     "unit".to_string(),
                                     PropertyDescriptor::data(
-                                        JsValue::String(JsString::from_str(&u)),
+                                        JsValue::from_str(&u),
                                         true,
                                         true,
                                         true,
                                     ),
                                 );
                         }
-                        let id = part_obj_id;
-                        JsValue::Object(crate::types::JsObject { id })
+                        JsValue::object(part_obj_id)
                     })
                     .collect();
 
@@ -648,13 +647,10 @@ impl Interpreter {
                 }
 
                 let props = vec![
-                    ("locale", JsValue::String(JsString::from_str(&locale))),
-                    ("style", JsValue::String(JsString::from_str(&style))),
-                    ("numeric", JsValue::String(JsString::from_str(&numeric))),
-                    (
-                        "numberingSystem",
-                        JsValue::String(JsString::from_str(&numbering_system)),
-                    ),
+                    ("locale", JsValue::from_str(&locale)),
+                    ("style", JsValue::from_str(&style)),
+                    ("numeric", JsValue::from_str(&numeric)),
+                    ("numberingSystem", JsValue::from_str(&numbering_system)),
                 ];
                 for (key, val) in props {
                     interp
@@ -666,7 +662,7 @@ impl Interpreter {
                         );
                 }
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
+                Completion::Normal(JsValue::object(result_id))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -676,7 +672,7 @@ impl Interpreter {
         self.realm_mut().intl_relative_time_format_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+        let proto_val = JsValue::object(proto_id);
         let proto_clone_id = proto_id;
 
         let rtf_ctor = self.create_function(JsFunction::constructor(
@@ -691,8 +687,8 @@ impl Interpreter {
                     );
                 }
 
-                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 let requested = match interp.intl_canonicalize_locale_list(&locales_arg) {
                     Ok(list) => list,
@@ -855,15 +851,14 @@ impl Interpreter {
                         },
                     ));
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                Completion::Normal(JsValue::object(obj_id))
             },
         ));
 
         // Set RelativeTimeFormat.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &rtf_ctor
-            && self.get_object_cell(ctor_ref.id).is_some()
+        if let Some(ctor_id) = rtf_ctor.as_object_id()
+            && self.get_object_cell(ctor_id).is_some()
         {
-            let ctor_id = ctor_ref.id;
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
@@ -876,8 +871,8 @@ impl Interpreter {
                 "supportedLocalesOf".to_string(),
                 1,
                 |interp, _this, args| {
-                    let locales = args.first().unwrap_or(&JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let locales = args.first().unwrap_or(&JsValue::UNDEFINED);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let requested = match interp.intl_canonicalize_locale_list(locales) {
                         Ok(list) => list,
                         Err(e) => return Completion::Throw(e),

@@ -183,8 +183,8 @@ impl Interpreter {
             "select".to_string(),
             1,
             |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
+                if let Some(o) = this.as_object_id()
+                    && let Some(obj) = interp.get_object_cell(o)
                 {
                     let data = {
                         let b = obj.borrow();
@@ -198,16 +198,14 @@ impl Interpreter {
                         ..
                     }) = data
                     {
-                        let n_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                        let n_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                         let n = match interp.to_number_value(&n_val) {
                             Ok(v) => v,
                             Err(e) => return Completion::Throw(e),
                         };
 
                         if n.is_nan() {
-                            return Completion::Normal(JsValue::String(JsString::from_str(
-                                "other",
-                            )));
+                            return Completion::Normal(JsValue::from_str("other"));
                         }
 
                         let base = base_locale(&locale);
@@ -224,9 +222,7 @@ impl Interpreter {
                         let rules = match IcuPluralRules::try_new(prefs, opts) {
                             Ok(r) => r,
                             Err(_) => {
-                                return Completion::Normal(JsValue::String(JsString::from_str(
-                                    "other",
-                                )));
+                                return Completion::Normal(JsValue::from_str("other"));
                             }
                         };
 
@@ -236,9 +232,7 @@ impl Interpreter {
                             compact_display.as_deref(),
                         );
                         let cat = rules.category_for(operands);
-                        return Completion::Normal(JsValue::String(JsString::from_str(
-                            plural_category_to_str(cat),
-                        )));
+                        return Completion::Normal(JsValue::from_str(plural_category_to_str(cat)));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -255,8 +249,8 @@ impl Interpreter {
             "selectRange".to_string(),
             2,
             |interp, this, args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
+                if let Some(o) = this.as_object_id()
+                    && let Some(obj) = interp.get_object_cell(o)
                 {
                     let data = {
                         let b = obj.borrow();
@@ -270,15 +264,15 @@ impl Interpreter {
                         ..
                     }) = data
                     {
-                        let start_val = args.first().cloned().unwrap_or(JsValue::Undefined);
-                        let end_val = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                        let start_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                        let end_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
-                        if matches!(start_val, JsValue::Undefined) {
+                        if start_val.is_undefined() {
                             return Completion::Throw(
                                 interp.create_type_error("start is undefined"),
                             );
                         }
-                        if matches!(end_val, JsValue::Undefined) {
+                        if end_val.is_undefined() {
                             return Completion::Throw(interp.create_type_error("end is undefined"));
                         }
 
@@ -311,9 +305,7 @@ impl Interpreter {
                         let range_rules = match PluralRulesWithRanges::try_new(prefs, opts) {
                             Ok(r) => r,
                             Err(_) => {
-                                return Completion::Normal(JsValue::String(JsString::from_str(
-                                    "other",
-                                )));
+                                return Completion::Normal(JsValue::from_str("other"));
                             }
                         };
 
@@ -328,9 +320,7 @@ impl Interpreter {
                             compact_display.as_deref(),
                         );
                         let cat = range_rules.category_for_range(start_ops, end_ops);
-                        return Completion::Normal(JsValue::String(JsString::from_str(
-                            plural_category_to_str(cat),
-                        )));
+                        return Completion::Normal(JsValue::from_str(plural_category_to_str(cat)));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -347,8 +337,8 @@ impl Interpreter {
             "resolvedOptions".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object_cell(o.id)
+                if let Some(o) = this.as_object_id()
+                    && let Some(obj) = interp.get_object_cell(o)
                 {
                     let data = {
                         let b = obj.borrow();
@@ -389,7 +379,7 @@ impl Interpreter {
                             .insert_property(
                                 "locale".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&locale)),
+                                    JsValue::from_str(&locale),
                                     true,
                                     true,
                                     true,
@@ -401,7 +391,7 @@ impl Interpreter {
                             .insert_property(
                                 "type".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&plural_type)),
+                                    JsValue::from_str(&plural_type),
                                     true,
                                     true,
                                     true,
@@ -413,7 +403,7 @@ impl Interpreter {
                             .insert_property(
                                 "notation".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&notation)),
+                                    JsValue::from_str(&notation),
                                     true,
                                     true,
                                     true,
@@ -427,7 +417,7 @@ impl Interpreter {
                                 .insert_property(
                                     "compactDisplay".to_string(),
                                     PropertyDescriptor::data(
-                                        JsValue::String(JsString::from_str(cd)),
+                                        JsValue::from_str(cd),
                                         true,
                                         true,
                                         true,
@@ -440,7 +430,7 @@ impl Interpreter {
                             .insert_property(
                                 "minimumIntegerDigits".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::Number(minimum_integer_digits as f64),
+                                    JsValue::number(minimum_integer_digits as f64),
                                     true,
                                     true,
                                     true,
@@ -455,7 +445,7 @@ impl Interpreter {
                                 .insert_property(
                                     "minimumFractionDigits".to_string(),
                                     PropertyDescriptor::data(
-                                        JsValue::Number(minimum_fraction_digits as f64),
+                                        JsValue::number(minimum_fraction_digits as f64),
                                         true,
                                         true,
                                         true,
@@ -467,7 +457,7 @@ impl Interpreter {
                                 .insert_property(
                                     "maximumFractionDigits".to_string(),
                                     PropertyDescriptor::data(
-                                        JsValue::Number(maximum_fraction_digits as f64),
+                                        JsValue::number(maximum_fraction_digits as f64),
                                         true,
                                         true,
                                         true,
@@ -482,7 +472,7 @@ impl Interpreter {
                                     .insert_property(
                                         "minimumFractionDigits".to_string(),
                                         PropertyDescriptor::data(
-                                            JsValue::Number(minimum_fraction_digits as f64),
+                                            JsValue::number(minimum_fraction_digits as f64),
                                             true,
                                             true,
                                             true,
@@ -494,7 +484,7 @@ impl Interpreter {
                                     .insert_property(
                                         "maximumFractionDigits".to_string(),
                                         PropertyDescriptor::data(
-                                            JsValue::Number(maximum_fraction_digits as f64),
+                                            JsValue::number(maximum_fraction_digits as f64),
                                             true,
                                             true,
                                             true,
@@ -510,7 +500,7 @@ impl Interpreter {
                                 .insert_property(
                                     "minimumSignificantDigits".to_string(),
                                     PropertyDescriptor::data(
-                                        JsValue::Number(min_sd as f64),
+                                        JsValue::number(min_sd as f64),
                                         true,
                                         true,
                                         true,
@@ -524,7 +514,7 @@ impl Interpreter {
                                 .insert_property(
                                     "maximumSignificantDigits".to_string(),
                                     PropertyDescriptor::data(
-                                        JsValue::Number(max_sd as f64),
+                                        JsValue::number(max_sd as f64),
                                         true,
                                         true,
                                         true,
@@ -534,10 +524,8 @@ impl Interpreter {
 
                         // pluralCategories
                         let cats = get_plural_categories_sorted(&locale, &plural_type);
-                        let cat_values: Vec<JsValue> = cats
-                            .iter()
-                            .map(|c| JsValue::String(JsString::from_str(c)))
-                            .collect();
+                        let cat_values: Vec<JsValue> =
+                            cats.iter().map(|c| JsValue::from_str(c)).collect();
                         let cat_array = interp.create_array(cat_values);
                         interp
                             .get_object_cell_expect(result_id)
@@ -553,7 +541,7 @@ impl Interpreter {
                             .insert_property(
                                 "roundingIncrement".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::Number(rounding_increment as f64),
+                                    JsValue::number(rounding_increment as f64),
                                     true,
                                     true,
                                     true,
@@ -565,7 +553,7 @@ impl Interpreter {
                             .insert_property(
                                 "roundingMode".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&rounding_mode)),
+                                    JsValue::from_str(&rounding_mode),
                                     true,
                                     true,
                                     true,
@@ -577,7 +565,7 @@ impl Interpreter {
                             .insert_property(
                                 "roundingPriority".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&rounding_priority)),
+                                    JsValue::from_str(&rounding_priority),
                                     true,
                                     true,
                                     true,
@@ -589,16 +577,14 @@ impl Interpreter {
                             .insert_property(
                                 "trailingZeroDisplay".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&trailing_zero_display)),
+                                    JsValue::from_str(&trailing_zero_display),
                                     true,
                                     true,
                                     true,
                                 ),
                             );
 
-                        return Completion::Normal(JsValue::Object(crate::types::JsObject {
-                            id: result_id,
-                        }));
+                        return Completion::Normal(JsValue::object(result_id));
                     }
                 }
                 Completion::Throw(interp.create_type_error(
@@ -613,7 +599,7 @@ impl Interpreter {
         self.realm_mut().intl_plural_rules_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+        let proto_val = JsValue::object(proto_id);
         let proto_clone_id = proto_id;
 
         let ctor = self.create_function(JsFunction::constructor(
@@ -626,8 +612,8 @@ impl Interpreter {
                     ));
                 }
 
-                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 let requested = match interp.intl_canonicalize_locale_list(&locales_arg) {
                     Ok(list) => list,
@@ -704,10 +690,10 @@ impl Interpreter {
                 };
 
                 // Read raw digit options to detect presence
-                let raw_min_fd = if let JsValue::Object(o) = &options {
-                    match interp.get_object_property(o.id, "minimumFractionDigits", &options) {
+                let raw_min_fd = if let Some(o) = options.as_object_id() {
+                    match interp.get_object_property(o, "minimumFractionDigits", &options) {
                         Completion::Normal(v) => {
-                            if matches!(v, JsValue::Undefined) {
+                            if v.is_undefined() {
                                 None
                             } else {
                                 Some(v)
@@ -720,10 +706,10 @@ impl Interpreter {
                     None
                 };
 
-                let raw_max_fd = if let JsValue::Object(o) = &options {
-                    match interp.get_object_property(o.id, "maximumFractionDigits", &options) {
+                let raw_max_fd = if let Some(o) = options.as_object_id() {
+                    match interp.get_object_property(o, "maximumFractionDigits", &options) {
                         Completion::Normal(v) => {
-                            if matches!(v, JsValue::Undefined) {
+                            if v.is_undefined() {
                                 None
                             } else {
                                 Some(v)
@@ -736,12 +722,10 @@ impl Interpreter {
                     None
                 };
 
-                let raw_min_sd = if let JsValue::Object(o) = &options {
-                    match interp
-                        .get_object_property(o.id, "minimumSignificantDigits", &options)
-                    {
+                let raw_min_sd = if let Some(o) = options.as_object_id() {
+                    match interp.get_object_property(o, "minimumSignificantDigits", &options) {
                         Completion::Normal(v) => {
-                            if matches!(v, JsValue::Undefined) {
+                            if v.is_undefined() {
                                 None
                             } else {
                                 Some(v)
@@ -754,12 +738,10 @@ impl Interpreter {
                     None
                 };
 
-                let raw_max_sd = if let JsValue::Object(o) = &options {
-                    match interp
-                        .get_object_property(o.id, "maximumSignificantDigits", &options)
-                    {
+                let raw_max_sd = if let Some(o) = options.as_object_id() {
+                    match interp.get_object_property(o, "maximumSignificantDigits", &options) {
                         Completion::Normal(v) => {
-                            if matches!(v, JsValue::Undefined) {
+                            if v.is_undefined() {
                                 None
                             } else {
                                 Some(v)
@@ -776,10 +758,10 @@ impl Interpreter {
                 let has_fd = raw_min_fd.is_some() || raw_max_fd.is_some();
 
                 // roundingIncrement
-                let raw_rounding_increment = if let JsValue::Object(o) = &options {
-                    match interp.get_object_property(o.id, "roundingIncrement", &options) {
+                let raw_rounding_increment = if let Some(o) = options.as_object_id() {
+                    match interp.get_object_property(o, "roundingIncrement", &options) {
                         Completion::Normal(v) => {
-                            if matches!(v, JsValue::Undefined) {
+                            if v.is_undefined() {
                                 None
                             } else {
                                 Some(v)
@@ -1072,15 +1054,14 @@ impl Interpreter {
                     trailing_zero_display,
                 }));
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                Completion::Normal(JsValue::object(obj_id))
             },
         ));
 
         // Set PluralRules.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &ctor
-            && self.get_object_cell(ctor_ref.id).is_some()
+        if let Some(ctor_id) = ctor.as_object_id()
+            && self.get_object_cell(ctor_id).is_some()
         {
-            let ctor_id = ctor_ref.id;
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
@@ -1093,8 +1074,8 @@ impl Interpreter {
                 "supportedLocalesOf".to_string(),
                 1,
                 |interp, _this, args| {
-                    let locales = args.first().unwrap_or(&JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let locales = args.first().unwrap_or(&JsValue::UNDEFINED);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let requested = match interp.intl_canonicalize_locale_list(locales) {
                         Ok(list) => list,
                         Err(e) => return Completion::Throw(e),

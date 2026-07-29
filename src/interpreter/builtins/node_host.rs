@@ -54,11 +54,11 @@ impl Interpreter {
             "__host_write".to_string(),
             2,
             |interp, _this, args| {
-                let fd = match interp.to_number_value(args.first().unwrap_or(&JsValue::Undefined)) {
+                let fd = match interp.to_number_value(args.first().unwrap_or(&JsValue::UNDEFINED)) {
                     Ok(n) => n,
                     Err(e) => return Completion::Throw(e),
                 };
-                let s = match interp.to_string_value(args.get(1).unwrap_or(&JsValue::Undefined)) {
+                let s = match interp.to_string_value(args.get(1).unwrap_or(&JsValue::UNDEFINED)) {
                     Ok(s) => s,
                     Err(e) => return Completion::Throw(e),
                 };
@@ -73,7 +73,7 @@ impl Interpreter {
                     let _ = out.write_all(bytes);
                     let _ = out.flush();
                 }
-                Completion::Normal(JsValue::Number(written as f64))
+                Completion::Normal(JsValue::number(written as f64))
             },
         ));
         self.install_host_global("__host_write", write_fn);
@@ -94,7 +94,8 @@ impl Interpreter {
             1,
             |interp, _this, args| {
                 let code = match args.first() {
-                    None | Some(JsValue::Undefined) => 0,
+                    None => 0,
+                    Some(v) if v.is_undefined() => 0,
                     Some(v) => match interp.to_number_value(v) {
                         Ok(n) if n.is_finite() => n.trunc() as i64 as i32,
                         Ok(_) => 0,
@@ -119,7 +120,7 @@ impl Interpreter {
                     .host_clock_start
                     .map(|start| start.elapsed().as_nanos())
                     .unwrap_or(0);
-                Completion::Normal(JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(ns))))
+                Completion::Normal(JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(ns))))
             },
         ));
         self.install_host_global("__host_hrtime", hrtime_fn);
@@ -134,7 +135,7 @@ impl Interpreter {
             1,
             |interp, _this, args| {
                 let n_f = match interp
-                    .to_integer_or_infinity_value(args.first().unwrap_or(&JsValue::Undefined))
+                    .to_integer_or_infinity_value(args.first().unwrap_or(&JsValue::UNDEFINED))
                 {
                     Ok(n) => n,
                     Err(e) => return Completion::Throw(e),

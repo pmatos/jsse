@@ -5006,9 +5006,9 @@ fn format_to_parts_with_options_raw(ms: f64, opts: &DtfOptions) -> Vec<(String, 
 /// %Intl%.[[FallbackSymbol]] via the ordinary [[Get]] (so Proxy traps fire) and
 /// require the result to carry the slot; otherwise throw a TypeError.
 fn unwrap_dtf(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, JsValue> {
-    if let JsValue::Object(o) = this {
+    if let Some(o) = this.as_object_id() {
         let has_slot = interp
-            .get_object_cell(o.id)
+            .get_object_cell(o)
             .map(|c| {
                 matches!(
                     c.borrow().intl_data(),
@@ -5023,25 +5023,25 @@ fn unwrap_dtf(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, JsVal
         // ? OrdinaryHasInstance(%DateTimeFormat%, this) — propagate abrupt completions.
         let is_instance = match &ctor {
             Some(c) => match interp.ordinary_has_instance(c, this) {
-                Completion::Normal(JsValue::Boolean(b)) => b,
+                Completion::Normal(v) => v.as_boolean().unwrap_or(false),
                 Completion::Throw(e) => return Err(e),
                 _ => false,
             },
             None => false,
         };
         if is_instance {
-            let key = match interp.intl_fallback_symbol() {
-                JsValue::Symbol(s) => s.to_property_key(),
-                _ => unreachable!(),
+            let key = match interp.intl_fallback_symbol().as_symbol() {
+                Some(s) => s.to_property_key(),
+                None => unreachable!(),
             };
-            let fb = match interp.get_object_property(o.id, &key, this) {
+            let fb = match interp.get_object_property(o, &key, this) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
-            if let JsValue::Object(fo) = &fb {
+            if let Some(fo) = fb.as_object_id() {
                 let fb_has_slot = interp
-                    .get_object_cell(fo.id)
+                    .get_object_cell(fo)
                     .map(|c| {
                         matches!(
                             c.borrow().intl_data(),
@@ -5062,8 +5062,8 @@ fn unwrap_dtf(interp: &mut Interpreter, this: &JsValue) -> Result<JsValue, JsVal
 fn extract_dtf_data(interp: &mut Interpreter, this: &JsValue) -> Result<DtfOptions, JsValue> {
     let recv = unwrap_dtf(interp, this)?;
     let this = &recv;
-    if let JsValue::Object(o) = this
-        && let Some(obj) = interp.get_object_cell(o.id)
+    if let Some(o) = this.as_object_id()
+        && let Some(obj) = interp.get_object_cell(o)
     {
         let b = obj.borrow();
         if let Some(IntlData::DateTimeFormat {
@@ -5133,12 +5133,12 @@ fn time_clip(t: f64) -> f64 {
 }
 
 fn resolve_date_value(interp: &mut Interpreter, date_arg: &JsValue) -> Result<f64, JsValue> {
-    if matches!(date_arg, JsValue::Undefined) {
+    if date_arg.is_undefined() {
         return Ok(now_ms().floor());
     }
     // Check if it's a Temporal object
-    if let JsValue::Object(o) = date_arg
-        && let Some(obj) = interp.get_object_cell(o.id)
+    if let Some(o) = date_arg.as_object_id()
+        && let Some(obj) = interp.get_object_cell(o)
     {
         let temporal = obj.borrow().temporal_data().cloned();
         if let Some(td) = temporal {
@@ -5165,8 +5165,8 @@ enum TemporalType {
 }
 
 fn detect_temporal_type(interp: &Interpreter, val: &JsValue) -> Option<TemporalType> {
-    if let JsValue::Object(o) = val
-        && let Some(obj) = interp.get_object_cell(o.id)
+    if let Some(o) = val.as_object_id()
+        && let Some(obj) = interp.get_object_cell(o)
     {
         let td = obj.borrow().temporal_data().cloned();
         return match td {
@@ -5184,8 +5184,8 @@ fn detect_temporal_type(interp: &Interpreter, val: &JsValue) -> Option<TemporalT
 }
 
 fn detect_temporal_calendar(interp: &Interpreter, val: &JsValue) -> Option<String> {
-    if let JsValue::Object(o) = val
-        && let Some(obj) = interp.get_object_cell(o.id)
+    if let Some(o) = val.as_object_id()
+        && let Some(obj) = interp.get_object_cell(o)
     {
         let td = obj.borrow().temporal_data().cloned();
         return match td {
@@ -5557,7 +5557,7 @@ fn temporal_to_epoch_ms(td: &TemporalData) -> Result<f64, JsValue> {
             Ok(ms)
         }
         TemporalData::Duration { .. } => {
-            Err(JsValue::Undefined) // Duration is not a date type
+            Err(JsValue::UNDEFINED) // Duration is not a date type
         }
     }
 }
@@ -5626,14 +5626,14 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
                 let this = &recv;
-                if let JsValue::Object(o) = this {
+                if let Some(o) = this.as_object_id() {
                     enum Probe {
                         NotDtf,
                         Cached(JsValue),
                         Uncached,
                     }
                     let probe = interp
-                        .get_object_cell(o.id)
+                        .get_object_cell(o)
                         .map(|cell| {
                             let b = cell.borrow();
                             if !matches!(b.intl_data(), Some(IntlData::DateTimeFormat { .. })) {
@@ -5659,7 +5659,7 @@ impl Interpreter {
                         Probe::Uncached => {}
                     }
 
-                    let opts_snapshot = interp.get_object_cell(o.id).and_then(|cell| {
+                    let opts_snapshot = interp.get_object_cell(o).and_then(|cell| {
                         let b = cell.borrow();
                         if let Some(IntlData::DateTimeFormat {
                             locale,
@@ -5725,7 +5725,7 @@ impl Interpreter {
                         1,
                         move |interp2, _this2, args2| {
                             let date_arg =
-                                args2.first().cloned().unwrap_or(JsValue::Undefined);
+                                args2.first().cloned().unwrap_or(JsValue::UNDEFINED);
                             let temporal_type = detect_temporal_type(interp2, &date_arg);
                             if matches!(temporal_type, Some(TemporalType::ZonedDateTime)) {
                                 return Completion::Throw(interp2.create_type_error(
@@ -5753,11 +5753,11 @@ impl Interpreter {
                                 ms
                             };
                             let result = format_with_options(ms, &effective_opts);
-                            Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                            Completion::Normal(JsValue::from_str(&result))
                         },
                     ));
 
-                    if let Some(obj) = interp.get_object_cell(o.id) {
+                    if let Some(obj) = interp.get_object_cell(o) {
                         obj.borrow_mut().properties.insert(
                             crate::interpreter::key_intern::intern_key("[[BoundFormat]]"),
                             PropertyDescriptor::data(format_fn.clone(), false, false, false),
@@ -5788,7 +5788,7 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let date_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let date_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let temporal_type = detect_temporal_type(interp, &date_arg);
                 if matches!(temporal_type, Some(TemporalType::ZonedDateTime)) {
                     return Completion::Throw(interp.create_type_error(
@@ -5835,7 +5835,7 @@ impl Interpreter {
                             .insert_property(
                                 "type".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&ptype)),
+                                    JsValue::from_str(&ptype),
                                     true,
                                     true,
                                     true,
@@ -5847,14 +5847,14 @@ impl Interpreter {
                             .insert_property(
                                 "value".to_string(),
                                 PropertyDescriptor::data(
-                                    JsValue::String(JsString::from_str(&value)),
+                                    JsValue::from_str(&value),
                                     true,
                                     true,
                                     true,
                                 ),
                             );
                         let id = part_obj_id;
-                        JsValue::Object(crate::types::JsObject { id })
+                        JsValue::object(id)
                     })
                     .collect();
 
@@ -5875,11 +5875,10 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let start_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let end_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let start_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let end_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
-                if matches!(start_arg, JsValue::Undefined) || matches!(end_arg, JsValue::Undefined)
-                {
+                if start_arg.is_undefined() || end_arg.is_undefined() {
                     return Completion::Throw(
                         interp.create_type_error("startDate and endDate are required"),
                     );
@@ -5967,7 +5966,7 @@ impl Interpreter {
                     end_ms
                 };
                 let result = format_range_with_options(start_ms, end_ms, &effective_opts);
-                Completion::Normal(JsValue::String(JsString::from_str(&result)))
+                Completion::Normal(JsValue::from_str(&result))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -5984,10 +5983,10 @@ impl Interpreter {
                     Err(e) => return Completion::Throw(e),
                 };
 
-                let start_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let end_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let start_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let end_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
-                if matches!(start_arg, JsValue::Undefined) || matches!(end_arg, JsValue::Undefined) {
+                if start_arg.is_undefined() || end_arg.is_undefined() {
                     return Completion::Throw(
                         interp.create_type_error("startDate and endDate are required"),
                     );
@@ -6078,7 +6077,7 @@ impl Interpreter {
                         interp.get_object_cell_expect(part_obj_id).borrow_mut().insert_property(
                             "type".to_string(),
                             PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&ptype)),
+                                JsValue::from_str(&ptype),
                                 true,
                                 true,
                                 true,
@@ -6087,7 +6086,7 @@ impl Interpreter {
                         interp.get_object_cell_expect(part_obj_id).borrow_mut().insert_property(
                             "value".to_string(),
                             PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&value)),
+                                JsValue::from_str(&value),
                                 true,
                                 true,
                                 true,
@@ -6096,14 +6095,14 @@ impl Interpreter {
                         interp.get_object_cell_expect(part_obj_id).borrow_mut().insert_property(
                             "source".to_string(),
                             PropertyDescriptor::data(
-                                JsValue::String(JsString::from_str(&source)),
+                                JsValue::from_str(&source),
                                 true,
                                 true,
                                 true,
                             ),
                         );
                         let id = part_obj_id;
-                        JsValue::Object(crate::types::JsObject { id })
+                        JsValue::object(id)
                     })
                     .collect();
 
@@ -6134,68 +6133,59 @@ impl Interpreter {
 
                 // Properties in spec order
                 let mut props: Vec<(&str, JsValue)> = vec![
-                    ("locale", JsValue::String(JsString::from_str(&opts.locale))),
-                    (
-                        "calendar",
-                        JsValue::String(JsString::from_str(&opts.calendar)),
-                    ),
-                    (
-                        "numberingSystem",
-                        JsValue::String(JsString::from_str(&opts.numbering_system)),
-                    ),
-                    (
-                        "timeZone",
-                        JsValue::String(JsString::from_str(&opts.time_zone)),
-                    ),
+                    ("locale", JsValue::from_str(&opts.locale)),
+                    ("calendar", JsValue::from_str(&opts.calendar)),
+                    ("numberingSystem", JsValue::from_str(&opts.numbering_system)),
+                    ("timeZone", JsValue::from_str(&opts.time_zone)),
                 ];
 
                 // hourCycle and hour12 only present if hour is used
                 let has_hour = opts.hour.is_some() || opts.time_style.is_some();
                 if has_hour {
                     let hc = resolve_hour_cycle(&opts);
-                    props.push(("hourCycle", JsValue::String(JsString::from_str(hc))));
+                    props.push(("hourCycle", JsValue::from_str(hc)));
                     let h12 = hc == "h12" || hc == "h11";
-                    props.push(("hour12", JsValue::Boolean(h12)));
+                    props.push(("hour12", JsValue::boolean(h12)));
                 }
 
                 if let Some(ref v) = opts.weekday {
-                    props.push(("weekday", JsValue::String(JsString::from_str(v))));
+                    props.push(("weekday", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.era {
-                    props.push(("era", JsValue::String(JsString::from_str(v))));
+                    props.push(("era", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.year {
-                    props.push(("year", JsValue::String(JsString::from_str(v))));
+                    props.push(("year", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.month {
-                    props.push(("month", JsValue::String(JsString::from_str(v))));
+                    props.push(("month", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.day {
-                    props.push(("day", JsValue::String(JsString::from_str(v))));
+                    props.push(("day", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.day_period {
-                    props.push(("dayPeriod", JsValue::String(JsString::from_str(v))));
+                    props.push(("dayPeriod", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.hour {
-                    props.push(("hour", JsValue::String(JsString::from_str(v))));
+                    props.push(("hour", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.minute {
-                    props.push(("minute", JsValue::String(JsString::from_str(v))));
+                    props.push(("minute", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.second {
-                    props.push(("second", JsValue::String(JsString::from_str(v))));
+                    props.push(("second", JsValue::from_str(v)));
                 }
                 if let Some(v) = opts.fractional_second_digits {
-                    props.push(("fractionalSecondDigits", JsValue::Number(v as f64)));
+                    props.push(("fractionalSecondDigits", JsValue::number(v as f64)));
                 }
                 if let Some(ref v) = opts.time_zone_name {
-                    props.push(("timeZoneName", JsValue::String(JsString::from_str(v))));
+                    props.push(("timeZoneName", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.date_style {
-                    props.push(("dateStyle", JsValue::String(JsString::from_str(v))));
+                    props.push(("dateStyle", JsValue::from_str(v)));
                 }
                 if let Some(ref v) = opts.time_style {
-                    props.push(("timeStyle", JsValue::String(JsString::from_str(v))));
+                    props.push(("timeStyle", JsValue::from_str(v)));
                 }
 
                 for (key, val) in props {
@@ -6208,7 +6198,7 @@ impl Interpreter {
                         );
                 }
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: result_id }))
+                Completion::Normal(JsValue::object(result_id))
             },
         ));
         self.get_object_cell_expect(proto_id)
@@ -6218,15 +6208,15 @@ impl Interpreter {
         self.realm_mut().intl_date_time_format_prototype = Some(proto_id);
 
         // --- Constructor ---
-        let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
+        let proto_val = JsValue::object(proto_id);
         let proto_clone_id = proto_id;
 
         let dtf_ctor = self.create_function(JsFunction::constructor(
             "DateTimeFormat".to_string(),
             0,
             move |interp, _this, args| {
-                let locales_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
-                let options_arg = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                let locales_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                let options_arg = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
 
                 let requested = match interp.intl_canonicalize_locale_list(&locales_arg) {
                     Ok(list) => list,
@@ -6280,16 +6270,16 @@ impl Interpreter {
                 }
 
                 // Step 12: hour12
-                let hour12_raw = if let JsValue::Object(o) = &options {
-                    match interp.get_object_property(o.id, "hour12", &options) {
+                let hour12_raw = if let Some(o) = options.as_object_id() {
+                    match interp.get_object_property(o, "hour12", &options) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     }
                 } else {
-                    JsValue::Undefined
+                    JsValue::UNDEFINED
                 };
-                let hour12 = if matches!(hour12_raw, JsValue::Undefined) {
+                let hour12 = if hour12_raw.is_undefined() {
                     None
                 } else {
                     Some(interp.to_boolean_val(&hour12_raw))
@@ -6638,71 +6628,68 @@ impl Interpreter {
                 // freshly-initialized formatter under %Intl%.[[FallbackSymbol]]
                 // and return the receiver instead of a fresh object.
                 if interp.new_target.is_none()
-                    && let JsValue::Object(recv) = _this
+                    && let Some(recv_id) = _this.as_object_id()
+                    && let Some(ctor) = interp.realm().intl_date_time_format_ctor.clone()
                 {
-                    let recv_id = recv.id;
-                    if let Some(ctor) = interp.realm().intl_date_time_format_ctor.clone() {
-                        // ? OrdinaryHasInstance(%DateTimeFormat%, this) — an abrupt
-                        // completion (e.g. revoked Proxy / throwing getPrototypeOf
-                        // trap) must propagate, not fall through to a fresh object.
-                        let is_instance = match interp.ordinary_has_instance(&ctor, _this) {
-                            Completion::Normal(JsValue::Boolean(b)) => b,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            _ => false,
+                    // ? OrdinaryHasInstance(%DateTimeFormat%, this) — an abrupt
+                    // completion (e.g. revoked Proxy / throwing getPrototypeOf
+                    // trap) must propagate, not fall through to a fresh object.
+                    let is_instance = match interp.ordinary_has_instance(&ctor, _this) {
+                        Completion::Normal(v) => v.as_boolean().unwrap_or(false),
+                        Completion::Throw(e) => return Completion::Throw(e),
+                        _ => false,
+                    };
+                    if is_instance {
+                        let key = match interp.intl_fallback_symbol().as_symbol() {
+                            Some(s) => s.to_property_key(),
+                            None => unreachable!(),
                         };
-                        if is_instance {
-                            let key = match interp.intl_fallback_symbol() {
-                                JsValue::Symbol(s) => s.to_property_key(),
-                                _ => unreachable!(),
-                            };
-                            let desc = crate::interpreter::types::PropertyDescriptor::data(
-                                JsValue::Object(crate::types::JsObject { id: obj_id }),
-                                false,
-                                false,
-                                false,
-                            );
-                            // ? DefinePropertyOrThrow(this, [[FallbackSymbol]], desc):
-                            // route through the receiver's [[DefineOwnProperty]] so a
-                            // Proxy's defineProperty trap fires and a later [[Get]] in
-                            // Unwrap can observe the chained formatter.
-                            let is_proxy = interp
-                                .get_object_cell(recv_id)
-                                .map(|c| {
-                                    let b = c.borrow();
-                                    b.is_proxy() || b.is_proxy_revoked()
-                                })
-                                .unwrap_or(false);
-                            let defined = if is_proxy {
-                                let desc_val = interp.from_property_descriptor(&desc);
-                                match interp.proxy_define_own_property(recv_id, key, &desc_val) {
-                                    Ok(b) => b,
-                                    Err(e) => return Completion::Throw(e),
-                                }
-                            } else {
-                                interp
-                                    .get_object_cell_expect(recv_id)
-                                    .borrow_mut()
-                                    .define_own_property(key, desc)
-                            };
-                            if !defined {
-                                return Completion::Throw(interp.create_type_error(
-                                    "Cannot define [[FallbackSymbol]] property on receiver",
-                                ));
+                        let desc = crate::interpreter::types::PropertyDescriptor::data(
+                            JsValue::object(obj_id),
+                            false,
+                            false,
+                            false,
+                        );
+                        // ? DefinePropertyOrThrow(this, [[FallbackSymbol]], desc):
+                        // route through the receiver's [[DefineOwnProperty]] so a
+                        // Proxy's defineProperty trap fires and a later [[Get]] in
+                        // Unwrap can observe the chained formatter.
+                        let is_proxy = interp
+                            .get_object_cell(recv_id)
+                            .map(|c| {
+                                let b = c.borrow();
+                                b.is_proxy() || b.is_proxy_revoked()
+                            })
+                            .unwrap_or(false);
+                        let defined = if is_proxy {
+                            let desc_val = interp.from_property_descriptor(&desc);
+                            match interp.proxy_define_own_property(recv_id, key, &desc_val) {
+                                Ok(b) => b,
+                                Err(e) => return Completion::Throw(e),
                             }
-                            return Completion::Normal(_this.clone());
+                        } else {
+                            interp
+                                .get_object_cell_expect(recv_id)
+                                .borrow_mut()
+                                .define_own_property(key, desc)
+                        };
+                        if !defined {
+                            return Completion::Throw(interp.create_type_error(
+                                "Cannot define [[FallbackSymbol]] property on receiver",
+                            ));
                         }
+                        return Completion::Normal(_this.clone());
                     }
                 }
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: obj_id }))
+                Completion::Normal(JsValue::object(obj_id))
             },
         ));
 
         // Set DateTimeFormat.prototype on constructor
-        if let JsValue::Object(ctor_ref) = &dtf_ctor
-            && self.get_object_cell(ctor_ref.id).is_some()
+        if let Some(ctor_id) = dtf_ctor.as_object_id()
+            && self.get_object_cell(ctor_id).is_some()
         {
-            let ctor_id = ctor_ref.id;
             self.get_object_cell_expect(ctor_id)
                 .borrow_mut()
                 .insert_property(
@@ -6715,8 +6702,8 @@ impl Interpreter {
                 "supportedLocalesOf".to_string(),
                 1,
                 |interp, _this, args| {
-                    let locales = args.first().unwrap_or(&JsValue::Undefined);
-                    let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
+                    let locales = args.first().unwrap_or(&JsValue::UNDEFINED);
+                    let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let requested = match interp.intl_canonicalize_locale_list(locales) {
                         Ok(list) => list,
                         Err(e) => return Completion::Throw(e),
