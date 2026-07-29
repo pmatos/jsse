@@ -118,8 +118,8 @@ Issues live on GitHub at `pmatos/jsse` and are managed via the `gh` CLI; externa
 
 ### Triage labels
 
-Canonical label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+Canonical triage roles map to the tracker labels `needs-triage`, `needs-info`, `agent-ready`, `human-ready`, and `wontfix`. See `docs/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context layout — one `CONTEXT.md` + `docs/adr/` at the repo root (created lazily by `/grill-with-docs`). See `docs/agents/domain.md`.
+Single-context layout — one `CONTEXT.md` + `docs/adr/` at the repo root (created lazily by `/domain-modeling`). See `docs/agents/domain.md`.
