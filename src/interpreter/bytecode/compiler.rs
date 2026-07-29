@@ -1,8 +1,8 @@
 use super::chunk::{Chunk, Constant};
 use super::op::Op;
 use crate::ast::{
-    AssignOp, BinaryOp, Expression, ForInit, Literal, LogicalOp, MemberProperty, Pattern,
-    Statement, UnaryOp, UpdateOp, VarKind, VariableDeclaration,
+    AssignOp, BinaryOp, CallSiteId, Expression, ForInit, Literal, LogicalOp, MemberProperty,
+    Pattern, Statement, UnaryOp, UpdateOp, VarKind, VariableDeclaration,
 };
 
 #[derive(Debug)]
@@ -76,6 +76,10 @@ impl Compiler {
     fn emit_u16(&mut self, n: u16) {
         self.code.push((n & 0xff) as u8);
         self.code.push((n >> 8) as u8);
+    }
+
+    fn emit_u32(&mut self, n: u32) {
+        self.code.extend_from_slice(&n.to_le_bytes());
     }
 
     /// Emit a forward jump with a placeholder offset; returns the patch site
@@ -368,7 +372,9 @@ impl Compiler {
                 }
                 MemberProperty::Private(_) => Err(CompileError::Unsupported("private field")),
             },
-            Expression::Call(callee, args, _) => self.compile_call(callee, args, Op::Call),
+            Expression::Call(callee, args, site_id) => {
+                self.compile_call(callee, args, Op::Call, *site_id)
+            }
             _ => Err(CompileError::Unsupported("expression")),
         }
     }
@@ -378,6 +384,7 @@ impl Compiler {
         callee: &Expression,
         args: &[Expression],
         op: Op,
+        site_id: CallSiteId,
     ) -> Result<(), CompileError> {
         let Expression::Identifier(name) = callee else {
             return Err(CompileError::Unsupported("call callee"));
@@ -409,6 +416,7 @@ impl Compiler {
         }
         self.emit(op);
         self.emit_u16(argc);
+        self.emit_u32(site_id.0);
         self.pop_n(argc + 2);
         if matches!(op, Op::Call | Op::ReturnCall) {
             self.push_n(1);
@@ -565,8 +573,8 @@ impl Compiler {
                 self.emit(Op::ReturnUndefined);
                 Ok(())
             }
-            Statement::Return(Some(Expression::Call(callee, args, _))) => {
-                self.compile_call(callee, args, Op::ReturnCall)?;
+            Statement::Return(Some(Expression::Call(callee, args, site_id))) => {
+                self.compile_call(callee, args, Op::ReturnCall, *site_id)?;
                 self.emit(Op::Return);
                 self.pop_n(1);
                 Ok(())

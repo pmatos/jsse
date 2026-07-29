@@ -1311,6 +1311,50 @@ fn direct_call_checks_global_proxy_binding_once() {
 }
 
 #[test]
+fn direct_call_hits_call_site_ic_in_bytecode() {
+    // Issue #432: the bytecode Call opcode must drive the same call-site IC
+    // as the tree-walker's eval_call, not run cold on every iteration. A
+    // 100-iteration hot loop on the same plain user function must register
+    // IC hits and route through the fast-dispatch entry that skips the
+    // proxy/wrapped/class-ctor checks (mirrors the tree-walker's
+    // `call_ic_records_after_repeated_call` / `call_ic_fast_dispatch_actually_skips_entry_checks`
+    // in `interpreter::tests`).
+    use crate::parser::Parser;
+    let source = "
+        function f() { return 7; }
+        var __r = (function() {
+            var sum = 0;
+            for (var i = 0; i < 100; i++) { sum = sum + f(); }
+            return sum;
+        })();
+    ";
+    let mut p = Parser::new(source).expect("parser init");
+    let program = p.parse_program().expect("parse");
+    let mut interp = Interpreter::new();
+    interp.bytecode_enabled = true;
+    let _ = interp.run(&program);
+    let v = interp
+        .get_global_var_ref("__r")
+        .unwrap_or(JsValue::Undefined);
+    assert!(matches!(v, JsValue::Number(n) if n == 700.0));
+    assert!(
+        interp.bytecode_chunks_executed >= 1,
+        "loop must execute through bytecode"
+    );
+    assert!(
+        interp.call_ic_hit_count() > 0,
+        "expected call-IC hits from the bytecode Call opcode after a \
+         100-iteration hot loop; dispatch_body must thread current_ic_handle \
+         into the bytecode branch for this to fire"
+    );
+    assert!(
+        interp.call_ic_fast_dispatch_count() > 0,
+        "expected the bytecode Call opcode to route IC hits through \
+         call_function_ic_validated, not the slow call_function path"
+    );
+}
+
+#[test]
 fn pending_argument_survives_gc_during_later_call_argument() {
     let source = "\
         var collect = $262.gc; \
