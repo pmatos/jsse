@@ -1,3 +1,10 @@
+## [0.4.14](https://github.com/pmatos/jsse/compare/v0.4.13...v0.4.14) (2026-07-29)
+
+
+### Performance Improvements
+
+* **bytecode:** extend call-site IC to the bytecode Call/ReturnCall opcodes ([#434](https://github.com/pmatos/jsse/issues/434)) ([7d16398](https://github.com/pmatos/jsse/commit/7d1639840e893ea8fdb78a80576834842d6c20a2))
+
 ## [0.4.13](https://github.com/pmatos/jsse/compare/v0.4.12...v0.4.13) (2026-07-26)
 
 
