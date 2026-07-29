@@ -16,11 +16,11 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
         (s.0.clone(), s.1.clone(), s.2.clone(), s.3.clone(), s.4)
     };
     if !alive {
-        return Completion::Normal(interp.create_iter_result_object(JsValue::Undefined, true));
+        return Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true));
     }
     if iters.is_empty() {
         state.borrow_mut().4 = false;
-        return Completion::Normal(interp.create_iter_result_object(JsValue::Undefined, true));
+        return Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true));
     }
 
     let mut values = Vec::with_capacity(iters.len());
@@ -28,7 +28,7 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
 
     for (i, (it, nm)) in iters.iter().enumerate() {
         if exhausted[i] {
-            values.push(padding_values.get(i).cloned().unwrap_or(JsValue::Undefined));
+            values.push(padding_values.get(i).cloned().unwrap_or(JsValue::UNDEFINED));
             continue;
         }
         match iterator_step_value_getter(interp, it, nm) {
@@ -48,7 +48,7 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
                         return Completion::Throw(e);
                     }
                     return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::Undefined, true),
+                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                     );
                 } else if mode == "strict" {
                     if i != 0 {
@@ -101,10 +101,10 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
                     }
                     state.borrow_mut().4 = false;
                     return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::Undefined, true),
+                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                     );
                 } else {
-                    values.push(padding_values.get(i).cloned().unwrap_or(JsValue::Undefined));
+                    values.push(padding_values.get(i).cloned().unwrap_or(JsValue::UNDEFINED));
                 }
             }
             Err(e) => {
@@ -126,7 +126,7 @@ fn zip_next_inner(interp: &mut Interpreter, state: &ZipState) -> Completion {
 
     if mode == "longest" && new_exhausted.iter().all(|e| *e) {
         state.borrow_mut().4 = false;
-        return Completion::Normal(interp.create_iter_result_object(JsValue::Undefined, true));
+        return Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true));
     }
 
     let arr = interp.create_array(values);
@@ -157,11 +157,11 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
         )
     };
     if !alive {
-        return Completion::Normal(interp.create_iter_result_object(JsValue::Undefined, true));
+        return Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true));
     }
     if iters.is_empty() {
         state.borrow_mut().5 = false;
-        return Completion::Normal(interp.create_iter_result_object(JsValue::Undefined, true));
+        return Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true));
     }
 
     let mut values: Vec<(JsPropertyKey, JsValue)> = Vec::with_capacity(iters.len());
@@ -171,7 +171,7 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
         if exhausted[i] {
             values.push((
                 keys[i].clone(),
-                padding_values.get(i).cloned().unwrap_or(JsValue::Undefined),
+                padding_values.get(i).cloned().unwrap_or(JsValue::UNDEFINED),
             ));
             continue;
         }
@@ -192,7 +192,7 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
                         return Completion::Throw(e);
                     }
                     return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::Undefined, true),
+                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                     );
                 } else if mode == "strict" {
                     if i != 0 {
@@ -245,13 +245,13 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
                     }
                     state.borrow_mut().5 = false;
                     return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::Undefined, true),
+                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                     );
                 } else {
                     // longest mode: append padding value
                     values.push((
                         keys[i].clone(),
-                        padding_values.get(i).cloned().unwrap_or(JsValue::Undefined),
+                        padding_values.get(i).cloned().unwrap_or(JsValue::UNDEFINED),
                     ));
                 }
             }
@@ -275,7 +275,7 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
     // For longest mode: check if ALL are now exhausted
     if mode == "longest" && new_exhausted.iter().all(|e| *e) {
         state.borrow_mut().5 = false;
-        return Completion::Normal(interp.create_iter_result_object(JsValue::Undefined, true));
+        return Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true));
     }
 
     // Create null-prototype result object with key-value pairs
@@ -294,7 +294,7 @@ fn zip_keyed_next_inner(interp: &mut Interpreter, state: &ZipKeyedState) -> Comp
             );
     }
     let result_id = result_obj_id;
-    let result_val = JsValue::Object(crate::types::JsObject { id: result_id });
+    let result_val = JsValue::object(result_id);
     Completion::Normal(interp.create_iter_result_object(result_val, false))
 }
 
@@ -303,33 +303,32 @@ fn get_iterator_direct_getter(
     interp: &mut Interpreter,
     obj: &JsValue,
 ) -> Result<(JsValue, JsValue), JsValue> {
-    match obj {
-        JsValue::Object(o) => {
-            let next_method = match interp.get_object_property(o.id, "next", obj) {
-                Completion::Normal(v) => v,
-                Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
-            };
-            Ok((obj.clone(), next_method))
-        }
-        _ => Err(interp.create_type_error("Iterator is not an object")),
+    if let Some(obj_id) = obj.as_object_id() {
+        let next_method = match interp.get_object_property(obj_id, "next", obj) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => JsValue::UNDEFINED,
+        };
+        Ok((obj.clone(), next_method))
+    } else {
+        Err(interp.create_type_error("Iterator is not an object"))
     }
 }
 
 // IteratorClose that uses get_object_property for .return (invokes getters)
 fn iterator_close_getter(interp: &mut Interpreter, iterator: &JsValue) -> Result<(), JsValue> {
-    if let JsValue::Object(io) = iterator {
-        let return_method = match interp.get_object_property(io.id, "return", iterator) {
+    if let Some(io_id) = iterator.as_object_id() {
+        let return_method = match interp.get_object_property(io_id, "return", iterator) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Err(e),
             _ => return Ok(()),
         };
-        if matches!(return_method, JsValue::Undefined | JsValue::Null) {
+        if return_method.is_nullish() {
             return Ok(());
         }
         match interp.call_function(&return_method, iterator, &[]) {
             Completion::Normal(inner_result) => {
-                if !matches!(inner_result, JsValue::Object(_)) {
+                if !inner_result.is_object() {
                     return Err(interp.create_type_error("Iterator result is not an object"));
                 }
                 Ok(())
@@ -349,14 +348,14 @@ fn get_iterator_flattenable(
     obj: &JsValue,
     reject_primitives: bool,
 ) -> Result<(JsValue, JsValue), JsValue> {
-    if !matches!(obj, JsValue::Object(_)) {
+    if !obj.is_object() {
         if reject_primitives {
             return Err(
                 interp.create_type_error("Iterator.prototype.flatMap mapper returned a non-object")
             );
         }
         // iterate-strings mode: GetMethod(obj, @@iterator) on primitive
-        if matches!(obj, JsValue::String(_)) {
+        if obj.is_string() {
             // GetMethod on primitive: ToObject for lookup, but use original as receiver
             let wrapped = match interp.to_object(obj) {
                 Completion::Normal(v) => v,
@@ -364,18 +363,18 @@ fn get_iterator_flattenable(
                 _ => return Err(interp.create_type_error("Cannot convert to object")),
             };
             let sym_key = interp.get_symbol_iterator_key();
-            let method = if let JsValue::Object(ref o) = wrapped
+            let method = if let Some(wrapped_id) = wrapped.as_object_id()
                 && let Some(ref key) = sym_key
             {
-                match interp.get_object_property(o.id, key, obj) {
+                match interp.get_object_property(wrapped_id, key, obj) {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
+                    _ => JsValue::UNDEFINED,
                 }
             } else {
-                JsValue::Undefined
+                JsValue::UNDEFINED
             };
-            if matches!(method, JsValue::Undefined | JsValue::Null) {
+            if method.is_nullish() {
                 return Err(interp.create_type_error("String iterator method is undefined"));
             }
             // Call(method, obj) — use original primitive as this
@@ -384,7 +383,7 @@ fn get_iterator_flattenable(
                 Completion::Throw(e) => return Err(e),
                 _ => return Err(interp.create_type_error("Iterator did not return a value")),
             };
-            if !matches!(iter_obj, JsValue::Object(_)) {
+            if !iter_obj.is_object() {
                 return Err(interp.create_type_error("Result of Symbol.iterator is not an object"));
             }
             return get_iterator_direct_getter(interp, &iter_obj);
@@ -394,27 +393,27 @@ fn get_iterator_flattenable(
 
     // Get @@iterator method
     let sym_key = interp.get_symbol_iterator_key();
-    let iter_method = if let JsValue::Object(o) = obj {
+    let iter_method = if let Some(obj_id) = obj.as_object_id() {
         if let Some(ref key) = sym_key {
-            match interp.get_object_property(o.id, key, obj) {
+            match interp.get_object_property(obj_id, key, obj) {
                 Completion::Normal(v) => Some(v),
                 Completion::Throw(e) => return Err(e),
-                _ => Some(JsValue::Undefined),
+                _ => Some(JsValue::UNDEFINED),
             }
         } else {
-            Some(JsValue::Undefined)
+            Some(JsValue::UNDEFINED)
         }
     } else {
-        Some(JsValue::Undefined)
+        Some(JsValue::UNDEFINED)
     };
 
     if let Some(method) = iter_method
-        && !matches!(method, JsValue::Undefined | JsValue::Null)
+        && !method.is_nullish()
     {
         // Has @@iterator - check it's callable and call it
-        if let JsValue::Object(mo) = &method {
+        if let Some(method_id) = method.as_object_id() {
             if !interp
-                .get_object_cell(mo.id)
+                .get_object_cell(method_id)
                 .map(|od| od.borrow().callable.is_some())
                 .unwrap_or(false)
             {
@@ -428,7 +427,7 @@ fn get_iterator_flattenable(
             Completion::Throw(e) => return Err(e),
             _ => return Err(interp.create_type_error("Symbol.iterator did not return a value")),
         };
-        if !matches!(iter_obj, JsValue::Object(_)) {
+        if !iter_obj.is_object() {
             return Err(interp.create_type_error("Result of Symbol.iterator is not an object"));
         }
         return get_iterator_direct_getter(interp, &iter_obj);
@@ -444,28 +443,26 @@ fn get_iterator_getter(
     obj: &JsValue,
 ) -> Result<(JsValue, JsValue), JsValue> {
     let sym_key = interp.get_symbol_iterator_key();
-    let method = match obj {
-        JsValue::Object(o) => {
-            if let Some(ref key) = sym_key {
-                match interp.get_object_property(o.id, key, obj) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
-                    _ => JsValue::Undefined,
-                }
-            } else {
-                return Err(interp.create_type_error("is not iterable"));
+    let method = if let Some(obj_id) = obj.as_object_id() {
+        if let Some(ref key) = sym_key {
+            match interp.get_object_property(obj_id, key, obj) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => JsValue::UNDEFINED,
             }
+        } else {
+            return Err(interp.create_type_error("is not iterable"));
         }
-        JsValue::String(_) => {
-            // For strings, use the string prototype's @@iterator
-            return match interp.get_iterator(obj) {
-                Ok(iter) => get_iterator_direct_getter(interp, &iter),
-                Err(e) => Err(e),
-            };
-        }
-        _ => return Err(interp.create_type_error("is not iterable")),
+    } else if obj.is_string() {
+        // For strings, use the string prototype's @@iterator
+        return match interp.get_iterator(obj) {
+            Ok(iter) => get_iterator_direct_getter(interp, &iter),
+            Err(e) => Err(e),
+        };
+    } else {
+        return Err(interp.create_type_error("is not iterable"));
     };
-    if matches!(method, JsValue::Undefined | JsValue::Null) {
+    if method.is_nullish() {
         return Err(interp.create_type_error("is not iterable"));
     }
     // Call the method
@@ -474,7 +471,7 @@ fn get_iterator_getter(
         Completion::Throw(e) => return Err(e),
         _ => return Err(interp.create_type_error("Symbol.iterator did not return a value")),
     };
-    if !matches!(iterator, JsValue::Object(_)) {
+    if !iterator.is_object() {
         return Err(interp.create_type_error("Result of Symbol.iterator is not an object"));
     }
     get_iterator_direct_getter(interp, &iterator)
@@ -492,24 +489,23 @@ fn iterator_step_value_getter(
         Completion::Throw(e) => return Err(e),
         _ => return Err(interp.create_type_error("Iterator next failed")),
     };
-    let obj_ref = match &result {
-        JsValue::Object(o) => o,
-        _ => return Err(interp.create_type_error("Iterator result is not an object")),
+    let Some(result_id) = result.as_object_id() else {
+        return Err(interp.create_type_error("Iterator result is not an object"));
     };
     // Read .done via getter
-    let done = match interp.get_object_property(obj_ref.id, "done", &result) {
+    let done = match interp.get_object_property(result_id, "done", &result) {
         Completion::Normal(v) => v,
         Completion::Throw(e) => return Err(e),
-        _ => JsValue::Undefined,
+        _ => JsValue::UNDEFINED,
     };
     if interp.to_boolean_val(&done) {
         return Ok(None);
     }
     // Read .value via getter
-    let value = match interp.get_object_property(obj_ref.id, "value", &result) {
+    let value = match interp.get_object_property(result_id, "value", &result) {
         Completion::Normal(v) => v,
         Completion::Throw(e) => return Err(e),
-        _ => JsValue::Undefined,
+        _ => JsValue::UNDEFINED,
     };
     Ok(Some(value))
 }
@@ -521,8 +517,8 @@ fn iterator_close_with_completion(
     iterator: &JsValue,
     completion: Result<(), JsValue>,
 ) -> Result<(), JsValue> {
-    if let JsValue::Object(io) = iterator {
-        let return_method = match interp.get_object_property(io.id, "return", iterator) {
+    if let Some(io_id) = iterator.as_object_id() {
+        let return_method = match interp.get_object_property(io_id, "return", iterator) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => {
                 // Step 5: If completion is a throw completion, return ? completion.
@@ -531,9 +527,9 @@ fn iterator_close_with_completion(
                 }
                 return Err(e);
             }
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         };
-        if matches!(return_method, JsValue::Undefined | JsValue::Null) {
+        if return_method.is_nullish() {
             return completion;
         }
         let inner_result = interp.call_function(&return_method, iterator, &[]);
@@ -544,7 +540,7 @@ fn iterator_close_with_completion(
                     return Err(e);
                 }
                 // Step 7: If innerResult.[[Value]] is not an Object, throw TypeError
-                if !matches!(v, JsValue::Object(_)) {
+                if !v.is_object() {
                     return Err(interp.create_type_error("Iterator result is not an object"));
                 }
                 // Step 8: Return completion
@@ -605,9 +601,7 @@ impl Interpreter {
             let tst_getter = self.create_function(JsFunction::native(
                 "get [Symbol.toStringTag]".to_string(),
                 0,
-                |_interp, _this, _args| {
-                    Completion::Normal(JsValue::String(JsString::from_str("Iterator")))
-                },
+                |_interp, _this, _args| Completion::Normal(JsValue::from_str("Iterator")),
             ));
             let ip_id = iter_proto_id;
             let tst_key_for_setter = self.get_symbol_key("toStringTag");
@@ -615,13 +609,10 @@ impl Interpreter {
                 "set [Symbol.toStringTag]".to_string(),
                 1,
                 move |interp, this, args| {
-                    let v = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    let this_id = match this {
-                        JsValue::Object(o) => o.id,
-                        _ => {
-                            let err = interp.create_type_error("setter called on non-object");
-                            return Completion::Throw(err);
-                        }
+                    let v = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    let Some(this_id) = this.as_object_id() else {
+                        let err = interp.create_type_error("setter called on non-object");
+                        return Completion::Throw(err);
                     };
                     if this_id == ip_id {
                         let err = interp.create_type_error(
@@ -661,7 +652,7 @@ impl Interpreter {
                             Err(err) => return Completion::Throw(err),
                         }
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
             self.get_object_cell_expect(iter_proto_id)
@@ -684,14 +675,18 @@ impl Interpreter {
             "[Symbol.dispose]".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    let return_method = interp.get_property_on_id(o.id, "return");
-                    if matches!(&return_method, JsValue::Object(ro) if interp.get_object_cell(ro.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
-                    {
+                if let Some(this_id) = this.as_object_id() {
+                    let return_method = interp.get_property_on_id(this_id, "return");
+                    if return_method.as_object_id().is_some_and(|ro_id| {
+                        interp
+                            .get_object_cell(ro_id)
+                            .map(|od| od.borrow().callable.is_some())
+                            .unwrap_or(false)
+                    }) {
                         return interp.call_function(&return_method, this, &[]);
                     }
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         if let Some(key) = self.get_symbol_key("dispose") {
@@ -715,17 +710,13 @@ impl Interpreter {
                 }
                 // If new_target is the Iterator constructor itself, throw TypeError
                 // (abstract class cannot be instantiated directly)
-                let nt_id = if let Some(JsValue::Object(nt)) = &interp.new_target {
-                    Some(nt.id)
-                } else {
-                    None
-                };
+                let nt_id = interp.new_target.as_ref().and_then(JsValue::as_object_id);
                 if let Some(nt_id) = nt_id {
                     // Check if new.target is the Iterator constructor by checking if
                     // looking up "Iterator" from global gives the same object
                     let global_iter = interp.get_global_var("Iterator");
-                    if let Some(JsValue::Object(gi)) = global_iter
-                        && gi.id == nt_id
+                    if let Some(gi_id) = global_iter.as_ref().and_then(JsValue::as_object_id)
+                        && gi_id == nt_id
                     {
                         let err = interp.create_type_error(
                             "Abstract class Iterator not directly constructable",
@@ -734,8 +725,8 @@ impl Interpreter {
                     }
                 }
                 // OrdinaryCreateFromConstructor — realm-aware prototype
-                if let JsValue::Object(o) = this
-                    && let Some(obj) = interp.get_object(o.id)
+                if let Some(this_id) = this.as_object_id()
+                    && let Some(obj) = interp.get_object(this_id)
                 {
                     let proto = match interp
                         .get_prototype_from_new_target_realm(|realm| realm.iterator_prototype)
@@ -752,17 +743,12 @@ impl Interpreter {
         ));
 
         // Set Iterator.prototype_id
-        if let JsValue::Object(ctor_obj) = &iterator_ctor
-            && let Some(obj) = self.get_object_cell(ctor_obj.id)
+        if let Some(ctor_id) = iterator_ctor.as_object_id()
+            && let Some(obj) = self.get_object_cell(ctor_id)
         {
             obj.borrow_mut().insert_property(
                 "prototype".to_string(),
-                PropertyDescriptor::data(
-                    JsValue::Object(crate::types::JsObject { id: iter_proto_id }),
-                    false,
-                    false,
-                    false,
-                ),
+                PropertyDescriptor::data(JsValue::object(iter_proto_id), false, false, false),
             );
         }
 
@@ -780,14 +766,11 @@ impl Interpreter {
                 "set constructor".to_string(),
                 1,
                 move |interp, this, args| {
-                    let v = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let v = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     // Step 1: If this is not an Object, throw TypeError
-                    let this_id = match this {
-                        JsValue::Object(o) => o.id,
-                        _ => {
-                            let err = interp.create_type_error("setter called on non-object");
-                            return Completion::Throw(err);
-                        }
+                    let Some(this_id) = this.as_object_id() else {
+                        let err = interp.create_type_error("setter called on non-object");
+                        return Completion::Throw(err);
                     };
                     // Step 2: If this is home (Iterator.prototype), throw TypeError
                     if this_id == ip_id {
@@ -828,7 +811,7 @@ impl Interpreter {
                             Err(err) => return Completion::Throw(err),
                         }
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
             self.get_object_cell_expect(iter_proto_id)
@@ -873,8 +856,8 @@ impl Interpreter {
             "next".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object(o.id) {
+                if let Some(this_id) = this.as_object_id() {
+                    if let Some(obj) = interp.get_object(this_id) {
                         let state = obj.borrow().iterator_state().cloned();
                         if let Some(IteratorState::ArrayIterator {
                             array_id,
@@ -885,24 +868,24 @@ impl Interpreter {
                         {
                             if done {
                                 return Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 );
                             }
                             let is_proxy = interp
                                 .get_object_cell(array_id)
                                 .is_some_and(|o| o.borrow().is_proxy());
                             if is_proxy {
-                                let arr_val =
-                                    JsValue::Object(crate::types::JsObject { id: array_id });
+                                let arr_val = JsValue::object(array_id);
                                 let len = match interp
                                     .get_object_property(array_id, "length", &arr_val)
                                 {
-                                    Completion::Normal(JsValue::Number(n)) => n as usize,
-                                    Completion::Normal(_) => 0,
+                                    Completion::Normal(v) => {
+                                        v.as_number().map_or(0, |n| n as usize)
+                                    }
                                     c => return c,
                                 };
                                 if index >= len {
-                                    if let Some(obj) = interp.get_object_cell(o.id) {
+                                    if let Some(obj) = interp.get_object_cell(this_id) {
                                         obj.borrow_mut().kind =
                                             crate::interpreter::types::ObjectKind::Iterator(
                                                 IteratorState::ArrayIterator {
@@ -914,12 +897,12 @@ impl Interpreter {
                                             );
                                     }
                                     return Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::Undefined, true),
+                                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                     );
                                 }
                                 let idx_str = index.to_string();
                                 let v = match kind {
-                                    IteratorKind::Key => JsValue::Number(index as f64),
+                                    IteratorKind::Key => JsValue::number(index as f64),
                                     IteratorKind::Value => {
                                         match interp
                                             .get_object_property(array_id, &idx_str, &arr_val)
@@ -936,10 +919,10 @@ impl Interpreter {
                                             c => return c,
                                         };
                                         let pair = interp.create_array(vec![
-                                            JsValue::Number(index as f64),
+                                            JsValue::number(index as f64),
                                             elem,
                                         ]);
-                                        if let Some(obj) = interp.get_object_cell(o.id) {
+                                        if let Some(obj) = interp.get_object_cell(this_id) {
                                             obj.borrow_mut().kind =
                                                 crate::interpreter::types::ObjectKind::Iterator(
                                                     IteratorState::ArrayIterator {
@@ -955,7 +938,7 @@ impl Interpreter {
                                         );
                                     }
                                 };
-                                if let Some(obj) = interp.get_object_cell(o.id) {
+                                if let Some(obj) = interp.get_object_cell(this_id) {
                                     obj.borrow_mut().kind =
                                         crate::interpreter::types::ObjectKind::Iterator(
                                             IteratorState::ArrayIterator {
@@ -977,7 +960,7 @@ impl Interpreter {
                                     && is_typed_array_out_of_bounds(ta)
                                 {
                                     drop(borrowed);
-                                    if let Some(obj) = interp.get_object_cell(o.id) {
+                                    if let Some(obj) = interp.get_object_cell(this_id) {
                                         obj.borrow_mut().kind =
                                             crate::interpreter::types::ObjectKind::Iterator(
                                                 IteratorState::ArrayIterator {
@@ -997,8 +980,9 @@ impl Interpreter {
                                 let borrowed = arr_obj.borrow();
                                 let len = if let Some(ta) = borrowed.typed_array_info() {
                                     typed_array_length(ta)
-                                } else if let Some(JsValue::Number(n)) =
-                                    borrowed.get_property_value("length")
+                                } else if let Some(n) = borrowed
+                                    .get_property_value("length")
+                                    .and_then(|v| v.as_number())
                                 {
                                     n as usize
                                 } else if let Some(elems) = borrowed.array_elements() {
@@ -1025,10 +1009,9 @@ impl Interpreter {
                                         None
                                     };
                                     drop(borrowed);
-                                    let arr_val =
-                                        JsValue::Object(crate::types::JsObject { id: array_id });
+                                    let arr_val = JsValue::object(array_id);
                                     let v = match kind {
-                                        IteratorKind::Key => JsValue::Number(index as f64),
+                                        IteratorKind::Key => JsValue::number(index as f64),
                                         IteratorKind::Value => {
                                             if let Some(fv) = fast_val {
                                                 fv
@@ -1053,7 +1036,7 @@ impl Interpreter {
                                                 }
                                             };
                                             let pair = interp.create_array(vec![
-                                                JsValue::Number(index as f64),
+                                                JsValue::number(index as f64),
                                                 elem,
                                             ]);
                                             return {
@@ -1101,7 +1084,7 @@ impl Interpreter {
                                             },
                                         );
                                     Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::Undefined, true),
+                                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                     )
                                 }
                             }
@@ -1114,7 +1097,7 @@ impl Interpreter {
                         {
                             if done {
                                 return Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 );
                             }
                             let ta_obj = interp.get_object(typed_array_id);
@@ -1129,7 +1112,7 @@ impl Interpreter {
                                         },
                                     );
                                 return Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 );
                             }
                             let ta_obj = ta_obj.unwrap();
@@ -1157,16 +1140,16 @@ impl Interpreter {
                                             },
                                         );
                                     return Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::Undefined, true),
+                                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                     );
                                 }
                                 let v = match kind {
-                                    IteratorKind::Key => JsValue::Number(index as f64),
+                                    IteratorKind::Key => JsValue::number(index as f64),
                                     IteratorKind::Value => typed_array_get_index(ta, index),
                                     IteratorKind::KeyValue => {
                                         let elem = typed_array_get_index(ta, index);
                                         let pair = interp.create_array(vec![
-                                            JsValue::Number(index as f64),
+                                            JsValue::number(index as f64),
                                             elem,
                                         ]);
                                         obj.borrow_mut().kind =
@@ -1201,7 +1184,7 @@ impl Interpreter {
                             Completion::Throw(err)
                         }
                     } else {
-                        Completion::Normal(JsValue::Undefined)
+                        Completion::Normal(JsValue::UNDEFINED)
                     }
                 } else {
                     let err = interp.create_type_error("next called on non-object");
@@ -1231,8 +1214,8 @@ impl Interpreter {
             "next".to_string(),
             0,
             |interp, this, _args| {
-                if let JsValue::Object(o) = this {
-                    if let Some(obj) = interp.get_object_cell(o.id) {
+                if let Some(this_id) = this.as_object_id() {
+                    if let Some(obj) = interp.get_object_cell(this_id) {
                         let state = obj.borrow().iterator_state().cloned();
                         if let Some(IteratorState::StringIterator {
                             ref string,
@@ -1250,7 +1233,7 @@ impl Interpreter {
                                         },
                                     );
                                 return Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 );
                             }
                             let cu = string.code_units[position];
@@ -1276,7 +1259,7 @@ impl Interpreter {
                             let result_js_str = JsString::from_vec(result_units);
                             Completion::Normal(
                                 interp.create_iter_result_object(
-                                    JsValue::String(result_js_str),
+                                    JsValue::string(result_js_str),
                                     false,
                                 ),
                             )
@@ -1286,7 +1269,7 @@ impl Interpreter {
                             Completion::Throw(err)
                         }
                     } else {
-                        Completion::Normal(JsValue::Undefined)
+                        Completion::Normal(JsValue::UNDEFINED)
                     }
                 } else {
                     let err = interp.create_type_error("next called on non-object");
@@ -1320,13 +1303,10 @@ impl Interpreter {
             "next".to_string(),
             0,
             |interp, this, args| {
-                let this_id = match this {
-                    JsValue::Object(o) => o.id,
-                    _ => {
-                        return Completion::Throw(
-                            interp.create_type_error("Iterator Helper next called on non-object"),
-                        );
-                    }
+                let Some(this_id) = this.as_object_id() else {
+                    return Completion::Throw(
+                        interp.create_type_error("Iterator Helper next called on non-object"),
+                    );
                 };
                 let (next_closure, gen_state) = {
                     let obj = match interp.get_object(this_id) {
@@ -1360,17 +1340,17 @@ impl Interpreter {
                 }
                 if s == 3 {
                     return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::Undefined, true),
+                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                     );
                 }
                 gen_state.set(2);
                 let result = interp.call_function(&next_closure, this, args);
                 let is_done = if let Completion::Normal(ref v) = result {
-                    if let JsValue::Object(o) = v {
-                        matches!(
-                            interp.get_object_property(o.id, "done", v),
-                            Completion::Normal(JsValue::Boolean(true))
-                        )
+                    if let Some(v_id) = v.as_object_id() {
+                        match interp.get_object_property(v_id, "done", v) {
+                            Completion::Normal(d) => d.as_boolean() == Some(true),
+                            _ => false,
+                        }
                     } else {
                         false
                     }
@@ -1390,13 +1370,10 @@ impl Interpreter {
             "return".to_string(),
             0,
             |interp, this, args| {
-                let this_id = match this {
-                    JsValue::Object(o) => o.id,
-                    _ => {
-                        return Completion::Throw(
-                            interp.create_type_error("Iterator Helper return called on non-object"),
-                        );
-                    }
+                let Some(this_id) = this.as_object_id() else {
+                    return Completion::Throw(
+                        interp.create_type_error("Iterator Helper return called on non-object"),
+                    );
                 };
                 let (return_closure, gen_state) =
                     {
@@ -1430,7 +1407,7 @@ impl Interpreter {
                 }
                 if s == 3 {
                     return Completion::Normal(
-                        interp.create_iter_result_object(JsValue::Undefined, true),
+                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                     );
                 }
                 if s == 0 {
@@ -1489,12 +1466,12 @@ impl Interpreter {
         }
 
         let id = obj_id;
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 
     fn set_helper_gc_roots(&mut self, helper: &JsValue, roots: Vec<JsValue>) {
-        if let JsValue::Object(ho) = helper
-            && let Some(obj) = self.get_object_cell(ho.id)
+        if let Some(helper_id) = helper.as_object_id()
+            && let Some(obj) = self.get_object_cell(helper_id)
         {
             obj.borrow_mut().gc_native_roots = Some(roots);
         }
@@ -1540,9 +1517,13 @@ impl Interpreter {
             "forEach".to_string(),
             1,
             |interp, this, args| {
-                let callback = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&callback, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
-                {
+                let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if !callback.as_object_id().is_some_and(|id| {
+                    interp
+                        .get_object_cell(id)
+                        .map(|od| od.borrow().callable.is_some())
+                        .unwrap_or(false)
+                }) {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("callback is not a function");
                     return Completion::Throw(err);
@@ -1556,13 +1537,13 @@ impl Interpreter {
                     match interp.iterator_step_direct(&iter, &next_method) {
                         Ok(Some(result)) => {
                             let value = match interp.iterator_value(&result) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                };
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
                             if let Completion::Throw(e) = interp.call_function(
                                 &callback,
-                                &JsValue::Undefined,
-                                &[value, JsValue::Number(counter)],
+                                &JsValue::UNDEFINED,
+                                &[value, JsValue::number(counter)],
                             ) {
                                 let _ = iterator_close_getter(interp, &iter);
                                 return Completion::Throw(e);
@@ -1573,7 +1554,7 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     }
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         self.get_object_cell_expect(iter_proto_id)
@@ -1585,9 +1566,13 @@ impl Interpreter {
             "some".to_string(),
             1,
             |interp, this, args| {
-                let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&predicate, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
-                {
+                let predicate = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if !predicate.as_object_id().is_some_and(|id| {
+                    interp
+                        .get_object_cell(id)
+                        .map(|od| od.borrow().callable.is_some())
+                        .unwrap_or(false)
+                }) {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
                     return Completion::Throw(err);
@@ -1601,31 +1586,34 @@ impl Interpreter {
                     match interp.iterator_step_direct(&iter, &next_method) {
                         Ok(Some(result)) => {
                             let value = match interp.iterator_value(&result) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                };
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
                             match interp.call_function(
                                 &predicate,
-                                &JsValue::Undefined,
-                                &[value, JsValue::Number(counter)],
+                                &JsValue::UNDEFINED,
+                                &[value, JsValue::number(counter)],
                             ) {
-                                Completion::Normal(v)
-                                    if interp.to_boolean_val(&v) => {
-                                        // Propagate IteratorClose errors
-                                        if let Err(e) = iterator_close_getter(interp, &iter) {
-                                            return Completion::Throw(e);
-                                        }
-                                        return Completion::Normal(JsValue::Boolean(true));
+                                Completion::Normal(v) if interp.to_boolean_val(&v) => {
+                                    // Propagate IteratorClose errors
+                                    if let Err(e) = iterator_close_getter(interp, &iter) {
+                                        return Completion::Throw(e);
                                     }
+                                    return Completion::Normal(JsValue::TRUE);
+                                }
                                 Completion::Throw(e) => {
-                                    let _ = iterator_close_with_completion(interp, &iter, Err(e.clone()));
+                                    let _ = iterator_close_with_completion(
+                                        interp,
+                                        &iter,
+                                        Err(e.clone()),
+                                    );
                                     return Completion::Throw(e);
                                 }
                                 _ => {}
                             }
                             counter += 1.0;
                         }
-                        Ok(None) => return Completion::Normal(JsValue::Boolean(false)),
+                        Ok(None) => return Completion::Normal(JsValue::FALSE),
                         Err(e) => return Completion::Throw(e),
                     }
                 }
@@ -1640,9 +1628,13 @@ impl Interpreter {
             "every".to_string(),
             1,
             |interp, this, args| {
-                let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&predicate, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
-                {
+                let predicate = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if !predicate.as_object_id().is_some_and(|id| {
+                    interp
+                        .get_object_cell(id)
+                        .map(|od| od.borrow().callable.is_some())
+                        .unwrap_or(false)
+                }) {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
                     return Completion::Throw(err);
@@ -1656,30 +1648,33 @@ impl Interpreter {
                     match interp.iterator_step_direct(&iter, &next_method) {
                         Ok(Some(result)) => {
                             let value = match interp.iterator_value(&result) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                };
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
                             match interp.call_function(
                                 &predicate,
-                                &JsValue::Undefined,
-                                &[value, JsValue::Number(counter)],
+                                &JsValue::UNDEFINED,
+                                &[value, JsValue::number(counter)],
                             ) {
-                                Completion::Normal(v)
-                                    if !interp.to_boolean_val(&v) => {
-                                        if let Err(e) = iterator_close_getter(interp, &iter) {
-                                            return Completion::Throw(e);
-                                        }
-                                        return Completion::Normal(JsValue::Boolean(false));
+                                Completion::Normal(v) if !interp.to_boolean_val(&v) => {
+                                    if let Err(e) = iterator_close_getter(interp, &iter) {
+                                        return Completion::Throw(e);
                                     }
+                                    return Completion::Normal(JsValue::FALSE);
+                                }
                                 Completion::Throw(e) => {
-                                    let _ = iterator_close_with_completion(interp, &iter, Err(e.clone()));
+                                    let _ = iterator_close_with_completion(
+                                        interp,
+                                        &iter,
+                                        Err(e.clone()),
+                                    );
                                     return Completion::Throw(e);
                                 }
                                 _ => {}
                             }
                             counter += 1.0;
                         }
-                        Ok(None) => return Completion::Normal(JsValue::Boolean(true)),
+                        Ok(None) => return Completion::Normal(JsValue::TRUE),
                         Err(e) => return Completion::Throw(e),
                     }
                 }
@@ -1694,9 +1689,13 @@ impl Interpreter {
             "find".to_string(),
             1,
             |interp, this, args| {
-                let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&predicate, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
-                {
+                let predicate = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if !predicate.as_object_id().is_some_and(|id| {
+                    interp
+                        .get_object_cell(id)
+                        .map(|od| od.borrow().callable.is_some())
+                        .unwrap_or(false)
+                }) {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
                     return Completion::Throw(err);
@@ -1710,30 +1709,33 @@ impl Interpreter {
                     match interp.iterator_step_direct(&iter, &next_method) {
                         Ok(Some(result)) => {
                             let value = match interp.iterator_value(&result) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                };
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
                             match interp.call_function(
                                 &predicate,
-                                &JsValue::Undefined,
-                                &[value.clone(), JsValue::Number(counter)],
+                                &JsValue::UNDEFINED,
+                                &[value.clone(), JsValue::number(counter)],
                             ) {
-                                Completion::Normal(v)
-                                    if interp.to_boolean_val(&v) => {
-                                        if let Err(e) = iterator_close_getter(interp, &iter) {
-                                            return Completion::Throw(e);
-                                        }
-                                        return Completion::Normal(value);
+                                Completion::Normal(v) if interp.to_boolean_val(&v) => {
+                                    if let Err(e) = iterator_close_getter(interp, &iter) {
+                                        return Completion::Throw(e);
                                     }
+                                    return Completion::Normal(value);
+                                }
                                 Completion::Throw(e) => {
-                                    let _ = iterator_close_with_completion(interp, &iter, Err(e.clone()));
+                                    let _ = iterator_close_with_completion(
+                                        interp,
+                                        &iter,
+                                        Err(e.clone()),
+                                    );
                                     return Completion::Throw(e);
                                 }
                                 _ => {}
                             }
                             counter += 1.0;
                         }
-                        Ok(None) => return Completion::Normal(JsValue::Undefined),
+                        Ok(None) => return Completion::Normal(JsValue::UNDEFINED),
                         Err(e) => return Completion::Throw(e),
                     }
                 }
@@ -1748,9 +1750,13 @@ impl Interpreter {
             "reduce".to_string(),
             1,
             |interp, this, args| {
-                let reducer = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&reducer, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
-                {
+                let reducer = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if !reducer.as_object_id().is_some_and(|id| {
+                    interp
+                        .get_object_cell(id)
+                        .map(|od| od.borrow().callable.is_some())
+                        .unwrap_or(false)
+                }) {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("reducer is not a function");
                     return Completion::Throw(err);
@@ -1774,8 +1780,9 @@ impl Interpreter {
                             counter = 1.0;
                         }
                         Ok(None) => {
-                            let err =
-                                interp.create_type_error("Reduce of empty iterator with no initial value");
+                            let err = interp.create_type_error(
+                                "Reduce of empty iterator with no initial value",
+                            );
                             return Completion::Throw(err);
                         }
                         Err(e) => return Completion::Throw(e),
@@ -1785,13 +1792,13 @@ impl Interpreter {
                     match interp.iterator_step_direct(&iter, &next_method) {
                         Ok(Some(result)) => {
                             let value = match interp.iterator_value(&result) {
-                                    Ok(v) => v,
-                                    Err(e) => return Completion::Throw(e),
-                                };
+                                Ok(v) => v,
+                                Err(e) => return Completion::Throw(e),
+                            };
                             match interp.call_function(
                                 &reducer,
-                                &JsValue::Undefined,
-                                &[accumulator.clone(), value, JsValue::Number(counter)],
+                                &JsValue::UNDEFINED,
+                                &[accumulator.clone(), value, JsValue::number(counter)],
                             ) {
                                 Completion::Normal(v) => accumulator = v,
                                 Completion::Throw(e) => {
@@ -1823,13 +1830,17 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 // Step 1-2: Require this to be an object
-                if !matches!(this, JsValue::Object(_)) {
+                if !this.is_object() {
                     let err = interp.create_type_error("Iterator.prototype.map called on non-object");
                     return Completion::Throw(err);
                 }
-                let mapper = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&mapper, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
-                {
+                let mapper = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if !mapper.as_object_id().is_some_and(|id| {
+                    interp
+                        .get_object_cell(id)
+                        .map(|od| od.borrow().callable.is_some())
+                        .unwrap_or(false)
+                }) {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("mapper is not a function");
                     return Completion::Throw(err);
@@ -1855,7 +1866,7 @@ impl Interpreter {
                         };
                         if !alive {
                             return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
+                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             );
                         }
                         if running {
@@ -1872,8 +1883,8 @@ impl Interpreter {
                                     };
                                     let mapped = interp.call_function(
                                         &mapper,
-                                        &JsValue::Undefined,
-                                        &[value, JsValue::Number(counter)],
+                                        &JsValue::UNDEFINED,
+                                        &[value, JsValue::number(counter)],
                                     );
                                     state_next.borrow_mut().3 = counter + 1.0;
                                     match mapped {
@@ -1886,14 +1897,14 @@ impl Interpreter {
                                             Completion::Throw(e)
                                         }
                                         _ => Completion::Normal(
-                                            interp.create_iter_result_object(JsValue::Undefined, true),
+                                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                         ),
                                     }
                                 }
                                 Ok(None) => {
                                     state_next.borrow_mut().4 = false;
                                     Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::Undefined, true),
+                                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                     )
                                 }
                                 Err(e) => {
@@ -1927,7 +1938,7 @@ impl Interpreter {
                                 Completion::Throw(e)
                             } else {
                                 Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 )
                             };
                         state_ret.borrow_mut().5 = false;
@@ -1952,13 +1963,17 @@ impl Interpreter {
             "filter".to_string(),
             1,
             |interp, this, args| {
-                if !matches!(this, JsValue::Object(_)) {
+                if !this.is_object() {
                     let err = interp.create_type_error("Iterator.prototype.filter called on non-object");
                     return Completion::Throw(err);
                 }
-                let predicate = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&predicate, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
-                {
+                let predicate = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if !predicate.as_object_id().is_some_and(|id| {
+                    interp
+                        .get_object_cell(id)
+                        .map(|od| od.borrow().callable.is_some())
+                        .unwrap_or(false)
+                }) {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("predicate is not a function");
                     return Completion::Throw(err);
@@ -1984,7 +1999,7 @@ impl Interpreter {
                         };
                         if !alive {
                             return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
+                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             );
                         }
                         if running {
@@ -2002,8 +2017,8 @@ impl Interpreter {
                                     };
                                         let test_result = interp.call_function(
                                             &pred,
-                                            &JsValue::Undefined,
-                                            &[value.clone(), JsValue::Number(counter)],
+                                            &JsValue::UNDEFINED,
+                                            &[value.clone(), JsValue::number(counter)],
                                         );
                                         counter += 1.0;
                                         state_next.borrow_mut().3 = counter;
@@ -2025,7 +2040,7 @@ impl Interpreter {
                                     Ok(None) => {
                                         state_next.borrow_mut().4 = false;
                                         return Completion::Normal(
-                                            interp.create_iter_result_object(JsValue::Undefined, true),
+                                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                         );
                                     }
                                     Err(e) => {
@@ -2060,12 +2075,12 @@ impl Interpreter {
                                 Completion::Throw(e)
                             } else {
                                 Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 )
                             }
                         } else {
                             Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
+                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             )
                         };
                         state_ret.borrow_mut().5 = false;
@@ -2091,13 +2106,13 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 // Step 2: If this is not an Object, throw TypeError
-                if !matches!(this, JsValue::Object(_)) {
+                if !this.is_object() {
                     let err =
                         interp.create_type_error("Iterator.prototype.take called on non-object");
                     return Completion::Throw(err);
                 }
                 // Step 3: numLimit = ToNumber(limit) — can throw via valueOf
-                let limit_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let limit_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let num_limit = match interp.to_number_value(&limit_val) {
                     Ok(n) => n,
                     Err(e) => {
@@ -2147,7 +2162,7 @@ impl Interpreter {
                         };
                         if !alive {
                             return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
+                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             );
                         }
                         if running {
@@ -2163,7 +2178,7 @@ impl Interpreter {
                                     return Completion::Throw(e);
                                 }
                                 return Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 );
                             }
                             // Decrement remaining
@@ -2180,7 +2195,7 @@ impl Interpreter {
                                 Ok(None) => {
                                     state_next.borrow_mut().3 = false;
                                     Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::Undefined, true),
+                                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                     )
                                 }
                                 Err(e) => {
@@ -2214,12 +2229,12 @@ impl Interpreter {
                                 Completion::Throw(e)
                             } else {
                                 Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 )
                             }
                         } else {
                             Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
+                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             )
                         };
                         state_ret.borrow_mut().4 = false;
@@ -2245,13 +2260,13 @@ impl Interpreter {
             1,
             |interp, this, args| {
                 // Step 2: If this is not an Object, throw TypeError
-                if !matches!(this, JsValue::Object(_)) {
+                if !this.is_object() {
                     let err =
                         interp.create_type_error("Iterator.prototype.drop called on non-object");
                     return Completion::Throw(err);
                 }
                 // Step 3: numLimit = ToNumber(limit)
-                let limit_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let limit_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let num_limit = match interp.to_number_value(&limit_val) {
                     Ok(n) => n,
                     Err(e) => {
@@ -2301,7 +2316,7 @@ impl Interpreter {
                         };
                         if !alive {
                             return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
+                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             );
                         }
                         if running {
@@ -2321,7 +2336,7 @@ impl Interpreter {
                                             state_next.borrow_mut().4 = false;
                                             return Completion::Normal(
                                                 interp.create_iter_result_object(
-                                                    JsValue::Undefined,
+                                                    JsValue::UNDEFINED,
                                                     true,
                                                 ),
                                             );
@@ -2345,7 +2360,7 @@ impl Interpreter {
                                 Ok(None) => {
                                     state_next.borrow_mut().4 = false;
                                     Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::Undefined, true),
+                                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                     )
                                 }
                                 Err(e) => {
@@ -2379,12 +2394,12 @@ impl Interpreter {
                                 Completion::Throw(e)
                             } else {
                                 Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 )
                             }
                         } else {
                             Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
+                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             )
                         };
                         state_ret.borrow_mut().5 = false;
@@ -2409,13 +2424,17 @@ impl Interpreter {
             "flatMap".to_string(),
             1,
             |interp, this, args| {
-                if !matches!(this, JsValue::Object(_)) {
+                if !this.is_object() {
                     let err = interp.create_type_error("Iterator.prototype.flatMap called on non-object");
                     return Completion::Throw(err);
                 }
-                let mapper = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(&mapper, JsValue::Object(o) if interp.get_object_cell(o.id).map(|od| od.borrow().callable.is_some()).unwrap_or(false))
-                {
+                let mapper = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if !mapper.as_object_id().is_some_and(|id| {
+                    interp
+                        .get_object_cell(id)
+                        .map(|od| od.borrow().callable.is_some())
+                        .unwrap_or(false)
+                }) {
                     let _ = iterator_close_getter(interp, this);
                     let err = interp.create_type_error("mapper is not a function");
                     return Completion::Throw(err);
@@ -2458,7 +2477,7 @@ impl Interpreter {
                         let running = state_next.borrow().7;
                         if !alive {
                             return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
+                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             );
                         }
                         if running {
@@ -2529,8 +2548,8 @@ impl Interpreter {
                                         };
                                         let mapped = interp.call_function(
                                             &mapper,
-                                            &JsValue::Undefined,
-                                            &[value, JsValue::Number(counter)],
+                                            &JsValue::UNDEFINED,
+                                            &[value, JsValue::number(counter)],
                                         );
                                         state_next.borrow_mut().3 = counter + 1.0;
                                         match mapped {
@@ -2557,7 +2576,7 @@ impl Interpreter {
                                                 state_next.borrow_mut().6 = false;
                                                 return Completion::Normal(
                                                     interp.create_iter_result_object(
-                                                        JsValue::Undefined,
+                                                        JsValue::UNDEFINED,
                                                         true,
                                                     ),
                                                 );
@@ -2568,7 +2587,7 @@ impl Interpreter {
                                         state_next.borrow_mut().6 = false;
                                         return Completion::Normal(
                                             interp
-                                                .create_iter_result_object(JsValue::Undefined, true),
+                                                .create_iter_result_object(JsValue::UNDEFINED, true),
                                         );
                                     }
                                     Err(e) => {
@@ -2608,12 +2627,12 @@ impl Interpreter {
                                 Completion::Throw(e)
                             } else {
                                 Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 )
                             }
                         } else {
                             Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
+                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             )
                         };
                         state_ret.borrow_mut().7 = false;
@@ -2649,12 +2668,9 @@ impl Interpreter {
             "next".to_string(),
             0,
             move |interp, this, _args| {
-                let this_id = match this {
-                    JsValue::Object(o) => o.id,
-                    _ => {
-                        let err = interp.create_type_error("next requires an Iterator wrapper");
-                        return Completion::Throw(err);
-                    }
+                let Some(this_id) = this.as_object_id() else {
+                    let err = interp.create_type_error("next requires an Iterator wrapper");
+                    return Completion::Throw(err);
                 };
                 let record = interp.get_object_cell(this_id).and_then(|o| {
                     if let Some(crate::interpreter::types::IterHelperData::Delegation {
@@ -2685,12 +2701,9 @@ impl Interpreter {
             "return".to_string(),
             0,
             move |interp, this, _args| {
-                let this_id = match this {
-                    JsValue::Object(o) => o.id,
-                    _ => {
-                        let err = interp.create_type_error("return requires an Iterator wrapper");
-                        return Completion::Throw(err);
-                    }
+                let Some(this_id) = this.as_object_id() else {
+                    let err = interp.create_type_error("return requires an Iterator wrapper");
+                    return Completion::Throw(err);
                 };
                 let record = interp.get_object_cell(this_id).and_then(|o| {
                     if let Some(crate::interpreter::types::IterHelperData::Delegation {
@@ -2710,20 +2723,20 @@ impl Interpreter {
                         return Completion::Throw(err);
                     }
                 };
-                if let JsValue::Object(io) = &iter {
-                    let return_method = match interp.get_object_property(io.id, "return", &iter) {
+                if let Some(iter_id) = iter.as_object_id() {
+                    let return_method = match interp.get_object_property(iter_id, "return", &iter) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
-                    if matches!(return_method, JsValue::Undefined | JsValue::Null) {
+                    if return_method.is_nullish() {
                         return Completion::Normal(
-                            interp.create_iter_result_object(JsValue::Undefined, true),
+                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
                         );
                     }
                     interp.call_function(&return_method, &iter, &[])
                 } else {
-                    Completion::Normal(interp.create_iter_result_object(JsValue::Undefined, true))
+                    Completion::Normal(interp.create_iter_result_object(JsValue::UNDEFINED, true))
                 }
             },
         ));
@@ -2737,7 +2750,7 @@ impl Interpreter {
             "from".to_string(),
             1,
             move |interp, _this, args| {
-                let obj = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let obj = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
 
                 // Use GetIteratorFlattenable(obj, iterate-strings) per spec
                 let (iter_val, next_method) = match get_iterator_flattenable(interp, &obj, false) {
@@ -2746,10 +2759,11 @@ impl Interpreter {
                 };
 
                 // OrdinaryHasInstance(%Iterator%, iteratorRecord.[[Iterator]])
-                let has_iter_proto = matches!(
-                    interp.ordinary_has_instance(&iterator_ctor_for_from, &iter_val),
-                    Completion::Normal(JsValue::Boolean(true))
-                );
+                let has_iter_proto =
+                    match interp.ordinary_has_instance(&iterator_ctor_for_from, &iter_val) {
+                        Completion::Normal(v) => v.as_boolean() == Some(true),
+                        _ => false,
+                    };
 
                 if has_iter_proto {
                     return Completion::Normal(iter_val);
@@ -2776,12 +2790,12 @@ impl Interpreter {
                     wrapper.gc_native_roots = Some(vec![iter_val, next_method]);
                 }
 
-                Completion::Normal(JsValue::Object(crate::types::JsObject { id: wrapper_id }))
+                Completion::Normal(JsValue::object(wrapper_id))
             },
         ));
 
-        if let JsValue::Object(ctor_obj) = iterator_ctor
-            && let Some(obj) = self.get_object_cell(ctor_obj.id)
+        if let Some(ctor_id) = iterator_ctor.as_object_id()
+            && let Some(obj) = self.get_object_cell(ctor_id)
         {
             obj.borrow_mut().insert_builtin("from".to_string(), from_fn);
         }
@@ -2796,28 +2810,28 @@ impl Interpreter {
                 let mut iterables: Vec<(JsValue, JsValue)> = Vec::new();
                 for arg in args {
                     // Per spec: each argument must NOT be a primitive (reject-primitives)
-                    if !matches!(arg, JsValue::Object(_)) {
+                    if !arg.is_object() {
                         let err = interp.create_type_error("value is not iterable");
                         return Completion::Throw(err);
                     }
                     if let Some(ref key) = sym_key {
-                        let iter_fn = if let JsValue::Object(o) = arg {
-                            match interp.get_object_property(o.id, key, arg) {
+                        let iter_fn = if let Some(arg_id) = arg.as_object_id() {
+                            match interp.get_object_property(arg_id, key, arg) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             }
                         } else {
-                            JsValue::Undefined
+                            JsValue::UNDEFINED
                         };
-                        if matches!(iter_fn, JsValue::Undefined | JsValue::Null) {
+                        if iter_fn.is_nullish() {
                             let err = interp.create_type_error("value is not iterable");
                             return Completion::Throw(err);
                         }
                         // Verify it's callable
-                        let is_callable = if let JsValue::Object(fo) = &iter_fn {
+                        let is_callable = if let Some(iter_fn_id) = iter_fn.as_object_id() {
                             interp
-                                .get_object_cell(fo.id)
+                                .get_object_cell(iter_fn_id)
                                 .map(|od| od.borrow().callable.is_some())
                                 .unwrap_or(false)
                         } else {
@@ -2856,7 +2870,7 @@ impl Interpreter {
                         let running = state_next.borrow().5;
                         if !alive {
                             return Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
+                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             );
                         }
                         if running {
@@ -2872,7 +2886,7 @@ impl Interpreter {
                             };
                             if !alive {
                                 return Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 );
                             }
 
@@ -2906,14 +2920,14 @@ impl Interpreter {
                             if idx >= iterables.len() {
                                 state_next.borrow_mut().4 = false;
                                 return Completion::Normal(
-                                    interp.create_iter_result_object(JsValue::Undefined, true),
+                                    interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                 );
                             }
 
                             let (ref iterable, ref iter_fn) = iterables[idx];
                             match interp.call_function(iter_fn, iterable, &[]) {
                                 Completion::Normal(new_iter) => {
-                                    if !matches!(new_iter, JsValue::Object(_)) {
+                                    if !new_iter.is_object() {
                                         state_next.borrow_mut().4 = false;
                                         let err = interp.create_type_error(
                                             "Result of Symbol.iterator is not an object",
@@ -2939,7 +2953,7 @@ impl Interpreter {
                                 _ => {
                                     state_next.borrow_mut().4 = false;
                                     return Completion::Normal(
-                                        interp.create_iter_result_object(JsValue::Undefined, true),
+                                        interp.create_iter_result_object(JsValue::UNDEFINED, true),
                                     );
                                 }
                             }
@@ -2974,7 +2988,7 @@ impl Interpreter {
                             Completion::Throw(e)
                         } else {
                             Completion::Normal(
-                                interp.create_iter_result_object(JsValue::Undefined, true),
+                                interp.create_iter_result_object(JsValue::UNDEFINED, true),
                             )
                         };
                         state_ret.borrow_mut().5 = false; // clear running
@@ -2996,17 +3010,17 @@ impl Interpreter {
         ));
 
         // Fix concat.length to 0 (spec says rest parameter = length 0)
-        if let JsValue::Object(concat_obj) = &concat_fn
-            && let Some(obj) = self.get_object_cell(concat_obj.id)
+        if let Some(concat_id) = concat_fn.as_object_id()
+            && let Some(obj) = self.get_object_cell(concat_id)
         {
             obj.borrow_mut().insert_property(
                 "length".to_string(),
-                PropertyDescriptor::data(JsValue::Number(0.0), false, false, true),
+                PropertyDescriptor::data(JsValue::number(0.0), false, false, true),
             );
         }
 
-        if let JsValue::Object(ctor_obj) = iterator_ctor
-            && let Some(obj) = self.get_object_cell(ctor_obj.id)
+        if let Some(ctor_id) = iterator_ctor.as_object_id()
+            && let Some(obj) = self.get_object_cell(ctor_id)
         {
             obj.borrow_mut()
                 .insert_builtin("concat".to_string(), concat_fn);
@@ -3017,33 +3031,33 @@ impl Interpreter {
             "zip".to_string(),
             1,
             |interp, _this, args| {
-                let iterables_arg = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let iterables_arg = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
 
                 // Step 1: If iterables is not an Object, throw a TypeError
-                if !matches!(iterables_arg, JsValue::Object(_)) {
+                if !iterables_arg.is_object() {
                     let err = interp.create_type_error("iterables is not an object");
                     return Completion::Throw(err);
                 }
 
                 // Step 2: GetOptionsObject(options)
-                let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(options, JsValue::Undefined | JsValue::Object(_)) {
+                let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                if !options.is_undefined() && !options.is_object() {
                     let err = interp.create_type_error("options must be an object or undefined");
                     return Completion::Throw(err);
                 }
 
                 // Step 3: Get mode — NOT ToString, direct string comparison
-                let mode = if matches!(options, JsValue::Undefined) {
+                let mode = if options.is_undefined() {
                     "shortest".to_string()
-                } else if let JsValue::Object(o) = &options {
-                    let mode_val = match interp.get_object_property(o.id, "mode", &options) {
+                } else if let Some(options_id) = options.as_object_id() {
+                    let mode_val = match interp.get_object_property(options_id, "mode", &options) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
-                    if matches!(mode_val, JsValue::Undefined) {
+                    if mode_val.is_undefined() {
                         "shortest".to_string()
-                    } else if let JsValue::String(ref s) = mode_val {
+                    } else if let Some(s) = mode_val.as_string() {
                         let rs = s.to_rust_string();
                         match rs.as_str() {
                             "shortest" | "longest" | "strict" => rs,
@@ -3065,14 +3079,14 @@ impl Interpreter {
 
                 // Step 7: Get padding from options (for "longest" mode)
                 let padding_option = if mode == "longest" {
-                    if let JsValue::Object(o) = &options {
-                        let p = match interp.get_object_property(o.id, "padding", &options) {
+                    if let Some(options_id) = options.as_object_id() {
+                        let p = match interp.get_object_property(options_id, "padding", &options) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
-                        if !matches!(p, JsValue::Undefined) {
-                            if !matches!(p, JsValue::Object(_)) {
+                        if !p.is_undefined() {
+                            if !p.is_object() {
                                 let err = interp
                                     .create_type_error("padding must be an object or undefined");
                                 return Completion::Throw(err);
@@ -3104,13 +3118,13 @@ impl Interpreter {
                         Ok(Some(next_val)) => {
                             match get_iterator_flattenable(interp, &next_val, true) {
                                 Ok(pair) => {
-                                    if let JsValue::Object(o) = &pair.0 {
-                                        collection_temp_ids.push(o.id);
-                                        interp.gc_temp_roots.push(o.id);
+                                    if let Some(id) = pair.0.as_object_id() {
+                                        collection_temp_ids.push(id);
+                                        interp.gc_temp_roots.push(id);
                                     }
-                                    if let JsValue::Object(o) = &pair.1 {
-                                        collection_temp_ids.push(o.id);
-                                        interp.gc_temp_roots.push(o.id);
+                                    if let Some(id) = pair.1.as_object_id() {
+                                        collection_temp_ids.push(id);
+                                        interp.gc_temp_roots.push(id);
                                     }
                                     iters.push(pair);
                                 }
@@ -3166,7 +3180,7 @@ impl Interpreter {
                                     Ok(Some(v)) => pads.push(v),
                                     Ok(None) => {
                                         using_iterator = false;
-                                        pads.push(JsValue::Undefined);
+                                        pads.push(JsValue::UNDEFINED);
                                     }
                                     Err(e) => {
                                         let _ = iterator_close_all(interp, &iters, Err(e.clone()));
@@ -3174,7 +3188,7 @@ impl Interpreter {
                                     }
                                 }
                             } else {
-                                pads.push(JsValue::Undefined);
+                                pads.push(JsValue::UNDEFINED);
                             }
                         }
                         if using_iterator && let Err(e) = iterator_close_getter(interp, &pi) {
@@ -3183,17 +3197,17 @@ impl Interpreter {
                         }
                         pads
                     } else {
-                        vec![JsValue::Undefined; iter_count]
+                        vec![JsValue::UNDEFINED; iter_count]
                     }
                 } else {
-                    vec![JsValue::Undefined; iter_count]
+                    vec![JsValue::UNDEFINED; iter_count]
                 };
 
                 // Also temp-root padding object ids during padding collection
                 for pad_val in &padding_values {
-                    if let JsValue::Object(o) = pad_val {
-                        collection_temp_ids.push(o.id);
-                        interp.gc_temp_roots.push(o.id);
+                    if let Some(id) = pad_val.as_object_id() {
+                        collection_temp_ids.push(id);
+                        interp.gc_temp_roots.push(id);
                     }
                 }
 
@@ -3225,16 +3239,16 @@ impl Interpreter {
                             let s = state_next.borrow();
                             let mut ids = Vec::new();
                             for (io, nm) in &s.0 {
-                                if let JsValue::Object(o) = io {
-                                    ids.push(o.id);
+                                if let Some(id) = io.as_object_id() {
+                                    ids.push(id);
                                 }
-                                if let JsValue::Object(o) = nm {
-                                    ids.push(o.id);
+                                if let Some(id) = nm.as_object_id() {
+                                    ids.push(id);
                                 }
                             }
                             for pad in &s.3 {
-                                if let JsValue::Object(o) = pad {
-                                    ids.push(o.id);
+                                if let Some(id) = pad.as_object_id() {
+                                    ids.push(id);
                                 }
                             }
                             ids
@@ -3276,7 +3290,7 @@ impl Interpreter {
                             }
                         }
                         Completion::Normal(
-                            interp.create_iter_result_object(JsValue::Undefined, true),
+                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
                         )
                     },
                 ));
@@ -3304,8 +3318,8 @@ impl Interpreter {
             },
         ));
 
-        if let JsValue::Object(ctor_obj) = iterator_ctor
-            && let Some(obj) = self.get_object_cell(ctor_obj.id)
+        if let Some(ctor_id) = iterator_ctor.as_object_id()
+            && let Some(obj) = self.get_object_cell(ctor_id)
         {
             obj.borrow_mut().insert_builtin("zip".to_string(), zip_fn);
         }
@@ -3315,36 +3329,33 @@ impl Interpreter {
             "zipKeyed".to_string(),
             1,
             |interp, _this, args| {
-                let iterables_obj = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let iterables_obj = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
 
                 // Step 1: iterables must be an object
-                let obj_id = match &iterables_obj {
-                    JsValue::Object(o) => o.id,
-                    _ => {
-                        let err = interp.create_type_error("iterables must be an object");
-                        return Completion::Throw(err);
-                    }
+                let Some(obj_id) = iterables_obj.as_object_id() else {
+                    let err = interp.create_type_error("iterables must be an object");
+                    return Completion::Throw(err);
                 };
 
                 // Step 2: GetOptionsObject(options)
-                let options = args.get(1).cloned().unwrap_or(JsValue::Undefined);
-                if !matches!(options, JsValue::Undefined | JsValue::Object(_)) {
+                let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+                if !options.is_undefined() && !options.is_object() {
                     let err = interp.create_type_error("options must be an object or undefined");
                     return Completion::Throw(err);
                 }
 
                 // Step 3: Get mode — direct string comparison, no ToString
-                let mode = if matches!(options, JsValue::Undefined) {
+                let mode = if options.is_undefined() {
                     "shortest".to_string()
-                } else if let JsValue::Object(o) = &options {
-                    let mode_val = match interp.get_object_property(o.id, "mode", &options) {
+                } else if let Some(options_id) = options.as_object_id() {
+                    let mode_val = match interp.get_object_property(options_id, "mode", &options) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Completion::Throw(e),
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
-                    if matches!(mode_val, JsValue::Undefined) {
+                    if mode_val.is_undefined() {
                         "shortest".to_string()
-                    } else if let JsValue::String(ref s) = mode_val {
+                    } else if let Some(s) = mode_val.as_string() {
                         let rs = s.to_rust_string();
                         match rs.as_str() {
                             "shortest" | "longest" | "strict" => rs,
@@ -3366,14 +3377,14 @@ impl Interpreter {
 
                 // Step 7: Get padding from options (for "longest" mode)
                 let padding_option = if mode == "longest" {
-                    if let JsValue::Object(o) = &options {
-                        let p = match interp.get_object_property(o.id, "padding", &options) {
+                    if let Some(options_id) = options.as_object_id() {
+                        let p = match interp.get_object_property(options_id, "padding", &options) {
                             Completion::Normal(v) => v,
                             Completion::Throw(e) => return Completion::Throw(e),
-                            _ => JsValue::Undefined,
+                            _ => JsValue::UNDEFINED,
                         };
-                        if !matches!(p, JsValue::Undefined) {
-                            if !matches!(p, JsValue::Object(_)) {
+                        if !p.is_undefined() {
+                            if !p.is_object() {
                                 let err = interp
                                     .create_type_error("padding must be an object or undefined");
                                 return Completion::Throw(err);
@@ -3408,15 +3419,11 @@ impl Interpreter {
                     let is_enumerable = match interp.proxy_get_own_property_descriptor(obj_id, &key)
                     {
                         Ok(desc_val) => {
-                            if matches!(desc_val, JsValue::Undefined) {
+                            if desc_val.is_undefined() {
                                 false
-                            } else if let JsValue::Object(desc_obj) = &desc_val {
+                            } else if let Some(desc_id) = desc_val.as_object_id() {
                                 // Read enumerable from descriptor object
-                                match interp.get_object_property(
-                                    desc_obj.id,
-                                    "enumerable",
-                                    &desc_val,
-                                ) {
+                                match interp.get_object_property(desc_id, "enumerable", &desc_val) {
                                     Completion::Normal(v) => {
                                         crate::interpreter::helpers::to_boolean(&v)
                                     }
@@ -3459,23 +3466,23 @@ impl Interpreter {
                             }
                             return Completion::Throw(e);
                         }
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
 
                     // Step 12.c.iii: If value is not undefined
-                    if matches!(iterable, JsValue::Undefined) {
+                    if iterable.is_undefined() {
                         continue;
                     }
 
                     match get_iterator_flattenable(interp, &iterable, true) {
                         Ok(pair) => {
-                            if let JsValue::Object(o) = &pair.0 {
-                                collection_temp_ids.push(o.id);
-                                interp.gc_temp_roots.push(o.id);
+                            if let Some(id) = pair.0.as_object_id() {
+                                collection_temp_ids.push(id);
+                                interp.gc_temp_roots.push(id);
                             }
-                            if let JsValue::Object(o) = &pair.1 {
-                                collection_temp_ids.push(o.id);
-                                interp.gc_temp_roots.push(o.id);
+                            if let Some(id) = pair.1.as_object_id() {
+                                collection_temp_ids.push(id);
+                                interp.gc_temp_roots.push(id);
                             }
                             key_names.push(key.clone());
                             iters.push(pair);
@@ -3499,35 +3506,35 @@ impl Interpreter {
                 // Step 14: Get padding values per key (for longest mode)
                 let padding_values: Vec<JsValue> = if mode == "longest" {
                     if let Some(ref pad_obj) = padding_option {
-                        if let JsValue::Object(po) = pad_obj {
+                        if let Some(pad_id) = pad_obj.as_object_id() {
                             let mut pads = Vec::with_capacity(iter_count);
                             for key in &key_names {
-                                let val = match interp.get_object_property(po.id, key, pad_obj) {
+                                let val = match interp.get_object_property(pad_id, key, pad_obj) {
                                     Completion::Normal(v) => v,
                                     Completion::Throw(e) => {
                                         let _ = iterator_close_all(interp, &iters, Err(e.clone()));
                                         return Completion::Throw(e);
                                     }
-                                    _ => JsValue::Undefined,
+                                    _ => JsValue::UNDEFINED,
                                 };
                                 pads.push(val);
                             }
                             pads
                         } else {
-                            vec![JsValue::Undefined; iter_count]
+                            vec![JsValue::UNDEFINED; iter_count]
                         }
                     } else {
-                        vec![JsValue::Undefined; iter_count]
+                        vec![JsValue::UNDEFINED; iter_count]
                     }
                 } else {
-                    vec![JsValue::Undefined; iter_count]
+                    vec![JsValue::UNDEFINED; iter_count]
                 };
 
                 // Also temp-root padding object ids
                 for pad_val in &padding_values {
-                    if let JsValue::Object(o) = pad_val {
-                        collection_temp_ids.push(o.id);
-                        interp.gc_temp_roots.push(o.id);
+                    if let Some(id) = pad_val.as_object_id() {
+                        collection_temp_ids.push(id);
+                        interp.gc_temp_roots.push(id);
                     }
                 }
 
@@ -3549,16 +3556,16 @@ impl Interpreter {
                             let s = state_next.borrow();
                             let mut ids = Vec::new();
                             for (io, nm) in &s.1 {
-                                if let JsValue::Object(o) = io {
-                                    ids.push(o.id);
+                                if let Some(id) = io.as_object_id() {
+                                    ids.push(id);
                                 }
-                                if let JsValue::Object(o) = nm {
-                                    ids.push(o.id);
+                                if let Some(id) = nm.as_object_id() {
+                                    ids.push(id);
                                 }
                             }
                             for pad in &s.4 {
-                                if let JsValue::Object(o) = pad {
-                                    ids.push(o.id);
+                                if let Some(id) = pad.as_object_id() {
+                                    ids.push(id);
                                 }
                             }
                             ids
@@ -3598,7 +3605,7 @@ impl Interpreter {
                             }
                         }
                         Completion::Normal(
-                            interp.create_iter_result_object(JsValue::Undefined, true),
+                            interp.create_iter_result_object(JsValue::UNDEFINED, true),
                         )
                     },
                 ));
@@ -3626,8 +3633,8 @@ impl Interpreter {
             },
         ));
 
-        if let JsValue::Object(ctor_obj) = iterator_ctor
-            && let Some(obj) = self.get_object_cell(ctor_obj.id)
+        if let Some(ctor_id) = iterator_ctor.as_object_id()
+            && let Some(obj) = self.get_object_cell(ctor_id)
         {
             obj.borrow_mut()
                 .insert_builtin("zipKeyed".to_string(), zip_keyed_fn);
@@ -3650,7 +3657,7 @@ impl Interpreter {
                 done: false,
             });
         let id = self.alloc_object(obj_data);
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 
     pub(crate) fn create_typed_array_iterator(
@@ -3673,7 +3680,7 @@ impl Interpreter {
                 done: false,
             });
         let id = self.alloc_object(obj_data);
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 
     pub(crate) fn create_string_iterator(&mut self, string: JsString) -> JsValue {
@@ -3691,7 +3698,7 @@ impl Interpreter {
                 done: false,
             });
         let id = self.alloc_object(obj_data);
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 
     pub(crate) fn setup_generator_prototype(&mut self) {
@@ -3708,10 +3715,10 @@ impl Interpreter {
             "next".to_string(),
             1,
             |interp, this, args| {
-                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 // Check which variant we have
-                if let JsValue::Object(o) = this
-                    && let Some(obj_rc) = interp.get_object_cell(o.id)
+                if let Some(this_id) = this.as_object_id()
+                    && let Some(obj_rc) = interp.get_object_cell(this_id)
                 {
                     let is_state_machine = matches!(
                         obj_rc.borrow().iterator_state(),
@@ -3736,10 +3743,10 @@ impl Interpreter {
             "return".to_string(),
             1,
             |interp, this, args| {
-                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 // Check which variant we have
-                if let JsValue::Object(o) = this
-                    && let Some(obj_rc) = interp.get_object_cell(o.id)
+                if let Some(this_id) = this.as_object_id()
+                    && let Some(obj_rc) = interp.get_object_cell(this_id)
                 {
                     let is_state_machine = matches!(
                         obj_rc.borrow().iterator_state(),
@@ -3764,10 +3771,10 @@ impl Interpreter {
             "throw".to_string(),
             1,
             |interp, this, args| {
-                let exception = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let exception = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 // Check which variant we have
-                if let JsValue::Object(o) = this
-                    && let Some(obj_rc) = interp.get_object_cell(o.id)
+                if let Some(this_id) = this.as_object_id()
+                    && let Some(obj_rc) = interp.get_object_cell(this_id)
                 {
                     let is_state_machine = matches!(
                         obj_rc.borrow().iterator_state(),
@@ -3803,10 +3810,10 @@ impl Interpreter {
         // [[Prototype]] = Function.prototype_id
         // Get Function.prototype from global Function
         if let Some(func_val) = self.get_global_var("Function")
-            && let JsValue::Object(func_obj) = func_val
-            && let JsValue::Object(func_proto_obj) =
-                self.get_property_on_id(func_obj.id, "prototype")
-            && let Some(func_proto) = self.get_object_cell(func_proto_obj.id)
+            && let Some(func_id) = func_val.as_object_id()
+            && let Some(func_proto_id) =
+                self.get_property_on_id(func_id, "prototype").as_object_id()
+            && let Some(func_proto) = self.get_object_cell(func_proto_id)
         {
             self.get_object_cell_expect(gf_proto_id)
                 .borrow_mut()
@@ -3818,12 +3825,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_property(
                 "prototype".to_string(),
-                PropertyDescriptor::data(
-                    JsValue::Object(crate::types::JsObject { id: gen_proto_id }),
-                    false,
-                    false,
-                    true,
-                ),
+                PropertyDescriptor::data(JsValue::object(gen_proto_id), false, false, true),
             );
 
         // Symbol.toStringTag = "GeneratorFunction"
@@ -3834,12 +3836,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_property(
                 "constructor".to_string(),
-                PropertyDescriptor::data(
-                    JsValue::Object(crate::types::JsObject { id: gf_proto_id }),
-                    false,
-                    false,
-                    true,
-                ),
+                PropertyDescriptor::data(JsValue::object(gf_proto_id), false, false, true),
             );
 
         self.realm_mut().generator_function_prototype = Some(gf_proto_id);
@@ -3875,16 +3872,12 @@ impl Interpreter {
                 // 2. Let promiseCapability be ! NewPromiseCapability(%Promise%).
                 let promise_ctor = interp
                     .get_global_var("Promise")
-                    .unwrap_or(JsValue::Undefined);
+                    .unwrap_or(JsValue::UNDEFINED);
                 let cap = match interp.new_promise_capability(&promise_ctor) {
                     Ok(c) => c,
                     Err(e) => return Completion::Throw(e),
                 };
-                let cap_promise_id = if let JsValue::Object(ref o) = cap.promise {
-                    o.id
-                } else {
-                    0
-                };
+                let cap_promise_id = cap.promise.as_object_id().unwrap_or(0);
 
                 // 3. Let return be GetMethod(O, "return").
                 // 4. IfAbruptRejectPromise(return, promiseCapability).
@@ -3897,9 +3890,9 @@ impl Interpreter {
                 };
                 let return_method = if interp.is_callable(&return_method) {
                     Some(return_method)
-                } else if matches!(return_method, JsValue::Undefined | JsValue::Null) {
+                } else if return_method.is_nullish() {
                     None
-                } else if !matches!(return_method, JsValue::Undefined | JsValue::Null) {
+                } else if !return_method.is_nullish() {
                     let e = interp.create_type_error("return is not a function");
                     interp.reject_promise(cap_promise_id, e);
                     return Completion::Normal(cap.promise);
@@ -3912,8 +3905,8 @@ impl Interpreter {
                 if return_method.is_none() {
                     let _ = interp.call_function(
                         &cap.resolve,
-                        &JsValue::Undefined,
-                        &[JsValue::Undefined],
+                        &JsValue::UNDEFINED,
+                        &[JsValue::UNDEFINED],
                     );
                     return Completion::Normal(cap.promise);
                 }
@@ -3946,15 +3939,11 @@ impl Interpreter {
                 let on_fulfilled = interp.create_function(JsFunction::native(
                     "".to_string(),
                     1,
-                    |_interp, _this, _args| Completion::Normal(JsValue::Undefined),
+                    |_interp, _this, _args| Completion::Normal(JsValue::UNDEFINED),
                 ));
 
                 //   g. Perform PerformPromiseThen(resultWrapper, onFulfilled, undefined, promiseCapability).
-                let wrapper_id = if let JsValue::Object(ref o) = result_wrapper {
-                    o.id
-                } else {
-                    0
-                };
+                let wrapper_id = result_wrapper.as_object_id().unwrap_or(0);
                 let fulfill_reaction = crate::interpreter::types::PromiseReaction {
                     handler: Some(on_fulfilled),
                     promise_id: Some(cap_promise_id),
@@ -4033,7 +4022,7 @@ impl Interpreter {
             "next".to_string(),
             1,
             |interp, this, args| {
-                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 interp.async_generator_next(this, value)
             },
         ));
@@ -4049,7 +4038,7 @@ impl Interpreter {
             "return".to_string(),
             1,
             |interp, this, args| {
-                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 interp.async_generator_return(this, value)
             },
         ));
@@ -4065,7 +4054,7 @@ impl Interpreter {
             "throw".to_string(),
             1,
             |interp, this, args| {
-                let exception = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let exception = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 interp.async_generator_throw(this, exception)
             },
         ));
@@ -4091,12 +4080,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_property(
                 "prototype".to_string(),
-                PropertyDescriptor::data(
-                    JsValue::Object(crate::types::JsObject { id: gen_proto_id }),
-                    false,
-                    false,
-                    true,
-                ),
+                PropertyDescriptor::data(JsValue::object(gen_proto_id), false, false, true),
             );
         // Symbol.toStringTag
         self.define_to_string_tag(agf_proto_id, "AsyncGeneratorFunction");
@@ -4105,12 +4089,7 @@ impl Interpreter {
             .borrow_mut()
             .insert_property(
                 "constructor".to_string(),
-                PropertyDescriptor::data(
-                    JsValue::Object(crate::types::JsObject { id: agf_proto_id }),
-                    false,
-                    false,
-                    true,
-                ),
+                PropertyDescriptor::data(JsValue::object(agf_proto_id), false, false, true),
             );
         self.realm_mut().async_generator_function_prototype = Some(agf_proto_id);
     }
@@ -4128,86 +4107,80 @@ impl Interpreter {
             .insert_value("value".to_string(), value);
         self.get_object_cell_expect(obj_id)
             .borrow_mut()
-            .insert_value("done".to_string(), JsValue::Boolean(done));
+            .insert_value("done".to_string(), JsValue::boolean(done));
         let id = obj_id;
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 
     pub(crate) fn get_iterator(&mut self, obj: &JsValue) -> Result<JsValue, JsValue> {
         let sym_key = self.get_symbol_iterator_key();
-        let iter_fn = match obj {
-            JsValue::Object(o) => {
-                if let Some(key) = &sym_key {
-                    let val = match self.get_object_property(o.id, key, obj) {
+        let iter_fn = if let Some(obj_id) = obj.as_object_id() {
+            if let Some(key) = &sym_key {
+                let val = match self.get_object_property(obj_id, key, obj) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => JsValue::UNDEFINED,
+                };
+                if val.is_undefined() {
+                    return Err(self.create_type_error("is not iterable"));
+                }
+                val
+            } else {
+                return Err(self.create_type_error("is not iterable"));
+            }
+        } else if obj.is_string() {
+            if let Some(key) = &sym_key {
+                let str_proto_id = self.realm().string_prototype;
+                if let Some(proto_id) = str_proto_id {
+                    let proto_val = JsValue::object(proto_id);
+                    let val = match self.get_object_property(proto_id, key, &proto_val) {
                         Completion::Normal(v) => v,
                         Completion::Throw(e) => return Err(e),
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
-                    if matches!(val, JsValue::Undefined) {
+                    if !val.is_undefined() {
+                        val
+                    } else {
                         return Err(self.create_type_error("is not iterable"));
                     }
+                } else {
+                    return Err(self.create_type_error("is not iterable"));
+                }
+            } else {
+                return Err(self.create_type_error("is not iterable"));
+            }
+        } else if let Some(key) = &sym_key {
+            let wrapped = match self.to_object(obj) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => return Err(self.create_type_error("is not iterable")),
+            };
+            if let Some(wrapped_id) = wrapped.as_object_id() {
+                let val = match self.get_object_property(wrapped_id, key, &wrapped) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => JsValue::UNDEFINED,
+                };
+                if !val.is_nullish() {
                     val
                 } else {
                     return Err(self.create_type_error("is not iterable"));
                 }
+            } else {
+                return Err(self.create_type_error("is not iterable"));
             }
-            JsValue::String(_) => {
-                if let Some(key) = &sym_key {
-                    let str_proto_id = self.realm().string_prototype;
-                    if let Some(proto_id) = str_proto_id {
-                        let proto_val = JsValue::Object(crate::types::JsObject { id: proto_id });
-                        let val = match self.get_object_property(proto_id, key, &proto_val) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Err(e),
-                            _ => JsValue::Undefined,
-                        };
-                        if !matches!(val, JsValue::Undefined) {
-                            val
-                        } else {
-                            return Err(self.create_type_error("is not iterable"));
-                        }
-                    } else {
-                        return Err(self.create_type_error("is not iterable"));
-                    }
-                } else {
-                    return Err(self.create_type_error("is not iterable"));
-                }
-            }
-            _ => {
-                if let Some(key) = &sym_key {
-                    let wrapped = match self.to_object(obj) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Err(e),
-                        _ => return Err(self.create_type_error("is not iterable")),
-                    };
-                    if let JsValue::Object(wo) = &wrapped {
-                        let val = match self.get_object_property(wo.id, key, &wrapped) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Err(e),
-                            _ => JsValue::Undefined,
-                        };
-                        if !matches!(val, JsValue::Undefined | JsValue::Null) {
-                            val
-                        } else {
-                            return Err(self.create_type_error("is not iterable"));
-                        }
-                    } else {
-                        return Err(self.create_type_error("is not iterable"));
-                    }
-                } else {
-                    return Err(self.create_type_error("is not iterable"));
-                }
-            }
+        } else {
+            return Err(self.create_type_error("is not iterable"));
         };
         match self.call_function(&iter_fn, obj, &[]) {
             Completion::Normal(v) => {
-                if let JsValue::Object(o) = &v {
-                    let next_method = match self.get_object_property(o.id, "next", &v) {
+                if let Some(v_id) = v.as_object_id() {
+                    let next_method = match self.get_object_property(v_id, "next", &v) {
                         Completion::Normal(n) => n,
                         Completion::Throw(e) => return Err(e),
-                        _ => JsValue::Undefined,
+                        _ => JsValue::UNDEFINED,
                     };
-                    self.iterator_next_cache.insert(o.id, next_method);
+                    self.iterator_next_cache.insert(v_id, next_method);
                     Ok(v)
                 } else {
                     Err(self
@@ -4222,31 +4195,26 @@ impl Interpreter {
     pub(crate) fn get_async_iterator(&mut self, obj: &JsValue) -> Result<JsValue, JsValue> {
         let async_sym_key = self.get_symbol_key("asyncIterator");
         if let Some(key) = &async_sym_key {
-            let iter_fn = match obj {
-                JsValue::Object(o) => {
-                    let val = match self.get_object_property(o.id, key, obj) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Err(e),
-                        _ => JsValue::Undefined,
-                    };
-                    if !matches!(val, JsValue::Undefined | JsValue::Null) {
-                        Some(val)
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
+            let iter_fn = if let Some(obj_id) = obj.as_object_id() {
+                let val = match self.get_object_property(obj_id, key, obj) {
+                    Completion::Normal(v) => v,
+                    Completion::Throw(e) => return Err(e),
+                    _ => JsValue::UNDEFINED,
+                };
+                if !val.is_nullish() { Some(val) } else { None }
+            } else {
+                None
             };
             if let Some(iter_fn) = iter_fn {
                 return match self.call_function(&iter_fn, obj, &[]) {
                     Completion::Normal(v) => {
-                        if let JsValue::Object(o) = &v {
-                            let next_method = match self.get_object_property(o.id, "next", &v) {
+                        if let Some(v_id) = v.as_object_id() {
+                            let next_method = match self.get_object_property(v_id, "next", &v) {
                                 Completion::Normal(n) => n,
                                 Completion::Throw(e) => return Err(e),
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             };
-                            self.iterator_next_cache.insert(o.id, next_method);
+                            self.iterator_next_cache.insert(v_id, next_method);
                             Ok(v)
                         } else {
                             Err(self.create_type_error(
@@ -4266,17 +4234,17 @@ impl Interpreter {
 
     pub(crate) fn create_async_from_sync_iterator(&mut self, sync_iter: JsValue) -> JsValue {
         let wrapper_id = self.create_object_id();
-        let cached_next = if let JsValue::Object(io) = &sync_iter {
-            if let Some(cached) = self.iterator_next_cache.get(&io.id).cloned() {
+        let cached_next = if let Some(sync_id) = sync_iter.as_object_id() {
+            if let Some(cached) = self.iterator_next_cache.get(&sync_id).cloned() {
                 cached
             } else {
-                match self.get_object_property(io.id, "next", &sync_iter) {
-                    Completion::Normal(v) if !matches!(v, JsValue::Undefined) => v,
-                    _ => JsValue::Undefined,
+                match self.get_object_property(sync_id, "next", &sync_iter) {
+                    Completion::Normal(v) if !v.is_undefined() => v,
+                    _ => JsValue::UNDEFINED,
                 }
             }
         } else {
-            JsValue::Undefined
+            JsValue::UNDEFINED
         };
 
         // §27.1.2.1 next()
@@ -4291,7 +4259,7 @@ impl Interpreter {
                     std::slice::from_ref(&args[0])
                 };
                 let result = match interp.call_function(&cached_next, &sync_for_next, call_args) {
-                    Completion::Normal(v) if matches!(v, JsValue::Object(_)) => v,
+                    Completion::Normal(v) if v.is_object() => v,
                     Completion::Normal(_) => {
                         let e = interp.create_type_error("Iterator result is not an object");
                         return interp.create_rejected_promise(e);
@@ -4316,16 +4284,16 @@ impl Interpreter {
             "return".to_string(),
             1,
             move |interp, _this, args| {
-                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let value_present = !args.is_empty();
-                if let JsValue::Object(io) = &sync_for_return {
+                if let Some(sync_id) = sync_for_return.as_object_id() {
                     // GetMethod(syncIterator, "return")
-                    let ret_fn = match interp.get_object_property(io.id, "return", &sync_for_return)
-                    {
-                        Completion::Normal(v) if interp.is_callable(&v) => Some(v),
-                        Completion::Throw(e) => return interp.create_rejected_promise(e),
-                        _ => None,
-                    };
+                    let ret_fn =
+                        match interp.get_object_property(sync_id, "return", &sync_for_return) {
+                            Completion::Normal(v) if interp.is_callable(&v) => Some(v),
+                            Completion::Throw(e) => return interp.create_rejected_promise(e),
+                            _ => None,
+                        };
                     if let Some(ret_fn) = ret_fn {
                         // §27.1.2.2 step 8-9: pass value only if present
                         let call_args: &[JsValue] = if value_present {
@@ -4339,9 +4307,9 @@ impl Interpreter {
                                 Completion::Throw(e) => {
                                     return interp.create_rejected_promise(e);
                                 }
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             };
-                        if !matches!(return_result, JsValue::Object(_)) {
+                        if !return_result.is_object() {
                             let e = interp.create_type_error("Iterator result is not an object");
                             return interp.create_rejected_promise(e);
                         }
@@ -4355,16 +4323,16 @@ impl Interpreter {
                         // return is undefined: resolve with {value, done: true}
                         let iter_result = interp.create_iter_result_object(value, true);
                         let promise = interp.create_promise_object();
-                        if let JsValue::Object(ref o) = promise {
-                            interp.fulfill_promise(o.id, iter_result);
+                        if let Some(promise_id) = promise.as_object_id() {
+                            interp.fulfill_promise(promise_id, iter_result);
                         }
                         Completion::Normal(promise)
                     }
                 } else {
-                    let iter_result = interp.create_iter_result_object(JsValue::Undefined, true);
+                    let iter_result = interp.create_iter_result_object(JsValue::UNDEFINED, true);
                     let promise = interp.create_promise_object();
-                    if let JsValue::Object(ref o) = promise {
-                        interp.fulfill_promise(o.id, iter_result);
+                    if let Some(promise_id) = promise.as_object_id() {
+                        interp.fulfill_promise(promise_id, iter_result);
                     }
                     Completion::Normal(promise)
                 }
@@ -4380,11 +4348,11 @@ impl Interpreter {
             "throw".to_string(),
             1,
             move |interp, _this, args| {
-                let value = args.first().cloned().unwrap_or(JsValue::Undefined);
-                if let JsValue::Object(io) = &sync_for_throw {
+                let value = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                if let Some(sync_id) = sync_for_throw.as_object_id() {
                     // GetMethod(syncIterator, "throw")
                     let throw_method =
-                        match interp.get_object_property(io.id, "throw", &sync_for_throw) {
+                        match interp.get_object_property(sync_id, "throw", &sync_for_throw) {
                             Completion::Normal(v) if interp.is_callable(&v) => Some(v),
                             Completion::Throw(e) => return interp.create_rejected_promise(e),
                             _ => None,
@@ -4394,9 +4362,9 @@ impl Interpreter {
                             match interp.call_function(&throw_method, &sync_for_throw, &[value]) {
                                 Completion::Normal(v) => v,
                                 Completion::Throw(e) => return interp.create_rejected_promise(e),
-                                _ => JsValue::Undefined,
+                                _ => JsValue::UNDEFINED,
                             };
-                        if !matches!(throw_result, JsValue::Object(_)) {
+                        if !throw_result.is_object() {
                             let e = interp.create_type_error("Iterator result is not an object");
                             return interp.create_rejected_promise(e);
                         }
@@ -4428,7 +4396,7 @@ impl Interpreter {
             .insert_builtin("throw".to_string(), throw_fn);
 
         let id = wrapper_id;
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 
     /// §27.1.2.4 AsyncFromSyncIteratorContinuation(result, promiseCap, syncIterRec, closeOnRejection)
@@ -4448,10 +4416,10 @@ impl Interpreter {
             Ok(v) => v,
             Err(e) => return self.create_rejected_promise(e),
         };
-        let done_bool = matches!(done, JsValue::Boolean(true));
+        let done_bool = done.as_boolean() == Some(true);
 
         // Step 5: valueWrapper = PromiseResolve(%Promise%, value)
-        let promise_ctor = self.get_global_var("Promise").unwrap_or(JsValue::Undefined);
+        let promise_ctor = self.get_global_var("Promise").unwrap_or(JsValue::UNDEFINED);
         let value_wrapper = match self.promise_resolve_with_constructor(&promise_ctor, &value) {
             Ok(w) => w,
             Err(e) => {
@@ -4475,12 +4443,12 @@ impl Interpreter {
             "".to_string(),
             1,
             move |interp, _this, args| {
-                let resolved_val = args.first().cloned().unwrap_or(JsValue::Undefined);
+                let resolved_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                 let iter_result = interp.create_iter_result_object(resolved_val, done_bool);
-                if let JsValue::Object(ref op) = outer_clone1 {
-                    interp.fulfill_promise(op.id, iter_result);
+                if let Some(op_id) = outer_clone1.as_object_id() {
+                    interp.fulfill_promise(op_id, iter_result);
                 }
-                Completion::Normal(JsValue::Undefined)
+                Completion::Normal(JsValue::UNDEFINED)
             },
         ));
 
@@ -4492,12 +4460,12 @@ impl Interpreter {
                 "".to_string(),
                 1,
                 move |interp, _this, args| {
-                    let err = args.first().cloned().unwrap_or(JsValue::Undefined);
+                    let err = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let _ = interp.iterator_close_result(&sync_for_close);
-                    if let JsValue::Object(ref op) = outer_clone2 {
-                        interp.reject_promise(op.id, err);
+                    if let Some(op_id) = outer_clone2.as_object_id() {
+                        interp.reject_promise(op_id, err);
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 },
             ))
         } else {
@@ -4505,20 +4473,16 @@ impl Interpreter {
                 "".to_string(),
                 1,
                 move |interp, _this, args| {
-                    let err = args.first().cloned().unwrap_or(JsValue::Undefined);
-                    if let JsValue::Object(ref op) = outer_clone2 {
-                        interp.reject_promise(op.id, err);
+                    let err = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    if let Some(op_id) = outer_clone2.as_object_id() {
+                        interp.reject_promise(op_id, err);
                     }
-                    Completion::Normal(JsValue::Undefined)
+                    Completion::Normal(JsValue::UNDEFINED)
                 },
             ))
         };
 
-        let outer_id = if let JsValue::Object(ref o) = outer_promise {
-            o.id
-        } else {
-            0
-        };
+        let outer_id = outer_promise.as_object_id().unwrap_or(0);
         let (outer_resolve, outer_reject) = self.create_resolving_functions(outer_id);
         let _ = self.perform_promise_then(
             &value_wrapper,
@@ -4532,16 +4496,16 @@ impl Interpreter {
     }
 
     pub(crate) fn iterator_next(&mut self, iterator: &JsValue) -> Result<JsValue, JsValue> {
-        if let JsValue::Object(io) = iterator {
-            let next_fn = if let Some(cached) = self.iterator_next_cache.get(&io.id).cloned() {
-                if matches!(cached, JsValue::Undefined) {
+        if let Some(iter_id) = iterator.as_object_id() {
+            let next_fn = if let Some(cached) = self.iterator_next_cache.get(&iter_id).cloned() {
+                if cached.is_undefined() {
                     None
                 } else {
                     Some(cached)
                 }
             } else {
-                match self.get_object_property(io.id, "next", iterator) {
-                    Completion::Normal(v) if !matches!(v, JsValue::Undefined) => Some(v),
+                match self.get_object_property(iter_id, "next", iterator) {
+                    Completion::Normal(v) if !v.is_undefined() => Some(v),
                     Completion::Throw(e) => return Err(e),
                     _ => None,
                 }
@@ -4549,7 +4513,7 @@ impl Interpreter {
             if let Some(next_fn) = next_fn {
                 match self.call_function(&next_fn, iterator, &[]) {
                     Completion::Normal(v) => {
-                        if matches!(v, JsValue::Object(_)) {
+                        if v.is_object() {
                             Ok(v)
                         } else {
                             Err(self.create_type_error("Iterator result is not an object"))
@@ -4567,11 +4531,11 @@ impl Interpreter {
     }
 
     pub(crate) fn iterator_complete(&mut self, result: &JsValue) -> Result<bool, JsValue> {
-        if let JsValue::Object(o) = result {
-            let done = match self.get_object_property(o.id, "done", result) {
+        if let Some(result_id) = result.as_object_id() {
+            let done = match self.get_object_property(result_id, "done", result) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             return Ok(self.to_boolean_val(&done));
         }
@@ -4579,14 +4543,14 @@ impl Interpreter {
     }
 
     pub(crate) fn iterator_value(&mut self, result: &JsValue) -> Result<JsValue, JsValue> {
-        if let JsValue::Object(o) = result {
-            match self.get_object_property(o.id, "value", result) {
+        if let Some(result_id) = result.as_object_id() {
+            match self.get_object_property(result_id, "value", result) {
                 Completion::Normal(v) => Ok(v),
                 Completion::Throw(e) => Err(e),
-                _ => Ok(JsValue::Undefined),
+                _ => Ok(JsValue::UNDEFINED),
             }
         } else {
-            Ok(JsValue::Undefined)
+            Ok(JsValue::UNDEFINED)
         }
     }
 
@@ -4604,9 +4568,9 @@ impl Interpreter {
         iterator: &JsValue,
         value: &JsValue,
     ) -> Result<Option<JsValue>, JsValue> {
-        if let JsValue::Object(io) = iterator {
-            let return_fn = match self.get_object_property(io.id, "return", iterator) {
-                Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Some(v),
+        if let Some(iter_id) = iterator.as_object_id() {
+            let return_fn = match self.get_object_property(iter_id, "return", iterator) {
+                Completion::Normal(v) if v.is_object() => Some(v),
                 Completion::Normal(_) => None,
                 Completion::Throw(e) => return Err(e),
                 _ => None,
@@ -4614,7 +4578,7 @@ impl Interpreter {
             if let Some(return_fn) = return_fn {
                 match self.call_function(&return_fn, iterator, std::slice::from_ref(value)) {
                     Completion::Normal(v) => {
-                        if matches!(v, JsValue::Object(_)) {
+                        if v.is_object() {
                             Ok(Some(v))
                         } else {
                             Err(self.create_type_error("Iterator return result is not an object"))
@@ -4636,9 +4600,9 @@ impl Interpreter {
         iterator: &JsValue,
         exception: &JsValue,
     ) -> Result<Option<JsValue>, JsValue> {
-        if let JsValue::Object(io) = iterator {
-            let throw_fn = match self.get_object_property(io.id, "throw", iterator) {
-                Completion::Normal(v) if matches!(v, JsValue::Object(_)) => Some(v),
+        if let Some(iter_id) = iterator.as_object_id() {
+            let throw_fn = match self.get_object_property(iter_id, "throw", iterator) {
+                Completion::Normal(v) if v.is_object() => Some(v),
                 Completion::Normal(_) => None,
                 Completion::Throw(e) => return Err(e),
                 _ => None,
@@ -4646,7 +4610,7 @@ impl Interpreter {
             if let Some(throw_fn) = throw_fn {
                 match self.call_function(&throw_fn, iterator, std::slice::from_ref(exception)) {
                     Completion::Normal(v) => {
-                        if matches!(v, JsValue::Object(_)) {
+                        if v.is_object() {
                             Ok(Some(v))
                         } else {
                             Err(self.create_type_error("Iterator throw result is not an object"))
@@ -4673,9 +4637,9 @@ impl Interpreter {
         // itself calls `__host_exit`, that boundary returns a `JsValue` and so
         // cannot carry the exit — record it in the terminal `pending_exit`
         // sink instead. Inert unless the node host floor is enabled.
-        if let JsValue::Object(io) = iterator {
+        if let Some(iter_id) = iterator.as_object_id() {
             // GetMethod(iterator, "return"): undefined/null → no-op, non-callable → TypeError
-            let return_val = match self.get_object_property(io.id, "return", iterator) {
+            let return_val = match self.get_object_property(iter_id, "return", iterator) {
                 Completion::Normal(v) => v,
                 Completion::Throw(_e) => return _completion, // original completion takes priority
                 _ => return _completion,
@@ -4701,9 +4665,9 @@ impl Interpreter {
         // unwinding a body `Completion::Exit`. If `return()` itself calls
         // `__host_exit`, record it in the terminal sink — this `Result`-typed
         // boundary cannot carry a `Completion::Exit`. Inert off-path.
-        if let JsValue::Object(io) = iterator {
+        if let Some(iter_id) = iterator.as_object_id() {
             // GetMethod(iterator, "return"): undefined/null → no-op, non-callable → TypeError
-            let return_val = match self.get_object_property(io.id, "return", iterator) {
+            let return_val = match self.get_object_property(iter_id, "return", iterator) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
                 _ => return Ok(()),
@@ -4715,7 +4679,7 @@ impl Interpreter {
                 return Err(self.create_type_error("iterator.return is not a function"));
             }
             match self.call_function(&return_val, iterator, &[]) {
-                Completion::Normal(inner_result) if !matches!(inner_result, JsValue::Object(_)) => {
+                Completion::Normal(inner_result) if !inner_result.is_object() => {
                     return Err(self.create_type_error("Iterator result is not an object"));
                 }
                 Completion::Throw(e) => return Err(e),
@@ -4733,7 +4697,7 @@ impl Interpreter {
     ) -> Result<Option<JsValue>, JsValue> {
         match self.call_function(next_method, iterator, &[]) {
             Completion::Normal(result) => {
-                if !matches!(result, JsValue::Object(_)) {
+                if !result.is_object() {
                     return Err(self.create_type_error("Iterator result is not an object"));
                 }
                 if self.iterator_complete(&result)? {
@@ -4776,14 +4740,13 @@ impl Interpreter {
         &mut self,
         obj: &JsValue,
     ) -> Result<Vec<JsValue>, JsValue> {
-        let obj_id = match obj {
-            JsValue::Object(o) => o.id,
-            _ => return Err(self.create_type_error("CreateListFromArrayLike called on non-object")),
+        let Some(obj_id) = obj.as_object_id() else {
+            return Err(self.create_type_error("CreateListFromArrayLike called on non-object"));
         };
         let len_val = match self.get_object_property(obj_id, "length", obj) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Err(e),
-            _ => JsValue::Undefined,
+            _ => JsValue::UNDEFINED,
         };
         let n = self.to_number_value(&len_val)?;
         let len = if n.is_nan() || n <= 0.0 {
@@ -4797,7 +4760,7 @@ impl Interpreter {
             let next = match self.get_object_property(obj_id, &index_name, obj) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
-                _ => JsValue::Undefined,
+                _ => JsValue::UNDEFINED,
             };
             list.push(next);
         }
