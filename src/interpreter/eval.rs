@@ -2113,7 +2113,12 @@ impl Interpreter {
                 },
             };
             if let Some(chunk) = chunk {
-                return vm::run_chunk(self, &chunk, exec_env, this_val.clone());
+                let handle = self.ic_store.for_body(body);
+                let prev = self.current_ic_handle;
+                self.current_ic_handle = handle;
+                let result = vm::run_chunk(self, &chunk, exec_env, this_val.clone());
+                self.current_ic_handle = prev;
+                return result;
             }
         }
         // #72: cache the hoisting *name collection* for this function body,
@@ -5607,10 +5612,10 @@ impl Interpreter {
                 args: evaluated_args,
             };
         }
-        // Phase 3 call-IC probe + record. Issue #71. v1 scope:
-        //  - Probe HIT increments call_ic_hit_count; dispatch is unchanged
-        //    (the fast path that skips proxy/wrapped/class-ctor checks is a
-        //    follow-up — see plan Step 15).
+        // Phase 3 call-IC probe + record. Issue #71.
+        //  - Probe HIT increments call_ic_hit_count and dispatches through
+        //    call_function_ic_validated, which skips the proxy/wrapped/
+        //    class-ctor entry checks (9a6246f, #71 Phase-3 follow-up).
         //  - Probe MISS classifies the callable; if it's a plain native or
         //    user function (no proxy, no wrapped, not a class ctor without
         //    `new`, not bound), records Mono. Otherwise transitions to
@@ -5683,7 +5688,11 @@ impl Interpreter {
     /// `CallIcSlot::Mono { kind: ... }` ready for caching, or `None` if the
     /// site is not IC-able under the v1 narrow scope (proxy, wrapped, bound,
     /// or class-ctor-without-new). Phase 3, plan Step 14.
-    fn classify_for_call_ic(
+    ///
+    /// `pub(super)` so the bytecode VM's `Call`/`ReturnCall` handling
+    /// (`bytecode::vm`) can share this classification with the tree-walker's
+    /// probe in `eval_call` (issue #432).
+    pub(super) fn classify_for_call_ic(
         &self,
         callee_obj_id: u64,
     ) -> Option<crate::interpreter::ic::CallIcSlot> {

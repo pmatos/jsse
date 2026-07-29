@@ -1,7 +1,8 @@
 use super::chunk::Chunk;
 use super::op::Op;
-use crate::ast::{BinaryOp, UnaryOp, UpdateOp};
+use crate::ast::{BinaryOp, CallSiteId, UnaryOp, UpdateOp};
 use crate::interpreter::eval::IdentifierRef;
+use crate::interpreter::ic::CallIcSlot;
 use crate::interpreter::types::{BindingKind, Completion, Environment};
 use crate::interpreter::{EnvRef, Interpreter};
 use crate::types::JsValue;
@@ -16,6 +17,10 @@ fn decode_u16(chunk: &Chunk, pc: usize) -> u16 {
     let lo = chunk.code[pc] as u16;
     let hi = chunk.code[pc + 1] as u16;
     (hi << 8) | lo
+}
+
+fn decode_u32(chunk: &Chunk, pc: usize) -> u32 {
+    u32::from_le_bytes(chunk.code[pc..pc + 4].try_into().unwrap())
 }
 
 /// Roots every `JsValue::Object` currently on the operand stack, not just the
@@ -367,6 +372,8 @@ fn run_chunk_inner(
             Op::Call | Op::ReturnCall => {
                 let argc = decode_u16(chunk, pc) as usize;
                 pc += 2;
+                let site_id = CallSiteId(decode_u32(chunk, pc));
+                pc += 4;
                 let (callee, this_value, args) = take_call_operands(&mut stack, argc);
                 if op == Op::ReturnCall && env.borrow().strict {
                     release_call_operands(interp, &callee, &this_value, &args);
@@ -376,11 +383,75 @@ fn run_chunk_inner(
                         args,
                     };
                 }
+                // Call-site IC probe + record, mirroring eval_call's tree-walker
+                // sequence (issue #432). `with_scope_depth != 0` is excluded
+                // because a `with`-resolved binding can dynamically pick a
+                // different callee per invocation, defeating monomorphic
+                // caching.
+                let ic_callee_id =
+                    if site_id != CallSiteId::UNASSIGNED && interp.with_scope_depth == 0 {
+                        callee.as_object_id()
+                    } else {
+                        None
+                    };
+                let mut probe_hit = false;
+                if let Some(callee_id) = ic_callee_id {
+                    let slot = *interp.call_slot(site_id);
+                    if let CallIcSlot::Mono {
+                        callee_obj_id,
+                        callee_shape_id,
+                        ..
+                    } = slot
+                        && callee_id == callee_obj_id
+                        && let Some(obj_rc) = interp.get_object(callee_id)
+                        && obj_rc.borrow().shape_id == callee_shape_id
+                    {
+                        interp
+                            .call_ic_hit_count
+                            .set(interp.call_ic_hit_count.get() + 1);
+                        probe_hit = true;
+                    }
+                    if !probe_hit {
+                        interp
+                            .call_ic_slow_path_count
+                            .set(interp.call_ic_slow_path_count.get() + 1);
+                    }
+                }
                 // The operands remain in gc_bytecode_roots for the complete
                 // nested invocation even though they have been removed from
                 // the operand Vec. A callee can execute arbitrary JS and hit
                 // any number of safepoints before returning.
-                let result = interp.call_function(&callee, &this_value, &args);
+                let result = if probe_hit {
+                    interp.call_function_ic_validated(&callee, &this_value, &args)
+                } else {
+                    interp.call_function(&callee, &this_value, &args)
+                };
+                // Record only on success to avoid caching error-paths.
+                if let Some(callee_id) = ic_callee_id
+                    && !probe_hit
+                    && matches!(result, Completion::Normal(_))
+                {
+                    let slot = *interp.call_slot(site_id);
+                    let new_slot = interp.classify_for_call_ic(callee_id);
+                    let next = match (slot, new_slot) {
+                        (CallIcSlot::Megamorphic, _) => CallIcSlot::Megamorphic,
+                        (_, None) => CallIcSlot::Empty,
+                        (CallIcSlot::Empty, Some(s)) => s,
+                        (
+                            CallIcSlot::Mono {
+                                callee_obj_id: prev,
+                                ..
+                            },
+                            Some(
+                                s @ CallIcSlot::Mono {
+                                    callee_obj_id: new, ..
+                                },
+                            ),
+                        ) if prev == new => s,
+                        (CallIcSlot::Mono { .. }, Some(_)) => CallIcSlot::Megamorphic,
+                    };
+                    *interp.call_slot(site_id) = next;
+                }
                 release_call_operands(interp, &callee, &this_value, &args);
                 match result {
                     Completion::Normal(value) | Completion::Return(value) => {
