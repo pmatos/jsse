@@ -1620,7 +1620,7 @@ mod tests {
         ];
 
         let cloned = std::thread::spawn(move || {
-            let cloned: Vec<_> = values.iter().cloned().collect();
+            let cloned: Vec<_> = values.to_vec();
             assert_eq!(
                 cloned[4].as_number().unwrap().to_bits(),
                 (-0.0_f64).to_bits()

@@ -784,7 +784,27 @@ impl Interpreter {
                 // OrdinarySetWithOwnDescriptor step 3.c: use Receiver.[[GetOwnProperty]] / [[DefineOwnProperty]]
                 let recv_id = receiver.as_object_id();
                 if recv_id == Some(obj_id) {
-                    // Common case: receiver is the same object, direct set
+                    // Common case: receiver is the same object. Ordinary objects can
+                    // take the direct route, but Array's "length" is exotic — it must
+                    // go through [[DefineOwnProperty]] (ArraySetLength, §10.4.2.4) or
+                    // its ToUint32 coercion / RangeError / element-deletion semantics
+                    // are silently skipped.
+                    if obj.borrow().class_name == "Array" {
+                        let val_desc = crate::interpreter::types::PropertyDescriptor {
+                            value: Some(value),
+                            writable: None,
+                            enumerable: None,
+                            configurable: None,
+                            get: None,
+                            set: None,
+                        };
+                        let desc_val = self.from_property_descriptor(&val_desc);
+                        return self.proxy_define_own_property(
+                            obj_id,
+                            key.to_js_property_key(),
+                            &desc_val,
+                        );
+                    }
                     self.gc_write_barrier_value(&obj, &value);
                     return Ok(obj.borrow_mut_untracked().set_property_value(key, value));
                 }
@@ -837,8 +857,11 @@ impl Interpreter {
                         );
                     }
                 }
-                self.gc_write_barrier_value(&obj, &value);
-                return Ok(obj.borrow_mut_untracked().set_property_value(key, value));
+                // Receiver is not an Object: [[Set]] must return false, never
+                // fall back to writing the property onto `obj` itself — `obj`
+                // may be a shared prototype reached by walking up from the
+                // (non-object) receiver's own [[Prototype]] chain.
+                return Ok(false);
             }
             // No own property, walk prototype chain
             let proto = obj.borrow().prototype_id;
@@ -905,8 +928,9 @@ impl Interpreter {
                         .set_property_value(key, value));
                 }
             }
-            self.gc_write_barrier_value(&obj, &value);
-            Ok(obj.borrow_mut_untracked().set_property_value(key, value))
+            // Receiver is not an Object (or resolved to no live object): [[Set]]
+            // must return false, never fall back to writing onto `obj` itself.
+            Ok(false)
         } else {
             Ok(false)
         }
