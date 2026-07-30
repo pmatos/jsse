@@ -307,3 +307,54 @@ Undefined, Null, Object, String, Symbol, or BigInt semantics.
   dependency on #403–#413 completing first: an unconverted file with a direct
   enum pattern fails to compile once the type stops being a plain enum. Phase
   4 (#415) removes any compatibility shims left over from the swap.
+
+## As Landed (Phase 4, issue #415)
+
+Phase 3 merged as PR #439, implementing the design above with no deviation to
+the tag layout, canonicalization, or ownership model. Two things are worth
+recording that the original framing (here and in [ADR 0003](../adr/0003-nan-boxed-jsvalue.md))
+got only approximately right, discovered while doing the Phase 4 cleanup pass:
+
+- **The actual shrink was 16 bytes → 8 bytes, not ~32 → 8.** This design doc
+  and ADR 0003 both cite "~32 bytes" as `JsValue`'s pre-migration size — that
+  was correct when issue #69 was opened, when `JsBigInt` inlined a
+  `num_bigint::BigInt` by value and `JsSymbol` inlined its description with no
+  wrapper. By the time Phase 3 actually ran, Phase 1 (#403 Arc-wrapping
+  `JsBigInt`, #404 Arc-wrapping `JsSymbol`) had already shrunk every heap
+  variant to a single pointer, so the pre-swap enum (`Undefined`, `Null`,
+  `Boolean(bool)`, `Number(f64)`, `String`/`Symbol`/`BigInt` each one `Arc`
+  pointer, `Object(u64)`) measured 16 bytes, confirmed by checking out the
+  commit immediately before the swap (`de832a4`) and by PR #439's own
+  before/after table. Phase 1 had therefore already captured half of the
+  total memory-footprint win before Phase 3 landed; the swap itself delivered
+  a further 2x (16→8), not the 4x (32→8) the epic's original framing implied.
+  This doesn't change the design's soundness, only the size of the win
+  attributable to Phase 3 specifically.
+- **No feature flag was used**, per the Rollout mechanism section above — this
+  held as planned; there was nothing to remove in Phase 4.
+- **Performance**: PR #439 measured a focused clone/read micro-benchmark
+  (`nan_box_clone_benchmark`, `src/types.rs`: an `#[ignore]`d single-threaded
+  loop of 10M Number/Object clone-read cycles, timed with
+  `Instant::elapsed()`) improving from 248.9ms to 96.0ms (~2.6x). That number
+  is *not* immune to host load — a wall-clock loop timed with
+  `Instant::elapsed()` still reflects whatever the OS scheduler and CPU
+  frequency state were doing during that particular run — it was a single
+  measurement each side, same as the test262 timing below, with no repeated
+  trials or statistical treatment. What it does avoid is the specific
+  confounder that dominates the test262 comparison: it doesn't fork/exec
+  thousands of subprocesses, so it's less exposed to scheduler noise over a
+  multi-minute window. That's a difference of degree, not of kind, and it
+  isn't enough on its own to call the number validated.
+  The same PR's one-off full test262 wall-clock timing went from 394.30s to
+  497.07s (+26%); both are single runs on a shared host — this project's own
+  development machine, not a dedicated benchmark box. Phase 4 attempted a
+  clean re-measurement and confirmed the host is unsuitable for this
+  comparison: the run coincided with unrelated load from other users
+  (`uptime` load average ~190 against 61 cores, i.e. roughly 3x
+  oversubscribed) and produced 8:26 — slower than both prior numbers, which a
+  behaviorally-identical diff (attribute removals only, no codegen change)
+  cannot explain except as host noise. **Both the micro-benchmark and the
+  full-suite wall-clock aggregate are therefore single, unrepeated
+  measurements on a contended host, and neither should be cited as a
+  validated performance result — win or regression — until re-measured with
+  repeated trials on an isolated, unshared machine.**

@@ -31,7 +31,6 @@ enum NanTag {
 /// The NaN-boxed `JsValue` exposes this kind via `JsValue::discriminant()` so
 /// sites like `Display`,
 /// `JSON.stringify`, and `strict_equality` keep compile-time exhaustiveness.
-#[allow(dead_code)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub(crate) enum ValueKind {
     Undefined,
@@ -410,7 +409,6 @@ pub(crate) struct JsObject {
 
 // Constructor / accessor surface for `JsValue`. Callers remain decoupled from
 // the NaN-box representation and never manipulate tags or raw pointers.
-#[allow(dead_code)]
 impl NanBoxedValue {
     const BOX_SIGNATURE: u64 = 0xFFF8_0000_0000_0000;
     const BOX_SIGNATURE_MASK: u64 = 0xFFF8_0000_0000_0000;
@@ -632,6 +630,10 @@ impl NanBoxedValue {
         })
     }
 
+    /// Only exercised by tests today (`with_bigint` covers every production
+    /// read path) — kept for symmetry with `into_string` and to keep this
+    /// tag's forget/`Arc::from_raw` transfer under test.
+    #[allow(dead_code)]
     pub(crate) fn into_bigint(self) -> Option<JsBigInt> {
         if self.tag() != Some(NanTag::BigInt) {
             return None;
@@ -1620,7 +1622,7 @@ mod tests {
         ];
 
         let cloned = std::thread::spawn(move || {
-            let cloned: Vec<_> = values.iter().cloned().collect();
+            let cloned: Vec<_> = values.to_vec();
             assert_eq!(
                 cloned[4].as_number().unwrap().to_bits(),
                 (-0.0_f64).to_bits()
