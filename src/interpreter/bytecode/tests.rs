@@ -10,7 +10,7 @@ use crate::types::JsValue;
 fn run(chunk: Chunk) -> Completion {
     let mut interp = Interpreter::new();
     let env = interp.realm().global_env.clone();
-    run_chunk(&mut interp, &chunk, &env, JsValue::Undefined)
+    run_chunk(&mut interp, &chunk, &env, JsValue::UNDEFINED)
 }
 
 #[test]
@@ -35,7 +35,7 @@ fn eval_with_mode(source: &str, bytecode: bool) -> (JsValue, usize) {
     let _ = interp.run(&program);
     let v = interp
         .get_global_var_ref("__r")
-        .unwrap_or(JsValue::Undefined);
+        .unwrap_or(JsValue::UNDEFINED);
     (v, interp.bytecode_chunks_executed)
 }
 
@@ -49,8 +49,8 @@ fn end_to_end_literal_return_takes_bytecode_path() {
         bc_count >= 1,
         "bytecode mode must execute at least one chunk"
     );
-    assert!(matches!(ast_v, JsValue::Number(n) if n == 42.0));
-    assert!(matches!(bc_v, JsValue::Number(n) if n == 42.0));
+    assert_eq!(ast_v.as_number(), Some(42.0));
+    assert_eq!(bc_v.as_number(), Some(42.0));
 }
 
 #[test]
@@ -58,7 +58,7 @@ fn end_to_end_addition_return_takes_bytecode_path() {
     let source = "var __r = (function(){ return 1 + 2; })();";
     let (v, count) = eval_with_mode(source, true);
     assert!(count >= 1, "bytecode mode must execute at least one chunk");
-    assert!(matches!(v, JsValue::Number(n) if n == 3.0));
+    assert_eq!(v.as_number(), Some(3.0));
 }
 
 #[test]
@@ -66,7 +66,7 @@ fn end_to_end_var_declaration_takes_bytecode_path() {
     let source = "var __r = (function(){ var x = 7; return x; })();";
     let (v, count) = eval_with_mode(source, true);
     assert!(count >= 1, "bytecode mode must execute the var body");
-    assert!(matches!(v, JsValue::Number(n) if n == 7.0));
+    assert_eq!(v.as_number(), Some(7.0));
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn end_to_end_bytecode_off_unchanged() {
     let source = "var __r = (function(){ return 42; })();";
     let (v, count) = eval_with_mode(source, false);
     assert_eq!(count, 0);
-    assert!(matches!(v, JsValue::Number(n) if n == 42.0));
+    assert_eq!(v.as_number(), Some(42.0));
 }
 
 #[test]
@@ -87,7 +87,7 @@ fn end_to_end_constructor_with_empty_body_returns_this() {
     let (v, count) = eval_with_mode(source, true);
     assert!(count >= 1, "bytecode path must execute the empty body");
     assert!(
-        matches!(v, JsValue::Object(_)),
+        v.is_object(),
         "expected new f() to return the instance, got {v:?}"
     );
 }
@@ -108,7 +108,7 @@ fn end_to_end_member_assignment_in_loop_takes_bytecode_path() {
         count >= 1,
         "member access inside the loop should now compile to bytecode"
     );
-    assert!(matches!(v, JsValue::Number(n) if n == 9.0));
+    assert_eq!(v.as_number(), Some(9.0));
 }
 
 #[test]
@@ -145,7 +145,7 @@ fn property_access_loop_releases_consumed_operand_roots() {
     let hot = interp.get_global_var_ref("hot").expect("hot binding");
     let chunks_before = interp.bytecode_chunks_executed;
     assert!(matches!(
-        interp.call_function(&hot, &JsValue::Undefined, &[JsValue::Number(64.0)]),
+        interp.call_function(&hot, &JsValue::UNDEFINED, &[JsValue::number(64.0)]),
         Completion::Normal(_)
     ));
     assert!(
@@ -164,7 +164,7 @@ fn end_to_end_dot_read_takes_bytecode_path() {
     let source = "var __r = (function(o){ return o.x; })({x: 5});";
     let (v, count) = eval_with_mode(source, true);
     assert!(count >= 1, "dot read should compile to bytecode");
-    assert!(matches!(v, JsValue::Number(n) if n == 5.0));
+    assert_eq!(v.as_number(), Some(5.0));
 }
 
 #[test]
@@ -172,7 +172,7 @@ fn end_to_end_computed_read_on_plain_array_takes_bytecode_path() {
     let source = "var __r = (function(a,i){ return a[i]; })([10,20,30], 1);";
     let (v, count) = eval_with_mode(source, true);
     assert!(count >= 1, "computed array read should compile to bytecode");
-    assert!(matches!(v, JsValue::Number(n) if n == 20.0));
+    assert_eq!(v.as_number(), Some(20.0));
 }
 
 #[test]
@@ -183,7 +183,7 @@ fn end_to_end_computed_read_on_typed_array_takes_bytecode_path() {
         count >= 1,
         "computed typed-array read should compile to bytecode"
     );
-    assert!(matches!(v, JsValue::Number(n) if n == 3.0));
+    assert_eq!(v.as_number(), Some(3.0));
 }
 
 #[test]
@@ -191,7 +191,7 @@ fn end_to_end_dot_write_takes_bytecode_path() {
     let source = "var __r = (function(o){ o.x = 9; return o.x; })({});";
     let (v, count) = eval_with_mode(source, true);
     assert!(count >= 1, "dot write should compile to bytecode");
-    assert!(matches!(v, JsValue::Number(n) if n == 9.0));
+    assert_eq!(v.as_number(), Some(9.0));
 }
 
 #[test]
@@ -202,7 +202,7 @@ fn end_to_end_computed_write_on_plain_array_takes_bytecode_path() {
         count >= 1,
         "computed array write should compile to bytecode"
     );
-    assert!(matches!(v, JsValue::Number(n) if n == 42.0));
+    assert_eq!(v.as_number(), Some(42.0));
 }
 
 #[test]
@@ -214,7 +214,7 @@ fn end_to_end_computed_write_on_typed_array_takes_bytecode_path() {
         count >= 1,
         "computed typed-array write should compile to bytecode"
     );
-    assert!(matches!(v, JsValue::Number(n) if n == 42.0));
+    assert_eq!(v.as_number(), Some(42.0));
 }
 
 fn assert_message_parity(source: &str) {
@@ -290,8 +290,9 @@ fn end_to_end_member_chain_base_survives_gc_during_rhs_evaluation() {
         count >= 1,
         "the containing function should compile to bytecode"
     );
-    assert!(
-        matches!(v, JsValue::Number(n) if n == 42.0),
+    assert_eq!(
+        v.as_number(),
+        Some(42.0),
         "the `a.base` result must survive the nested GC triggered while evaluating `a.rhs`, got {v:?}"
     );
 }
@@ -325,7 +326,7 @@ fn end_to_end_getprop_call_argument_survives_gc_during_sibling_arg_evaluation() 
         "the containing function should compile to bytecode"
     );
     assert!(
-        matches!(&v, JsValue::String(s) if s.to_string() == "ok"),
+        v.as_string().is_some_and(|s| s.to_string() == "ok"),
         "GetProp's call-argument result must survive the GC forced while evaluating a sibling call argument, got {v:?}"
     );
 }
@@ -341,7 +342,7 @@ fn load_const_and_return_yields_number_completion() {
         max_refs: 0,
     };
     match run(chunk) {
-        Completion::Return(JsValue::Number(n)) => assert_eq!(n, 42.0),
+        Completion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
         other => panic!("expected Return(Number(42.0)), got {other:?}"),
     }
 }
@@ -357,7 +358,7 @@ fn return_undefined_completes_with_undefined() {
         max_refs: 0,
     };
     match run(chunk) {
-        Completion::Return(JsValue::Undefined) => {}
+        Completion::Return(value) if value.is_undefined() => {}
         other => panic!("expected Return(Undefined), got {other:?}"),
     }
 }
@@ -383,7 +384,7 @@ fn add_two_numbers_via_eval_binary() {
         max_refs: 0,
     };
     match run(chunk) {
-        Completion::Return(JsValue::Number(n)) => assert_eq!(n, 5.0),
+        Completion::Return(value) => assert_eq!(value.as_number(), Some(5.0)),
         other => panic!("expected Return(Number(5.0)), got {other:?}"),
     }
 }
@@ -395,7 +396,7 @@ fn compile_body_return_number_literal() {
     )))];
     let chunk = compile_body(&body).expect("compile");
     match run(chunk) {
-        Completion::Return(JsValue::Number(n)) => assert_eq!(n, 42.0),
+        Completion::Return(value) => assert_eq!(value.as_number(), Some(42.0)),
         other => panic!("expected Return(Number(42.0)), got {other:?}"),
     }
 }
@@ -404,7 +405,7 @@ fn compile_body_return_number_literal() {
 fn compile_body_empty_returns_undefined() {
     let chunk = compile_body(&[]).expect("compile");
     match run(chunk) {
-        Completion::Return(JsValue::Undefined) => {}
+        Completion::Return(value) if value.is_undefined() => {}
         other => panic!("expected Return(Undefined), got {other:?}"),
     }
 }
@@ -414,7 +415,7 @@ fn compile_body_bare_return_yields_undefined() {
     let body = vec![Statement::Return(None)];
     let chunk = compile_body(&body).expect("compile");
     match run(chunk) {
-        Completion::Return(JsValue::Undefined) => {}
+        Completion::Return(value) if value.is_undefined() => {}
         other => panic!("expected Return(Undefined), got {other:?}"),
     }
 }
@@ -429,7 +430,7 @@ fn compile_body_return_addition_of_literals() {
     )))];
     let chunk = compile_body(&body).expect("compile");
     match run(chunk) {
-        Completion::Return(JsValue::Number(n)) => assert_eq!(n, 5.0),
+        Completion::Return(value) => assert_eq!(value.as_number(), Some(5.0)),
         other => panic!("expected Return(Number(5.0)), got {other:?}"),
     }
 }
@@ -447,10 +448,7 @@ fn end_to_end_sub_mul_div_mod_pow_via_bytecode() {
         let source = format!("var __r = {expr};");
         let (v, count) = eval_with_mode(&source, true);
         assert!(count >= 1, "{expr}: bytecode path must run");
-        match v {
-            JsValue::Number(n) => assert_eq!(n, expected, "{expr}"),
-            other => panic!("{expr}: expected Number({expected}), got {other:?}"),
-        }
+        assert_eq!(v.as_number(), Some(expected), "{expr}");
     }
 }
 
@@ -473,10 +471,7 @@ fn end_to_end_comparison_and_equality_ops_via_bytecode() {
         let source = format!("var __r = {expr};");
         let (v, count) = eval_with_mode(&source, true);
         assert!(count >= 1, "{expr}: bytecode path must run");
-        match v {
-            JsValue::Boolean(b) => assert_eq!(b, expected, "{expr}"),
-            other => panic!("{expr}: expected Boolean({expected}), got {other:?}"),
-        }
+        assert_eq!(v.as_boolean(), Some(expected), "{expr}");
     }
 }
 
@@ -494,36 +489,39 @@ fn end_to_end_bitwise_ops_via_bytecode() {
         let source = format!("var __r = {expr};");
         let (v, count) = eval_with_mode(&source, true);
         assert!(count >= 1, "{expr}: bytecode path must run");
-        match v {
-            JsValue::Number(n) => assert_eq!(n as i64, expected as i64, "{expr}"),
-            other => panic!("{expr}: expected Number, got {other:?}"),
-        }
+        let number = v
+            .as_number()
+            .unwrap_or_else(|| panic!("{expr}: expected Number, got {v:?}"));
+        assert_eq!(number as i64, expected as i64, "{expr}");
     }
 }
 
 #[test]
 fn end_to_end_unary_ops_via_bytecode() {
     let cases: &[(&str, JsValue)] = &[
-        ("(function(){ return -5; })()", JsValue::Number(-5.0)),
-        ("(function(){ return +'3'; })()", JsValue::Number(3.0)),
-        ("(function(){ return !true; })()", JsValue::Boolean(false)),
-        ("(function(){ return !0; })()", JsValue::Boolean(true)),
-        ("(function(){ return ~5; })()", JsValue::Number(-6.0)),
-        ("(function(){ return void 0; })()", JsValue::Undefined),
+        ("(function(){ return -5; })()", JsValue::number(-5.0)),
+        ("(function(){ return +'3'; })()", JsValue::number(3.0)),
+        ("(function(){ return !true; })()", JsValue::FALSE),
+        ("(function(){ return !0; })()", JsValue::TRUE),
+        ("(function(){ return ~5; })()", JsValue::number(-6.0)),
+        ("(function(){ return void 0; })()", JsValue::UNDEFINED),
         (
             "(function(){ return void 'anything'; })()",
-            JsValue::Undefined,
+            JsValue::UNDEFINED,
         ),
     ];
     for (expr, expected) in cases {
         let source = format!("var __r = {expr};");
         let (v, count) = eval_with_mode(&source, true);
         assert!(count >= 1, "{expr}: bytecode path must run");
-        match (&v, expected) {
-            (JsValue::Number(n), JsValue::Number(e)) => assert_eq!(n, e, "{expr}"),
-            (JsValue::Boolean(b), JsValue::Boolean(e)) => assert_eq!(b, e, "{expr}"),
-            (JsValue::Undefined, JsValue::Undefined) => {}
-            _ => panic!("{expr}: expected {expected:?}, got {v:?}"),
+        if let Some(expected_number) = expected.as_number() {
+            assert_eq!(v.as_number(), Some(expected_number), "{expr}");
+        } else if let Some(expected_boolean) = expected.as_boolean() {
+            assert_eq!(v.as_boolean(), Some(expected_boolean), "{expr}");
+        } else if expected.is_undefined() {
+            assert!(v.is_undefined(), "{expr}: expected undefined, got {v:?}");
+        } else {
+            panic!("{expr}: unsupported expected value {expected:?}");
         }
     }
 }
@@ -533,20 +531,20 @@ fn end_to_end_ternary_conditional_via_bytecode() {
     let cases: &[(&str, JsValue)] = &[
         (
             "(function(){ return true ? 1 : 2; })()",
-            JsValue::Number(1.0),
+            JsValue::number(1.0),
         ),
         (
             "(function(){ return false ? 1 : 2; })()",
-            JsValue::Number(2.0),
+            JsValue::number(2.0),
         ),
-        ("(function(){ return 0 ? 1 : 2; })()", JsValue::Number(2.0)),
+        ("(function(){ return 0 ? 1 : 2; })()", JsValue::number(2.0)),
         (
             "(function(){ return 1 ? 'yes' : 'no'; })()",
-            JsValue::Number(0.0), /* placeholder */
+            JsValue::number(0.0), /* placeholder */
         ),
         (
             "(function(){ return null ? 1 : 2; })()",
-            JsValue::Number(2.0),
+            JsValue::number(2.0),
         ),
     ];
     for (i, (expr, expected)) in cases.iter().enumerate() {
@@ -555,16 +553,13 @@ fn end_to_end_ternary_conditional_via_bytecode() {
         assert!(count >= 1, "{expr}: bytecode path must run");
         if i == 3 {
             // String case — check separately
-            match v {
-                JsValue::String(ref s) => assert_eq!(s.to_rust_string(), "yes", "{expr}"),
-                _ => panic!("{expr}: expected String 'yes', got {v:?}"),
-            }
+            let string = v
+                .as_string()
+                .unwrap_or_else(|| panic!("{expr}: expected String 'yes', got {v:?}"));
+            assert_eq!(string.to_rust_string(), "yes", "{expr}");
             continue;
         }
-        match (&v, expected) {
-            (JsValue::Number(n), JsValue::Number(e)) => assert_eq!(n, e, "{expr}"),
-            _ => panic!("{expr}: expected {expected:?}, got {v:?}"),
-        }
+        assert_eq!(v.as_number(), expected.as_number(), "{expr}");
     }
 }
 
@@ -574,21 +569,18 @@ fn end_to_end_logical_short_circuit_via_bytecode() {
     // || returns lhs if truthy, else rhs
     // ?? returns lhs if non-nullish, else rhs
     let cases: &[(&str, JsValue)] = &[
-        ("(function(){ return true && 5; })()", JsValue::Number(5.0)),
-        (
-            "(function(){ return false && 5; })()",
-            JsValue::Boolean(false),
-        ),
-        ("(function(){ return 0 && 5; })()", JsValue::Number(0.0)),
-        ("(function(){ return 1 && 2; })()", JsValue::Number(2.0)),
-        ("(function(){ return false || 5; })()", JsValue::Number(5.0)),
-        ("(function(){ return 7 || 5; })()", JsValue::Number(7.0)),
-        ("(function(){ return 0 || 5; })()", JsValue::Number(5.0)),
-        ("(function(){ return null ?? 5; })()", JsValue::Number(5.0)),
-        ("(function(){ return 0 ?? 5; })()", JsValue::Number(0.0)),
+        ("(function(){ return true && 5; })()", JsValue::number(5.0)),
+        ("(function(){ return false && 5; })()", JsValue::FALSE),
+        ("(function(){ return 0 && 5; })()", JsValue::number(0.0)),
+        ("(function(){ return 1 && 2; })()", JsValue::number(2.0)),
+        ("(function(){ return false || 5; })()", JsValue::number(5.0)),
+        ("(function(){ return 7 || 5; })()", JsValue::number(7.0)),
+        ("(function(){ return 0 || 5; })()", JsValue::number(5.0)),
+        ("(function(){ return null ?? 5; })()", JsValue::number(5.0)),
+        ("(function(){ return 0 ?? 5; })()", JsValue::number(0.0)),
         (
             "(function(){ return 'x' ?? 5; })()",
-            JsValue::Number(0.0), /* placeholder */
+            JsValue::number(0.0), /* placeholder */
         ),
     ];
     for (i, (expr, expected)) in cases.iter().enumerate() {
@@ -597,16 +589,18 @@ fn end_to_end_logical_short_circuit_via_bytecode() {
         assert!(count >= 1, "{expr}: bytecode path must run");
         if i == 9 {
             // 'x' ?? 5 → 'x'
-            match v {
-                JsValue::String(ref s) => assert_eq!(s.to_rust_string(), "x", "{expr}"),
-                _ => panic!("{expr}: expected String 'x', got {v:?}"),
-            }
+            let string = v
+                .as_string()
+                .unwrap_or_else(|| panic!("{expr}: expected String 'x', got {v:?}"));
+            assert_eq!(string.to_rust_string(), "x", "{expr}");
             continue;
         }
-        match (&v, expected) {
-            (JsValue::Number(n), JsValue::Number(e)) => assert_eq!(n, e, "{expr}"),
-            (JsValue::Boolean(b), JsValue::Boolean(e)) => assert_eq!(b, e, "{expr}"),
-            _ => panic!("{expr}: expected {expected:?}, got {v:?}"),
+        if let Some(expected_number) = expected.as_number() {
+            assert_eq!(v.as_number(), Some(expected_number), "{expr}");
+        } else if let Some(expected_boolean) = expected.as_boolean() {
+            assert_eq!(v.as_boolean(), Some(expected_boolean), "{expr}");
+        } else {
+            panic!("{expr}: unsupported expected value {expected:?}");
         }
     }
 }
@@ -617,7 +611,7 @@ fn end_to_end_param_read_via_bytecode() {
     let source = "var __r = (function(x){ return x; })(42);";
     let (v, count) = eval_with_mode(source, true);
     assert!(count >= 1, "bytecode path must run");
-    assert!(matches!(v, JsValue::Number(n) if n == 42.0), "got {v:?}");
+    assert_eq!(v.as_number(), Some(42.0), "got {v:?}");
 }
 
 #[test]
@@ -625,7 +619,7 @@ fn end_to_end_param_arithmetic_via_bytecode() {
     let source = "var __r = (function(x, y){ return x + y * 2; })(3, 5);";
     let (v, count) = eval_with_mode(source, true);
     assert!(count >= 1, "bytecode path must run");
-    assert!(matches!(v, JsValue::Number(n) if n == 13.0), "got {v:?}");
+    assert_eq!(v.as_number(), Some(13.0), "got {v:?}");
 }
 
 #[test]
@@ -633,7 +627,7 @@ fn end_to_end_param_compare_returns_boolean() {
     let source = "var __r = (function(n){ return n > 10; })(5);";
     let (v, count) = eval_with_mode(source, true);
     assert!(count >= 1, "bytecode path must run");
-    assert!(matches!(v, JsValue::Boolean(false)), "got {v:?}");
+    assert_eq!(v.as_boolean(), Some(false), "got {v:?}");
 }
 
 #[test]
@@ -641,7 +635,7 @@ fn end_to_end_undeclared_identifier_throws_reference_error() {
     // Should throw ReferenceError, not just falsely succeed via the bytecode path
     let source = "var __r = false; try { (function(){ return undeclaredX; })(); } catch (e) { __r = e instanceof ReferenceError; }";
     let (v, _count) = eval_with_mode(source, true);
-    assert!(matches!(v, JsValue::Boolean(true)), "got {v:?}");
+    assert_eq!(v.as_boolean(), Some(true), "got {v:?}");
 }
 
 #[test]
@@ -649,7 +643,7 @@ fn end_to_end_param_mutation_via_bytecode() {
     let source = "var __r = (function(x){ x = x + 1; return x; })(5);";
     let (v, count) = eval_with_mode(source, true);
     assert!(count >= 1, "bytecode path must run");
-    assert!(matches!(v, JsValue::Number(n) if n == 6.0), "got {v:?}");
+    assert_eq!(v.as_number(), Some(6.0), "got {v:?}");
 }
 
 #[test]
@@ -657,7 +651,7 @@ fn end_to_end_multiple_statements_via_bytecode() {
     let source = "var __r = (function(x){ x = x + 1; x = x * 2; return x; })(3);";
     let (v, count) = eval_with_mode(source, true);
     assert!(count >= 1, "bytecode path must run");
-    assert!(matches!(v, JsValue::Number(n) if n == 8.0), "got {v:?}");
+    assert_eq!(v.as_number(), Some(8.0), "got {v:?}");
 }
 
 #[test]
@@ -666,7 +660,7 @@ fn end_to_end_assignment_returns_assigned_value() {
     let source = "var __r = (function(x){ return (x = 99); })(0);";
     let (v, count) = eval_with_mode(source, true);
     assert!(count >= 1, "bytecode path must run");
-    assert!(matches!(v, JsValue::Number(n) if n == 99.0), "got {v:?}");
+    assert_eq!(v.as_number(), Some(99.0), "got {v:?}");
 }
 
 #[test]
@@ -690,7 +684,13 @@ fn add_string_and_number_falls_through_to_string_concat() {
         max_refs: 0,
     };
     match run(chunk) {
-        Completion::Return(JsValue::String(s)) => assert_eq!(s.to_string(), "x1"),
+        Completion::Return(value) => assert_eq!(
+            value
+                .as_string()
+                .expect("expected Return(String(\"x1\"))")
+                .to_string(),
+            "x1"
+        ),
         other => panic!("expected Return(String(\"x1\")), got {other:?}"),
     }
 }
@@ -704,13 +704,8 @@ fn assert_parity_number(source: &str, expected: f64) {
     let (bc_v, bc_count) = eval_with_mode(source, true);
     assert_eq!(ast_count, 0, "{source}: AST mode must not run chunks");
     assert!(bc_count >= 1, "{source}: bytecode path must run a chunk");
-    match (&ast_v, &bc_v) {
-        (JsValue::Number(a), JsValue::Number(b)) => {
-            assert_eq!(*a, expected, "{source}: AST value");
-            assert_eq!(*b, expected, "{source}: bytecode value");
-        }
-        _ => panic!("{source}: expected Number({expected}), got ast={ast_v:?} bc={bc_v:?}"),
-    }
+    assert_eq!(ast_v.as_number(), Some(expected), "{source}: AST value");
+    assert_eq!(bc_v.as_number(), Some(expected), "{source}: bytecode value");
 }
 
 // NOTE: lexical declarations are not yet compilable, so a body containing one
@@ -790,14 +785,8 @@ fn if_truthiness_coercion_matches_tree_walker() {
     let (ast_v, _) = eval_with_mode(src, false);
     let (bc_v, bc_count) = eval_with_mode(src, true);
     assert_eq!(bc_count, 0, "object-literal test must bail to AST");
-    assert!(
-        matches!(ast_v, JsValue::Number(n) if n == 1.0),
-        "ast {ast_v:?}"
-    );
-    assert!(
-        matches!(bc_v, JsValue::Number(n) if n == 1.0),
-        "bc {bc_v:?}"
-    );
+    assert_eq!(ast_v.as_number(), Some(1.0), "ast {ast_v:?}");
+    assert_eq!(bc_v.as_number(), Some(1.0), "bc {bc_v:?}");
 }
 
 #[test]
@@ -819,7 +808,7 @@ fn compile_body_if_lowers_via_vm_directly() {
     })];
     let chunk = compile_body(&body).expect("compile if/else");
     match run(chunk) {
-        Completion::Return(JsValue::Number(n)) => assert_eq!(n, 10.0),
+        Completion::Return(value) => assert_eq!(value.as_number(), Some(10.0)),
         other => panic!("expected Return(Number(10.0)), got {other:?}"),
     }
 }
@@ -868,7 +857,7 @@ fn compound_assign_on_member_bails_to_unsupported() {
         count, 0,
         "compound assignment on a member target must bail to the tree-walker"
     );
-    assert!(matches!(v, JsValue::Number(n) if n == 2.0));
+    assert_eq!(v.as_number(), Some(2.0));
 }
 
 #[test]
@@ -879,7 +868,7 @@ fn update_on_member_bails_to_unsupported() {
         count, 0,
         "update expression on a member target must bail to the tree-walker"
     );
-    assert!(matches!(v, JsValue::Number(n) if n == 2.0));
+    assert_eq!(v.as_number(), Some(2.0));
 }
 
 #[test]
@@ -890,7 +879,7 @@ fn optional_member_access_bails_to_unsupported() {
         count, 0,
         "optional member access must bail to the tree-walker"
     );
-    assert!(matches!(v, JsValue::Number(n) if n == 3.0));
+    assert_eq!(v.as_number(), Some(3.0));
 }
 
 #[test]
@@ -929,7 +918,7 @@ fn compile_body_one_armed_if_returning_consequent_false_path_is_safe() {
     })];
     let chunk = compile_body(&body).expect("compile one-armed if");
     match run(chunk) {
-        Completion::Return(JsValue::Undefined) => {}
+        Completion::Return(value) if value.is_undefined() => {}
         other => panic!("expected Return(Undefined) on false path, got {other:?}"),
     }
 }
@@ -944,22 +933,16 @@ fn end_to_end_one_armed_if_last_statement_both_paths() {
     let (bv, bc) = eval_with_mode(true_src, true);
     assert_eq!(ac, 0, "AST mode must not run chunks");
     assert!(bc >= 1, "bytecode path must run (true)");
-    assert!(
-        matches!(av, JsValue::Number(n) if n == 1.0),
-        "ast true {av:?}"
-    );
-    assert!(
-        matches!(bv, JsValue::Number(n) if n == 1.0),
-        "bc true {bv:?}"
-    );
+    assert_eq!(av.as_number(), Some(1.0), "ast true {av:?}");
+    assert_eq!(bv.as_number(), Some(1.0), "bc true {bv:?}");
 
     let false_src = "var __r = (function(x){ if (x) return 1; })(false);";
     let (av2, ac2) = eval_with_mode(false_src, false);
     let (bv2, bc2) = eval_with_mode(false_src, true);
     assert_eq!(ac2, 0, "AST mode must not run chunks");
     assert!(bc2 >= 1, "bytecode path must run (false)");
-    assert!(matches!(av2, JsValue::Undefined), "ast false {av2:?}");
-    assert!(matches!(bv2, JsValue::Undefined), "bc false {bv2:?}");
+    assert!(av2.is_undefined(), "ast false {av2:?}");
+    assert!(bv2.is_undefined(), "bc false {bv2:?}");
 }
 
 #[test]
@@ -973,7 +956,7 @@ fn load_undefined_then_return_completes_with_undefined() {
         max_refs: 0,
     };
     match run(chunk) {
-        Completion::Return(JsValue::Undefined) => {}
+        Completion::Return(value) if value.is_undefined() => {}
         other => panic!("expected Return(Undefined), got {other:?}"),
     }
 }
@@ -987,8 +970,8 @@ fn var_bindings_are_hoisted_before_initializers() {
     let (bytecode, bytecode_count) = eval_with_mode(source, true);
     assert_eq!(ast_count, 0);
     assert!(bytecode_count >= 1, "bytecode path must run");
-    assert!(matches!(ast, JsValue::Undefined));
-    assert!(matches!(bytecode, JsValue::Undefined));
+    assert!(ast.is_undefined());
+    assert!(bytecode.is_undefined());
 }
 
 #[test]
@@ -1018,13 +1001,14 @@ fn identifier_update_preserves_bigint_semantics() {
     let (bytecode, bytecode_count) = eval_with_mode(source, true);
     assert_eq!(ast_count, 0);
     assert!(bytecode_count >= 1, "bytecode path must run");
-    match (ast, bytecode) {
-        (JsValue::BigInt(a), JsValue::BigInt(b)) => {
-            assert_eq!(a.value.to_string(), "2");
-            assert_eq!(b.value.to_string(), "2");
-        }
-        other => panic!("expected matching BigInt results, got {other:?}"),
-    }
+    let ast_bigint = ast
+        .as_bigint()
+        .unwrap_or_else(|| panic!("expected BigInt AST result, got {ast:?}"));
+    let bytecode_bigint = bytecode
+        .as_bigint()
+        .unwrap_or_else(|| panic!("expected BigInt bytecode result, got {bytecode:?}"));
+    assert_eq!(ast_bigint.value.to_string(), "2");
+    assert_eq!(bytecode_bigint.value.to_string(), "2");
 }
 
 #[test]
@@ -1039,8 +1023,8 @@ fn compound_assignment_preserves_captured_identifier_reference() {
     let (bytecode, bytecode_count) = eval_with_mode(source, true);
     assert_eq!(ast_count, 0);
     assert!(bytecode_count >= 1, "nested function must use bytecode");
-    assert!(matches!(ast, JsValue::Number(n) if n == 5.0));
-    assert!(matches!(bytecode, JsValue::Number(n) if n == 5.0));
+    assert_eq!(ast.as_number(), Some(5.0));
+    assert_eq!(bytecode.as_number(), Some(5.0));
 }
 
 #[test]
@@ -1104,7 +1088,7 @@ fn lexical_for_loop_falls_back_to_tree_walker() {
     let source = "var __r = (function(){ var sum = 0; for (let i = 0; i < 3; i++) sum += i; return sum; })();";
     let (value, count) = eval_with_mode(source, true);
     assert_eq!(count, 0, "lexical loop must remain ineligible");
-    assert!(matches!(value, JsValue::Number(n) if n == 3.0));
+    assert_eq!(value.as_number(), Some(3.0));
 }
 
 #[test]
@@ -1112,7 +1096,7 @@ fn loop_with_break_falls_back_to_tree_walker() {
     let source = "var __r = (function(){ var i = 0; while (true) { i++; break; } return i; })();";
     let (value, count) = eval_with_mode(source, true);
     assert_eq!(count, 0, "break lowering is not part of this slice");
-    assert!(matches!(value, JsValue::Number(n) if n == 1.0));
+    assert_eq!(value.as_number(), Some(1.0));
 }
 
 // ----- direct identifier calls -----
@@ -1129,8 +1113,8 @@ fn direct_call_compiles_caller_and_compilable_callee() {
         bytecode_count >= 2,
         "caller and callee must both execute bytecode"
     );
-    assert!(matches!(ast, JsValue::Number(n) if n == 42.0));
-    assert!(matches!(bytecode, JsValue::Number(n) if n == 42.0));
+    assert_eq!(ast.as_number(), Some(42.0));
+    assert_eq!(bytecode.as_number(), Some(42.0));
 }
 
 #[test]
@@ -1145,8 +1129,8 @@ fn direct_call_bridges_to_ineligible_callee() {
         bytecode_count, 1,
         "only the caller should compile; the object/member callee must fall back"
     );
-    assert!(matches!(ast, JsValue::Number(n) if n == 37.0));
-    assert!(matches!(bytecode, JsValue::Number(n) if n == 37.0));
+    assert_eq!(ast.as_number(), Some(37.0));
+    assert_eq!(bytecode.as_number(), Some(37.0));
 }
 
 #[test]
@@ -1156,8 +1140,8 @@ fn direct_native_call_takes_bytecode_path() {
     let (bytecode, bytecode_count) = eval_with_mode(source, true);
     assert_eq!(ast_count, 0);
     assert_eq!(bytecode_count, 1, "native callee has no bytecode Body");
-    assert!(matches!(ast, JsValue::Number(n) if n == 42.0));
-    assert!(matches!(bytecode, JsValue::Number(n) if n == 42.0));
+    assert_eq!(ast.as_number(), Some(42.0));
+    assert_eq!(bytecode.as_number(), Some(42.0));
 }
 
 #[test]
@@ -1179,18 +1163,18 @@ fn direct_native_call_preserves_persistent_callback_root() {
     let make_callback = interp
         .get_global_var_ref("makeCallback")
         .expect("makeCallback binding");
-    let callback = match interp.call_function(&make_callback, &JsValue::Undefined, &[]) {
+    let callback = match interp.call_function(&make_callback, &JsValue::UNDEFINED, &[]) {
         Completion::Normal(value) => value,
         other => panic!("makeCallback failed: {other:?}"),
     };
-    let JsValue::Object(callback_object) = callback.clone() else {
-        panic!("makeCallback must return a function object");
-    };
+    let callback_id = callback
+        .as_object_id()
+        .expect("makeCallback must return a function object");
     let schedule = interp
         .get_global_var_ref("schedule")
         .expect("schedule binding");
     assert!(matches!(
-        interp.call_function(&schedule, &JsValue::Undefined, &[callback]),
+        interp.call_function(&schedule, &JsValue::UNDEFINED, &[callback]),
         Completion::Normal(_)
     ));
     assert!(
@@ -1205,7 +1189,7 @@ fn direct_native_call_preserves_persistent_callback_root() {
     interp.gc.request();
     interp.gc_safepoint();
     assert!(
-        interp.get_object_cell(callback_object.id).is_some(),
+        interp.get_object_cell(callback_id).is_some(),
         "setTimeout's persistent callback root must survive the bytecode frame"
     );
 }
@@ -1238,8 +1222,8 @@ fn direct_call_preserves_with_base_as_this_value() {
     let (bytecode, bytecode_count) = eval_with_mode(source, true);
     assert_eq!(ast_count, 0);
     assert!(bytecode_count >= 1, "runner must execute through bytecode");
-    assert!(matches!(ast, JsValue::Number(n) if n == 42.0));
-    assert!(matches!(bytecode, JsValue::Number(n) if n == 42.0));
+    assert_eq!(ast.as_number(), Some(42.0));
+    assert_eq!(bytecode.as_number(), Some(42.0));
 }
 
 #[test]
@@ -1264,9 +1248,10 @@ fn direct_call_clears_stale_with_base_before_global_resolution() {
     let (bytecode, bytecode_count) = eval_with_mode(source, true);
     assert_eq!(ast_count, 0);
     assert!(bytecode_count >= 1, "runner must execute through bytecode");
-    assert!(matches!(ast, JsValue::Number(n) if n == 1.0));
-    assert!(
-        matches!(bytecode, JsValue::Number(n) if n == 1.0),
+    assert_eq!(ast.as_number(), Some(1.0));
+    assert_eq!(
+        bytecode.as_number(),
+        Some(1.0),
         "a global call must not inherit a with base from an earlier identifier read"
     );
 }
@@ -1303,9 +1288,10 @@ fn direct_call_checks_global_proxy_binding_once() {
     let (bytecode, bytecode_count) = eval_with_mode(source, true);
     assert_eq!(ast_count, 0);
     assert!(bytecode_count >= 1, "run must execute through bytecode");
-    assert!(matches!(ast, JsValue::Number(n) if n == 111.0));
-    assert!(
-        matches!(bytecode, JsValue::Number(n) if n == 111.0),
+    assert_eq!(ast.as_number(), Some(111.0));
+    assert_eq!(
+        bytecode.as_number(),
+        Some(111.0),
         "bytecode must invoke the stateful global proxy has trap exactly once, got {bytecode:?}"
     );
 }
@@ -1335,8 +1321,8 @@ fn direct_call_hits_call_site_ic_in_bytecode() {
     let _ = interp.run(&program);
     let v = interp
         .get_global_var_ref("__r")
-        .unwrap_or(JsValue::Undefined);
-    assert!(matches!(v, JsValue::Number(n) if n == 700.0));
+        .unwrap_or(JsValue::UNDEFINED);
+    assert_eq!(v.as_number(), Some(700.0));
     assert!(
         interp.bytecode_chunks_executed >= 1,
         "loop must execute through bytecode"
@@ -1368,8 +1354,8 @@ fn pending_argument_survives_gc_during_later_call_argument() {
     let (bytecode, bytecode_count) = eval_with_mode(source, true);
     assert_eq!(ast_count, 0);
     assert!(bytecode_count >= 1, "run must execute through bytecode");
-    assert!(matches!(ast, JsValue::Number(n) if n == 42.0));
-    assert!(matches!(bytecode, JsValue::Number(n) if n == 42.0));
+    assert_eq!(ast.as_number(), Some(42.0));
+    assert_eq!(bytecode.as_number(), Some(42.0));
 }
 
 #[test]
@@ -1391,8 +1377,8 @@ fn pending_with_getter_callee_survives_gc_during_argument() {
     let (bytecode, bytecode_count) = eval_with_mode(source, true);
     assert_eq!(ast_count, 0);
     assert!(bytecode_count >= 1, "runner must execute through bytecode");
-    assert!(matches!(ast, JsValue::Number(n) if n == 17.0));
-    assert!(matches!(bytecode, JsValue::Number(n) if n == 17.0));
+    assert_eq!(ast.as_number(), Some(17.0));
+    assert_eq!(bytecode.as_number(), Some(17.0));
 }
 
 #[test]
@@ -1409,7 +1395,7 @@ fn strict_direct_return_call_preserves_tail_calls() {
         bytecode_count >= 2001,
         "every recursive dispatch must execute bytecode"
     );
-    assert!(matches!(value, JsValue::Number(n) if n == 42.0));
+    assert_eq!(value.as_number(), Some(42.0));
 }
 
 #[test]
@@ -1421,7 +1407,7 @@ fn non_callable_direct_call_throws_via_bytecode() {
         try { run(); } catch (error) { __r = error instanceof TypeError; }";
     let (value, bytecode_count) = eval_with_mode(source, true);
     assert!(bytecode_count >= 1, "run must execute through bytecode");
-    assert!(matches!(value, JsValue::Boolean(true)));
+    assert_eq!(value.as_boolean(), Some(true));
 }
 
 #[test]

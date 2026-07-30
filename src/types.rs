@@ -1008,12 +1008,12 @@ mod tests {
 
     #[test]
     fn display_values() {
-        assert_eq!(format!("{}", JsValue::Undefined), "undefined");
-        assert_eq!(format!("{}", JsValue::Null), "null");
-        assert_eq!(format!("{}", JsValue::Boolean(true)), "true");
-        assert_eq!(format!("{}", JsValue::Number(42.0)), "42");
+        assert_eq!(format!("{}", JsValue::UNDEFINED), "undefined");
+        assert_eq!(format!("{}", JsValue::NULL), "null");
+        assert_eq!(format!("{}", JsValue::TRUE), "true");
+        assert_eq!(format!("{}", JsValue::number(42.0)), "42");
         assert_eq!(
-            format!("{}", JsValue::String(JsString::from_str("hi"))),
+            format!("{}", JsValue::string(JsString::from_str("hi"))),
             "hi"
         );
     }
@@ -1092,10 +1092,10 @@ mod tests {
 
     #[test]
     fn value_constructors() {
-        assert!(matches!(JsValue::UNDEFINED, JsValue::Undefined));
-        assert!(matches!(JsValue::NULL, JsValue::Null));
-        assert!(matches!(JsValue::TRUE, JsValue::Boolean(true)));
-        assert!(matches!(JsValue::FALSE, JsValue::Boolean(false)));
+        assert!(JsValue::UNDEFINED.is_undefined());
+        assert!(JsValue::NULL.is_null());
+        assert_eq!(JsValue::TRUE.as_boolean(), Some(true));
+        assert_eq!(JsValue::FALSE.as_boolean(), Some(false));
         assert_eq!(JsValue::boolean(true).as_boolean(), Some(true));
         assert_eq!(JsValue::number(3.5).as_number(), Some(3.5));
         assert_eq!(JsValue::object(7).as_object_id(), Some(7));
@@ -1124,58 +1124,58 @@ mod tests {
 
     #[test]
     fn typed_accessors_return_none_on_mismatch() {
-        let n = JsValue::Number(1.0);
+        let n = JsValue::number(1.0);
         assert_eq!(n.as_boolean(), None);
         assert_eq!(n.as_object_id(), None);
         assert!(n.as_string().is_none());
         assert!(n.as_symbol().is_none());
         assert!(n.as_bigint().is_none());
-        assert_eq!(JsValue::Boolean(true).as_number(), None);
+        assert_eq!(JsValue::TRUE.as_number(), None);
     }
 
     #[test]
     fn with_accessors() {
         let s = JsValue::from_str("abc");
         assert_eq!(s.with_string(|cu| cu.len()), Some(3));
-        assert_eq!(JsValue::Null.with_string(|cu| cu.len()), None);
+        assert_eq!(JsValue::NULL.with_string(|cu| cu.len()), None);
 
-        let sym = JsValue::Symbol(JsSymbol::new(9, None));
+        let sym = JsValue::symbol(JsSymbol::new(9, None));
         assert_eq!(sym.with_symbol(JsSymbol::id), Some(9));
-        assert_eq!(JsValue::Null.with_symbol(JsSymbol::id), None);
+        assert_eq!(JsValue::NULL.with_symbol(JsSymbol::id), None);
 
-        let big = JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(5)));
+        let big = JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(5)));
         assert_eq!(
             big.with_bigint(|b| b.clone()),
             Some(num_bigint::BigInt::from(5))
         );
-        assert_eq!(JsValue::Null.with_bigint(|b| b.clone()), None);
+        assert_eq!(JsValue::NULL.with_bigint(|b| b.clone()), None);
     }
 
     #[test]
     fn into_accessors() {
         let s = JsValue::from_str("x");
         assert_eq!(s.into_string().unwrap().to_rust_string(), "x");
-        assert!(JsValue::Null.into_string().is_none());
+        assert!(JsValue::NULL.into_string().is_none());
 
-        let big = JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(11)));
+        let big = JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(11)));
         assert_eq!(
             *big.into_bigint().unwrap().value,
             num_bigint::BigInt::from(11)
         );
-        assert!(JsValue::Number(1.0).into_bigint().is_none());
+        assert!(JsValue::number(1.0).into_bigint().is_none());
     }
 
     #[test]
     fn discriminant_and_kind() {
         let cases = [
-            (JsValue::Undefined, ValueKind::Undefined),
-            (JsValue::Null, ValueKind::Null),
-            (JsValue::Boolean(true), ValueKind::Boolean),
-            (JsValue::Number(1.0), ValueKind::Number),
+            (JsValue::UNDEFINED, ValueKind::Undefined),
+            (JsValue::NULL, ValueKind::Null),
+            (JsValue::TRUE, ValueKind::Boolean),
+            (JsValue::number(1.0), ValueKind::Number),
             (JsValue::from_str("s"), ValueKind::String),
-            (JsValue::Symbol(JsSymbol::new(0, None)), ValueKind::Symbol),
+            (JsValue::symbol(JsSymbol::new(0, None)), ValueKind::Symbol),
             (
-                JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(0))),
+                JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(0))),
                 ValueKind::BigInt,
             ),
             (JsValue::object(1), ValueKind::Object),
@@ -1189,7 +1189,7 @@ mod tests {
     #[test]
     fn is_object_predicate() {
         assert!(JsValue::object(3).is_object());
-        assert!(!JsValue::Null.is_object());
-        assert!(!JsValue::Number(0.0).is_object());
+        assert!(!JsValue::NULL.is_object());
+        assert!(!JsValue::number(0.0).is_object());
     }
 }

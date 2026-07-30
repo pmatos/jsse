@@ -62,33 +62,31 @@ fn run_module_with_path(source: &str, path: &Path) -> Interpreter {
 }
 
 fn global_string(interp: &Interpreter, name: &str) -> String {
-    match interp
+    let value = interp
         .get_global_var_ref(name)
-        .unwrap_or(JsValue::Undefined)
-    {
-        JsValue::String(s) => s.to_string(),
-        other => panic!("expected global string for {name}, got {other:?}"),
-    }
+        .unwrap_or(JsValue::UNDEFINED);
+    value
+        .as_string()
+        .unwrap_or_else(|| panic!("expected global string for {name}, got {value:?}"))
+        .to_string()
 }
 
 fn global_number(interp: &Interpreter, name: &str) -> f64 {
-    match interp
+    let value = interp
         .get_global_var_ref(name)
-        .unwrap_or(JsValue::Undefined)
-    {
-        JsValue::Number(n) => n,
-        other => panic!("expected global number for {name}, got {other:?}"),
-    }
+        .unwrap_or(JsValue::UNDEFINED);
+    value
+        .as_number()
+        .unwrap_or_else(|| panic!("expected global number for {name}, got {value:?}"))
 }
 
 fn global_object_id(interp: &Interpreter, name: &str) -> u64 {
-    match interp
+    let value = interp
         .get_global_var_ref(name)
-        .unwrap_or(JsValue::Undefined)
-    {
-        JsValue::Object(o) => o.id,
-        other => panic!("expected global object for {name}, got {other:?}"),
-    }
+        .unwrap_or(JsValue::UNDEFINED);
+    value
+        .as_object_id()
+        .unwrap_or_else(|| panic!("expected global object for {name}, got {value:?}"))
 }
 
 fn temp_case_dir(label: &str) -> PathBuf {
@@ -171,13 +169,12 @@ fn define_method_installs_a_correctly_shaped_builtin() {
     let target_id = interp.create_object_id();
 
     interp.define_method(target_id, "greet", 1, |_interp, _this, args| {
-        let name = match args.first() {
-            Some(JsValue::String(s)) => s.to_rust_string(),
-            _ => "world".to_string(),
-        };
-        Completion::Normal(JsValue::String(JsString::from_str(&format!(
-            "hello {name}"
-        ))))
+        let name = args
+            .first()
+            .and_then(JsValue::as_string)
+            .map(|s| s.to_rust_string())
+            .unwrap_or_else(|| "world".to_string());
+        Completion::Normal(JsValue::from_str(&format!("hello {name}")))
     });
 
     let desc = interp
@@ -200,27 +197,37 @@ fn define_method_installs_a_correctly_shaped_builtin() {
 
     // define_method must still route through create_function, so name/length bookkeeping
     // (used by Function.prototype.toString, .length, etc.) isn't lost.
-    let JsValue::Object(fn_obj) = &greet_fn else {
-        panic!("expected greet to be a function object")
-    };
-    let fn_cell = interp.get_object_cell_expect(fn_obj.id);
-    match fn_cell.borrow().get_own_property("name").unwrap().value {
-        Some(JsValue::String(ref s)) => assert_eq!(s.to_rust_string(), "greet"),
-        ref other => panic!("expected name string, got {other:?}"),
-    }
-    match fn_cell.borrow().get_own_property("length").unwrap().value {
-        Some(JsValue::Number(n)) => assert_eq!(n, 1.0),
-        ref other => panic!("expected length number, got {other:?}"),
-    }
+    let fn_id = greet_fn
+        .as_object_id()
+        .expect("expected greet to be a function object");
+    let fn_cell = interp.get_object_cell_expect(fn_id);
+    let name = fn_cell
+        .borrow()
+        .get_own_property("name")
+        .unwrap()
+        .value
+        .and_then(|value| value.as_string())
+        .expect("expected name string");
+    assert_eq!(name.to_rust_string(), "greet");
+    let length = fn_cell
+        .borrow()
+        .get_own_property("length")
+        .unwrap()
+        .value
+        .and_then(|value| value.as_number())
+        .expect("expected length number");
+    assert_eq!(length, 1.0);
 
-    let target_val = JsValue::Object(crate::types::JsObject { id: target_id });
-    let result = interp.call_function(
-        &greet_fn,
-        &target_val,
-        &[JsValue::String(JsString::from_str("jsse"))],
-    );
+    let target_val = JsValue::object(target_id);
+    let result = interp.call_function(&greet_fn, &target_val, &[JsValue::from_str("jsse")]);
     match result {
-        Completion::Normal(JsValue::String(s)) => assert_eq!(s.to_rust_string(), "hello jsse"),
+        Completion::Normal(value) => assert_eq!(
+            value
+                .as_string()
+                .expect("expected string completion")
+                .to_rust_string(),
+            "hello jsse"
+        ),
         other => panic!("unexpected completion: {other:?}"),
     }
 }
@@ -231,7 +238,7 @@ fn define_getter_installs_a_correctly_shaped_accessor() {
     let target_id = interp.create_object_id();
 
     let getter = interp.define_getter(target_id, "answer", |_interp, _this, _args| {
-        Completion::Normal(JsValue::Number(42.0))
+        Completion::Normal(JsValue::number(42.0))
     });
 
     // Raw stored descriptor (get_own_property would complete an absent setter
@@ -260,29 +267,38 @@ fn define_getter_installs_a_correctly_shaped_accessor() {
 
     // define_getter must return the same function it installed as the getter.
     let installed_getter = desc.get.expect("getter value present");
-    assert!(
-        matches!((&installed_getter, &getter), (JsValue::Object(a), JsValue::Object(b)) if a.id == b.id),
+    let getter_id = getter
+        .as_object_id()
+        .expect("expected getter to be a function object");
+    assert_eq!(
+        installed_getter.as_object_id(),
+        Some(getter_id),
         "returned getter must be the one installed on the accessor"
     );
 
     // Getter bookkeeping: name is prefixed with "get ", length is 0 (per spec).
-    let JsValue::Object(fn_obj) = &getter else {
-        panic!("expected getter to be a function object")
-    };
-    let fn_cell = interp.get_object_cell_expect(fn_obj.id);
-    match fn_cell.borrow().get_own_property("name").unwrap().value {
-        Some(JsValue::String(ref s)) => assert_eq!(s.to_rust_string(), "get answer"),
-        ref other => panic!("expected name string, got {other:?}"),
-    }
-    match fn_cell.borrow().get_own_property("length").unwrap().value {
-        Some(JsValue::Number(n)) => assert_eq!(n, 0.0),
-        ref other => panic!("expected length number, got {other:?}"),
-    }
+    let fn_cell = interp.get_object_cell_expect(getter_id);
+    let name = fn_cell
+        .borrow()
+        .get_own_property("name")
+        .unwrap()
+        .value
+        .and_then(|value| value.as_string())
+        .expect("expected name string");
+    assert_eq!(name.to_rust_string(), "get answer");
+    let length = fn_cell
+        .borrow()
+        .get_own_property("length")
+        .unwrap()
+        .value
+        .and_then(|value| value.as_number())
+        .expect("expected length number");
+    assert_eq!(length, 0.0);
 
     // The getter is callable and returns its computed value.
-    let target_val = JsValue::Object(crate::types::JsObject { id: target_id });
+    let target_val = JsValue::object(target_id);
     match interp.call_function(&getter, &target_val, &[]) {
-        Completion::Normal(JsValue::Number(n)) => assert_eq!(n, 42.0),
+        Completion::Normal(value) => assert_eq!(value.as_number(), Some(42.0)),
         other => panic!("unexpected completion: {other:?}"),
     }
 }
@@ -306,10 +322,12 @@ fn define_to_string_tag_installs_a_correctly_shaped_data_property() {
 
     // Per spec, @@toStringTag on builtin prototypes is a data property:
     // { [[Value]]: tag, [[Writable]]: false, [[Enumerable]]: false, [[Configurable]]: true }.
-    match desc.value {
-        Some(JsValue::String(ref s)) => assert_eq!(s.to_rust_string(), "CorrectlyShaped"),
-        ref other => panic!("expected string tag value, got {other:?}"),
-    }
+    let tag = desc
+        .value
+        .as_ref()
+        .and_then(JsValue::as_string)
+        .expect("expected string tag value");
+    assert_eq!(tag.to_rust_string(), "CorrectlyShaped");
     assert_eq!(desc.writable, Some(false), "@@toStringTag is non-writable");
     assert_eq!(
         desc.enumerable,
@@ -339,15 +357,19 @@ fn define_to_string_tag_installs_a_correctly_shaped_data_property() {
     );
 
     // Observable: Object.prototype.toString sees the installed tag.
-    let target_val = JsValue::Object(crate::types::JsObject { id: target_id });
+    let target_val = JsValue::object(target_id);
     let to_string = match interp.run(&parse_program("Object.prototype.toString;")) {
         Completion::Normal(v) => v,
         other => panic!("expected Object.prototype.toString value, got {other:?}"),
     };
     match interp.call_function(&to_string, &target_val, &[]) {
-        Completion::Normal(JsValue::String(s)) => {
-            assert_eq!(s.to_rust_string(), "[object CorrectlyShaped]")
-        }
+        Completion::Normal(value) => assert_eq!(
+            value
+                .as_string()
+                .expect("expected string completion")
+                .to_rust_string(),
+            "[object CorrectlyShaped]"
+        ),
         other => panic!("unexpected completion: {other:?}"),
     }
 }
@@ -788,11 +810,11 @@ fn missing_named_module_import_throws_syntax_error() {
 fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
     let mut interp = Interpreter::new();
     let id = interp.create_object_id();
-    let obj_val = JsValue::Object(crate::types::JsObject { id });
+    let obj_val = JsValue::object(id);
 
     interp.scheduler.enqueue_microtask((
         vec![obj_val.clone()],
-        Box::new(|_| Completion::Normal(JsValue::Undefined)),
+        Box::new(|_| Completion::Normal(JsValue::UNDEFINED)),
     ));
     interp.gc.request();
     interp.gc_safepoint();
@@ -830,18 +852,16 @@ fn gc_keeps_module_exports_alive_until_registry_entry_is_removed() {
         .get("obj")
         .expect("module export")
         .clone();
-    let JsValue::Object(obj_ref) = export_val else {
-        panic!("expected exported object");
-    };
+    let object_id = export_val.as_object_id().expect("expected exported object");
 
     interp.gc.request();
     interp.gc_safepoint();
-    assert!(interp.get_object_cell(obj_ref.id).is_some());
+    assert!(interp.get_object_cell(object_id).is_some());
 
     interp.module_registry.remove(&key);
     interp.gc.request();
     interp.gc_safepoint();
-    assert!(interp.get_object_cell(obj_ref.id).is_none());
+    assert!(interp.get_object_cell(object_id).is_none());
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -1228,7 +1248,7 @@ fn set_property_value_add_bumps_shape() {
         .get_object(id)
         .unwrap()
         .borrow_mut()
-        .set_property_value("x", JsValue::Number(1.0));
+        .set_property_value("x", JsValue::number(1.0));
     assert!(
         ok,
         "set_property_value should succeed on extensible empty obj"
@@ -1249,13 +1269,13 @@ fn set_property_value_update_existing_does_not_bump_shape() {
         .get_object(id)
         .unwrap()
         .borrow_mut()
-        .set_property_value("x", JsValue::Number(1.0));
+        .set_property_value("x", JsValue::number(1.0));
     let before = interp.get_object(id).unwrap().borrow().shape_id;
     interp
         .get_object(id)
         .unwrap()
         .borrow_mut()
-        .set_property_value("x", JsValue::Number(2.0));
+        .set_property_value("x", JsValue::number(2.0));
     let after = interp.get_object(id).unwrap().borrow().shape_id;
     assert_eq!(
         after, before,
@@ -1273,7 +1293,7 @@ fn define_own_property_bumps_shape_on_attribute_change() {
         .get_object(id)
         .unwrap()
         .borrow_mut()
-        .set_property_value("x", JsValue::Number(1.0));
+        .set_property_value("x", JsValue::number(1.0));
     let before = interp.get_object(id).unwrap().borrow().shape_id;
     let ok = interp
         .get_object(id)
@@ -1282,7 +1302,7 @@ fn define_own_property_bumps_shape_on_attribute_change() {
         .define_own_property(
             "x".to_string(),
             PropertyDescriptor {
-                value: Some(JsValue::Number(1.0)),
+                value: Some(JsValue::number(1.0)),
                 writable: Some(false),
                 enumerable: Some(true),
                 configurable: Some(true),
@@ -1867,7 +1887,7 @@ fn define_own_property_bumps_shape_on_data_to_accessor_swap() {
         .get_object(id)
         .unwrap()
         .borrow_mut()
-        .set_property_value("x", JsValue::Number(1.0));
+        .set_property_value("x", JsValue::number(1.0));
     let before = interp.get_object(id).unwrap().borrow().shape_id;
     // Swap data → accessor by defining a getter.
     let ok = interp
@@ -1879,7 +1899,7 @@ fn define_own_property_bumps_shape_on_data_to_accessor_swap() {
             PropertyDescriptor {
                 value: None,
                 writable: None,
-                get: Some(JsValue::Undefined), // sentinel — real getter not needed for this test
+                get: Some(JsValue::UNDEFINED), // sentinel — real getter not needed for this test
                 set: None,
                 enumerable: Some(true),
                 configurable: Some(true),
@@ -1967,18 +1987,28 @@ fn array_prototype_methods_have_correctly_shaped_builtins() {
             Some(true),
             "Array.prototype.{name} must stay configurable"
         );
-        let JsValue::Object(fn_obj) = desc.value.expect("method has a function value") else {
-            panic!("Array.prototype.{name} is not a function object")
-        };
-        let fn_cell = interp.get_object_cell_expect(fn_obj.id);
-        match fn_cell.borrow().get_own_property("name").unwrap().value {
-            Some(JsValue::String(ref s)) => assert_eq!(s.to_rust_string(), *name),
-            ref other => panic!("Array.prototype.{name}: expected name string, got {other:?}"),
-        }
-        match fn_cell.borrow().get_own_property("length").unwrap().value {
-            Some(JsValue::Number(n)) => assert_eq!(n, *len, "Array.prototype.{name}.length"),
-            ref other => panic!("Array.prototype.{name}: expected length number, got {other:?}"),
-        }
+        let fn_id = desc
+            .value
+            .expect("method has a function value")
+            .as_object_id()
+            .unwrap_or_else(|| panic!("Array.prototype.{name} is not a function object"));
+        let fn_cell = interp.get_object_cell_expect(fn_id);
+        let actual_name = fn_cell
+            .borrow()
+            .get_own_property("name")
+            .unwrap()
+            .value
+            .and_then(|value| value.as_string())
+            .unwrap_or_else(|| panic!("Array.prototype.{name}: expected name string"));
+        assert_eq!(actual_name.to_rust_string(), *name);
+        let actual_length = fn_cell
+            .borrow()
+            .get_own_property("length")
+            .unwrap()
+            .value
+            .and_then(|value| value.as_number())
+            .unwrap_or_else(|| panic!("Array.prototype.{name}: expected length number"));
+        assert_eq!(actual_length, *len, "Array.prototype.{name}.length");
     }
 
     // Array.prototype[@@iterator] must be the very same function object as .values (§23.1.3.35).
@@ -1993,16 +2023,18 @@ fn array_prototype_methods_have_correctly_shaped_builtins() {
         .borrow()
         .get_own_property(&iterator_key)
         .expect("@@iterator installed");
-    let (JsValue::Object(values_obj), JsValue::Object(iterator_obj)) = (
-        values_desc.value.expect("values has a function value"),
-        iterator_desc
-            .value
-            .expect("@@iterator has a function value"),
-    ) else {
-        panic!("expected both values and @@iterator to be function objects")
-    };
+    let values_id = values_desc
+        .value
+        .expect("values has a function value")
+        .as_object_id()
+        .expect("values must be a function object");
+    let iterator_id = iterator_desc
+        .value
+        .expect("@@iterator has a function value")
+        .as_object_id()
+        .expect("@@iterator must be a function object");
     assert_eq!(
-        values_obj.id, iterator_obj.id,
+        values_id, iterator_id,
         "Array.prototype[@@iterator] must be identical to Array.prototype.values"
     );
 }
@@ -2195,10 +2227,12 @@ mod loop_completion_value_tests {
     }
 
     fn assert_number(source: &str, expected: f64) {
-        match completion_value(source) {
-            JsValue::Number(n) => assert_eq!(n, expected, "completion value of `{source}`"),
-            other => panic!("expected number completion for `{source}`, got {other:?}"),
-        }
+        let value = completion_value(source);
+        assert_eq!(
+            value.as_number(),
+            Some(expected),
+            "completion value of `{source}`"
+        );
     }
 
     #[test]
@@ -2307,43 +2341,40 @@ mod to_integer_or_infinity_value_tests {
 
     #[test]
     fn truncates_toward_zero() {
-        assert_eq!(conv(JsValue::Number(3.7)), 3.0);
-        assert_eq!(conv(JsValue::Number(-3.7)), -3.0);
-        assert_eq!(conv(JsValue::Number(5.0)), 5.0);
-        assert_eq!(conv(JsValue::Number(-0.9)), 0.0);
+        assert_eq!(conv(JsValue::number(3.7)), 3.0);
+        assert_eq!(conv(JsValue::number(-3.7)), -3.0);
+        assert_eq!(conv(JsValue::number(5.0)), 5.0);
+        assert_eq!(conv(JsValue::number(-0.9)), 0.0);
     }
 
     #[test]
     fn nan_becomes_positive_zero() {
-        let r = conv(JsValue::Number(f64::NAN));
+        let r = conv(JsValue::number(f64::NAN));
         assert_eq!(r, 0.0);
         assert!(r.is_sign_positive(), "ToIntegerOrInfinity(NaN) is +0");
     }
 
     #[test]
     fn infinities_pass_through() {
-        assert_eq!(conv(JsValue::Number(f64::INFINITY)), f64::INFINITY);
-        assert_eq!(conv(JsValue::Number(f64::NEG_INFINITY)), f64::NEG_INFINITY);
+        assert_eq!(conv(JsValue::number(f64::INFINITY)), f64::INFINITY);
+        assert_eq!(conv(JsValue::number(f64::NEG_INFINITY)), f64::NEG_INFINITY);
     }
 
     #[test]
     fn coerces_booleans_null_and_undefined() {
-        assert_eq!(conv(JsValue::Boolean(true)), 1.0); // ToNumber(true) = 1
-        assert_eq!(conv(JsValue::Boolean(false)), 0.0);
-        assert_eq!(conv(JsValue::Null), 0.0); // ToNumber(null) = 0
-        assert_eq!(conv(JsValue::Undefined), 0.0); // ToNumber(undefined) = NaN -> 0
+        assert_eq!(conv(JsValue::TRUE), 1.0); // ToNumber(true) = 1
+        assert_eq!(conv(JsValue::FALSE), 0.0);
+        assert_eq!(conv(JsValue::NULL), 0.0); // ToNumber(null) = 0
+        assert_eq!(conv(JsValue::UNDEFINED), 0.0); // ToNumber(undefined) = NaN -> 0
     }
 
     #[test]
     fn coerces_strings() {
-        assert_eq!(conv(JsValue::String(JsString::from_str("42"))), 42.0);
-        assert_eq!(conv(JsValue::String(JsString::from_str("42.9"))), 42.0);
-        assert_eq!(conv(JsValue::String(JsString::from_str("  -7.5 "))), -7.0);
-        assert_eq!(conv(JsValue::String(JsString::from_str("abc"))), 0.0); // NaN -> 0
-        assert_eq!(
-            conv(JsValue::String(JsString::from_str("Infinity"))),
-            f64::INFINITY
-        );
+        assert_eq!(conv(JsValue::from_str("42")), 42.0);
+        assert_eq!(conv(JsValue::from_str("42.9")), 42.0);
+        assert_eq!(conv(JsValue::from_str("  -7.5 ")), -7.0);
+        assert_eq!(conv(JsValue::from_str("abc")), 0.0); // NaN -> 0
+        assert_eq!(conv(JsValue::from_str("Infinity")), f64::INFINITY);
     }
 
     #[test]
