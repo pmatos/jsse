@@ -1620,16 +1620,16 @@ impl Interpreter {
                         }
                     };
                     // Capture len BEFORE argument coercion (may resize buffer)
-                    let len = typed_array_length(&ta) as i64;
+                    let len = typed_array_length(&ta);
                     let idx_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
                     let idx = match interp.to_integer_or_infinity_value(&idx_val) {
-                        Ok(n) => n as i64,
+                        Ok(n) => n,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let actual = if idx < 0 { len + idx } else { idx };
-                    if actual < 0 || actual >= len {
-                        return Completion::Normal(JsValue::UNDEFINED);
-                    }
+                    let actual = match resolve_element_index(idx, len) {
+                        Some(k) => k,
+                        None => return Completion::Normal(JsValue::UNDEFINED),
+                    };
                     // Use Get semantics (checks OOB post-resize via is_valid_integer_index)
                     let key = actual.to_string();
                     return interp.get_object_property(o, &key, this_val);
@@ -1825,29 +1825,15 @@ impl Interpreter {
                     } else {
                         typed_array_length(&ta) as i64
                     };
-                    let begin = {
-                        let n = to_integer_or_infinity(if let Some(a) = args.first() {
-                            match interp.to_number_value(a) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            0.0
-                        });
-                        resolve_relative_index(n, src_len as usize)
+                    let begin = match resolve_start_index(interp, args.first(), src_len as usize) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
                     let end_is_undefined =
                         args.len() <= 1 || args.get(1).is_some_and(|v| v.is_undefined());
-                    let end = {
-                        let n = if !end_is_undefined {
-                            match interp.to_integer_or_infinity_value(&args[1]) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            src_len as f64
-                        };
-                        resolve_relative_index(n, src_len as usize)
+                    let end = match resolve_end_index(interp, args.get(1), src_len as usize) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
                     let new_len = end.saturating_sub(begin);
                     let bpe = ta.kind.bytes_per_element();
@@ -1891,27 +1877,13 @@ impl Interpreter {
                         }
                     };
                     let len = typed_array_length(&ta) as i64;
-                    let begin = {
-                        let n = to_integer_or_infinity(if let Some(a) = args.first() {
-                            match interp.to_number_value(a) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            0.0
-                        });
-                        resolve_relative_index(n, len as usize)
+                    let begin = match resolve_start_index(interp, args.first(), len as usize) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
-                    let end = {
-                        let n = if args.len() > 1 && !args[1].is_undefined() {
-                            match interp.to_integer_or_infinity_value(&args[1]) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            len as f64
-                        };
-                        resolve_relative_index(n, len as usize)
+                    let end = match resolve_end_index(interp, args.get(1), len as usize) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
                     let count = end.saturating_sub(begin);
 
@@ -2029,34 +2001,17 @@ impl Interpreter {
                         return c;
                     }
                     let len = typed_array_length(&ta) as i64;
-                    let target = {
-                        let n = match interp.to_integer_or_infinity_value(
-                            args.first().unwrap_or(JsValue::undefined_ref()),
-                        ) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        resolve_relative_index(n, len as usize)
+                    let target = match resolve_start_index(interp, args.first(), len as usize) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
-                    let start = {
-                        let n = match interp.to_integer_or_infinity_value(
-                            args.get(1).unwrap_or(JsValue::undefined_ref()),
-                        ) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        };
-                        resolve_relative_index(n, len as usize)
+                    let start = match resolve_start_index(interp, args.get(1), len as usize) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
-                    let end = {
-                        let n = if args.len() > 2 && !args[2].is_undefined() {
-                            match interp.to_integer_or_infinity_value(&args[2]) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            len as f64
-                        };
-                        resolve_relative_index(n, len as usize)
+                    let end = match resolve_end_index(interp, args.get(2), len as usize) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
                     // Re-check detach and OOB after coercion
                     if let Err(c) = check_detached_or_out_of_bounds(interp, &ta) {
@@ -2126,28 +2081,13 @@ impl Interpreter {
                         Ok(v) => v,
                         Err(e) => return Completion::Throw(e),
                     };
-                    let len_f = len as f64;
-                    let start = {
-                        let v = to_integer_or_infinity(if args.len() > 1 {
-                            match interp.to_number_value(&args[1]) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            0.0
-                        });
-                        resolve_relative_index(v, len)
+                    let start = match resolve_start_index(interp, args.get(1), len) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
-                    let end = {
-                        let v = if args.len() > 2 && !args[2].is_undefined() {
-                            match interp.to_integer_or_infinity_value(&args[2]) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            len_f
-                        };
-                        resolve_relative_index(v, len)
+                    let end = match resolve_end_index(interp, args.get(2), len) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
                     // Re-check detach and OOB after coercion (buffer may have been resized)
                     if ta.is_detached.get() {

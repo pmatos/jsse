@@ -14,6 +14,27 @@ pub(crate) fn resolve_relative_index(n: f64, len: usize) -> usize {
     }
 }
 
+// Resolves a spec "relative index" for element access — the `.prototype.at` and
+// `.prototype.with` methods of Array, String and TypedArray — where an
+// out-of-range index yields no element rather than being clamped. `relative`
+// must already have passed through ToIntegerOrInfinity. Returns `Some(k)` when
+// the resolved index lies in `[0, len)` (the caller reads or writes element
+// `k`); returns `None` when it is out of range (`.at` returns `undefined`,
+// `.with` throws a RangeError). Contrast `resolve_relative_index`, which clamps
+// into `[0, len]` for the range-based methods (slice/fill/copyWithin/...).
+pub(crate) fn resolve_element_index(relative: f64, len: usize) -> Option<usize> {
+    let k = if relative < 0.0 {
+        len as f64 + relative
+    } else {
+        relative
+    };
+    if k >= 0.0 && k < len as f64 {
+        Some(k as usize)
+    } else {
+        None
+    }
+}
+
 // Resolves a spec "start"-style relative-index argument for the range-based
 // Array methods (slice, fill, copyWithin, splice, toSpliced). An absent
 // argument defaults to index 0; otherwise the argument is passed through
@@ -2780,6 +2801,83 @@ mod resolve_relative_index_tests {
     fn zero_length_clamps_everything_to_zero() {
         assert_eq!(resolve_relative_index(-1.0, 0), 0);
         assert_eq!(resolve_relative_index(5.0, 0), 0);
+    }
+}
+
+#[cfg(test)]
+mod resolve_element_index_tests {
+    use super::resolve_element_index;
+
+    // --- in-range indices resolve to a concrete position ---
+
+    #[test]
+    fn positive_in_range_is_itself() {
+        assert_eq!(resolve_element_index(3.0, 10), Some(3));
+    }
+
+    #[test]
+    fn negative_counts_back_from_length() {
+        assert_eq!(resolve_element_index(-3.0, 10), Some(7));
+    }
+
+    #[test]
+    fn last_valid_positive_index_is_in_range() {
+        // relative == len - 1 is the largest in-range positive index.
+        assert_eq!(resolve_element_index(9.0, 10), Some(9));
+    }
+
+    #[test]
+    fn most_negative_in_range_index_is_zero() {
+        // relative == -len maps to index 0 (the first element).
+        assert_eq!(resolve_element_index(-10.0, 10), Some(0));
+    }
+
+    // --- out-of-range indices resolve to None (no element) ---
+
+    #[test]
+    fn index_equal_to_length_is_out_of_range() {
+        assert_eq!(resolve_element_index(10.0, 10), None);
+    }
+
+    #[test]
+    fn negative_one_past_the_start_is_out_of_range() {
+        // relative == -(len) - 1 falls just before index 0.
+        assert_eq!(resolve_element_index(-11.0, 10), None);
+    }
+
+    #[test]
+    fn empty_length_has_no_valid_index() {
+        assert_eq!(resolve_element_index(0.0, 0), None);
+        assert_eq!(resolve_element_index(-1.0, 0), None);
+    }
+
+    // --- non-finite / huge magnitudes: equivalent to the pre-refactor
+    //     `f64 as i64` saturating casts (they always fell out of range) ---
+
+    #[test]
+    fn positive_infinity_is_out_of_range() {
+        assert_eq!(resolve_element_index(f64::INFINITY, 10), None);
+    }
+
+    #[test]
+    fn negative_infinity_is_out_of_range() {
+        assert_eq!(resolve_element_index(f64::NEG_INFINITY, 10), None);
+    }
+
+    #[test]
+    fn huge_positive_magnitude_is_out_of_range() {
+        assert_eq!(resolve_element_index(1e300, 10), None);
+    }
+
+    #[test]
+    fn huge_negative_magnitude_is_out_of_range() {
+        assert_eq!(resolve_element_index(-1e300, 10), None);
+    }
+
+    #[test]
+    fn negative_zero_resolves_to_index_zero() {
+        // -0.0 is not < 0.0, so it is treated as the positive index 0.
+        assert_eq!(resolve_element_index(-0.0, 10), Some(0));
     }
 }
 
