@@ -1,3 +1,10 @@
+## [0.4.15](https://github.com/pmatos/jsse/compare/v0.4.14...v0.4.15) (2026-07-30)
+
+
+### Performance Improvements
+
+* **nan-box:** implement one-word JsValue representation ([#439](https://github.com/pmatos/jsse/issues/439)) ([abd3b0f](https://github.com/pmatos/jsse/commit/abd3b0ff12d8d41aef2b3333982eeab522db1db6))
+
 ## [0.4.14](https://github.com/pmatos/jsse/compare/v0.4.13...v0.4.14) (2026-07-29)
 
 
