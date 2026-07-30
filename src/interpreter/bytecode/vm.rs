@@ -23,8 +23,8 @@ fn decode_u32(chunk: &Chunk, pc: usize) -> u32 {
     u32::from_le_bytes(chunk.code[pc..pc + 4].try_into().unwrap())
 }
 
-/// Roots every `JsValue::Object` currently on the operand stack, not just the
-/// current opcode's own operands. A value pushed by an earlier `GetProp`/
+/// Roots every object-valued `JsValue` currently on the operand stack, not
+/// just the current opcode's own operands. A value pushed by an earlier `GetProp`/
 /// `GetElement` (e.g. the base of `a.b.value = a.c`) can still be pending on
 /// the stack while a *later* opcode's own getter/proxy-trap/`ToPropertyKey`
 /// coercion runs and reaches a nested `gc_safepoint()` — rooting only this
@@ -38,17 +38,17 @@ fn root_operand_stack(interp: &mut Interpreter, stack: &[JsValue]) -> usize {
 }
 
 fn root_stack_value(interp: &mut Interpreter, value: &JsValue) {
-    if let JsValue::Object(object) = value {
-        interp.gc_bytecode_roots.push(object.id);
+    if let Some(object_id) = value.as_object_id() {
+        interp.gc_bytecode_roots.push(object_id);
     }
 }
 
 fn unroot_stack_value(interp: &mut Interpreter, value: &JsValue) {
-    if let JsValue::Object(object) = value
+    if let Some(object_id) = value.as_object_id()
         && let Some(pos) = interp
             .gc_bytecode_roots
             .iter()
-            .rposition(|&id| id == object.id)
+            .rposition(|&id| id == object_id)
     {
         interp.gc_bytecode_roots.remove(pos);
     }
@@ -87,13 +87,13 @@ fn release_call_operands(
 }
 
 fn member_get(interp: &mut Interpreter, base: &JsValue, name: &str) -> Completion {
-    if matches!(base, JsValue::Undefined | JsValue::Null) {
+    if base.is_nullish() {
         let err = interp.create_type_error(&format!(
             "Cannot read properties of {base} (reading '{name}')"
         ));
         return Completion::Throw(err);
     }
-    let obj_val = if matches!(base, JsValue::Object(_)) {
+    let obj_val = if base.is_object() {
         base.clone()
     } else {
         match interp.to_object(base) {
@@ -101,14 +101,14 @@ fn member_get(interp: &mut Interpreter, base: &JsValue, name: &str) -> Completio
             abrupt => return abrupt,
         }
     };
-    let JsValue::Object(o) = &obj_val else {
-        return Completion::Normal(JsValue::Undefined);
+    let Some(object_id) = obj_val.as_object_id() else {
+        return Completion::Normal(JsValue::UNDEFINED);
     };
-    interp.get_object_property(o.id, name, &obj_val)
+    interp.get_object_property(object_id, name, &obj_val)
 }
 
 fn member_get_computed(interp: &mut Interpreter, base: &JsValue, key_val: &JsValue) -> Completion {
-    if matches!(base, JsValue::Undefined | JsValue::Null) {
+    if base.is_nullish() {
         let err = interp.create_type_error(&format!(
             "Cannot read properties of {base} (reading property)"
         ));
@@ -118,7 +118,7 @@ fn member_get_computed(interp: &mut Interpreter, base: &JsValue, key_val: &JsVal
         Ok(k) => k,
         Err(e) => return Completion::Throw(e),
     };
-    let obj_val = if matches!(base, JsValue::Object(_)) {
+    let obj_val = if base.is_object() {
         base.clone()
     } else {
         match interp.to_object(base) {
@@ -126,10 +126,10 @@ fn member_get_computed(interp: &mut Interpreter, base: &JsValue, key_val: &JsVal
             abrupt => return abrupt,
         }
     };
-    let JsValue::Object(o) = &obj_val else {
-        return Completion::Normal(JsValue::Undefined);
+    let Some(object_id) = obj_val.as_object_id() else {
+        return Completion::Normal(JsValue::UNDEFINED);
     };
-    interp.get_object_property(o.id, &key, &obj_val)
+    interp.get_object_property(object_id, &key, &obj_val)
 }
 
 fn member_set(
@@ -139,7 +139,7 @@ fn member_set(
     rhs: JsValue,
     strict: bool,
 ) -> Result<(), JsValue> {
-    if matches!(base, JsValue::Undefined | JsValue::Null) {
+    if base.is_nullish() {
         return Err(interp.create_type_error(&format!(
             "Cannot set properties of {base} (setting '{name}')"
         )));
@@ -155,7 +155,7 @@ fn member_set_computed(
     strict: bool,
 ) -> Result<(), JsValue> {
     let key = interp.to_property_key(key_val)?;
-    if matches!(base, JsValue::Undefined | JsValue::Null) {
+    if base.is_nullish() {
         return Err(interp.create_type_error(&format!(
             "Cannot set properties of {base} (setting '{key}')"
         )));
@@ -221,8 +221,8 @@ fn run_chunk_inner(
                 interp.last_identifier_with_base = None;
                 let callee_result = interp.resolve_identifier(name, env, strict);
                 let this_value = match interp.last_identifier_with_base.take() {
-                    Some(id) => JsValue::Object(crate::types::JsObject { id }),
-                    None => JsValue::Undefined,
+                    Some(id) => JsValue::object(id),
+                    None => JsValue::UNDEFINED,
                 };
                 let callee = match callee_result {
                     Completion::Normal(value) => value,
@@ -347,27 +347,27 @@ fn run_chunk_inner(
                 }
             }
             Op::LoadUndefined => {
-                push_value(interp, &mut stack, JsValue::Undefined);
+                push_value(interp, &mut stack, JsValue::UNDEFINED);
             }
             Op::LoadTrue => {
-                push_value(interp, &mut stack, JsValue::Boolean(true));
+                push_value(interp, &mut stack, JsValue::TRUE);
             }
             Op::LoadFalse => {
-                push_value(interp, &mut stack, JsValue::Boolean(false));
+                push_value(interp, &mut stack, JsValue::FALSE);
             }
             Op::LoadNull => {
-                push_value(interp, &mut stack, JsValue::Null);
+                push_value(interp, &mut stack, JsValue::NULL);
             }
             Op::Return => {
                 let v = if stack.is_empty() {
-                    JsValue::Undefined
+                    JsValue::UNDEFINED
                 } else {
                     pop_value(interp, &mut stack, "stack underflow on Return")
                 };
                 return Completion::Return(v);
             }
             Op::ReturnUndefined => {
-                return Completion::Return(JsValue::Undefined);
+                return Completion::Return(JsValue::UNDEFINED);
             }
             Op::Call | Op::ReturnCall => {
                 let argc = decode_u16(chunk, pc) as usize;
@@ -458,7 +458,7 @@ fn run_chunk_inner(
                         push_value(interp, &mut stack, value);
                     }
                     Completion::Empty => {
-                        push_value(interp, &mut stack, JsValue::Undefined);
+                        push_value(interp, &mut stack, JsValue::UNDEFINED);
                     }
                     abrupt => return abrupt,
                 }
@@ -582,7 +582,7 @@ fn run_chunk_inner(
                 let v = stack
                     .last()
                     .expect("stack underflow on JumpIfNotNullishKeep");
-                if !matches!(v, JsValue::Undefined | JsValue::Null) {
+                if !v.is_nullish() {
                     pc = (pc as i32 + offset) as usize;
                 }
             }

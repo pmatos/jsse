@@ -10,8 +10,8 @@ pub(crate) enum Constant {
 impl Constant {
     pub(crate) fn to_value(&self) -> JsValue {
         match self {
-            Constant::Number(n) => JsValue::Number(*n),
-            Constant::String(s) => JsValue::String(JsString::from_str(s)),
+            Constant::Number(n) => JsValue::number(*n),
+            Constant::String(s) => JsValue::string(JsString::from_str(s)),
         }
     }
 }
