@@ -83,13 +83,13 @@ def main():
             errors.append((str(test), "TIMEOUT"))
 
     total = passed + failed
-    print(f"\n=== Custom Test Results ===")
+    print("\n=== Custom Test Results ===")
     print(f"Total: {total}")
     print(f"Pass:  {passed}")
     print(f"Fail:  {failed}")
 
     if errors:
-        print(f"\nFailed tests:")
+        print("\nFailed tests:")
         for path, err in errors:
             print(f"  FAIL {path}")
             if err:

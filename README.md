@@ -88,6 +88,22 @@ cargo build --release
 ./target/release/jsse              # starts REPL
 ```
 
+## Development checks
+
+Install the pinned repository hooks once per checkout:
+
+```bash
+uv tool install pre-commit
+pre-commit install
+```
+
+Run every hook against the full repository when changing hook configuration or
+tooling:
+
+```bash
+pre-commit run --all-files
+```
+
 ## Running test262
 
 ```bash
