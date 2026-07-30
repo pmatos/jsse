@@ -75,4 +75,3 @@ handle.
 - Compare JetStream splay before and after when the local JetStream checkout is
   available. At minimum, record arena allocation statistics in unit tests so
   the one-chunk-per-many-objects property cannot regress silently.
-

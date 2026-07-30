@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Generate src/unicode_tables.rs from Unicode 17.0.0 UCD data files."""
 
-import os
-import re
 import sys
 import urllib.request
 from collections import defaultdict
@@ -74,7 +72,9 @@ def merge_ranges(ranges: list[tuple[int, int]]) -> list[tuple[int, int]]:
     return merged
 
 
-def parse_script_extensions(text: str, script_data: dict[str, list[tuple[int, int]]]) -> dict[str, list[tuple[int, int]]]:
+def parse_script_extensions(
+    text: str, script_data: dict[str, list[tuple[int, int]]]
+) -> dict[str, list[tuple[int, int]]]:
     """Parse ScriptExtensions.txt. Each codepoint gets added to all listed scripts.
     Also inherits from Script property for codepoints not in ScriptExtensions."""
     scx = defaultdict(list)
@@ -222,7 +222,9 @@ def generate_rust(
     for name, ranges in sorted(script_data.items()):
         const_name = f"SCRIPT_{to_rust_ident(name).upper()}"
         ranges_no_surr = remove_surrogates(ranges)
-        lines.append(f"const {const_name}: &[(u32, u32)] = &[{format_ranges(ranges_no_surr)}];")
+        lines.append(
+            f"const {const_name}: &[(u32, u32)] = &[{format_ranges(ranges_no_surr)}];"
+        )
         all_tables[("Script", name)] = const_name
 
     lines.append("")
@@ -231,7 +233,9 @@ def generate_rust(
     for name, ranges in sorted(scx_data.items()):
         const_name = f"SCX_{to_rust_ident(name).upper()}"
         ranges_no_surr = remove_surrogates(ranges)
-        lines.append(f"const {const_name}: &[(u32, u32)] = &[{format_ranges(ranges_no_surr)}];")
+        lines.append(
+            f"const {const_name}: &[(u32, u32)] = &[{format_ranges(ranges_no_surr)}];"
+        )
         all_tables[("Script_Extensions", name)] = const_name
 
     lines.append("")
@@ -251,7 +255,9 @@ def generate_rust(
     for name, ranges in sorted(gc_data.items()):
         const_name = f"GC_{to_rust_ident(name).upper()}"
         ranges_no_surr = remove_surrogates(ranges)
-        lines.append(f"const {const_name}: &[(u32, u32)] = &[{format_ranges(ranges_no_surr)}];")
+        lines.append(
+            f"const {const_name}: &[(u32, u32)] = &[{format_ranges(ranges_no_surr)}];"
+        )
         all_tables[("General_Category", name)] = const_name
 
     # Compute composites from the parsed data
@@ -264,7 +270,9 @@ def generate_rust(
             combined = merge_ranges(sorted(combined))
             const_name = f"GC_{to_rust_ident(comp_name).upper()}"
             ranges_no_surr = remove_surrogates(combined)
-            lines.append(f"const {const_name}: &[(u32, u32)] = &[{format_ranges(ranges_no_surr)}];")
+            lines.append(
+                f"const {const_name}: &[(u32, u32)] = &[{format_ranges(ranges_no_surr)}];"
+            )
             all_tables[("General_Category", comp_name)] = const_name
 
     lines.append("")
@@ -273,7 +281,9 @@ def generate_rust(
     for name, ranges in sorted(binary_data.items()):
         const_name = f"BINARY_{to_rust_ident(name).upper()}"
         ranges_no_surr = remove_surrogates(ranges)
-        lines.append(f"const {const_name}: &[(u32, u32)] = &[{format_ranges(ranges_no_surr)}];")
+        lines.append(
+            f"const {const_name}: &[(u32, u32)] = &[{format_ranges(ranges_no_surr)}];"
+        )
         all_tables[("Binary", name)] = const_name
 
     # Special binary properties
@@ -283,25 +293,33 @@ def generate_rust(
         all_tables[("Binary", "ASCII")] = "BINARY_ASCII"
 
     # Any
-    lines.append("const BINARY_ANY: &[(u32, u32)] = &[(0x0000, 0xD7FF), (0xE000, 0x10FFFF)];")
+    lines.append(
+        "const BINARY_ANY: &[(u32, u32)] = &[(0x0000, 0xD7FF), (0xE000, 0x10FFFF)];"
+    )
     all_tables[("Binary", "Any")] = "BINARY_ANY"
 
     # Assigned = complement of Unassigned (gc=Cn)
     if "Cn" in gc_data:
         assigned_ranges = compute_complement(gc_data["Cn"])
-        lines.append(f"const BINARY_ASSIGNED: &[(u32, u32)] = &[{format_ranges(assigned_ranges)}];")
+        lines.append(
+            f"const BINARY_ASSIGNED: &[(u32, u32)] = &[{format_ranges(assigned_ranges)}];"
+        )
         all_tables[("Binary", "Assigned")] = "BINARY_ASSIGNED"
 
     lines.append("")
 
     # Build the lookup function
-    lines.append("pub fn lookup_property(content: &str) -> Option<&'static [(u32, u32)]> {")
+    lines.append(
+        "pub fn lookup_property(content: &str) -> Option<&'static [(u32, u32)]> {"
+    )
     lines.append("    if let Some(eq_pos) = content.find('=') {")
     lines.append("        let prop_name = &content[..eq_pos];")
     lines.append("        let prop_value = &content[eq_pos + 1..];")
     lines.append("        match prop_name {")
     lines.append('            "Script" | "sc" => lookup_script(prop_value),')
-    lines.append('            "Script_Extensions" | "scx" => lookup_script_extensions(prop_value),')
+    lines.append(
+        '            "Script_Extensions" | "scx" => lookup_script_extensions(prop_value),'
+    )
     lines.append('            "General_Category" | "gc" => lookup_gc(prop_value),')
     lines.append("            _ => None,")
     lines.append("        }")
@@ -336,7 +354,9 @@ def generate_rust(
     lines.append("")
 
     # lookup_script_extensions
-    lines.append("fn lookup_script_extensions(value: &str) -> Option<&'static [(u32, u32)]> {")
+    lines.append(
+        "fn lookup_script_extensions(value: &str) -> Option<&'static [(u32, u32)]> {"
+    )
     lines.append("    match value {")
     for name in sorted(scx_data.keys()):
         const_name = all_tables[("Script_Extensions", name)]
@@ -382,7 +402,9 @@ def generate_rust(
                 emitted_gc.add(n)
     # Also add "punct" alias for Punctuation
     if "punct" not in emitted_gc and ("General_Category", "P") in all_tables:
-        lines.append(f'        "punct" => Some({all_tables[("General_Category", "P")]}),')
+        lines.append(
+            f'        "punct" => Some({all_tables[("General_Category", "P")]}),'
+        )
     lines.append("        _ => None,")
     lines.append("    }")
     lines.append("}")
@@ -392,10 +414,7 @@ def generate_rust(
     lines.append("fn lookup_binary(name: &str) -> Option<&'static [(u32, u32)]> {")
     lines.append("    match name {")
 
-    # Build binary alias map from PropertyValueAliases
-    binary_alias_map = defaultdict(set)
-    # The binary properties in PropertyValueAliases are under property "sc", "gc", etc.
-    # but for actual binary properties, they're self-named. We need to add common aliases.
+    # Add common aliases for the self-named binary properties.
     binary_aliases = {
         "ASCII_Hex_Digit": ["AHex"],
         "Alphabetic": ["Alpha"],
@@ -554,8 +573,13 @@ def main():
 
     # Generate Rust source
     rust_src = generate_rust(
-        script_data, scx_data, gc_data, binary_data,
-        pva, script_aliases, gc_aliases,
+        script_data,
+        scx_data,
+        gc_data,
+        binary_data,
+        pva,
+        script_aliases,
+        gc_aliases,
     )
 
     out_path = Path(__file__).parent.parent / "src" / "unicode_tables.rs"

@@ -86,9 +86,7 @@ class FmtHookTests(unittest.TestCase):
         # A #[cfg(test)]-gated module (e.g. src/interpreter/tests.rs) is not
         # compiled by --bin jsse, so it must go through --all-targets or the
         # hook would report success without ever linting the edit.
-        result = self.run_hook(
-            REPO_ROOT / "src" / "interpreter" / "tests.rs"
-        )
+        result = self.run_hook(REPO_ROOT / "src" / "interpreter" / "tests.rs")
 
         self.assertEqual(result.returncode, 0)
         self.assertIn("--all-targets -- -D warnings", self.cargo_commands()[1])

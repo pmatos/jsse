@@ -73,6 +73,7 @@ FEATURES_RE = re.compile(r"^features:\s*\[([^\]]*)\]", re.MULTILINE)
 # Engine adapters
 # ---------------------------------------------------------------------------
 
+
 class EngineAdapter(ABC):
     """Abstract base for engine-specific behavior."""
 
@@ -81,8 +82,12 @@ class EngineAdapter(ABC):
 
     @abstractmethod
     def build_command(
-        self, test_file: Path, tmp_path: str | None, harness_files: list[Path],
-        is_module: bool, flags: list[str] | None = None,
+        self,
+        test_file: Path,
+        tmp_path: str | None,
+        harness_files: list[Path],
+        is_module: bool,
+        flags: list[str] | None = None,
     ) -> list[str]:
         """Return the command list to execute."""
 
@@ -304,6 +309,7 @@ def parse_frontmatter(text: str) -> dict:
 # Scenario computation (dual strict/non-strict per spec)
 # ---------------------------------------------------------------------------
 
+
 def compute_scenarios(test_file: str, metadata: dict) -> list[tuple[str, str]]:
     """Return list of (scenario_id, mode) for a test file.
 
@@ -336,6 +342,7 @@ def compute_scenarios(test_file: str, metadata: dict) -> list[tuple[str, str]]:
 # Harness / source building
 # ---------------------------------------------------------------------------
 
+
 def read_harness_file(test262_dir: Path, name: str) -> str:
     path = test262_dir / "harness" / name
     with open(path, encoding="utf-8", errors="replace", newline="") as f:
@@ -363,7 +370,10 @@ def get_harness_files(
 
 
 def build_test_source(
-    test_file: Path, metadata: dict, test262_dir: Path, mode: str,
+    test_file: Path,
+    metadata: dict,
+    test262_dir: Path,
+    mode: str,
 ) -> str:
     """Build the full source to feed to the engine, prepending harness files.
 
@@ -401,6 +411,7 @@ def build_test_source(
 # ---------------------------------------------------------------------------
 # Test execution
 # ---------------------------------------------------------------------------
+
 
 def run_single_test(
     args: tuple[str, str, str, int, str, str, str],
@@ -453,8 +464,12 @@ def run_single_test(
             return (scenario_id, False, "harness_error", 0.0)
 
         with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".js", delete=False, encoding="utf-8",
-            newline="", dir=str(test_file.parent)
+            mode="w",
+            suffix=".js",
+            delete=False,
+            encoding="utf-8",
+            newline="",
+            dir=str(test_file.parent),
         ) as tmp:
             tmp.write(combined)
             tmp_path = tmp.name
@@ -525,6 +540,7 @@ def run_single_test(
 # ---------------------------------------------------------------------------
 # CLI and main
 # ---------------------------------------------------------------------------
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -639,7 +655,9 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
             if path.is_file() and path.suffix == ".js":
                 tests.append(path)
             elif path.is_dir():
-                tests.extend(f for f in sorted(path.rglob("*.js")) if not _is_fixture(f))
+                tests.extend(
+                    f for f in sorted(path.rglob("*.js")) if not _is_fixture(f)
+                )
         return sorted(tests)
 
     test_dir = test262_dir / "test"
@@ -695,6 +713,7 @@ def main():
     binary_path = Path(binary)
     if not binary_path.is_file():
         import shutil
+
         found = shutil.which(binary)
         if found:
             binary_path = Path(found)
@@ -715,11 +734,14 @@ def main():
     if is_sample_run:
         rate = args.sample
         if not (0 < rate <= 1):
-            print("Error: --sample must be between 0 (exclusive) and 1 (inclusive)", file=sys.stderr)
+            print(
+                "Error: --sample must be between 0 (exclusive) and 1 (inclusive)",
+                file=sys.stderr,
+            )
             sys.exit(2)
         tests = sample_tests(tests, rate, args.seed)
         print(
-            f"Sampling {rate*100:.1f}% of tests (seed={args.seed}): {len(tests)} files selected.",
+            f"Sampling {rate * 100:.1f}% of tests (seed={args.seed}): {len(tests)} files selected.",
             file=sys.stderr,
         )
     elif selected_paths:
@@ -841,7 +863,7 @@ def main():
     print("=== test262 Results ===")
     print(f"Engine:  {engine_name} ({binary})")
     if is_sample_run:
-        print(f"Sample:  {args.sample*100:.1f}% (seed={args.seed})")
+        print(f"Sample:  {args.sample * 100:.1f}% (seed={args.seed})")
     elif selected_paths:
         print(f"Paths:   {', '.join(selected_paths)}")
     if baseline_source:
@@ -862,7 +884,9 @@ def main():
             print(f"  ... and {len(fail_list) - 20} more")
 
     if regressions:
-        print(f"\n!!! REGRESSIONS: {len(regressions)} tests that previously passed now fail:")
+        print(
+            f"\n!!! REGRESSIONS: {len(regressions)} tests that previously passed now fail:"
+        )
         for r in regressions[:20]:
             print(f"  REGRESSED: {r}")
         if len(regressions) > 20:
@@ -897,16 +921,16 @@ def main():
 
     print()
     json_obj = {
-        'engine': engine_name,
-        'files': num_files,
-        'scenarios': total,
-        'run': run_total,
-        'skip': skipped,
-        'pass': passed,
-        'fail': failed,
-        'percentage': round(percentage, 2),
-        'regressions': len(regressions),
-        'new_passes': len(new_passes),
+        "engine": engine_name,
+        "files": num_files,
+        "scenarios": total,
+        "run": run_total,
+        "skip": skipped,
+        "pass": passed,
+        "fail": failed,
+        "percentage": round(percentage, 2),
+        "regressions": len(regressions),
+        "new_passes": len(new_passes),
     }
     print(f"JSON: {json.dumps(json_obj)}")
 
