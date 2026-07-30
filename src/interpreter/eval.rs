@@ -4424,6 +4424,12 @@ impl Interpreter {
         strict: bool,
     ) -> Result<(), JsValue> {
         let key = key.to_js_property_key();
+        // §6.2.5.6 PutValue: [[Set]] is invoked on ToObject(base), but the
+        // receiver argument stays the original base value. For a primitive
+        // base that means the receiver is never an object, so OrdinarySet's
+        // "Receiver is not an Object" rejection (§10.1.9.2 step 3) applies —
+        // capture it before boxing, not after.
+        let receiver = obj_val.clone();
         // Auto-box primitives for property access.
         let obj_val = if !(obj_val).is_object() {
             match self.to_object(&obj_val) {
@@ -4445,9 +4451,7 @@ impl Interpreter {
         // Delegate to the canonical [[Set]] entry point: proxy `set` trap,
         // module-namespace reject, TypedArray integer-index set, accessor
         // setters, and the OrdinarySet prototype-chain walk all live in
-        // `property.rs`. The receiver is the object itself, matching this
-        // assignment path's PutValue semantics.
-        let receiver = obj_val.clone();
+        // `property.rs`.
         let success = self.set_object_property(obj_id, &key, val, &receiver)?;
         if !success && strict {
             return Err(self.read_only_assignment_error(obj_id, &key));

@@ -410,7 +410,34 @@ impl Interpreter {
     }
 
     /// §10.4.2.4 ArraySetLength(A, Desc)
+    ///
+    /// Roots `obj_id` for the whole operation: ToUint32/ToNumber on
+    /// `desc.value` below can invoke a user `valueOf` that reaches a GC
+    /// safepoint, and every step after that re-derefs `obj_id` — an
+    /// unrooted, ephemeral receiver (e.g. an array literal used only as a
+    /// destructuring-assignment target) can otherwise be collected out from
+    /// under this function, turning `get_object_cell(obj_id).unwrap()` into
+    /// a panic.
+    ///
+    /// Unroots only this receiver on the way out (mirrors
+    /// `call_function_inner`'s operand cleanup), not a bulk
+    /// `gc_unroot_frame`: the `valueOf` call above can itself leave a
+    /// *persistent* root on the stack — e.g. `Atomics.waitAsync`'s resolver,
+    /// meant to survive until the async completion settles — and a frame
+    /// truncate would discard that too.
     pub(crate) fn array_set_length(
+        &mut self,
+        obj_id: usize,
+        desc: PropertyDescriptor,
+    ) -> Result<bool, JsValue> {
+        let receiver = JsValue::object(obj_id as u64);
+        self.gc_root_value(&receiver);
+        let result = self.array_set_length_inner(obj_id, desc);
+        self.gc_unroot_value(&receiver);
+        result
+    }
+
+    fn array_set_length_inner(
         &mut self,
         obj_id: usize,
         desc: PropertyDescriptor,
@@ -784,7 +811,35 @@ impl Interpreter {
                 // OrdinarySetWithOwnDescriptor step 3.c: use Receiver.[[GetOwnProperty]] / [[DefineOwnProperty]]
                 let recv_id = receiver.as_object_id();
                 if recv_id == Some(obj_id) {
-                    // Common case: receiver is the same object, direct set
+                    // Common case: receiver is the same object. Ordinary objects
+                    // (and ordinary Array properties) can take the direct route;
+                    // only Array's "length" is exotic and must go through
+                    // [[DefineOwnProperty]] (ArraySetLength, §10.4.2.4) or its
+                    // ToUint32 coercion / RangeError / element-deletion semantics
+                    // are silently skipped. Gate on the key too, not just the
+                    // class — routing every existing-element write (e.g. `a[0]++`)
+                    // through descriptor allocation regressed a 200k-iteration
+                    // increment loop by ~1.7-2x.
+                    if key.as_property_key_str() == Some("length")
+                        && obj.borrow().class_name == "Array"
+                    {
+                        // Call ArraySetLength directly with a native descriptor —
+                        // round-tripping through from_property_descriptor +
+                        // to_property_descriptor would build a JS object whose
+                        // [[Prototype]] is Object.prototype, and ToPropertyDescriptor
+                        // reads fields via [[HasProperty]] (prototype-chain walk), so
+                        // an unrelated Object.prototype mutation (e.g. a non-callable
+                        // "get") would leak into this internal, value-only descriptor.
+                        let val_desc = crate::interpreter::types::PropertyDescriptor {
+                            value: Some(value),
+                            writable: None,
+                            enumerable: None,
+                            configurable: None,
+                            get: None,
+                            set: None,
+                        };
+                        return self.array_set_length(obj_id as usize, val_desc);
+                    }
                     self.gc_write_barrier_value(&obj, &value);
                     return Ok(obj.borrow_mut_untracked().set_property_value(key, value));
                 }
@@ -837,8 +892,11 @@ impl Interpreter {
                         );
                     }
                 }
-                self.gc_write_barrier_value(&obj, &value);
-                return Ok(obj.borrow_mut_untracked().set_property_value(key, value));
+                // Receiver is not an Object: [[Set]] must return false, never
+                // fall back to writing the property onto `obj` itself — `obj`
+                // may be a shared prototype reached by walking up from the
+                // (non-object) receiver's own [[Prototype]] chain.
+                return Ok(false);
             }
             // No own property, walk prototype chain
             let proto = obj.borrow().prototype_id;
@@ -905,8 +963,9 @@ impl Interpreter {
                         .set_property_value(key, value));
                 }
             }
-            self.gc_write_barrier_value(&obj, &value);
-            Ok(obj.borrow_mut_untracked().set_property_value(key, value))
+            // Receiver is not an Object (or resolved to no live object): [[Set]]
+            // must return false, never fall back to writing onto `obj` itself.
+            Ok(false)
         } else {
             Ok(false)
         }
