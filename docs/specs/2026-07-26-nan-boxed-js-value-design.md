@@ -333,21 +333,28 @@ got only approximately right, discovered while doing the Phase 4 cleanup pass:
 - **No feature flag was used**, per the Rollout mechanism section above — this
   held as planned; there was nothing to remove in Phase 4.
 - **Performance**: PR #439 measured a focused clone/read micro-benchmark
-  (10M Number/Object clone-read cycles) improving from 248.9ms to 96.0ms
-  (~2.6x) — a clean, repeatable, engine-internal measurement not sensitive to
-  host load, and the strongest evidence this migration delivers on its
-  memory/throughput goal for the operation it targets directly. The same
-  PR's one-off full test262 wall-clock timing went from 394.30s to 497.07s
-  (+26%), but both are single runs, on a shared host this project's own
+  (`nan_box_clone_benchmark`, `src/types.rs`: an `#[ignore]`d single-threaded
+  loop of 10M Number/Object clone-read cycles, timed with
+  `Instant::elapsed()`) improving from 248.9ms to 96.0ms (~2.6x). That number
+  is *not* immune to host load — a wall-clock loop timed with
+  `Instant::elapsed()` still reflects whatever the OS scheduler and CPU
+  frequency state were doing during that particular run — it was a single
+  measurement each side, same as the test262 timing below, with no repeated
+  trials or statistical treatment. What it does avoid is the specific
+  confounder that dominates the test262 comparison: it doesn't fork/exec
+  thousands of subprocesses, so it's less exposed to scheduler noise over a
+  multi-minute window. That's a difference of degree, not of kind, and it
+  isn't enough on its own to call the number validated.
+  The same PR's one-off full test262 wall-clock timing went from 394.30s to
+  497.07s (+26%); both are single runs on a shared host — this project's own
   development machine, not a dedicated benchmark box. Phase 4 attempted a
   clean re-measurement and confirmed the host is unsuitable for this
   comparison: the run coincided with unrelated load from other users
   (`uptime` load average ~190 against 61 cores, i.e. roughly 3x
   oversubscribed) and produced 8:26 — slower than both prior numbers, which a
   behaviorally-identical diff (attribute removals only, no codegen change)
-  cannot explain except as host noise. **The full-suite wall-clock
-  aggregate is therefore unresolved and not reliably measurable on this
-  host**; the 10M-cycle micro-benchmark result stands as the validated
-  performance claim for this migration, and the test262 aggregate should not
-  be cited as either a win or a regression until measured on an isolated,
-  unshared machine.
+  cannot explain except as host noise. **Both the micro-benchmark and the
+  full-suite wall-clock aggregate are therefore single, unrepeated
+  measurements on a contended host, and neither should be cited as a
+  validated performance result — win or regression — until re-measured with
+  repeated trials on an isolated, unshared machine.**
