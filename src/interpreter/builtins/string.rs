@@ -428,25 +428,14 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let units = &js_str.code_units;
-                    let len = units.len() as f64;
-                    let int_start = match args.first() {
-                        Some(v) => match to_int_or_inf(interp, v) {
-                            Ok(n) => n,
-                            Err(c) => return c,
-                        },
-                        None => 0.0,
+                    let from = match resolve_start_index(interp, args.first(), units.len()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
-                    let int_end = match args.get(1) {
-                        Some(v) if !(v).is_undefined() => match to_int_or_inf(interp, v) {
-                            Ok(n) => n,
-                            Err(c) => return c,
-                        },
-                        _ => len,
+                    let to = match resolve_end_index(interp, args.get(1), units.len()) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
-                    let from = resolve_relative_index(int_start, len as usize);
-                    let to = resolve_relative_index(int_end, len as usize);
-                    let from = from.min(units.len());
-                    let to = to.min(units.len());
                     if from >= to {
                         return Completion::Normal(JsValue::string(JsString::from_str("")));
                     }
@@ -1098,21 +1087,18 @@ impl Interpreter {
                         Err(c) => return c,
                     };
                     let units = &js_str.code_units;
-                    let len = units.len() as i64;
                     let idx = match args.first() {
                         Some(v) => match to_int_or_inf(interp, v) {
-                            Ok(n) => n as i64,
+                            Ok(n) => n,
                             Err(c) => return c,
                         },
-                        None => 0,
+                        None => 0.0,
                     };
-                    let actual = if idx < 0 { len + idx } else { idx };
-                    if actual < 0 || actual >= len {
-                        return Completion::Normal(JsValue::UNDEFINED);
-                    }
-                    Completion::Normal(JsValue::string(JsString::from_vec(vec![
-                        units[actual as usize],
-                    ])))
+                    let actual = match resolve_element_index(idx, units.len()) {
+                        Some(k) => k,
+                        None => return Completion::Normal(JsValue::UNDEFINED),
+                    };
+                    Completion::Normal(JsValue::string(JsString::from_vec(vec![units[actual]])))
                 }),
             ),
             (

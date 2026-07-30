@@ -2966,26 +2966,22 @@ impl Interpreter {
                 Err(c) => return c,
             };
             let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v as i64,
+                Ok(v) => v,
                 Err(c) => return c,
             };
             let relative_index = if let Some(v) = args.first() {
                 match interp.to_integer_or_infinity_value(v) {
-                    Ok(n) => n as i64,
+                    Ok(n) => n,
                     Err(e) => return Completion::Throw(e),
                 }
             } else {
-                0
+                0.0
             };
-            let k = if relative_index >= 0 {
-                relative_index
-            } else {
-                len + relative_index
+            let k = match resolve_element_index(relative_index, len) {
+                Some(k) => k,
+                None => return Completion::Normal(JsValue::UNDEFINED),
             };
-            if k < 0 || k >= len {
-                return Completion::Normal(JsValue::UNDEFINED);
-            }
-            match obj_get(interp, &o, &(k as usize).to_string()) {
+            match obj_get(interp, &o, &k.to_string()) {
                 Ok(v) => Completion::Normal(v),
                 Err(c) => c,
             }
@@ -2998,7 +2994,7 @@ impl Interpreter {
                 Err(c) => return c,
             };
             let len = match length_of_array_like(interp, &o) {
-                Ok(v) => v as i64,
+                Ok(v) => v,
                 Err(c) => return c,
             };
             if len as u64 > 0xFFFF_FFFF {
@@ -3006,24 +3002,20 @@ impl Interpreter {
             }
             let relative_index = if let Some(v) = args.first() {
                 match interp.to_integer_or_infinity_value(v) {
-                    Ok(n) => n as i64,
+                    Ok(n) => n,
                     Err(e) => return Completion::Throw(e),
                 }
             } else {
-                0
+                0.0
             };
-            let actual = if relative_index >= 0 {
-                relative_index
-            } else {
-                len + relative_index
+            let actual = match resolve_element_index(relative_index, len) {
+                Some(k) => k,
+                None => return Completion::Throw(interp.create_range_error("Invalid index")),
             };
-            if actual < 0 || actual >= len {
-                return Completion::Throw(interp.create_range_error("Invalid index"));
-            }
             let value = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-            let mut result = Vec::with_capacity(len as usize);
-            for k in 0..len as usize {
-                if k == actual as usize {
+            let mut result = Vec::with_capacity(len);
+            for k in 0..len {
+                if k == actual {
                     result.push(value.clone());
                 } else {
                     result.push(match obj_get(interp, &o, &k.to_string()) {
