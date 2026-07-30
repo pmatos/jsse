@@ -796,6 +796,13 @@ impl Interpreter {
                     if key.as_property_key_str() == Some("length")
                         && obj.borrow().class_name == "Array"
                     {
+                        // Call ArraySetLength directly with a native descriptor —
+                        // round-tripping through from_property_descriptor +
+                        // to_property_descriptor would build a JS object whose
+                        // [[Prototype]] is Object.prototype, and ToPropertyDescriptor
+                        // reads fields via [[HasProperty]] (prototype-chain walk), so
+                        // an unrelated Object.prototype mutation (e.g. a non-callable
+                        // "get") would leak into this internal, value-only descriptor.
                         let val_desc = crate::interpreter::types::PropertyDescriptor {
                             value: Some(value),
                             writable: None,
@@ -804,12 +811,7 @@ impl Interpreter {
                             get: None,
                             set: None,
                         };
-                        let desc_val = self.from_property_descriptor(&val_desc);
-                        return self.proxy_define_own_property(
-                            obj_id,
-                            key.to_js_property_key(),
-                            &desc_val,
-                        );
+                        return self.array_set_length(obj_id as usize, val_desc);
                     }
                     self.gc_write_barrier_value(&obj, &value);
                     return Ok(obj.borrow_mut_untracked().set_property_value(key, value));
