@@ -56,6 +56,10 @@ A from-scratch JavaScript engine implemented in Rust. No JS parser/engine librar
 - `cargo build --release` — always build in release mode for test262 runs (debug is too slow)
 - The project uses Rust nightly features (`let_chains`, etc.)
 
+## Conventions
+ - PR titles: [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
+  PRs are squash-merged by default - clean-history branches.
+
 ## Testing
 - Primary validation: test262 suite
 - Custom tests: `tests/` directory
