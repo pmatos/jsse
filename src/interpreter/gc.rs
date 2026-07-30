@@ -1010,7 +1010,7 @@ mod tests {
     use super::*;
 
     fn obj(id: u64) -> JsValue {
-        JsValue::Object(crate::types::JsObject { id })
+        JsValue::object(id)
     }
 
     /// Sort + dedup a worklist so tests can compare against an expected set
@@ -1028,9 +1028,9 @@ mod tests {
         assert_eq!(worklist, vec![42]);
 
         let mut worklist = Vec::new();
-        Interpreter::collect_value_roots(&JsValue::Undefined, &mut worklist);
-        Interpreter::collect_value_roots(&JsValue::Number(3.0), &mut worklist);
-        Interpreter::collect_value_roots(&JsValue::Boolean(true), &mut worklist);
+        Interpreter::collect_value_roots(JsValue::undefined_ref(), &mut worklist);
+        Interpreter::collect_value_roots(&JsValue::number(3.0), &mut worklist);
+        Interpreter::collect_value_roots(&JsValue::TRUE, &mut worklist);
         assert!(worklist.is_empty());
     }
 
@@ -1056,7 +1056,7 @@ mod tests {
         );
         data.properties.insert(
             "n".into(),
-            PropertyDescriptor::data(JsValue::Number(1.0), true, true, true),
+            PropertyDescriptor::data(JsValue::number(1.0), true, true, true),
         );
 
         let mut worklist = Vec::new();
@@ -1080,7 +1080,7 @@ mod tests {
     #[test]
     fn trace_object_fields_roots_array_elements_and_native_roots() {
         let mut data = JsObjectData::new();
-        data.kind = ObjectKind::Array(vec![obj(20), JsValue::Number(0.0), obj(21)]);
+        data.kind = ObjectKind::Array(vec![obj(20), JsValue::number(0.0), obj(21)]);
         data.gc_native_roots = Some(vec![obj(22)]);
 
         let mut worklist = Vec::new();
@@ -1332,7 +1332,7 @@ mod tests {
         assert!(owner_handle.is_old());
         assert!(interp.objects.take_remembered().is_empty());
 
-        interp.gc_write_barrier_value(&owner_handle, &JsValue::Number(1.0));
+        interp.gc_write_barrier_value(&owner_handle, &JsValue::number(1.0));
         interp.gc_write_barrier_value(&owner_handle, &obj(owner));
         assert!(interp.objects.take_remembered().is_empty());
 

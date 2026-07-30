@@ -54,14 +54,17 @@ impl Interpreter {
             "__host_write".to_string(),
             2,
             |interp, _this, args| {
-                let fd = match interp.to_number_value(args.first().unwrap_or(&JsValue::UNDEFINED)) {
+                let fd = match interp
+                    .to_number_value(args.first().unwrap_or(JsValue::undefined_ref()))
+                {
                     Ok(n) => n,
                     Err(e) => return Completion::Throw(e),
                 };
-                let s = match interp.to_string_value(args.get(1).unwrap_or(&JsValue::UNDEFINED)) {
-                    Ok(s) => s,
-                    Err(e) => return Completion::Throw(e),
-                };
+                let s =
+                    match interp.to_string_value(args.get(1).unwrap_or(JsValue::undefined_ref())) {
+                        Ok(s) => s,
+                        Err(e) => return Completion::Throw(e),
+                    };
                 let bytes = s.as_bytes();
                 let written = bytes.len();
                 if fd == 2.0 {
@@ -135,7 +138,7 @@ impl Interpreter {
             1,
             |interp, _this, args| {
                 let n_f = match interp
-                    .to_integer_or_infinity_value(args.first().unwrap_or(&JsValue::UNDEFINED))
+                    .to_integer_or_infinity_value(args.first().unwrap_or(JsValue::undefined_ref()))
                 {
                     Ok(n) => n,
                     Err(e) => return Completion::Throw(e),

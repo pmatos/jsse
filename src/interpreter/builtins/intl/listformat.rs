@@ -357,7 +357,7 @@ impl Interpreter {
                 "supportedLocalesOf".to_string(),
                 1,
                 |interp, _this, args| {
-                    let locales = args.first().unwrap_or(&JsValue::UNDEFINED);
+                    let locales = args.first().unwrap_or(JsValue::undefined_ref());
                     let options = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
                     let requested = match interp.intl_canonicalize_locale_list(locales) {
                         Ok(list) => list,

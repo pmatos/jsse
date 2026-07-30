@@ -2502,13 +2502,13 @@ impl JsObjectData {
                 } else if current_is_accessor {
                     // Non-configurable accessor property
                     if let Some(ref new_get) = desc.get {
-                        let cur_get = current.get.as_ref().unwrap_or(&JsValue::UNDEFINED);
+                        let cur_get = current.get.as_ref().unwrap_or(JsValue::undefined_ref());
                         if !same_value(new_get, cur_get) {
                             return false;
                         }
                     }
                     if let Some(ref new_set) = desc.set {
-                        let cur_set = current.set.as_ref().unwrap_or(&JsValue::UNDEFINED);
+                        let cur_set = current.set.as_ref().unwrap_or(JsValue::undefined_ref());
                         if !same_value(new_set, cur_set) {
                             return false;
                         }

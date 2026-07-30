@@ -171,14 +171,14 @@ mod tests {
     }
 
     fn desc(n: f64) -> PropertyDescriptor {
-        PropertyDescriptor::data_default(JsValue::Number(n))
+        PropertyDescriptor::data_default(JsValue::number(n))
     }
 
     fn num(d: &PropertyDescriptor) -> f64 {
-        match &d.value {
-            Some(JsValue::Number(n)) => *n,
-            _ => f64::NAN,
-        }
+        d.value
+            .as_ref()
+            .and_then(JsValue::as_number)
+            .unwrap_or(f64::NAN)
     }
 
     fn is_inline(map: &PropertyMap) -> bool {
@@ -251,11 +251,11 @@ mod tests {
         let mut seen: Vec<(String, f64)> = m
             .iter()
             .map(|(k, d)| {
-                let n = if let Some(JsValue::Number(n)) = d.value {
-                    n
-                } else {
-                    -1.0
-                };
+                let n = d
+                    .value
+                    .as_ref()
+                    .and_then(JsValue::as_number)
+                    .unwrap_or(-1.0);
                 (k.to_string(), n)
             })
             .collect();
@@ -272,11 +272,11 @@ mod tests {
         let mut seen: Vec<(String, f64)> = m
             .iter()
             .map(|(k, d)| {
-                let n = if let Some(JsValue::Number(n)) = d.value {
-                    n
-                } else {
-                    -1.0
-                };
+                let n = d
+                    .value
+                    .as_ref()
+                    .and_then(JsValue::as_number)
+                    .unwrap_or(-1.0);
                 (k.to_string(), n)
             })
             .collect();
@@ -301,7 +301,7 @@ mod tests {
         let mut m = PropertyMap::new();
         m.insert(key("a"), desc(1.0));
         if let Some(d) = m.get_mut("a") {
-            d.value = Some(JsValue::Number(7.0));
+            d.value = Some(JsValue::number(7.0));
         }
         assert_eq!(num(m.get("a").expect("present")), 7.0);
 
@@ -310,7 +310,7 @@ mod tests {
         }
         assert!(!is_inline(&m));
         if let Some(d) = m.get_mut("a") {
-            d.value = Some(JsValue::Number(42.0));
+            d.value = Some(JsValue::number(42.0));
         }
         assert_eq!(num(m.get("a").expect("present")), 42.0);
     }

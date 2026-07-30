@@ -412,7 +412,7 @@ impl Interpreter {
                         );
                     }
                     // Step 3-4: newByteLength
-                    let new_len_arg = args.first().unwrap_or(&JsValue::UNDEFINED);
+                    let new_len_arg = args.first().unwrap_or(JsValue::undefined_ref());
                     let old_len = {
                         let obj_ref = obj.borrow();
                         buffer_len(obj_ref.arraybuffer_data().unwrap())
@@ -515,7 +515,7 @@ impl Interpreter {
                         let obj_ref = obj.borrow();
                         buffer_len(obj_ref.arraybuffer_data().unwrap())
                     };
-                    let new_len_arg = args.first().unwrap_or(&JsValue::UNDEFINED);
+                    let new_len_arg = args.first().unwrap_or(JsValue::undefined_ref());
                     let new_len = if new_len_arg.is_undefined() {
                         old_len
                     } else {
@@ -599,7 +599,7 @@ impl Interpreter {
                         let obj_ref = obj.borrow();
                         buffer_len(obj_ref.arraybuffer_data().unwrap())
                     };
-                    let new_len_arg = args.first().unwrap_or(&JsValue::UNDEFINED);
+                    let new_len_arg = args.first().unwrap_or(JsValue::undefined_ref());
                     let new_len = if new_len_arg.is_undefined() {
                         old_len
                     } else {
@@ -836,7 +836,7 @@ impl Interpreter {
                         );
                     }
                     // Step 4: ToIndex(newLength) — BEFORE detach check
-                    let new_len_val = args.first().unwrap_or(&JsValue::UNDEFINED);
+                    let new_len_val = args.first().unwrap_or(JsValue::undefined_ref());
                     let new_len = match interp.to_index(new_len_val) {
                         Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                         Completion::Throw(e) => return Completion::Throw(e),
@@ -1212,7 +1212,7 @@ impl Interpreter {
                             interp.create_type_error("SharedArrayBuffer is not growable"),
                         );
                     }
-                    let new_len_val = args.first().unwrap_or(&JsValue::UNDEFINED);
+                    let new_len_val = args.first().unwrap_or(JsValue::undefined_ref());
                     let new_len = match interp.to_index(new_len_val) {
                         Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                         Completion::Throw(e) => return Completion::Throw(e),
@@ -2031,7 +2031,7 @@ impl Interpreter {
                     let len = typed_array_length(&ta) as i64;
                     let target = {
                         let n = match interp.to_integer_or_infinity_value(
-                            args.first().unwrap_or(&JsValue::UNDEFINED),
+                            args.first().unwrap_or(JsValue::undefined_ref()),
                         ) {
                             Ok(n) => n,
                             Err(e) => return Completion::Throw(e),
@@ -2040,7 +2040,7 @@ impl Interpreter {
                     };
                     let start = {
                         let n = match interp.to_integer_or_infinity_value(
-                            args.get(1).unwrap_or(&JsValue::UNDEFINED),
+                            args.get(1).unwrap_or(JsValue::undefined_ref()),
                         ) {
                             Ok(n) => n,
                             Err(e) => return Completion::Throw(e),
@@ -5216,7 +5216,7 @@ impl Interpreter {
                                 }
                             }
                             let byte_offset = match interp
-                                .to_index(args.first().unwrap_or(&JsValue::UNDEFINED))
+                                .to_index(args.first().unwrap_or(JsValue::undefined_ref()))
                             {
                                 Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                                 Completion::Throw(e) => return Completion::Throw(e),
@@ -5394,7 +5394,7 @@ impl Interpreter {
                             }
                             // Step 4: ToIndex(byteOffset) — before detach check
                             let byte_offset = match interp
-                                .to_index(args.first().unwrap_or(&JsValue::UNDEFINED))
+                                .to_index(args.first().unwrap_or(JsValue::undefined_ref()))
                             {
                                 Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                                 Completion::Throw(e) => return Completion::Throw(e),
@@ -5402,7 +5402,7 @@ impl Interpreter {
                             };
                             // Step 3: ToNumber(value) — before detach check
                             let num_value = match interp
-                                .to_number_value(args.get(1).unwrap_or(&JsValue::UNDEFINED))
+                                .to_number_value(args.get(1).unwrap_or(JsValue::undefined_ref()))
                             {
                                 Ok(n) => n,
                                 Err(e) => return Completion::Throw(e),
@@ -5484,7 +5484,7 @@ impl Interpreter {
                             }
                             // Step 2: ToIndex(byteOffset) — before detach check
                             let byte_offset = match interp
-                                .to_index(args.first().unwrap_or(&JsValue::UNDEFINED))
+                                .to_index(args.first().unwrap_or(JsValue::undefined_ref()))
                             {
                                 Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                                 Completion::Throw(e) => return Completion::Throw(e),
@@ -5492,7 +5492,7 @@ impl Interpreter {
                             };
                             // Step 3: ToBigInt(value) — before detach check
                             let bigint_value = match interp
-                                .to_bigint_value(args.get(1).unwrap_or(&JsValue::UNDEFINED))
+                                .to_bigint_value(args.get(1).unwrap_or(JsValue::undefined_ref()))
                             {
                                 Ok(v) => v,
                                 Err(e) => return Completion::Throw(e),
@@ -5677,7 +5677,7 @@ impl Interpreter {
                     }
                     // ToIndex(byteOffset) BEFORE detach check
                     let byte_offset =
-                        match interp.to_index(args.get(1).unwrap_or(&JsValue::UNDEFINED)) {
+                        match interp.to_index(args.get(1).unwrap_or(JsValue::undefined_ref())) {
                             Completion::Normal(v) => v.as_number().map_or(0, |n| n as usize),
                             Completion::Throw(e) => return Completion::Throw(e),
                             _ => 0,
@@ -5707,7 +5707,7 @@ impl Interpreter {
                             "offset is outside the bounds of the buffer",
                         ));
                     }
-                    let byte_length_arg = args.get(2).unwrap_or(&JsValue::UNDEFINED);
+                    let byte_length_arg = args.get(2).unwrap_or(JsValue::undefined_ref());
                     let has_byte_length = !byte_length_arg.is_undefined();
                     let is_length_tracking = is_resizable && !has_byte_length;
                     let byte_length = if !has_byte_length {
