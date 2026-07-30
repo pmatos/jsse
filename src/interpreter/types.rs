@@ -3889,7 +3889,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn array_elements_some_for_array_kind() {
-        let obj = obj_with_kind(ObjectKind::Array(vec![JsValue::Undefined]));
+        let obj = obj_with_kind(ObjectKind::Array(vec![JsValue::UNDEFINED]));
         assert!(obj.array_elements().is_some());
         assert_eq!(obj.array_elements().unwrap().len(), 1);
     }
@@ -3903,9 +3903,7 @@ mod kind_accessor_tests {
     #[test]
     fn array_elements_mut_allows_push() {
         let mut obj = obj_with_kind(ObjectKind::Array(Vec::new()));
-        obj.array_elements_mut()
-            .unwrap()
-            .push(JsValue::Boolean(true));
+        obj.array_elements_mut().unwrap().push(JsValue::TRUE);
         assert_eq!(obj.array_elements().unwrap().len(), 1);
     }
 
@@ -3913,7 +3911,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn set_data_some_for_set_kind() {
-        let obj = obj_with_kind(ObjectKind::Set(vec![Some(JsValue::Number(1.0))]));
+        let obj = obj_with_kind(ObjectKind::Set(vec![Some(JsValue::number(1.0))]));
         assert!(obj.set_data().is_some());
         assert_eq!(obj.set_data().unwrap().len(), 1);
     }
@@ -3935,7 +3933,7 @@ mod kind_accessor_tests {
 
     #[test]
     fn map_data_some_for_map_kind() {
-        let entry = Some((JsValue::Number(1.0), JsValue::Boolean(false)));
+        let entry = Some((JsValue::number(1.0), JsValue::FALSE));
         let obj = obj_with_kind(ObjectKind::Map(vec![entry]));
         assert!(obj.map_data().is_some());
         assert_eq!(obj.map_data().unwrap().len(), 1);
@@ -3952,7 +3950,7 @@ mod kind_accessor_tests {
         let mut obj = obj_with_kind(ObjectKind::Map(Vec::new()));
         obj.map_data_mut()
             .unwrap()
-            .push(Some((JsValue::Number(0.0), JsValue::Undefined)));
+            .push(Some((JsValue::number(0.0), JsValue::UNDEFINED)));
         assert_eq!(obj.map_data().unwrap().len(), 1);
     }
 
@@ -3961,8 +3959,8 @@ mod kind_accessor_tests {
     #[test]
     fn bound_some_for_bound_function_kind() {
         let data = BoundFunctionData {
-            target: JsValue::Undefined,
-            this: JsValue::Undefined,
+            target: JsValue::UNDEFINED,
+            this: JsValue::UNDEFINED,
             args: vec![],
         };
         let obj = obj_with_kind(ObjectKind::BoundFunction(data));
@@ -4035,8 +4033,8 @@ mod property_bag_tests {
     #[test]
     fn remove_property_clears_both_map_and_order() {
         let mut obj = JsObjectData::new();
-        obj.insert_property("a", PropertyDescriptor::data_default(JsValue::Number(1.0)));
-        obj.insert_property("b", PropertyDescriptor::data_default(JsValue::Number(2.0)));
+        obj.insert_property("a", PropertyDescriptor::data_default(JsValue::number(1.0)));
+        obj.insert_property("b", PropertyDescriptor::data_default(JsValue::number(2.0)));
 
         let removed = obj.remove_property("a");
 
@@ -4049,7 +4047,7 @@ mod property_bag_tests {
     fn remove_property_preserves_order_of_survivors() {
         let mut obj = JsObjectData::new();
         for k in ["a", "b", "c", "d"] {
-            obj.insert_property(k, PropertyDescriptor::data_default(JsValue::Undefined));
+            obj.insert_property(k, PropertyDescriptor::data_default(JsValue::UNDEFINED));
         }
 
         obj.remove_property("b");
@@ -4064,12 +4062,15 @@ mod property_bag_tests {
         let mut obj = JsObjectData::new();
         obj.insert_property(
             "x",
-            PropertyDescriptor::data(JsValue::Number(42.0), false, true, false),
+            PropertyDescriptor::data(JsValue::number(42.0), false, true, false),
         );
 
         let removed = obj.remove_property("x").expect("descriptor returned");
 
-        assert!(matches!(removed.value, Some(JsValue::Number(n)) if n == 42.0));
+        assert_eq!(
+            removed.value.and_then(|value| value.as_number()),
+            Some(42.0)
+        );
         assert_eq!(removed.writable, Some(false));
         assert_eq!(removed.enumerable, Some(true));
         assert_eq!(removed.configurable, Some(false));
@@ -4078,7 +4079,7 @@ mod property_bag_tests {
     #[test]
     fn remove_absent_key_is_a_noop() {
         let mut obj = JsObjectData::new();
-        obj.insert_property("a", PropertyDescriptor::data_default(JsValue::Undefined));
+        obj.insert_property("a", PropertyDescriptor::data_default(JsValue::UNDEFINED));
 
         assert!(obj.remove_property("missing").is_none());
         assert_eq!(keys(&obj), vec!["a"], "order untouched");
@@ -4088,7 +4089,7 @@ mod property_bag_tests {
     #[test]
     fn second_remove_returns_none() {
         let mut obj = JsObjectData::new();
-        obj.insert_property("a", PropertyDescriptor::data_default(JsValue::Undefined));
+        obj.insert_property("a", PropertyDescriptor::data_default(JsValue::UNDEFINED));
 
         assert!(obj.remove_property("a").is_some());
         assert!(obj.remove_property("a").is_none());
