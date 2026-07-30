@@ -418,15 +418,22 @@ impl Interpreter {
     /// destructuring-assignment target) can otherwise be collected out from
     /// under this function, turning `get_object_cell(obj_id).unwrap()` into
     /// a panic.
+    ///
+    /// Unroots only this receiver on the way out (mirrors
+    /// `call_function_inner`'s operand cleanup), not a bulk
+    /// `gc_unroot_frame`: the `valueOf` call above can itself leave a
+    /// *persistent* root on the stack — e.g. `Atomics.waitAsync`'s resolver,
+    /// meant to survive until the async completion settles — and a frame
+    /// truncate would discard that too.
     pub(crate) fn array_set_length(
         &mut self,
         obj_id: usize,
         desc: PropertyDescriptor,
     ) -> Result<bool, JsValue> {
-        let gc_frame = self.gc_root_frame();
-        self.gc_root_value(&JsValue::object(obj_id as u64));
+        let receiver = JsValue::object(obj_id as u64);
+        self.gc_root_value(&receiver);
         let result = self.array_set_length_inner(obj_id, desc);
-        self.gc_unroot_frame(gc_frame);
+        self.gc_unroot_value(&receiver);
         result
     }
 
