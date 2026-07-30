@@ -1,3 +1,10 @@
+## [0.4.16](https://github.com/pmatos/jsse/compare/v0.4.15...v0.4.16) (2026-07-30)
+
+
+### Bug Fixes
+
+* **interpreter:** route [[Set]] on Array length and primitive receivers through spec MOP ([#442](https://github.com/pmatos/jsse/issues/442)) ([b2a2d7c](https://github.com/pmatos/jsse/commit/b2a2d7c7b63514c578e1ca5eeba230eb4dbe8de6))
+
 ## [0.4.15](https://github.com/pmatos/jsse/compare/v0.4.14...v0.4.15) (2026-07-30)
 
 
