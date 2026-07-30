@@ -410,7 +410,27 @@ impl Interpreter {
     }
 
     /// §10.4.2.4 ArraySetLength(A, Desc)
+    ///
+    /// Roots `obj_id` for the whole operation: ToUint32/ToNumber on
+    /// `desc.value` below can invoke a user `valueOf` that reaches a GC
+    /// safepoint, and every step after that re-derefs `obj_id` — an
+    /// unrooted, ephemeral receiver (e.g. an array literal used only as a
+    /// destructuring-assignment target) can otherwise be collected out from
+    /// under this function, turning `get_object_cell(obj_id).unwrap()` into
+    /// a panic.
     pub(crate) fn array_set_length(
+        &mut self,
+        obj_id: usize,
+        desc: PropertyDescriptor,
+    ) -> Result<bool, JsValue> {
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(&JsValue::object(obj_id as u64));
+        let result = self.array_set_length_inner(obj_id, desc);
+        self.gc_unroot_frame(gc_frame);
+        result
+    }
+
+    fn array_set_length_inner(
         &mut self,
         obj_id: usize,
         desc: PropertyDescriptor,
