@@ -26,7 +26,7 @@ impl Interpreter {
             "getCanonicalLocales".to_string(),
             1,
             |interp: &mut Interpreter, _this: &JsValue, args: &[JsValue]| {
-                let locales = args.first().unwrap_or(&JsValue::UNDEFINED);
+                let locales = args.first().unwrap_or(JsValue::undefined_ref());
                 match interp.intl_canonicalize_locale_list(locales) {
                     Ok(list) => {
                         let values: Vec<JsValue> =

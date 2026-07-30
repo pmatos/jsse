@@ -1382,18 +1382,24 @@ mod tests {
 
     fn completion_number(completion: Completion) -> f64 {
         match completion {
-            Completion::Normal(JsValue::Number(value)) => value,
+            Completion::Normal(value) => value
+                .as_number()
+                .expect("expected a numeric normal completion"),
             _ => panic!("expected a numeric normal completion"),
         }
     }
 
     fn bigint(value: i64) -> JsValue {
-        JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(value)))
+        JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(value)))
     }
 
     fn completion_bigint(completion: Completion) -> num_bigint::BigInt {
         match completion {
-            Completion::Normal(JsValue::BigInt(value)) => (*value.value).clone(),
+            Completion::Normal(value) => (*value
+                .into_bigint()
+                .expect("expected a BigInt normal completion")
+                .value)
+                .clone(),
             _ => panic!("expected a BigInt normal completion"),
         }
     }
@@ -1411,7 +1417,7 @@ mod tests {
         ];
 
         for (kind, offset) in number_kinds {
-            atomic_store_shared(&buffer, offset, kind, false, &JsValue::Number(5.0));
+            atomic_store_shared(&buffer, offset, kind, false, &JsValue::number(5.0));
             assert_eq!(
                 completion_number(atomic_load_shared(&buffer, offset, kind, false)),
                 5.0
@@ -1422,8 +1428,8 @@ mod tests {
                     offset,
                     kind,
                     false,
-                    &JsValue::Number(5.0),
-                    &JsValue::Number(7.0),
+                    &JsValue::number(5.0),
+                    &JsValue::number(7.0),
                 )),
                 5.0
             );
@@ -1433,7 +1439,7 @@ mod tests {
                     offset,
                     kind,
                     false,
-                    &JsValue::Number(3.0),
+                    &JsValue::number(3.0),
                     i64::wrapping_add,
                     i64::wrapping_add,
                 )),

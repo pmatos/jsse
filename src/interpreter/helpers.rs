@@ -2596,13 +2596,13 @@ mod resolve_index_arg_tests {
     use crate::types::{JsBigInt, JsValue};
 
     fn num(n: f64) -> JsValue {
-        JsValue::Number(n)
+        JsValue::number(n)
     }
 
     // A value whose ToNumber (and thus ToIntegerOrInfinity) throws a TypeError:
     // BigInt cannot be converted to a Number (ECMAScript, sec-tonumber).
     fn throwing_arg() -> JsValue {
-        JsValue::BigInt(JsBigInt::new(num_bigint::BigInt::from(1)))
+        JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(1)))
     }
 
     // --- resolve_start_index: absent defaults to 0, no undefined special-case ---

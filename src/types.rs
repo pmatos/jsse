@@ -3,24 +3,34 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
-#[derive(Clone, Debug)]
-pub(crate) enum JsValue {
-    Undefined,
-    Null,
-    Boolean(bool),
-    Number(f64),
-    String(JsString),
-    Symbol(JsSymbol),
-    BigInt(JsBigInt),
-    Object(JsObject),
+/// One-word ECMAScript value representation.
+///
+/// Non-matching bit patterns are IEEE-754 Numbers. Negative quiet-NaN
+/// patterns carry a three-bit tag and a 48-bit scalar or exposed-pointer
+/// payload. Heap payloads own one `Arc` strong reference.
+#[repr(transparent)]
+pub(crate) struct NanBoxedValue(u64);
+
+pub(crate) type JsValue = NanBoxedValue;
+
+#[repr(u64)]
+#[derive(Copy, Clone, Eq, PartialEq)]
+enum NanTag {
+    Undefined = 0,
+    Null = 1,
+    False = 2,
+    True = 3,
+    Object = 4,
+    String = 5,
+    Symbol = 6,
+    BigInt = 7,
 }
 
 /// Eight-way value tag, used by sites that need exhaustive enum dispatch
 /// while remaining decoupled from the underlying `JsValue` representation.
-/// The future NaN-boxed `JsValue` (issue #69) will continue to expose this
-/// kind via `JsValue::discriminant()` so sites like `Display`,
+/// The NaN-boxed `JsValue` exposes this kind via `JsValue::discriminant()` so
+/// sites like `Display`,
 /// `JSON.stringify`, and `strict_equality` keep compile-time exhaustiveness.
-// Consumers land in follow-up #69 NaN-box migration PRs.
 #[allow(dead_code)]
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
 pub(crate) enum ValueKind {
@@ -398,147 +408,253 @@ pub(crate) struct JsObject {
     pub id: u64,
 }
 
-// Constructor / accessor surface for `JsValue`. The methods here are
-// representation-neutral: a future NaN-boxed storage (issue #69) will
-// re-implement them in terms of bit operations while keeping the same
-// signatures, so callers do not need to change.
-// Consumers land in follow-up #69 NaN-box migration PRs.
+// Constructor / accessor surface for `JsValue`. Callers remain decoupled from
+// the NaN-box representation and never manipulate tags or raw pointers.
 #[allow(dead_code)]
-impl JsValue {
-    pub(crate) const UNDEFINED: JsValue = JsValue::Undefined;
-    pub(crate) const NULL: JsValue = JsValue::Null;
-    pub(crate) const TRUE: JsValue = JsValue::Boolean(true);
-    pub(crate) const FALSE: JsValue = JsValue::Boolean(false);
+impl NanBoxedValue {
+    const BOX_SIGNATURE: u64 = 0xFFF8_0000_0000_0000;
+    const BOX_SIGNATURE_MASK: u64 = 0xFFF8_0000_0000_0000;
+    const TAG_SHIFT: u32 = 48;
+    const PAYLOAD_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+    const CANONICAL_NAN_BITS: u64 = 0x7FF8_0000_0000_0000;
 
-    pub(crate) fn boolean(b: bool) -> Self {
-        JsValue::Boolean(b)
+    pub(crate) const UNDEFINED: JsValue = Self::boxed(NanTag::Undefined, 0);
+    pub(crate) const NULL: JsValue = Self::boxed(NanTag::Null, 0);
+    pub(crate) const TRUE: JsValue = Self::boxed(NanTag::True, 0);
+    pub(crate) const FALSE: JsValue = Self::boxed(NanTag::False, 0);
+
+    /// Stable borrow for APIs that need a default argument by reference.
+    pub(crate) fn undefined_ref() -> &'static Self {
+        static UNDEFINED: NanBoxedValue = NanBoxedValue::boxed(NanTag::Undefined, 0);
+        &UNDEFINED
     }
 
-    /// Construct a Number value. NaN canonicalisation lands here in Phase 3
-    /// (issue #69) — for now this is a thin wrapper.
+    const fn boxed(tag: NanTag, payload: u64) -> Self {
+        Self(Self::BOX_SIGNATURE | ((tag as u64) << Self::TAG_SHIFT) | payload)
+    }
+
+    fn is_boxed(&self) -> bool {
+        self.0 & Self::BOX_SIGNATURE_MASK == Self::BOX_SIGNATURE
+    }
+
+    fn tag(&self) -> Option<NanTag> {
+        if !self.is_boxed() {
+            return None;
+        }
+        Some(match (self.0 >> Self::TAG_SHIFT) & 0b111 {
+            0 => NanTag::Undefined,
+            1 => NanTag::Null,
+            2 => NanTag::False,
+            3 => NanTag::True,
+            4 => NanTag::Object,
+            5 => NanTag::String,
+            6 => NanTag::Symbol,
+            7 => NanTag::BigInt,
+            _ => unreachable!(),
+        })
+    }
+
+    fn payload(&self) -> u64 {
+        self.0 & Self::PAYLOAD_MASK
+    }
+
+    #[cfg(test)]
+    fn raw_bits(&self) -> u64 {
+        self.0
+    }
+
+    fn from_arc<T>(tag: NanTag, arc: Arc<T>) -> Self {
+        let address = Arc::as_ptr(&arc).expose_provenance();
+        Self::from_arc_after_address_check(tag, arc, address)
+    }
+
+    fn from_arc_after_address_check<T>(tag: NanTag, arc: Arc<T>, address: usize) -> Self {
+        assert!(
+            address <= Self::PAYLOAD_MASK as usize,
+            "NaN-box heap pointer exceeds the 48-bit payload range"
+        );
+
+        // The range check deliberately happens before ownership is transferred.
+        // No panicking operations may be added between `into_raw` and boxing.
+        let raw = Arc::into_raw(arc);
+        let payload = raw.expose_provenance() as u64;
+        Self::boxed(tag, payload)
+    }
+
+    fn payload_ptr<T>(&self) -> *const T {
+        std::ptr::with_exposed_provenance(self.payload() as usize)
+    }
+
+    pub(crate) fn boolean(b: bool) -> Self {
+        if b { Self::TRUE } else { Self::FALSE }
+    }
+
+    /// Construct a Number, canonicalising every NaN away from the boxed range.
     pub(crate) fn number(n: f64) -> Self {
-        JsValue::Number(n)
+        Self(if n.is_nan() {
+            Self::CANONICAL_NAN_BITS
+        } else {
+            n.to_bits()
+        })
     }
 
     pub(crate) fn string(s: JsString) -> Self {
-        JsValue::String(s)
+        Self::from_arc(NanTag::String, s.code_units)
     }
 
     /// Sugar for `JsValue::string(JsString::from_str(s))`.
     pub(crate) fn from_str(s: &str) -> Self {
-        JsValue::String(JsString::from_str(s))
+        Self::string(JsString::from_str(s))
     }
 
     pub(crate) fn symbol(s: JsSymbol) -> Self {
-        JsValue::Symbol(s)
+        Self::from_arc(NanTag::Symbol, s.data)
     }
 
     pub(crate) fn bigint(b: JsBigInt) -> Self {
-        JsValue::BigInt(b)
+        Self::from_arc(NanTag::BigInt, b.value)
     }
 
     pub(crate) fn object(id: u64) -> Self {
-        JsValue::Object(JsObject { id })
+        assert!(
+            id <= Self::PAYLOAD_MASK,
+            "NaN-box object id exceeds the 48-bit payload range"
+        );
+        Self::boxed(NanTag::Object, id)
     }
 
     // ----- typed accessors --------------------------------------------------
     // Copy-typed payloads return by value. Heap-payload variants (String,
     // Symbol, BigInt) provide both a clone-returning form (`as_string` etc.)
-    // and a callback-borrowing form (`with_string` etc.). Under the future
-    // NaN-box layout (issue #69), borrow-returning accessors of the form
-    // `&JsString` are unsound (no Rust-level borrowee exists), so the
-    // `with_*` form is the only zero-refcount-bump path.
+    // and a callback-borrowing form (`with_string` etc.). Borrow-returning
+    // accessors of the form `&JsString` would be unsound because no wrapper
+    // object lives inside the word.
 
     pub(crate) fn as_boolean(&self) -> Option<bool> {
-        match self {
-            JsValue::Boolean(b) => Some(*b),
+        match self.tag() {
+            Some(NanTag::False) => Some(false),
+            Some(NanTag::True) => Some(true),
             _ => None,
         }
     }
 
     pub(crate) fn as_number(&self) -> Option<f64> {
-        match self {
-            JsValue::Number(n) => Some(*n),
-            _ => None,
-        }
+        (!self.is_boxed()).then(|| f64::from_bits(self.0))
     }
 
     pub(crate) fn as_object_id(&self) -> Option<u64> {
-        match self {
-            JsValue::Object(o) => Some(o.id),
-            _ => None,
-        }
+        (self.tag() == Some(NanTag::Object)).then(|| self.payload())
     }
 
-    /// Cloning accessor — under the future NaN-box this becomes an Arc
-    /// refcount bump, so it stays O(1).
     pub(crate) fn as_string(&self) -> Option<JsString> {
-        match self {
-            JsValue::String(s) => Some(s.clone()),
-            _ => None,
+        if self.tag() != Some(NanTag::String) {
+            return None;
+        }
+        let ptr = self.payload_ptr::<Vec<u16>>();
+        // SAFETY: a String-tagged value owns one strong count for this pointer.
+        unsafe {
+            Arc::increment_strong_count(ptr);
+            Some(JsString {
+                code_units: Arc::from_raw(ptr),
+            })
         }
     }
 
     pub(crate) fn as_symbol(&self) -> Option<JsSymbol> {
-        match self {
-            JsValue::Symbol(s) => Some(s.clone()),
-            _ => None,
+        if self.tag() != Some(NanTag::Symbol) {
+            return None;
+        }
+        let ptr = self.payload_ptr::<JsSymbolData>();
+        // SAFETY: a Symbol-tagged value owns one strong count for this pointer.
+        unsafe {
+            Arc::increment_strong_count(ptr);
+            Some(JsSymbol {
+                data: Arc::from_raw(ptr),
+            })
         }
     }
 
     pub(crate) fn as_bigint(&self) -> Option<JsBigInt> {
-        match self {
-            JsValue::BigInt(b) => Some(b.clone()),
-            _ => None,
+        if self.tag() != Some(NanTag::BigInt) {
+            return None;
+        }
+        let ptr = self.payload_ptr::<num_bigint::BigInt>();
+        // SAFETY: a BigInt-tagged value owns one strong count for this pointer.
+        unsafe {
+            Arc::increment_strong_count(ptr);
+            Some(JsBigInt {
+                value: Arc::from_raw(ptr),
+            })
         }
     }
 
     pub(crate) fn with_string<R>(&self, f: impl FnOnce(&[u16]) -> R) -> Option<R> {
-        match self {
-            JsValue::String(s) => Some(f(&s.code_units)),
-            _ => None,
+        if self.tag() != Some(NanTag::String) {
+            return None;
         }
+        let ptr = self.payload_ptr::<Vec<u16>>();
+        // SAFETY: `self` keeps its strong count alive for the callback.
+        Some(f(unsafe { &*ptr }))
     }
 
     pub(crate) fn with_symbol<R>(&self, f: impl FnOnce(&JsSymbol) -> R) -> Option<R> {
-        match self {
-            JsValue::Symbol(s) => Some(f(s)),
-            _ => None,
+        if self.tag() != Some(NanTag::Symbol) {
+            return None;
         }
+        let ptr = self.payload_ptr::<JsSymbolData>();
+        // SAFETY: `self` owns the strong count represented by this temporary
+        // Arc. `ManuallyDrop` prevents both normal and unwind paths from
+        // consuming that count.
+        let symbol = std::mem::ManuallyDrop::new(JsSymbol {
+            data: unsafe { Arc::from_raw(ptr) },
+        });
+        Some(f(&symbol))
     }
 
     pub(crate) fn with_bigint<R>(&self, f: impl FnOnce(&num_bigint::BigInt) -> R) -> Option<R> {
-        match self {
-            JsValue::BigInt(b) => Some(f(&b.value)),
-            _ => None,
+        if self.tag() != Some(NanTag::BigInt) {
+            return None;
         }
+        let ptr = self.payload_ptr::<num_bigint::BigInt>();
+        // SAFETY: `self` keeps its strong count alive for the callback.
+        Some(f(unsafe { &*ptr }))
     }
 
     pub(crate) fn into_string(self) -> Option<JsString> {
-        match self {
-            JsValue::String(s) => Some(s),
-            _ => None,
+        if self.tag() != Some(NanTag::String) {
+            return None;
         }
+        let ptr = self.payload_ptr::<Vec<u16>>();
+        std::mem::forget(self);
+        // SAFETY: forgetting `self` transfers its one strong count.
+        Some(JsString {
+            code_units: unsafe { Arc::from_raw(ptr) },
+        })
     }
 
     pub(crate) fn into_bigint(self) -> Option<JsBigInt> {
-        match self {
-            JsValue::BigInt(b) => Some(b),
-            _ => None,
+        if self.tag() != Some(NanTag::BigInt) {
+            return None;
         }
+        let ptr = self.payload_ptr::<num_bigint::BigInt>();
+        std::mem::forget(self);
+        // SAFETY: forgetting `self` transfers its one strong count.
+        Some(JsBigInt {
+            value: unsafe { Arc::from_raw(ptr) },
+        })
     }
 
     /// Eight-way value tag for exhaustive dispatch. See `ValueKind`.
     pub(crate) fn discriminant(&self) -> ValueKind {
-        match self {
-            JsValue::Undefined => ValueKind::Undefined,
-            JsValue::Null => ValueKind::Null,
-            JsValue::Boolean(_) => ValueKind::Boolean,
-            JsValue::Number(_) => ValueKind::Number,
-            JsValue::String(_) => ValueKind::String,
-            JsValue::Symbol(_) => ValueKind::Symbol,
-            JsValue::BigInt(_) => ValueKind::BigInt,
-            JsValue::Object(_) => ValueKind::Object,
+        match self.tag() {
+            None => ValueKind::Number,
+            Some(NanTag::Undefined) => ValueKind::Undefined,
+            Some(NanTag::Null) => ValueKind::Null,
+            Some(NanTag::False | NanTag::True) => ValueKind::Boolean,
+            Some(NanTag::Object) => ValueKind::Object,
+            Some(NanTag::String) => ValueKind::String,
+            Some(NanTag::Symbol) => ValueKind::Symbol,
+            Some(NanTag::BigInt) => ValueKind::BigInt,
         }
     }
 
@@ -548,44 +664,135 @@ impl JsValue {
     }
 
     pub(crate) fn is_object(&self) -> bool {
-        matches!(self, JsValue::Object(_))
+        self.tag() == Some(NanTag::Object)
     }
 }
 
 // §6.1.6.1 — Number type operations
-impl JsValue {
+impl NanBoxedValue {
     pub(crate) fn is_undefined(&self) -> bool {
-        matches!(self, JsValue::Undefined)
+        self.tag() == Some(NanTag::Undefined)
     }
 
     pub(crate) fn is_null(&self) -> bool {
-        matches!(self, JsValue::Null)
+        self.tag() == Some(NanTag::Null)
     }
 
     pub(crate) fn is_boolean(&self) -> bool {
-        matches!(self, JsValue::Boolean(_))
+        matches!(self.tag(), Some(NanTag::False | NanTag::True))
     }
 
     pub(crate) fn is_number(&self) -> bool {
-        matches!(self, JsValue::Number(_))
+        !self.is_boxed()
     }
 
     pub(crate) fn is_string(&self) -> bool {
-        matches!(self, JsValue::String(_))
+        self.tag() == Some(NanTag::String)
     }
 
     pub(crate) fn is_symbol(&self) -> bool {
-        matches!(self, JsValue::Symbol(_))
+        self.tag() == Some(NanTag::Symbol)
     }
 
     pub(crate) fn is_bigint(&self) -> bool {
-        matches!(self, JsValue::BigInt(_))
+        self.tag() == Some(NanTag::BigInt)
     }
 
     pub(crate) fn is_nullish(&self) -> bool {
-        matches!(self, JsValue::Undefined | JsValue::Null)
+        matches!(self.tag(), Some(NanTag::Undefined | NanTag::Null))
     }
 }
+
+impl Clone for NanBoxedValue {
+    fn clone(&self) -> Self {
+        match self.tag() {
+            Some(NanTag::String) => {
+                let ptr = self.payload_ptr::<Vec<u16>>();
+                // SAFETY: this value owns a live strong count for `ptr`.
+                unsafe { Arc::increment_strong_count(ptr) };
+            }
+            Some(NanTag::Symbol) => {
+                let ptr = self.payload_ptr::<JsSymbolData>();
+                // SAFETY: this value owns a live strong count for `ptr`.
+                unsafe { Arc::increment_strong_count(ptr) };
+            }
+            Some(NanTag::BigInt) => {
+                let ptr = self.payload_ptr::<num_bigint::BigInt>();
+                // SAFETY: this value owns a live strong count for `ptr`.
+                unsafe { Arc::increment_strong_count(ptr) };
+            }
+            _ => {}
+        }
+        Self(self.0)
+    }
+}
+
+impl Drop for NanBoxedValue {
+    fn drop(&mut self) {
+        match self.tag() {
+            Some(NanTag::String) => {
+                let ptr = self.payload_ptr::<Vec<u16>>();
+                // SAFETY: this value owns exactly one strong count for `ptr`.
+                unsafe { drop(Arc::from_raw(ptr)) };
+            }
+            Some(NanTag::Symbol) => {
+                let ptr = self.payload_ptr::<JsSymbolData>();
+                // SAFETY: this value owns exactly one strong count for `ptr`.
+                unsafe { drop(Arc::from_raw(ptr)) };
+            }
+            Some(NanTag::BigInt) => {
+                let ptr = self.payload_ptr::<num_bigint::BigInt>();
+                // SAFETY: this value owns exactly one strong count for `ptr`.
+                unsafe { drop(Arc::from_raw(ptr)) };
+            }
+            _ => {}
+        }
+    }
+}
+
+impl fmt::Debug for NanBoxedValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.kind() {
+            ValueKind::Undefined => f.write_str("Undefined"),
+            ValueKind::Null => f.write_str("Null"),
+            ValueKind::Boolean => f
+                .debug_tuple("Boolean")
+                .field(&self.as_boolean().unwrap())
+                .finish(),
+            ValueKind::Number => f
+                .debug_tuple("Number")
+                .field(&self.as_number().unwrap())
+                .finish(),
+            ValueKind::String => f
+                .debug_tuple("String")
+                .field(&self.as_string().unwrap())
+                .finish(),
+            ValueKind::Symbol => f
+                .debug_tuple("Symbol")
+                .field(&self.as_symbol().unwrap())
+                .finish(),
+            ValueKind::BigInt => f
+                .debug_tuple("BigInt")
+                .field(&self.as_bigint().unwrap())
+                .finish(),
+            ValueKind::Object => f
+                .debug_tuple("Object")
+                .field(&JsObject {
+                    id: self.as_object_id().unwrap(),
+                })
+                .finish(),
+        }
+    }
+}
+
+// `NanBoxedValue` is structurally `Send + Sync`; keep its hidden pointee types
+// under the same contract so moving the owning word between threads stays sound.
+const _: fn() = || {
+    fn assert_send_sync<T: Send + Sync>() {}
+    assert_send_sync::<Vec<u16>>();
+    assert_send_sync::<JsSymbolData>();
+    assert_send_sync::<num_bigint::BigInt>();
+};
 
 // §6.1.6.1 Number type operations
 pub(crate) mod number_ops {
@@ -1088,7 +1295,7 @@ mod tests {
         );
     }
 
-    // ----- JsValue method surface (issue #69 NaN-box migration) -------------
+    // ----- JsValue method surface -------------------------------------------
 
     #[test]
     fn value_constructors() {
@@ -1191,5 +1398,311 @@ mod tests {
         assert!(JsValue::object(3).is_object());
         assert!(!JsValue::NULL.is_object());
         assert!(!JsValue::number(0.0).is_object());
+    }
+
+    #[test]
+    fn nan_box_scalar_layout_and_number_bits() {
+        const CANONICAL_NAN_BITS: u64 = 0x7FF8_0000_0000_0000;
+
+        assert_eq!(std::mem::size_of::<JsValue>(), 8);
+        assert_eq!(std::mem::align_of::<JsValue>(), std::mem::align_of::<u64>());
+
+        let nan_inputs = [
+            f64::NAN,
+            f64::from_bits(0xFFF8_0000_0000_0000),
+            f64::from_bits(0x7FF0_0000_0000_0001),
+            f64::from_bits(0xFFF0_1234_5678_9ABC),
+            (-1.0_f64).sqrt(),
+            std::hint::black_box(0.0_f64) / std::hint::black_box(0.0_f64),
+        ];
+        for input in nan_inputs {
+            assert_eq!(
+                JsValue::number(input).as_number().unwrap().to_bits(),
+                CANONICAL_NAN_BITS
+            );
+        }
+
+        let preserved_bits = [
+            0x0000_0000_0000_0000,
+            0x8000_0000_0000_0000,
+            0x0000_0000_0000_0001,
+            0x0010_0000_0000_0000,
+            0x3FF0_0000_0000_0000,
+            0x7FEF_FFFF_FFFF_FFFF,
+            0x7FF0_0000_0000_0000,
+            0xFFF0_0000_0000_0000,
+        ];
+        for bits in preserved_bits {
+            assert_eq!(
+                JsValue::number(f64::from_bits(bits))
+                    .as_number()
+                    .unwrap()
+                    .to_bits(),
+                bits
+            );
+        }
+    }
+
+    #[test]
+    fn nan_box_layout_matches_ratified_tags() {
+        const SIGNATURE: u64 = 0xFFF8_0000_0000_0000;
+        const TAG_SHIFT: u32 = 48;
+
+        assert_eq!(JsValue::UNDEFINED.raw_bits(), SIGNATURE);
+        assert_eq!(JsValue::NULL.raw_bits(), SIGNATURE | (1 << TAG_SHIFT));
+        assert_eq!(JsValue::FALSE.raw_bits(), SIGNATURE | (2 << TAG_SHIFT));
+        assert_eq!(JsValue::TRUE.raw_bits(), SIGNATURE | (3 << TAG_SHIFT));
+        assert_eq!(
+            JsValue::object(0x1234).raw_bits(),
+            SIGNATURE | (4 << TAG_SHIFT) | 0x1234
+        );
+
+        let string_storage = Arc::new(vec![0x61]);
+        let string_address = Arc::as_ptr(&string_storage).expose_provenance() as u64;
+        let string = JsValue::string(JsString {
+            code_units: string_storage,
+        });
+        assert_eq!(
+            string.raw_bits(),
+            SIGNATURE | (5 << TAG_SHIFT) | string_address
+        );
+
+        let symbol = JsSymbol::new(1, None);
+        let symbol_address = Arc::as_ptr(&symbol.data).expose_provenance() as u64;
+        let symbol = JsValue::symbol(symbol);
+        assert_eq!(
+            symbol.raw_bits(),
+            SIGNATURE | (6 << TAG_SHIFT) | symbol_address
+        );
+
+        let bigint = JsBigInt::new(num_bigint::BigInt::from(1));
+        let bigint_address = Arc::as_ptr(&bigint.value).expose_provenance() as u64;
+        let bigint = JsValue::bigint(bigint);
+        assert_eq!(
+            bigint.raw_bits(),
+            SIGNATURE | (7 << TAG_SHIFT) | bigint_address
+        );
+    }
+
+    #[test]
+    fn nan_box_object_payload_bounds() {
+        const MAX_PAYLOAD: u64 = (1_u64 << 48) - 1;
+
+        assert_eq!(JsValue::object(0).as_object_id(), Some(0));
+        assert_eq!(
+            JsValue::object(MAX_PAYLOAD).as_object_id(),
+            Some(MAX_PAYLOAD)
+        );
+        assert!(std::panic::catch_unwind(|| JsValue::object(1_u64 << 48)).is_err());
+        assert!(std::panic::catch_unwind(|| JsValue::object(u64::MAX)).is_err());
+    }
+
+    #[test]
+    fn nan_box_heap_payload_strong_counts() {
+        let string_storage = Arc::new(vec![0x61, 0x62]);
+        let string = JsValue::string(JsString {
+            code_units: string_storage.clone(),
+        });
+        assert_eq!(Arc::strong_count(&string_storage), 2);
+        let string_clone = string.clone();
+        assert_eq!(Arc::strong_count(&string_storage), 3);
+        drop(string_clone);
+        assert_eq!(Arc::strong_count(&string_storage), 2);
+        let string_access = string.as_string().unwrap();
+        assert_eq!(Arc::strong_count(&string_storage), 3);
+        drop(string_access);
+        let consumed_string = string.clone().into_string().unwrap();
+        assert_eq!(Arc::strong_count(&string_storage), 3);
+        drop(consumed_string);
+        assert!(JsValue::number(1.0).into_string().is_none());
+        drop(string);
+        assert_eq!(Arc::strong_count(&string_storage), 1);
+
+        let description_storage = Arc::new(vec![0x73]);
+        let symbol = JsSymbol::new(
+            17,
+            Some(JsString {
+                code_units: description_storage.clone(),
+            }),
+        );
+        let symbol_storage = symbol.data.clone();
+        let symbol_value = JsValue::symbol(symbol);
+        assert_eq!(Arc::strong_count(&symbol_storage), 2);
+        let symbol_clone = symbol_value.clone();
+        assert_eq!(Arc::strong_count(&symbol_storage), 3);
+        drop(symbol_clone);
+        let symbol_access = symbol_value.as_symbol().unwrap();
+        assert_eq!(symbol_access.id(), 17);
+        assert_eq!(symbol_access.description().unwrap().to_rust_string(), "s");
+        assert_eq!(Arc::strong_count(&symbol_storage), 3);
+        drop(symbol_access);
+        drop(symbol_value);
+        assert_eq!(Arc::strong_count(&symbol_storage), 1);
+        drop(symbol_storage);
+        assert_eq!(Arc::strong_count(&description_storage), 1);
+
+        let bigint_storage = Arc::new(num_bigint::BigInt::from(123));
+        let bigint = JsValue::bigint(JsBigInt {
+            value: bigint_storage.clone(),
+        });
+        assert_eq!(Arc::strong_count(&bigint_storage), 2);
+        let bigint_clone = bigint.clone();
+        assert_eq!(Arc::strong_count(&bigint_storage), 3);
+        drop(bigint_clone);
+        let bigint_access = bigint.as_bigint().unwrap();
+        assert_eq!(*bigint_access.value, num_bigint::BigInt::from(123));
+        assert_eq!(Arc::strong_count(&bigint_storage), 3);
+        drop(bigint_access);
+        let consumed_bigint = bigint.clone().into_bigint().unwrap();
+        assert_eq!(Arc::strong_count(&bigint_storage), 3);
+        drop(consumed_bigint);
+        assert!(JsValue::NULL.into_bigint().is_none());
+        drop(bigint);
+        assert_eq!(Arc::strong_count(&bigint_storage), 1);
+    }
+
+    #[test]
+    fn nan_box_borrowing_callbacks_survive_unwind() {
+        let string_storage = Arc::new(vec![0x78]);
+        let string = JsValue::string(JsString {
+            code_units: string_storage.clone(),
+        });
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                string.with_string(|_| panic!("string callback"));
+            }))
+            .is_err()
+        );
+        assert_eq!(string.with_string(|units| units[0]), Some(0x78));
+        assert_eq!(Arc::strong_count(&string_storage), 2);
+
+        let symbol = JsSymbol::new(23, None);
+        let symbol_storage = symbol.data.clone();
+        let symbol_value = JsValue::symbol(symbol);
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                symbol_value.with_symbol(|_| panic!("symbol callback"));
+            }))
+            .is_err()
+        );
+        assert_eq!(symbol_value.with_symbol(JsSymbol::id), Some(23));
+        assert_eq!(Arc::strong_count(&symbol_storage), 2);
+
+        let bigint_storage = Arc::new(num_bigint::BigInt::from(456));
+        let bigint = JsValue::bigint(JsBigInt {
+            value: bigint_storage.clone(),
+        });
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                bigint.with_bigint(|_| panic!("bigint callback"));
+            }))
+            .is_err()
+        );
+        assert_eq!(
+            bigint.with_bigint(Clone::clone),
+            Some(num_bigint::BigInt::from(456))
+        );
+        assert_eq!(Arc::strong_count(&bigint_storage), 2);
+    }
+
+    #[test]
+    fn nan_box_mixed_values_move_and_clone_across_threads() {
+        let values = vec![
+            JsValue::UNDEFINED,
+            JsValue::NULL,
+            JsValue::FALSE,
+            JsValue::TRUE,
+            JsValue::number(-0.0),
+            JsValue::object(99),
+            JsValue::from_str("thread"),
+            JsValue::symbol(JsSymbol::new(31, Some(JsString::from_str("nested")))),
+            JsValue::bigint(JsBigInt::new(num_bigint::BigInt::from(789))),
+        ];
+
+        let cloned = std::thread::spawn(move || {
+            let cloned: Vec<_> = values.iter().cloned().collect();
+            assert_eq!(
+                cloned[4].as_number().unwrap().to_bits(),
+                (-0.0_f64).to_bits()
+            );
+            assert_eq!(cloned[5].as_object_id(), Some(99));
+            assert_eq!(cloned[6].with_string(|units| units.len()), Some(6));
+            assert_eq!(cloned[7].with_symbol(JsSymbol::id), Some(31));
+            assert_eq!(
+                cloned[8].with_bigint(Clone::clone),
+                Some(num_bigint::BigInt::from(789))
+            );
+            cloned
+        })
+        .join()
+        .unwrap();
+
+        assert_eq!(
+            cloned.iter().map(JsValue::kind).collect::<Vec<_>>(),
+            vec![
+                ValueKind::Undefined,
+                ValueKind::Null,
+                ValueKind::Boolean,
+                ValueKind::Boolean,
+                ValueKind::Number,
+                ValueKind::Object,
+                ValueKind::String,
+                ValueKind::Symbol,
+                ValueKind::BigInt,
+            ]
+        );
+    }
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn nan_box_heap_pointer_range_panics_before_arc_transfer() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct DropSpy(Arc<AtomicUsize>);
+
+        impl Drop for DropSpy {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let payload = Arc::new(DropSpy(drops.clone()));
+        let result = std::panic::catch_unwind(|| {
+            NanBoxedValue::from_arc_after_address_check(NanTag::String, payload, 1_usize << 48)
+        });
+
+        assert!(result.is_err());
+        assert_eq!(drops.load(Ordering::SeqCst), 1);
+    }
+
+    /// Measurement-only probe kept identical before and after the NaN-box swap.
+    #[test]
+    #[ignore = "manual representation microbenchmark"]
+    fn nan_box_clone_benchmark() {
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        const ITERATIONS: u64 = 10_000_000;
+        let number = JsValue::number(1234.5);
+        let object = JsValue::object(0x1234_5678);
+        let mut checksum = 0_u64;
+
+        let started = Instant::now();
+        for _ in 0..ITERATIONS {
+            let number_clone = black_box(number.clone());
+            checksum ^= black_box(number_clone.as_number().unwrap().to_bits());
+            let object_clone = black_box(object.clone());
+            checksum ^= black_box(object_clone.as_object_id().unwrap());
+        }
+        let elapsed = started.elapsed();
+
+        eprintln!(
+            "jsvalue_size={} iterations={} elapsed_ns={} checksum={checksum}",
+            std::mem::size_of::<JsValue>(),
+            ITERATIONS,
+            elapsed.as_nanos()
+        );
+        black_box(checksum);
     }
 }

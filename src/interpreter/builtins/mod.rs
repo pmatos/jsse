@@ -2154,7 +2154,8 @@ impl Interpreter {
                 name.to_string(),
                 1,
                 move |interp, _this, args| {
-                    let x = interp.to_number_coerce(args.first().unwrap_or(&JsValue::UNDEFINED));
+                    let x =
+                        interp.to_number_coerce(args.first().unwrap_or(JsValue::undefined_ref()));
                     Completion::Normal(JsValue::number(op(x)))
                 },
             ));
@@ -2167,7 +2168,7 @@ impl Interpreter {
             "round".to_string(),
             1,
             |interp, _this, args| {
-                let x = interp.to_number_coerce(args.first().unwrap_or(&JsValue::UNDEFINED));
+                let x = interp.to_number_coerce(args.first().unwrap_or(JsValue::undefined_ref()));
                 let result = if x.is_nan() || x.is_infinite() || x == 0.0 {
                     x
                 } else if (-0.5..0.0).contains(&x) {
@@ -2262,8 +2263,9 @@ impl Interpreter {
             "pow".to_string(),
             2,
             |interp, _this, args| {
-                let base = interp.to_number_coerce(args.first().unwrap_or(&JsValue::UNDEFINED));
-                let exp = interp.to_number_coerce(args.get(1).unwrap_or(&JsValue::UNDEFINED));
+                let base =
+                    interp.to_number_coerce(args.first().unwrap_or(JsValue::undefined_ref()));
+                let exp = interp.to_number_coerce(args.get(1).unwrap_or(JsValue::undefined_ref()));
                 Completion::Normal(JsValue::number(number_ops::exponentiate(base, exp)))
             },
         ));
@@ -2286,8 +2288,8 @@ impl Interpreter {
             "atan2".to_string(),
             2,
             |interp, _this, args| {
-                let y = interp.to_number_coerce(args.first().unwrap_or(&JsValue::UNDEFINED));
-                let x = interp.to_number_coerce(args.get(1).unwrap_or(&JsValue::UNDEFINED));
+                let y = interp.to_number_coerce(args.first().unwrap_or(JsValue::undefined_ref()));
+                let x = interp.to_number_coerce(args.get(1).unwrap_or(JsValue::undefined_ref()));
                 Completion::Normal(JsValue::number(y.atan2(x)))
             },
         ));
@@ -2363,7 +2365,7 @@ impl Interpreter {
             "fround".to_string(),
             1,
             |interp, _this, args| {
-                let x = interp.to_number_coerce(args.first().unwrap_or(&JsValue::UNDEFINED));
+                let x = interp.to_number_coerce(args.first().unwrap_or(JsValue::undefined_ref()));
                 Completion::Normal(JsValue::number((x as f32) as f64))
             },
         ));
@@ -2376,7 +2378,7 @@ impl Interpreter {
             "clz32".to_string(),
             1,
             |interp, _this, args| {
-                let x = interp.to_number_coerce(args.first().unwrap_or(&JsValue::UNDEFINED));
+                let x = interp.to_number_coerce(args.first().unwrap_or(JsValue::undefined_ref()));
                 let n = number_ops::to_uint32(x);
                 Completion::Normal(JsValue::number(n.leading_zeros() as f64))
             },
@@ -2418,7 +2420,8 @@ impl Interpreter {
                 name.to_string(),
                 1,
                 move |interp, _this, args| {
-                    let x = interp.to_number_coerce(args.first().unwrap_or(&JsValue::UNDEFINED));
+                    let x =
+                        interp.to_number_coerce(args.first().unwrap_or(JsValue::undefined_ref()));
                     Completion::Normal(JsValue::number(op(x)))
                 },
             ));

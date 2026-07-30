@@ -142,7 +142,7 @@ impl Interpreter {
                                 && desc.writable == Some(false)
                                 && !same_value(
                                     &v,
-                                    desc.value.as_ref().unwrap_or(&JsValue::UNDEFINED),
+                                    desc.value.as_ref().unwrap_or(JsValue::undefined_ref()),
                                 )
                             {
                                 return Completion::Throw(self.create_type_error(
@@ -317,7 +317,7 @@ impl Interpreter {
     }
 
     /// Iterative prototype-chain walk of `get_property`. Returns
-    /// `JsValue::Undefined` when the key is not found anywhere in the chain.
+    /// `JsValue::UNDEFINED` when the key is not found anywhere in the chain.
     /// Each frame borrows the slot's `RefCell` directly via `get_object_cell_expect`,
     /// avoiding an `Rc::clone` per prototype hop. The walk holds no state across
     /// `&mut self` calls, so the `&self`-tied lifetime is safe.
@@ -691,7 +691,7 @@ impl Interpreter {
                                     && desc.writable == Some(false)
                                     && !same_value(
                                         &value,
-                                        desc.value.as_ref().unwrap_or(&JsValue::UNDEFINED),
+                                        desc.value.as_ref().unwrap_or(JsValue::undefined_ref()),
                                     )
                                 {
                                     return Err(self.create_type_error(
@@ -1846,7 +1846,7 @@ fn is_compatible_property_desc(
             if let Some(ref desc_val) = desc.value
                 && !same_value(
                     desc_val,
-                    current.value.as_ref().unwrap_or(&JsValue::UNDEFINED),
+                    current.value.as_ref().unwrap_or(JsValue::undefined_ref()),
                 )
             {
                 return false;
@@ -1860,7 +1860,7 @@ fn is_compatible_property_desc(
         if let Some(ref desc_set) = desc.set
             && !same_value(
                 desc_set,
-                current.set.as_ref().unwrap_or(&JsValue::UNDEFINED),
+                current.set.as_ref().unwrap_or(JsValue::undefined_ref()),
             )
         {
             return false;
@@ -1869,7 +1869,7 @@ fn is_compatible_property_desc(
         if let Some(ref desc_get) = desc.get
             && !same_value(
                 desc_get,
-                current.get.as_ref().unwrap_or(&JsValue::UNDEFINED),
+                current.get.as_ref().unwrap_or(JsValue::undefined_ref()),
             )
         {
             return false;

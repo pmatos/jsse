@@ -28,6 +28,7 @@ jobs:
         run: |
           set -euo pipefail
           for test_filter in \
+            'types::tests::nan_box_' \
             'interpreter::property_map::tests::' \
             'interpreter::object_arena::tests::' \
             'interpreter::gc::tests::' \
