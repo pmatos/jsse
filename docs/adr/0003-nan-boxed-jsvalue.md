@@ -67,7 +67,12 @@ artifacts; the phantom comment carries no design authority and is superseded.
 ## Consequences
 
 - `JsValue` shrinks from ~32 bytes (tag plus largest inline variant,
-  `JsBigInt { num_bigint::BigInt }`) to 8 bytes everywhere it is stored.
+  `JsBigInt { num_bigint::BigInt }`) to 8 bytes everywhere it is stored. That
+  ~32-byte figure was accurate when this ADR was written, before #403/#404
+  wrapped `JsBigInt`/`JsSymbol` in `Arc`; by the time the swap (#414) actually
+  landed, the pre-swap enum measured 16 bytes — see the design doc's
+  [As Landed](../specs/2026-07-26-nan-boxed-js-value-design.md#as-landed-phase-4-issue-415)
+  section for the reconciled numbers.
 - `NanBoxedValue` is `Clone`, not `Copy`: every existing `.clone()` call site
   keeps working unchanged, but a stray `let y = x;` that implicitly relied on
   `Copy` now fails to compile instead of silently corrupting a refcount —
