@@ -784,12 +784,18 @@ impl Interpreter {
                 // OrdinarySetWithOwnDescriptor step 3.c: use Receiver.[[GetOwnProperty]] / [[DefineOwnProperty]]
                 let recv_id = receiver.as_object_id();
                 if recv_id == Some(obj_id) {
-                    // Common case: receiver is the same object. Ordinary objects can
-                    // take the direct route, but Array's "length" is exotic — it must
-                    // go through [[DefineOwnProperty]] (ArraySetLength, §10.4.2.4) or
-                    // its ToUint32 coercion / RangeError / element-deletion semantics
-                    // are silently skipped.
-                    if obj.borrow().class_name == "Array" {
+                    // Common case: receiver is the same object. Ordinary objects
+                    // (and ordinary Array properties) can take the direct route;
+                    // only Array's "length" is exotic and must go through
+                    // [[DefineOwnProperty]] (ArraySetLength, §10.4.2.4) or its
+                    // ToUint32 coercion / RangeError / element-deletion semantics
+                    // are silently skipped. Gate on the key too, not just the
+                    // class — routing every existing-element write (e.g. `a[0]++`)
+                    // through descriptor allocation regressed a 200k-iteration
+                    // increment loop by ~1.7-2x.
+                    if key.as_property_key_str() == Some("length")
+                        && obj.borrow().class_name == "Array"
+                    {
                         let val_desc = crate::interpreter::types::PropertyDescriptor {
                             value: Some(value),
                             writable: None,
