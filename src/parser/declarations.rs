@@ -811,7 +811,7 @@ impl<'a> Parser<'a> {
                 self.in_static_block = prev_in_static_block;
                 self.in_block_or_function = prev_block;
                 self.in_switch_case = prev_sc;
-                if Self::stmts_contain_arguments(&stmts) {
+                if crate::ast::stmts_contain_matching(&stmts, &crate::ast::is_arguments_reference) {
                     return Err(self.error("'arguments' is not allowed in class static blocks"));
                 }
                 self.eat(&Token::RightBrace)?;
@@ -913,7 +913,10 @@ impl<'a> Parser<'a> {
                 let value = if self.current == Token::Assign {
                     self.advance()?;
                     let expr = self.parse_field_initializer_value()?;
-                    if Self::contains_arguments(&expr) {
+                    if crate::ast::expr_contains_matching(
+                        &expr,
+                        &crate::ast::is_arguments_reference,
+                    ) {
                         return Err(
                             self.error("Class field initializer cannot reference 'arguments'")
                         );
@@ -947,7 +950,7 @@ impl<'a> Parser<'a> {
             let value = if self.current == Token::Assign {
                 self.advance()?;
                 let expr = self.parse_field_initializer_value()?;
-                if Self::contains_arguments(&expr) {
+                if crate::ast::expr_contains_matching(&expr, &crate::ast::is_arguments_reference) {
                     return Err(self.error("Class field initializer cannot reference 'arguments'"));
                 }
                 Some(expr)
@@ -1070,7 +1073,7 @@ impl<'a> Parser<'a> {
                 self.advance()?;
                 let expr = self.parse_field_initializer_value()?;
                 // Class field initializers cannot contain 'arguments'
-                if Self::contains_arguments(&expr) {
+                if crate::ast::expr_contains_matching(&expr, &crate::ast::is_arguments_reference) {
                     return Err(self.error("Class field initializer cannot reference 'arguments'"));
                 }
                 Some(expr)

@@ -906,6 +906,230 @@ fn for_in_of_left_uses_arguments(left: &ForInOfLeft) -> bool {
     }
 }
 
+/// Predicate for the `ContainsArguments` static semantic: an unqualified
+/// reference to the `arguments` identifier.
+pub(crate) fn is_arguments_reference(expr: &Expression) -> bool {
+    matches!(expr, Expression::Identifier(name) if name == "arguments")
+}
+
+/// Predicate for the `Contains SuperCall` static semantic: a `super(...)` call.
+/// `super.prop` is a SuperProperty (not a SuperCall) and does not match.
+pub(crate) fn is_super_call(expr: &Expression) -> bool {
+    matches!(expr, Expression::Call(callee, _, _) if matches!(&**callee, Expression::Super))
+}
+
+/// Returns true if `pred` matches any expression syntactically reachable from
+/// `stmts` within the same function scope.
+///
+/// This is the single traversal behind the `ContainsArguments` and
+/// `Contains SuperCall` static-semantic early errors — class field
+/// initializers, class static blocks, and direct `eval` textually inside
+/// either. Arrow bodies and class computed keys ARE traversed (they execute in
+/// the enclosing scope); nested function, method, getter/setter, and non-arrow
+/// bodies are opaque, and binding patterns (which introduce names rather than
+/// reference them) are not visited. This deliberately differs from
+/// [`stmts_use_arguments`], which drives the `arguments`-object allocation
+/// optimization and therefore also inspects binding names and nested `eval`.
+///
+/// The match is exhaustive over `Statement`/`Expression`: a new AST variant
+/// forces this one traversal to be updated rather than silently slipping past a
+/// hand-maintained copy.
+pub(crate) fn stmts_contain_matching(
+    stmts: &[Statement],
+    pred: &dyn Fn(&Expression) -> bool,
+) -> bool {
+    stmts.iter().any(|s| stmt_contains_matching(s, pred))
+}
+
+fn stmt_contains_matching(stmt: &Statement, pred: &dyn Fn(&Expression) -> bool) -> bool {
+    match stmt {
+        Statement::Empty
+        | Statement::Debugger
+        | Statement::Break(_)
+        | Statement::Continue(_)
+        | Statement::Return(None)
+        // Nested functions own their `arguments`/`super`; opaque.
+        | Statement::FunctionDeclaration(_) => false,
+        Statement::Expression(e) | Statement::Throw(e) => expr_contains_matching(e, pred),
+        Statement::Return(Some(e)) => expr_contains_matching(e, pred),
+        Statement::Block(stmts) => stmts_contain_matching(stmts, pred),
+        Statement::Variable(decl) => decl
+            .declarations
+            .iter()
+            .any(|d| d.init.as_ref().is_some_and(|e| expr_contains_matching(e, pred))),
+        Statement::If(i) => {
+            expr_contains_matching(&i.test, pred)
+                || stmt_contains_matching(&i.consequent, pred)
+                || i.alternate
+                    .as_ref()
+                    .is_some_and(|a| stmt_contains_matching(a, pred))
+        }
+        Statement::While(w) => {
+            expr_contains_matching(&w.test, pred) || stmt_contains_matching(&w.body, pred)
+        }
+        Statement::DoWhile(d) => {
+            expr_contains_matching(&d.test, pred) || stmt_contains_matching(&d.body, pred)
+        }
+        Statement::For(f) => {
+            f.init.as_ref().is_some_and(|i| match i {
+                ForInit::Expression(e) => expr_contains_matching(e, pred),
+                ForInit::Variable(d) => d
+                    .declarations
+                    .iter()
+                    .any(|dd| dd.init.as_ref().is_some_and(|e| expr_contains_matching(e, pred))),
+            }) || f.test.as_ref().is_some_and(|e| expr_contains_matching(e, pred))
+                || f.update.as_ref().is_some_and(|e| expr_contains_matching(e, pred))
+                || stmt_contains_matching(&f.body, pred)
+        }
+        Statement::ForIn(f) => {
+            expr_contains_matching(&f.right, pred) || stmt_contains_matching(&f.body, pred)
+        }
+        Statement::ForOf(f) => {
+            expr_contains_matching(&f.right, pred) || stmt_contains_matching(&f.body, pred)
+        }
+        Statement::Try(t) => {
+            stmts_contain_matching(&t.block, pred)
+                || t.handler
+                    .as_ref()
+                    .is_some_and(|h| stmts_contain_matching(&h.body, pred))
+                || t.finalizer
+                    .as_ref()
+                    .is_some_and(|f| stmts_contain_matching(f, pred))
+        }
+        Statement::Switch(s) => {
+            expr_contains_matching(&s.discriminant, pred)
+                || s.cases.iter().any(|c| {
+                    c.test
+                        .as_ref()
+                        .is_some_and(|e| expr_contains_matching(e, pred))
+                        || stmts_contain_matching(&c.consequent, pred)
+                })
+        }
+        Statement::Labeled(_, s) => stmt_contains_matching(s, pred),
+        Statement::With(e, s) => {
+            expr_contains_matching(e, pred) || stmt_contains_matching(s, pred)
+        }
+        // Method bodies are opaque, but `extends` and computed element keys
+        // evaluate in the enclosing scope.
+        Statement::ClassDeclaration(cls) => {
+            cls.super_class
+                .as_ref()
+                .is_some_and(|sc| expr_contains_matching(sc, pred))
+                || class_elements_contain_matching(&cls.body, pred)
+        }
+    }
+}
+
+pub(crate) fn expr_contains_matching(
+    expr: &Expression,
+    pred: &dyn Fn(&Expression) -> bool,
+) -> bool {
+    if pred(expr) {
+        return true;
+    }
+    match expr {
+        // Leaves with no in-scope child expressions, plus nested regular
+        // functions (opaque to `arguments`/`super`).
+        Expression::Literal(_)
+        | Expression::Identifier(_)
+        | Expression::This
+        | Expression::Super
+        | Expression::NewTarget
+        | Expression::ImportMeta
+        | Expression::PrivateIdentifier(_)
+        | Expression::Function(_) => false,
+        Expression::Array(elems, _) => elems
+            .iter()
+            .any(|e| e.as_ref().is_some_and(|e| expr_contains_matching(e, pred))),
+        Expression::Object(props) => props.iter().any(|p| {
+            expr_contains_matching(&p.value, pred)
+                || matches!(&p.key, PropertyKey::Computed(e) if expr_contains_matching(e, pred))
+        }),
+        Expression::Member(object, property, _) => {
+            expr_contains_matching(object, pred)
+                || matches!(property, MemberProperty::Computed(e) if expr_contains_matching(e, pred))
+        }
+        Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
+            expr_contains_matching(callee, pred)
+                || args.iter().any(|a| expr_contains_matching(a, pred))
+        }
+        Expression::Binary(_, l, r)
+        | Expression::Logical(_, l, r)
+        | Expression::Assign(_, l, r) => {
+            expr_contains_matching(l, pred) || expr_contains_matching(r, pred)
+        }
+        Expression::Unary(_, e)
+        | Expression::Update(_, _, e)
+        | Expression::Spread(e)
+        | Expression::Await(e)
+        | Expression::Typeof(e)
+        | Expression::Void(e)
+        | Expression::Delete(e) => expr_contains_matching(e, pred),
+        Expression::Yield(opt, _) => opt
+            .as_ref()
+            .is_some_and(|e| expr_contains_matching(e, pred)),
+        Expression::Conditional(t, c, a) => {
+            expr_contains_matching(t, pred)
+                || expr_contains_matching(c, pred)
+                || expr_contains_matching(a, pred)
+        }
+        Expression::Sequence(exprs) | Expression::Comma(exprs) => {
+            exprs.iter().any(|e| expr_contains_matching(e, pred))
+        }
+        Expression::Template(tl) => tl
+            .expressions
+            .iter()
+            .any(|e| expr_contains_matching(e, pred)),
+        Expression::TaggedTemplate(tag, tl) => {
+            expr_contains_matching(tag, pred)
+                || tl
+                    .expressions
+                    .iter()
+                    .any(|e| expr_contains_matching(e, pred))
+        }
+        Expression::OptionalChain(object, chain) => {
+            expr_contains_matching(object, pred) || expr_contains_matching(chain, pred)
+        }
+        Expression::Import(inner, opts)
+        | Expression::ImportDefer(inner, opts)
+        | Expression::ImportSource(inner, opts) => {
+            expr_contains_matching(inner, pred)
+                || opts
+                    .as_ref()
+                    .is_some_and(|e| expr_contains_matching(e, pred))
+        }
+        // Arrow functions inherit `arguments`/`super`, so the body executes in
+        // the enclosing scope and IS traversed.
+        Expression::ArrowFunction(af) => match af.body.body().statements.as_slice() {
+            [Statement::Return(Some(e))] => expr_contains_matching(e, pred),
+            stmts => stmts_contain_matching(stmts, pred),
+        },
+        // Method/field bodies are opaque, but `extends` and computed element
+        // keys evaluate in the enclosing scope.
+        Expression::Class(cls) => {
+            cls.super_class
+                .as_ref()
+                .is_some_and(|sc| expr_contains_matching(sc, pred))
+                || class_elements_contain_matching(&cls.body, pred)
+        }
+    }
+}
+
+fn class_elements_contain_matching(
+    body: &[ClassElement],
+    pred: &dyn Fn(&Expression) -> bool,
+) -> bool {
+    body.iter().any(|elem| match elem {
+        ClassElement::Method(m) => {
+            matches!(&m.key, PropertyKey::Computed(e) if expr_contains_matching(e, pred))
+        }
+        ClassElement::Property(p) | ClassElement::AutoAccessor(p) => {
+            matches!(&p.key, PropertyKey::Computed(e) if expr_contains_matching(e, pred))
+        }
+        ClassElement::StaticBlock(_) => false,
+    })
+}
+
 fn assign_stmt_sites(stmt: &mut Statement, call_id: &mut u32, prop_id: &mut u32) {
     match stmt {
         Statement::Expression(e) => assign_expr_sites(e, call_id, prop_id),
