@@ -13534,203 +13534,6 @@ impl Interpreter {
         false
     }
 
-    fn stmts_contain_arguments(stmts: &[Statement]) -> bool {
-        stmts.iter().any(Self::stmt_contains_arguments)
-    }
-
-    fn stmt_contains_arguments(stmt: &Statement) -> bool {
-        use crate::ast::*;
-        match stmt {
-            Statement::Expression(e) => Self::expr_contains_arguments(e),
-            Statement::Variable(d) => d.declarations.iter().any(|decl| {
-                decl.init
-                    .as_ref()
-                    .is_some_and(Self::expr_contains_arguments)
-            }),
-            Statement::Block(stmts) => Self::stmts_contain_arguments(stmts),
-            Statement::If(if_stmt) => {
-                Self::expr_contains_arguments(&if_stmt.test)
-                    || Self::stmt_contains_arguments(&if_stmt.consequent)
-                    || if_stmt
-                        .alternate
-                        .as_ref()
-                        .is_some_and(|a| Self::stmt_contains_arguments(a))
-            }
-            Statement::Return(e) => e.as_ref().is_some_and(Self::expr_contains_arguments),
-            Statement::Throw(e) => Self::expr_contains_arguments(e),
-            Statement::Try(t) => {
-                Self::stmts_contain_arguments(&t.block)
-                    || t.handler
-                        .as_ref()
-                        .is_some_and(|h| Self::stmts_contain_arguments(&h.body))
-                    || t.finalizer
-                        .as_ref()
-                        .is_some_and(|f| Self::stmts_contain_arguments(f))
-            }
-            Statement::While(w) => {
-                Self::expr_contains_arguments(&w.test) || Self::stmt_contains_arguments(&w.body)
-            }
-            Statement::For(f) => {
-                f.init.as_ref().is_some_and(|i| match i {
-                    ForInit::Expression(e) => Self::expr_contains_arguments(e),
-                    ForInit::Variable(d) => d.declarations.iter().any(|decl| {
-                        decl.init
-                            .as_ref()
-                            .is_some_and(Self::expr_contains_arguments)
-                    }),
-                }) || f.test.as_ref().is_some_and(Self::expr_contains_arguments)
-                    || f.update.as_ref().is_some_and(Self::expr_contains_arguments)
-                    || Self::stmt_contains_arguments(&f.body)
-            }
-            Statement::ForIn(f) => {
-                Self::expr_contains_arguments(&f.right) || Self::stmt_contains_arguments(&f.body)
-            }
-            Statement::ForOf(f) => {
-                Self::expr_contains_arguments(&f.right) || Self::stmt_contains_arguments(&f.body)
-            }
-            Statement::Switch(s) => {
-                Self::expr_contains_arguments(&s.discriminant)
-                    || s.cases
-                        .iter()
-                        .any(|c| Self::stmts_contain_arguments(&c.consequent))
-            }
-            Statement::DoWhile(d) => {
-                Self::stmt_contains_arguments(&d.body) || Self::expr_contains_arguments(&d.test)
-            }
-            Statement::Labeled(_, s) => Self::stmt_contains_arguments(s),
-            Statement::With(e, s) => {
-                Self::expr_contains_arguments(e) || Self::stmt_contains_arguments(s)
-            }
-            // Function/class declarations create their own scope — don't recurse
-            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
-            _ => false,
-        }
-    }
-
-    fn expr_contains_arguments(expr: &Expression) -> bool {
-        use crate::ast::*;
-        match expr {
-            Expression::Identifier(name) => name == "arguments",
-            Expression::Array(elems, _) => elems
-                .iter()
-                .any(|e| e.as_ref().is_some_and(Self::expr_contains_arguments)),
-            Expression::Object(props) => props.iter().any(|p| {
-                Self::expr_contains_arguments(&p.value)
-                    || matches!(&p.key, PropertyKey::Computed(e) if Self::expr_contains_arguments(e))
-            }),
-            Expression::Member(obj, prop, _) => {
-                Self::expr_contains_arguments(obj)
-                    || matches!(prop, MemberProperty::Computed(e) if Self::expr_contains_arguments(e))
-            }
-            Expression::Call(callee, args, _) | Expression::New(callee, args, _) => {
-                Self::expr_contains_arguments(callee)
-                    || args.iter().any(Self::expr_contains_arguments)
-            }
-            Expression::Binary(_, l, r)
-            | Expression::Logical(_, l, r)
-            | Expression::Assign(_, l, r) => {
-                Self::expr_contains_arguments(l) || Self::expr_contains_arguments(r)
-            }
-            Expression::Unary(_, e)
-            | Expression::Update(_, _, e)
-            | Expression::Spread(e)
-            | Expression::Await(e)
-            | Expression::Yield(Some(e), _) => Self::expr_contains_arguments(e),
-            Expression::Conditional(t, c, a) => {
-                Self::expr_contains_arguments(t)
-                    || Self::expr_contains_arguments(c)
-                    || Self::expr_contains_arguments(a)
-            }
-            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
-                exprs.iter().any(Self::expr_contains_arguments)
-            }
-            Expression::Template(tl) => tl.expressions.iter().any(Self::expr_contains_arguments),
-            Expression::TaggedTemplate(tag, tl) => {
-                Self::expr_contains_arguments(tag)
-                    || tl.expressions.iter().any(Self::expr_contains_arguments)
-            }
-            Expression::ArrowFunction(af) => match af.body.body().as_slice() {
-                [Statement::Return(Some(e))] => Self::expr_contains_arguments(e),
-                stmts => Self::stmts_contain_arguments(stmts),
-            },
-            Expression::Function(_) | Expression::Class(_) => false,
-            _ => false,
-        }
-    }
-
-    fn stmts_contain_super_call(stmts: &[Statement]) -> bool {
-        stmts.iter().any(Self::stmt_contains_super_call)
-    }
-
-    fn stmt_contains_super_call(stmt: &Statement) -> bool {
-        use crate::ast::*;
-        match stmt {
-            Statement::Expression(e) => Self::expr_contains_super_call(e),
-            Statement::Variable(d) => d.declarations.iter().any(|decl| {
-                decl.init
-                    .as_ref()
-                    .is_some_and(Self::expr_contains_super_call)
-            }),
-            Statement::Block(stmts) => Self::stmts_contain_super_call(stmts),
-            Statement::If(if_stmt) => {
-                Self::expr_contains_super_call(&if_stmt.test)
-                    || Self::stmt_contains_super_call(&if_stmt.consequent)
-                    || if_stmt
-                        .alternate
-                        .as_ref()
-                        .is_some_and(|a| Self::stmt_contains_super_call(a))
-            }
-            Statement::Return(e) => e.as_ref().is_some_and(Self::expr_contains_super_call),
-            Statement::Throw(e) => Self::expr_contains_super_call(e),
-            Statement::FunctionDeclaration(_) | Statement::ClassDeclaration(_) => false,
-            _ => false,
-        }
-    }
-
-    fn expr_contains_super_call(expr: &Expression) -> bool {
-        use crate::ast::*;
-        match expr {
-            Expression::Call(callee, args, _) => {
-                matches!(**callee, Expression::Super)
-                    || Self::expr_contains_super_call(callee)
-                    || args.iter().any(Self::expr_contains_super_call)
-            }
-            Expression::Array(elems, _) => elems
-                .iter()
-                .any(|e| e.as_ref().is_some_and(Self::expr_contains_super_call)),
-            Expression::Binary(_, l, r)
-            | Expression::Logical(_, l, r)
-            | Expression::Assign(_, l, r) => {
-                Self::expr_contains_super_call(l) || Self::expr_contains_super_call(r)
-            }
-            Expression::Unary(_, e) | Expression::Update(_, _, e) | Expression::Spread(e) => {
-                Self::expr_contains_super_call(e)
-            }
-            Expression::Conditional(t, c, a) => {
-                Self::expr_contains_super_call(t)
-                    || Self::expr_contains_super_call(c)
-                    || Self::expr_contains_super_call(a)
-            }
-            Expression::ArrowFunction(af) => match af.body.body().as_slice() {
-                [Statement::Return(Some(e))] => Self::expr_contains_super_call(e),
-                stmts => Self::stmts_contain_super_call(stmts),
-            },
-            Expression::New(callee, args, _) => {
-                Self::expr_contains_super_call(callee)
-                    || args.iter().any(Self::expr_contains_super_call)
-            }
-            Expression::Member(obj, prop, _) => {
-                Self::expr_contains_super_call(obj)
-                    || matches!(prop, MemberProperty::Computed(e) if Self::expr_contains_super_call(e))
-            }
-            Expression::Sequence(exprs) | Expression::Comma(exprs) => {
-                exprs.iter().any(Self::expr_contains_super_call)
-            }
-            Expression::Function(_) | Expression::Class(_) => false,
-            _ => false,
-        }
-    }
-
     pub(crate) fn perform_eval(
         &mut self,
         args: &[JsValue],
@@ -13824,13 +13627,19 @@ impl Interpreter {
             return Completion::Throw(self.create_error("SyntaxError", &format!("{}", e)));
         }
         if in_field_initializer {
-            if Self::stmts_contain_arguments(program.body.as_slice()) {
+            if crate::ast::stmts_contain_matching(
+                program.body.as_slice(),
+                &crate::ast::is_arguments_reference,
+            ) {
                 return Completion::Throw(self.create_error(
                     "SyntaxError",
                     "'arguments' is not allowed in class field initializer or static block",
                 ));
             }
-            if Self::stmts_contain_super_call(program.body.as_slice()) {
+            if crate::ast::stmts_contain_matching(
+                program.body.as_slice(),
+                &crate::ast::is_super_call,
+            ) {
                 return Completion::Throw(self.create_error(
                     "SyntaxError",
                     "'super()' is not allowed in class field initializer",
