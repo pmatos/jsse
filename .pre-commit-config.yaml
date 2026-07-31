@@ -1,3 +1,5 @@
+default_install_hook_types: [pre-commit, commit-msg]
+
 exclude: |
   (?x)^(
     CHANGELOG\.md$
@@ -43,3 +45,9 @@ repos:
     rev: 0.8.4
     hooks:
       - id: pydoclint
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
