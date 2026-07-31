@@ -1,12 +1,14 @@
 name: Release
 
-# Releases are cut by semantic-release: on every push to main it derives the
-# next version from Conventional Commit types, builds the Linux `jsse` binary,
-# and publishes a GitHub Release (notes + CHANGELOG + tarball + checksums).
-# Replaces the previous manual workflow_dispatch pipeline.
+# Releases are cut by semantic-release on a weekly batch schedule (Sundays
+# 00:00 UTC): it derives the next version from Conventional Commit types
+# accumulated on main since the last release, builds the Linux `jsse`
+# binary, and publishes a GitHub Release (notes + CHANGELOG + tarball +
+# checksums). No-op if nothing releasable landed that week. Use
+# workflow_dispatch to cut a release on demand between scheduled runs.
 on:
-  push:
-    branches: [main]
+  schedule:
+    - cron: "0 0 * * 0"
   workflow_dispatch: {}
 
 concurrency:
