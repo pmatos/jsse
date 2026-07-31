@@ -1,3 +1,10 @@
+## [0.4.17](https://github.com/pmatos/jsse/compare/v0.4.16...v0.4.17) (2026-07-31)
+
+
+### Bug Fixes
+
+* **ast:** reject arguments/super() hidden in eval'd class field initializers ([#444](https://github.com/pmatos/jsse/issues/444)) ([5869825](https://github.com/pmatos/jsse/commit/5869825832c7814f032bd2e7eb88b37fb6d7ddf6))
+
 ## [0.4.16](https://github.com/pmatos/jsse/compare/v0.4.15...v0.4.16) (2026-07-30)
 
 
