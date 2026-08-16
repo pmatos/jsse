@@ -883,6 +883,46 @@ fn array_literal_releases_temp_roots_after_abrupt_completion() {
 }
 
 #[test]
+fn private_method_call_with_non_iterable_spread_throws() {
+    // A spread argument that is not iterable must throw a TypeError, even when the
+    // callee is a private method reached through `this.#m(...)`. The private-call
+    // path used to hand-roll argument evaluation and silently drop the iteration
+    // error, invoking the method with zero arguments instead of throwing.
+    let interp = run_script(
+        r#"
+        var result = "";
+        class C {
+            #m() { return "called"; }
+            run() { return this.#m(...5); }
+        }
+        try {
+            new C().run();
+            result = "no-throw";
+        } catch (e) {
+            result = e.constructor.name;
+        }
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "TypeError");
+}
+
+#[test]
+fn private_method_call_forwards_iterable_spread_arguments() {
+    // The private-method call path must forward spread arguments from an iterable,
+    // matching the ordinary member-call path.
+    let interp = run_script(
+        r#"
+        class D {
+            #m(a, b, c) { return a + b + c; }
+            run() { return this.#m(1, ...[2, 3]); }
+        }
+        var result = new D().run();
+        "#,
+    );
+    assert_eq!(global_number(&interp, "result"), 6.0);
+}
+
+#[test]
 fn shared_array_buffer_atomics_smoke() {
     let interp = run_script(
         r#"
