@@ -2901,29 +2901,8 @@ impl Interpreter {
                                 .create_type_error(&format!("Cannot convert {} to a BigInt", n)))
                         }
                         ValueKind::String => {
-                            let text = val.as_string().unwrap().to_rust_string().trim().to_string();
-                            if text.is_empty() {
-                                return Err(interp.create_error(
-                                    "SyntaxError",
-                                    "Cannot convert empty string to a BigInt",
-                                ));
-                            }
-                            let parsed = if let Some(hex) =
-                                text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
-                            {
-                                num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16)
-                            } else if let Some(oct) =
-                                text.strip_prefix("0o").or_else(|| text.strip_prefix("0O"))
-                            {
-                                num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8)
-                            } else if let Some(bin) =
-                                text.strip_prefix("0b").or_else(|| text.strip_prefix("0B"))
-                            {
-                                num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2)
-                            } else {
-                                text.parse::<num_bigint::BigInt>().ok()
-                            };
-                            match parsed {
+                            let text = val.as_string().unwrap().to_rust_string();
+                            match crate::interpreter::helpers::string_to_bigint(&text) {
                                 Some(v) => Ok(JsValue::bigint(JsBigInt::new(v))),
                                 None => Err(interp.create_error(
                                     "SyntaxError",

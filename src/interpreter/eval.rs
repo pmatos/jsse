@@ -20,33 +20,6 @@ impl Drop for EvalDepthGuard {
     }
 }
 
-/// StringToBigInt per spec §7.1.14 — handles empty string, hex, octal, binary.
-fn string_to_bigint_for_comparison(s: &str) -> Option<num_bigint::BigInt> {
-    let trimmed = s.trim();
-    if trimmed.is_empty() {
-        return Some(num_bigint::BigInt::from(0));
-    }
-    if let Some(hex) = trimmed
-        .strip_prefix("0x")
-        .or_else(|| trimmed.strip_prefix("0X"))
-    {
-        return num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16);
-    }
-    if let Some(oct) = trimmed
-        .strip_prefix("0o")
-        .or_else(|| trimmed.strip_prefix("0O"))
-    {
-        return num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8);
-    }
-    if let Some(bin) = trimmed
-        .strip_prefix("0b")
-        .or_else(|| trimmed.strip_prefix("0B"))
-    {
-        return num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2);
-    }
-    trimmed.parse::<num_bigint::BigInt>().ok()
-}
-
 pub(super) enum IdentifierRef {
     WithObject(u64),
     Unresolvable,
@@ -1795,31 +1768,7 @@ impl Interpreter {
             })))
         } else if let Some(s) = prim.as_string() {
             let text = s.to_rust_string();
-            let trimmed = text.trim();
-            if trimmed.is_empty() {
-                return Ok(JsValue::bigint(crate::types::JsBigInt::new(
-                    num_bigint::BigInt::from(0),
-                )));
-            }
-            let parsed = if let Some(hex) = trimmed
-                .strip_prefix("0x")
-                .or_else(|| trimmed.strip_prefix("0X"))
-            {
-                num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16)
-            } else if let Some(oct) = trimmed
-                .strip_prefix("0o")
-                .or_else(|| trimmed.strip_prefix("0O"))
-            {
-                num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8)
-            } else if let Some(bin) = trimmed
-                .strip_prefix("0b")
-                .or_else(|| trimmed.strip_prefix("0B"))
-            {
-                num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2)
-            } else {
-                trimmed.parse::<num_bigint::BigInt>().ok()
-            };
-            match parsed {
+            match crate::interpreter::helpers::string_to_bigint(&text) {
                 Some(n) => Ok(JsValue::bigint(crate::types::JsBigInt::new(n))),
                 None => Err(self.create_error(
                     "SyntaxError",
@@ -1894,13 +1843,15 @@ impl Interpreter {
         }
         // BigInt == String (via StringToBigInt)
         if let (Some(b), Some(s)) = (left.as_bigint(), right.as_string()) {
-            if let Some(parsed) = string_to_bigint_for_comparison(&s.to_rust_string()) {
+            if let Some(parsed) = crate::interpreter::helpers::string_to_bigint(&s.to_rust_string())
+            {
                 return Ok(bigint_ops::equal(&b.value, &parsed));
             }
             return Ok(false);
         }
         if let (Some(s), Some(b)) = (left.as_string(), right.as_bigint()) {
-            if let Some(parsed) = string_to_bigint_for_comparison(&s.to_rust_string()) {
+            if let Some(parsed) = crate::interpreter::helpers::string_to_bigint(&s.to_rust_string())
+            {
                 return Ok(bigint_ops::equal(&parsed, &b.value));
             }
             return Ok(false);
@@ -2002,7 +1953,8 @@ impl Interpreter {
         if lprim.is_bigint()
             && let Some(s) = rprim.as_string()
         {
-            if let Some(parsed) = string_to_bigint_for_comparison(&s.to_rust_string()) {
+            if let Some(parsed) = crate::interpreter::helpers::string_to_bigint(&s.to_rust_string())
+            {
                 return self.abstract_relational(&lprim, &JsValue::bigint(JsBigInt::new(parsed)));
             }
             return Ok(None);
@@ -2010,7 +1962,8 @@ impl Interpreter {
         if let Some(s) = lprim.as_string()
             && rprim.is_bigint()
         {
-            if let Some(parsed) = string_to_bigint_for_comparison(&s.to_rust_string()) {
+            if let Some(parsed) = crate::interpreter::helpers::string_to_bigint(&s.to_rust_string())
+            {
                 return self.abstract_relational(&JsValue::bigint(JsBigInt::new(parsed)), &rprim);
             }
             return Ok(None);

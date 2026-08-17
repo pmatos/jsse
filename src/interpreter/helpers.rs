@@ -218,6 +218,58 @@ fn string_to_number(s: &JsString) -> f64 {
     trimmed.parse::<f64>().unwrap_or(f64::NAN)
 }
 
+// §7.1.14 StringToBigInt: the single canonical parse of a String value to a
+// BigInt, returning None when the string is not a valid StringIntegerLiteral.
+// Shared by the BigInt constructor, ToBigInt (typed-array/DataView writes,
+// %TypedArray%.prototype.with), and BigInt/String loose equality so every
+// consumer agrees. Whitespace is trimmed per StrWhiteSpace (via
+// `is_ecma_whitespace`, matching `string_to_number`); the empty string is 0n.
+//
+// Unlike a bare `num_bigint` parse, the grammar is enforced: numeric separators
+// (`_`), a sign inside a NonDecimalIntegerLiteral (e.g. `0x-1`), radix points,
+// exponents, a `n` suffix, and non-ASCII digits are all rejected.
+pub(crate) fn string_to_bigint(s: &str) -> Option<num_bigint::BigInt> {
+    let trimmed = s.trim_matches(is_ecma_whitespace);
+    if trimmed.is_empty() {
+        return Some(num_bigint::BigInt::from(0));
+    }
+    // NonDecimalIntegerLiteral: a 0x/0o/0b prefix followed by one or more digits
+    // of that radix — no sign, no separators. `num_bigint::parse_bytes` silently
+    // ignores `_` and accepts a leading sign, so validate the body first.
+    fn parse_non_decimal(body: &str, radix: u32) -> Option<num_bigint::BigInt> {
+        if !body.is_empty() && body.chars().all(|c| c.is_digit(radix)) {
+            num_bigint::BigInt::parse_bytes(body.as_bytes(), radix)
+        } else {
+            None
+        }
+    }
+    if let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return parse_non_decimal(hex, 16);
+    }
+    if let Some(oct) = trimmed
+        .strip_prefix("0o")
+        .or_else(|| trimmed.strip_prefix("0O"))
+    {
+        return parse_non_decimal(oct, 8);
+    }
+    if let Some(bin) = trimmed
+        .strip_prefix("0b")
+        .or_else(|| trimmed.strip_prefix("0B"))
+    {
+        return parse_non_decimal(bin, 2);
+    }
+    // SignedInteger: an optional single sign then one or more decimal digits —
+    // no separators, radix points, or exponents.
+    let digits = trimmed.strip_prefix(['+', '-']).unwrap_or(trimmed);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    trimmed.parse::<num_bigint::BigInt>().ok()
+}
+
 pub(crate) fn to_js_string(val: &JsValue) -> String {
     val.with_bigint(|b| b.to_string())
         .unwrap_or_else(|| format!("{val}"))
@@ -3021,5 +3073,112 @@ mod string_to_number_tests {
         assert_eq!(n("5."), 5.0);
         assert_eq!(n("-0"), 0.0);
         assert!(n("-0").is_sign_negative());
+    }
+}
+
+#[cfg(test)]
+mod string_to_bigint_tests {
+    // §7.1.14 StringToBigInt. Expected values are the independent source of truth
+    // from ECMA-262 §12 (WhiteSpace) and the StringIntegerLiteral grammar,
+    // cross-checked against node's `BigInt(...)`. `Some(_)` mirrors a successful
+    // parse; `None` is the "return undefined" case (a SyntaxError for the
+    // constructor/ToBigInt, and `false` for loose equality).
+    use super::string_to_bigint;
+    use num_bigint::BigInt;
+
+    fn b(s: &str) -> Option<BigInt> {
+        string_to_bigint(s)
+    }
+
+    fn v(n: i64) -> Option<BigInt> {
+        Some(BigInt::from(n))
+    }
+
+    #[test]
+    fn empty_and_whitespace_are_zero() {
+        assert_eq!(b(""), v(0));
+        assert_eq!(b("   "), v(0));
+        assert_eq!(b("\t\n\r "), v(0));
+    }
+
+    #[test]
+    fn decimal_signed_integers() {
+        assert_eq!(b("0"), v(0));
+        assert_eq!(b("00"), v(0));
+        assert_eq!(b("12"), v(12));
+        assert_eq!(b("  12  "), v(12));
+        assert_eq!(b("+5"), v(5));
+        assert_eq!(b("-5"), v(-5));
+        assert_eq!(b("   -197   "), v(-197));
+        assert_eq!(b("-0"), v(0));
+    }
+
+    #[test]
+    fn non_decimal_integer_literals() {
+        assert_eq!(b("0xFF"), v(255));
+        assert_eq!(b("0X1a"), v(26));
+        assert_eq!(b("0o17"), v(15));
+        assert_eq!(b("0O17"), v(15));
+        assert_eq!(b("0b1010"), v(10));
+        assert_eq!(b("0B11"), v(3));
+    }
+
+    #[test]
+    fn numeric_separators_are_rejected() {
+        // `num_bigint::parse_bytes`/`FromStr` silently ignore `_`; the string
+        // grammar does not permit NumericLiteralSeparator.
+        assert_eq!(b("1_0"), None);
+        assert_eq!(b("0x1_0"), None);
+        assert_eq!(b("0b1_0"), None);
+        assert_eq!(b("0o1_0"), None);
+    }
+
+    #[test]
+    fn sign_is_only_valid_for_decimal_signed_integer() {
+        // A NonDecimalIntegerLiteral has no sign; `parse_bytes` would accept one.
+        assert_eq!(b("0x-10"), None);
+        assert_eq!(b("0b-1"), None);
+        assert_eq!(b("-0x10"), None);
+        assert_eq!(b("+0x10"), None);
+        assert_eq!(b("+ 5"), None);
+        assert_eq!(b("+"), None);
+        assert_eq!(b("-"), None);
+    }
+
+    #[test]
+    fn radix_points_exponents_suffixes_and_bad_digits_are_rejected() {
+        assert_eq!(b("1.5"), None);
+        assert_eq!(b(".5"), None);
+        assert_eq!(b("1e3"), None);
+        assert_eq!(b("10n"), None);
+        assert_eq!(b("0x"), None);
+        assert_eq!(b("0b12"), None);
+        assert_eq!(b("0o18"), None);
+        assert_eq!(b("0xG"), None);
+        assert_eq!(b("Infinity"), None);
+        assert_eq!(b("abc"), None);
+    }
+
+    #[test]
+    fn non_ascii_digits_are_rejected() {
+        assert_eq!(b("\u{FF15}"), None); // fullwidth digit five
+        assert_eq!(b("\u{0665}"), None); // arabic-indic digit five
+    }
+
+    #[test]
+    fn only_strwhitespace_is_trimmed() {
+        // U+FEFF (ZWNBSP) IS StrWhiteSpace; U+0085 (NEL) is NOT. This matches
+        // `string_to_number` and node, and differs from `char::is_whitespace`.
+        assert_eq!(b("\u{FEFF}1"), v(1));
+        assert_eq!(b("1\u{FEFF}"), v(1));
+        assert_eq!(b("\u{FEFF}"), v(0));
+        assert_eq!(b("\u{0085}1"), None);
+        assert_eq!(b("\u{0085}"), None);
+    }
+
+    #[test]
+    fn large_values_round_trip() {
+        assert_eq!(b("18446744073709551616"), Some(BigInt::from(1u128 << 64)));
+        assert_eq!(b("0x10000000000000000"), Some(BigInt::from(1u128 << 64)));
     }
 }

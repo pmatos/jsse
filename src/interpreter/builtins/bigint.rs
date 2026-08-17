@@ -171,28 +171,8 @@ impl Interpreter {
                     ))));
                 }
                 if let Some(string) = val.as_string() {
-                    let text = string.to_rust_string().trim().to_string();
-                    if text.is_empty() {
-                        return Completion::Normal(JsValue::bigint(JsBigInt::new(
-                            num_bigint::BigInt::from(0),
-                        )));
-                    }
-                    let parsed = if let Some(hex) =
-                        text.strip_prefix("0x").or_else(|| text.strip_prefix("0X"))
-                    {
-                        num_bigint::BigInt::parse_bytes(hex.as_bytes(), 16)
-                    } else if let Some(oct) =
-                        text.strip_prefix("0o").or_else(|| text.strip_prefix("0O"))
-                    {
-                        num_bigint::BigInt::parse_bytes(oct.as_bytes(), 8)
-                    } else if let Some(bin) =
-                        text.strip_prefix("0b").or_else(|| text.strip_prefix("0B"))
-                    {
-                        num_bigint::BigInt::parse_bytes(bin.as_bytes(), 2)
-                    } else {
-                        text.parse::<num_bigint::BigInt>().ok()
-                    };
-                    return match parsed {
+                    let text = string.to_rust_string();
+                    return match crate::interpreter::helpers::string_to_bigint(&text) {
                         Some(value) => Completion::Normal(JsValue::bigint(JsBigInt::new(value))),
                         None => Completion::Throw(interp.create_error(
                             "SyntaxError",
