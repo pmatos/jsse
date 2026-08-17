@@ -5352,32 +5352,31 @@ impl Interpreter {
                                         )));
                                 }
                             };
-                            let mut evaluated_args = Vec::new();
-                            for arg in args {
-                                match arg {
-                                    Expression::Spread(inner) => {
-                                        let spread_val = match self.eval_expr(inner, env) {
-                                            Completion::Normal(v) => v,
-                                            other => return other,
-                                        };
-                                        if let Ok(items) = self.iterate_to_vec(&spread_val) {
-                                            evaluated_args.extend(items);
-                                        }
-                                    }
-                                    _ => match self.eval_expr(arg, env) {
-                                        Completion::Normal(v) => evaluated_args.push(v),
-                                        other => return other,
-                                    },
+                            // Evaluate the call arguments through the shared spread
+                            // seam so a non-iterable spread throws (rather than being
+                            // silently dropped) and every argument is GC-rooted, exactly
+                            // as the ordinary member-call path does.
+                            let gc_frame = self.gc_root_frame();
+                            self.gc_root_value(&func_val);
+                            self.gc_root_value(&obj_val);
+                            let evaluated_args = match self.eval_spread_args(args, env) {
+                                Ok(v) => v,
+                                Err(e) => {
+                                    self.gc_unroot_frame(gc_frame);
+                                    return Completion::Throw(e);
                                 }
-                            }
+                            };
                             if saved_tail {
+                                self.gc_unroot_frame(gc_frame);
                                 return Completion::TailCall {
                                     func: func_val,
                                     this: obj_val,
                                     args: evaluated_args,
                                 };
                             }
-                            return self.call_function(&func_val, &obj_val, &evaluated_args);
+                            let result = self.call_function(&func_val, &obj_val, &evaluated_args);
+                            self.gc_unroot_frame(gc_frame);
+                            return result;
                         }
                         return Completion::Throw(self.create_type_error(&format!(
                             "Cannot read private member #{name} from a non-object"
