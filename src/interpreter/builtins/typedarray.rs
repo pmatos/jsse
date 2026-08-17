@@ -254,36 +254,18 @@ impl Interpreter {
                             let obj_ref = obj.borrow();
                             buffer_len(obj_ref.arraybuffer_data().unwrap())
                         };
-                        let len = buf_len as f64;
-                        let start_arg = if let Some(a) = args.first() {
-                            match interp.to_number_value(a) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            0.0
+                        // Steps 6-9: resolve start/end via ToIntegerOrInfinity then
+                        // clamp against the pre-coercion length. Coerce start before
+                        // end; a truncating relative-index resolution (e.g. -0.9 → 0,
+                        // not len + (-0.9)) is shared with the Array/TypedArray/String
+                        // range methods.
+                        let start = match resolve_start_index(interp, args.first(), buf_len) {
+                            Ok(v) => v,
+                            Err(c) => return c,
                         };
-                        let start = if start_arg.is_nan() {
-                            0
-                        } else if start_arg < 0.0 {
-                            ((len + start_arg) as isize).max(0) as usize
-                        } else {
-                            (start_arg as usize).min(buf_len)
-                        };
-                        let end_arg = if args.len() > 1 && !args[1].is_undefined() {
-                            match interp.to_number_value(&args[1]) {
-                                Ok(n) => n,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        } else {
-                            len
-                        };
-                        let end = if end_arg.is_nan() {
-                            0
-                        } else if end_arg < 0.0 {
-                            ((len + end_arg) as isize).max(0) as usize
-                        } else {
-                            (end_arg as usize).min(buf_len)
+                        let end = match resolve_end_index(interp, args.get(1), buf_len) {
+                            Ok(v) => v,
+                            Err(c) => return c,
                         };
                         let new_len = end.saturating_sub(start);
 
@@ -714,51 +696,18 @@ impl Interpreter {
                     let obj_ref = obj.borrow();
                     buffer_len(obj_ref.arraybuffer_data().unwrap())
                 };
-                let len_f = len as f64;
-
-                // ResolveBounds via ToIntegerOrInfinity semantics.
-                // Truncate is needed: e.g. -0.9 → 0, not (len + -0.9).
-                let resolve = |num: f64| -> usize {
-                    if num.is_nan() || num == 0.0 {
-                        return 0;
-                    }
-                    if num == f64::NEG_INFINITY {
-                        return 0;
-                    }
-                    if num == f64::INFINITY {
-                        return len;
-                    }
-                    let int_val = num.trunc();
-                    if int_val < 0.0 {
-                        ((len_f + int_val) as isize).max(0) as usize
-                    } else if int_val >= len_f {
-                        len
-                    } else {
-                        int_val as usize
-                    }
+                // Step 6: ResolveBounds(len, start, end) — coerce start first, then
+                // end, via the shared truncating relative-index resolution
+                // (ToIntegerOrInfinity then clamp; e.g. -0.9 → 0, not len + (-0.9)),
+                // as used by ArrayBuffer/SharedArrayBuffer.prototype.slice.
+                let first = match resolve_start_index(interp, args.first(), len) {
+                    Ok(v) => v,
+                    Err(c) => return c,
                 };
-
-                // Step 6: ResolveBounds(len, start, end). Coerce start first, then end.
-                let start_num = if let Some(a) = args.first() {
-                    match interp.to_number_value(a) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    }
-                } else {
-                    0.0
+                let final_to = match resolve_end_index(interp, args.get(1), len) {
+                    Ok(v) => v,
+                    Err(c) => return c,
                 };
-                let first = resolve(start_num);
-
-                let end_undefined = args.len() < 2 || args[1].is_undefined();
-                let end_num = if end_undefined {
-                    len_f
-                } else {
-                    match interp.to_number_value(&args[1]) {
-                        Ok(n) => n,
-                        Err(e) => return Completion::Throw(e),
-                    }
-                };
-                let final_to = resolve(end_num);
 
                 // Step 9: newLen = max(final - first, 0)
                 let new_len = final_to.saturating_sub(first);
@@ -1267,36 +1216,17 @@ impl Interpreter {
                             );
                         }
                     };
-                    let len = buf_len as f64;
-                    let start_arg = if let Some(a) = args.first() {
-                        match interp.to_number_value(a) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        0.0
+                    // Resolve start/end via ToIntegerOrInfinity then clamp against
+                    // the byte length, sharing the truncating relative-index
+                    // resolution used by ArrayBuffer.prototype.slice and the
+                    // Array/TypedArray/String range methods.
+                    let start = match resolve_start_index(interp, args.first(), buf_len) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
-                    let start = if start_arg.is_nan() {
-                        0
-                    } else if start_arg < 0.0 {
-                        ((len + start_arg) as isize).max(0) as usize
-                    } else {
-                        (start_arg as usize).min(buf_len)
-                    };
-                    let end_arg = if args.len() > 1 && !args[1].is_undefined() {
-                        match interp.to_number_value(&args[1]) {
-                            Ok(n) => n,
-                            Err(e) => return Completion::Throw(e),
-                        }
-                    } else {
-                        len
-                    };
-                    let end = if end_arg.is_nan() {
-                        0
-                    } else if end_arg < 0.0 {
-                        ((len + end_arg) as isize).max(0) as usize
-                    } else {
-                        (end_arg as usize).min(buf_len)
+                    let end = match resolve_end_index(interp, args.get(1), buf_len) {
+                        Ok(v) => v,
+                        Err(c) => return c,
                     };
                     let new_len = end.saturating_sub(start);
 

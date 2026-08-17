@@ -36,9 +36,11 @@ pub(crate) fn resolve_element_index(relative: f64, len: usize) -> Option<usize> 
 }
 
 // Resolves a spec "start"-style relative-index argument for the range-based
-// Array methods (slice, fill, copyWithin, splice, toSpliced). An absent
-// argument defaults to index 0; otherwise the argument is passed through
-// ToIntegerOrInfinity and clamped against `len` by `resolve_relative_index`.
+// methods of Array (slice, fill, copyWithin, splice, toSpliced), TypedArray,
+// String, and the ArrayBuffer/SharedArrayBuffer slice family (slice,
+// sliceToImmutable). An absent argument defaults to index 0; otherwise the
+// argument is passed through ToIntegerOrInfinity and clamped against `len` by
+// `resolve_relative_index`.
 // Unlike the "end" argument, an explicit `undefined` is NOT special-cased —
 // it coerces to 0 like any other non-numeric value.
 // `len` must be the array length captured *before* this coercion runs, since a
@@ -58,10 +60,11 @@ pub(crate) fn resolve_start_index(
     Ok(resolve_relative_index(relative, len))
 }
 
-// Resolves a spec "end"-style relative-index argument for the range-based Array
-// methods. An absent argument *or* an explicit `undefined` defaults to `len`;
-// otherwise the argument is passed through ToIntegerOrInfinity and clamped
-// against `len`. See `resolve_start_index` for the `len` capture invariant.
+// Resolves a spec "end"-style relative-index argument for the range-based
+// methods (see `resolve_start_index` for the surfaces this covers). An absent
+// argument *or* an explicit `undefined` defaults to `len`; otherwise the
+// argument is passed through ToIntegerOrInfinity and clamped against `len`. See
+// `resolve_start_index` for the `len` capture invariant.
 pub(crate) fn resolve_end_index(
     interp: &mut Interpreter,
     arg: Option<&JsValue>,
