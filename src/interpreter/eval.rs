@@ -13647,110 +13647,6 @@ impl Interpreter {
         self.dispose_resources(&lex_env, result.update_empty(JsValue::UNDEFINED))
     }
 
-    /// Collect top-level var-declared names from eval body (recursively into blocks, etc.)
-    fn collect_eval_var_names(stmts: &[Statement], names: &mut Vec<String>) {
-        for stmt in stmts {
-            Self::collect_eval_var_names_from_stmt(stmt, names);
-        }
-    }
-
-    fn collect_eval_var_names_from_stmt(stmt: &Statement, names: &mut Vec<String>) {
-        match stmt {
-            Statement::Variable(decl) if decl.kind == VarKind::Var => {
-                for d in &decl.declarations {
-                    d.pattern.bound_names(names);
-                }
-            }
-            Statement::Block(stmts) => {
-                for s in stmts {
-                    Self::collect_eval_var_names_from_stmt(s, names);
-                }
-            }
-            Statement::If(i) => {
-                Self::collect_eval_var_names_from_stmt(&i.consequent, names);
-                if let Some(alt) = &i.alternate {
-                    Self::collect_eval_var_names_from_stmt(alt, names);
-                }
-            }
-            Statement::While(w) => Self::collect_eval_var_names_from_stmt(&w.body, names),
-            Statement::DoWhile(d) => Self::collect_eval_var_names_from_stmt(&d.body, names),
-            Statement::For(f) => {
-                if let Some(ForInit::Variable(decl)) = &f.init
-                    && decl.kind == VarKind::Var
-                {
-                    for d in &decl.declarations {
-                        d.pattern.bound_names(names);
-                    }
-                }
-                Self::collect_eval_var_names_from_stmt(&f.body, names);
-            }
-            Statement::ForIn(fi) => {
-                if let ForInOfLeft::Variable(decl) = &fi.left
-                    && decl.kind == VarKind::Var
-                {
-                    for d in &decl.declarations {
-                        d.pattern.bound_names(names);
-                    }
-                }
-                Self::collect_eval_var_names_from_stmt(&fi.body, names);
-            }
-            Statement::ForOf(fo) => {
-                if let ForInOfLeft::Variable(decl) = &fo.left
-                    && decl.kind == VarKind::Var
-                {
-                    for d in &decl.declarations {
-                        d.pattern.bound_names(names);
-                    }
-                }
-                Self::collect_eval_var_names_from_stmt(&fo.body, names);
-            }
-            Statement::Switch(sw) => {
-                for case in &sw.cases {
-                    for s in &case.consequent {
-                        Self::collect_eval_var_names_from_stmt(s, names);
-                    }
-                }
-            }
-            Statement::Try(t) => {
-                for s in &t.block {
-                    Self::collect_eval_var_names_from_stmt(s, names);
-                }
-                if let Some(handler) = &t.handler {
-                    for s in &handler.body {
-                        Self::collect_eval_var_names_from_stmt(s, names);
-                    }
-                }
-                if let Some(finalizer) = &t.finalizer {
-                    for s in finalizer {
-                        Self::collect_eval_var_names_from_stmt(s, names);
-                    }
-                }
-            }
-            Statement::Labeled(_, inner) => {
-                Self::collect_eval_var_names_from_stmt(inner, names);
-            }
-            Statement::With(_, inner) => {
-                Self::collect_eval_var_names_from_stmt(inner, names);
-            }
-            _ => {}
-        }
-    }
-
-    /// Collect top-level function declarations from eval body (only top-level, not inside blocks)
-    fn collect_eval_function_decls(stmts: &[Statement]) -> Vec<FunctionDecl> {
-        let mut funcs = Vec::new();
-        for stmt in stmts {
-            if let Some(f) = Self::unwrap_labeled_function(stmt) {
-                funcs.push(f.clone());
-            }
-        }
-        // Per spec: reverse order, keep last occurrence of each name
-        funcs.reverse();
-        let mut seen = HashSet::new();
-        funcs.retain(|f| seen.insert(f.name.clone()));
-        funcs
-    }
-
     /// EvalDeclarationInstantiation per spec 19.2.1.4
     fn eval_declaration_instantiation(
         &mut self,
@@ -13764,13 +13660,12 @@ impl Interpreter {
         let is_global = var_env.borrow().global_object_id.is_some();
 
         // Collect function declarations to initialize
-        let functions_to_init = Self::collect_eval_function_decls(body);
+        let functions_to_init = super::hoisting::collect_function_decls(body);
         let declared_func_names: Vec<String> =
             functions_to_init.iter().map(|f| f.name.clone()).collect();
 
         // Collect var-declared names (excluding those that are also function names)
-        let mut all_var_names = Vec::new();
-        Self::collect_eval_var_names(body, &mut all_var_names);
+        let all_var_names = super::hoisting::collect_var_names(body);
         let declared_var_names: Vec<String> = {
             let mut seen = HashSet::new();
             all_var_names

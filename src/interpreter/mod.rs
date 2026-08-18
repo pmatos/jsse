@@ -28,6 +28,7 @@ mod exec;
 mod gc;
 pub(crate) mod generator_analysis;
 pub(crate) mod generator_transform;
+mod hoisting;
 pub(crate) mod ic;
 pub(crate) mod ic_store;
 pub(crate) mod key_intern;
