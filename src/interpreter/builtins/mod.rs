@@ -66,6 +66,69 @@ fn sanitize_native_fn_name(name: &str) -> String {
     String::new()
 }
 
+/// Shared body of `setTimeout` / `setInterval`: validate the callback, coerce
+/// the delay, and arm a timer. Extra arguments are passed to the callback when
+/// it fires. Returns the timer id.
+fn arm_timer(interp: &mut Interpreter, args: &[JsValue], repeating: bool) -> Completion {
+    let name = if repeating {
+        "setInterval"
+    } else {
+        "setTimeout"
+    };
+    let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+    if !interp.is_callable(&callback) {
+        return Completion::Throw(
+            interp.create_type_error(&format!("{name} callback must be callable")),
+        );
+    }
+
+    let delay_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
+    let delay = match interp.to_integer_or_infinity_value(&delay_val) {
+        Ok(n) => n,
+        Err(e) => return Completion::Throw(e),
+    };
+    // A non-positive delay (NaN included, which coerces to 0) fires on the next
+    // turn. An infinite one saturates to a deadline hundreds of millions of
+    // years out, so the timer never fires but still holds the event loop open —
+    // the same outcome as the thread that used to sleep for u64::MAX ms.
+    let delay_ms = if delay <= 0.0 {
+        0
+    } else {
+        delay.min(u64::MAX as f64) as u64
+    };
+
+    let timer_args: Vec<JsValue> = args.iter().skip(2).cloned().collect();
+    let id = interp.scheduler.add_timer(
+        callback,
+        timer_args,
+        std::time::Duration::from_millis(delay_ms),
+        repeating,
+    );
+    Completion::Normal(JsValue::number(id as f64))
+}
+
+/// Shared body of `clearTimeout` / `clearInterval`. An id that is unknown, or
+/// not a timer id at all, is a no-op rather than an error — as in Node.
+fn disarm_timer(interp: &mut Interpreter, args: &[JsValue]) -> Completion {
+    // Ids come from a monotonic counter, so a value outside the exactly
+    // representable integer range cannot name a live timer.
+    const MAX_SAFE_INTEGER: f64 = 9007199254740991.0;
+    let id_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+    // Node resolves an id only from a number or a string and ignores anything
+    // else without coercing it. Coercing here instead would run an object's
+    // `valueOf` as an observable side effect Node does not have.
+    if id_val.as_number().is_none() && id_val.as_string().is_none() {
+        return Completion::Normal(JsValue::UNDEFINED);
+    }
+    if let Ok(n) = interp.to_number_value(&id_val)
+        && (1.0..=MAX_SAFE_INTEGER).contains(&n)
+        && n.fract() == 0.0
+    {
+        interp.scheduler.clear_timer(n as u64);
+    }
+    Completion::Normal(JsValue::UNDEFINED)
+}
+
 /// Convert f64 to IEEE 754 binary16 (half-precision) and back to f64.
 /// Uses round-to-nearest-even (banker's rounding).
 fn f64_to_f16_to_f64(val: f64) -> f64 {
@@ -452,62 +515,36 @@ impl Interpreter {
             let _ = self.env_set(&env, "print", print_fn);
         }
 
-        // Host timer used by the test262 atomics harness.  This is not an
-        // ECMAScript intrinsic, but exposing it avoids the harness fallback
-        // that busy-polls timers through Promise microtasks.
+        // Host timers. Not ECMAScript intrinsics, but the test262 atomics
+        // harness needs setTimeout, and real-world libraries need the whole
+        // family. They are serviced on the event loop rather than by a thread
+        // per call (issue #254).
         self.register_global_fn(
             "setTimeout",
             BindingKind::Var,
             JsFunction::native("setTimeout".to_string(), 2, |interp, _this, args| {
-                let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                if !interp.is_callable(&callback) {
-                    return Completion::Throw(
-                        interp.create_type_error("setTimeout callback must be callable"),
-                    );
-                }
-
-                let delay_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-                let delay_num = match interp.to_number_value(&delay_val) {
-                    Ok(n) => n,
-                    Err(e) => return Completion::Throw(e),
-                };
-                let delay_ms = if delay_num.is_nan() || delay_num <= 0.0 {
-                    0
-                } else if delay_num.is_infinite() {
-                    u64::MAX
-                } else {
-                    delay_num.trunc().min(u64::MAX as f64) as u64
-                };
-
-                let timer_args: Vec<JsValue> = args.iter().skip(2).cloned().collect();
-                interp.gc_root_value(&callback);
-                for arg in &timer_args {
-                    interp.gc_root_value(arg);
-                }
-
-                let pending = interp.agent_async_completions.clone();
-                let pending_timer_jobs = interp.scheduler.pending_timer_jobs_handle();
-                pending_timer_jobs.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                std::thread::spawn(move || {
-                    if delay_ms > 0 {
-                        std::thread::sleep(std::time::Duration::from_millis(delay_ms));
-                    }
-                    let (ref mtx, ref completion_cvar) = *pending;
-                    mtx.lock()
-                        .unwrap()
-                        .push(Box::new(move |interp: &mut Interpreter| {
-                            let _ =
-                                interp.call_function(&callback, &JsValue::UNDEFINED, &timer_args);
-                            interp.gc_unroot_value(&callback);
-                            for arg in &timer_args {
-                                interp.gc_unroot_value(arg);
-                            }
-                            pending_timer_jobs.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
-                        }));
-                    completion_cvar.notify_one();
-                });
-
-                Completion::Normal(JsValue::number(0.0))
+                arm_timer(interp, args, false)
+            }),
+        );
+        self.register_global_fn(
+            "setInterval",
+            BindingKind::Var,
+            JsFunction::native("setInterval".to_string(), 2, |interp, _this, args| {
+                arm_timer(interp, args, true)
+            }),
+        );
+        self.register_global_fn(
+            "clearTimeout",
+            BindingKind::Var,
+            JsFunction::native("clearTimeout".to_string(), 1, |interp, _this, args| {
+                disarm_timer(interp, args)
+            }),
+        );
+        self.register_global_fn(
+            "clearInterval",
+            BindingKind::Var,
+            JsFunction::native("clearInterval".to_string(), 1, |interp, _this, args| {
+                disarm_timer(interp, args)
             }),
         );
 
@@ -4013,6 +4050,9 @@ impl Interpreter {
             "Temporal",
             "Intl",
             "setTimeout",
+            "setInterval",
+            "clearTimeout",
+            "clearInterval",
             "escape",
             "unescape",
             "DisposableStack",
