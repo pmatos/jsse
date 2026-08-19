@@ -161,8 +161,9 @@ impl TimerQueue {
     /// in the same batch cancelled it. A one-shot leaves the queue here, at the
     /// moment it is about to run.
     pub(crate) fn take_for_firing(&mut self, id: u64) -> Option<(JsValue, Vec<JsValue>)> {
-        if self.timers.get(&id)?.interval.is_some() {
-            let timer = &self.timers[&id];
+        let timer = self.timers.get(&id)?;
+        if timer.interval.is_some() {
+            // An interval stays armed, so hand out a copy of what to call.
             return Some((timer.callback.clone(), timer.args.clone()));
         }
         let timer = self.timers.remove(&id)?;
