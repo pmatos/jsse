@@ -16,14 +16,18 @@ fn parse_module_program(source: &str) -> Program {
         .expect("parse module program")
 }
 
-fn run_script(source: &str) -> Interpreter {
+fn run_step(interp: &mut Interpreter, source: &str) {
     let program = parse_program(source);
-    let mut interp = Interpreter::new();
     let result = interp.run(&program);
     assert!(
         matches!(result, Completion::Normal(_) | Completion::Empty),
         "unexpected completion: {result:?}"
     );
+}
+
+fn run_script(source: &str) -> Interpreter {
+    let mut interp = Interpreter::new();
+    run_step(&mut interp, source);
     interp
 }
 
@@ -1117,6 +1121,218 @@ fn gc_keeps_microtask_roots_alive_until_queue_is_cleared() {
     assert!(
         interp.get_object_cell(id).is_none(),
         "object should be collectable after queue clears"
+    );
+}
+
+/// Run each source in turn on one interpreter, forcing a major collection
+/// between steps. Combinator machinery that is only reachable through a native
+/// closure capture is reclaimed at those points unless it is pinned.
+fn run_steps_with_major_gc_between(steps: &[&str]) -> Interpreter {
+    let mut interp = Interpreter::new();
+    for step in steps {
+        run_step(&mut interp, step);
+        interp.gc.request();
+        interp.gc_safepoint();
+    }
+    interp
+}
+
+// The promise combinators build their per-element resolve/reject functions as
+// native closures that capture the capability's resolving function and the
+// shared result accumulator by value. Those captures are invisible to the GC
+// tracer, so a major collection while the combinator is in flight used to
+// reclaim them: the element function then called a dead id, the combinator
+// promise never settled, and every continuation awaiting it was lost (#309).
+// In each case below the input promises are scoped to an IIFE, so nothing but
+// the combinator's own machinery keeps them — or their settled values — alive.
+
+#[test]
+fn promise_all_settles_across_major_gc_between_element_settlements() {
+    let interp = run_steps_with_major_gc_between(&[
+        r#"
+        globalThis.outcome = "pending";
+        (function () {
+            const first = new Promise((resolve) => { globalThis.releaseFirst = resolve; });
+            const second = new Promise((resolve) => { globalThis.releaseSecond = resolve; });
+            Promise.all([first, second]).then((values) => {
+                globalThis.outcome = "all:" + values[0].marker + "," + values[1].marker;
+            });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.releaseFirst;
+            delete globalThis.releaseFirst;
+            settle({ marker: "first" });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.releaseSecond;
+            delete globalThis.releaseSecond;
+            settle({ marker: "second" });
+        })();
+        "#,
+    ]);
+    assert_eq!(global_string(&interp, "outcome"), "all:first,second");
+}
+
+#[test]
+fn promise_all_settled_settles_across_major_gc_between_element_settlements() {
+    let interp = run_steps_with_major_gc_between(&[
+        r#"
+        globalThis.outcome = "pending";
+        (function () {
+            const first = new Promise((resolve) => { globalThis.releaseFirst = resolve; });
+            const second = new Promise((_, reject) => { globalThis.rejectSecond = reject; });
+            Promise.allSettled([first, second]).then((results) => {
+                globalThis.outcome = "settled:" + results[0].status + ":" +
+                    results[0].value.marker + "," + results[1].status + ":" +
+                    results[1].reason.marker;
+            });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.releaseFirst;
+            delete globalThis.releaseFirst;
+            settle({ marker: "first" });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.rejectSecond;
+            delete globalThis.rejectSecond;
+            settle({ marker: "second" });
+        })();
+        "#,
+    ]);
+    assert_eq!(
+        global_string(&interp, "outcome"),
+        "settled:fulfilled:first,rejected:second"
+    );
+}
+
+#[test]
+fn promise_any_rejects_across_major_gc_between_element_settlements() {
+    let interp = run_steps_with_major_gc_between(&[
+        r#"
+        globalThis.outcome = "pending";
+        (function () {
+            const first = new Promise((_, reject) => { globalThis.rejectFirst = reject; });
+            const second = new Promise((_, reject) => { globalThis.rejectSecond = reject; });
+            Promise.any([first, second]).catch((error) => {
+                globalThis.outcome = "any:" + error.errors[0].marker + "," +
+                    error.errors[1].marker;
+            });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.rejectFirst;
+            delete globalThis.rejectFirst;
+            settle({ marker: "first" });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.rejectSecond;
+            delete globalThis.rejectSecond;
+            settle({ marker: "second" });
+        })();
+        "#,
+    ]);
+    assert_eq!(global_string(&interp, "outcome"), "any:first,second");
+}
+
+#[test]
+fn promise_finally_runs_callback_across_major_gc() {
+    let interp = run_steps_with_major_gc_between(&[
+        r#"
+        globalThis.outcome = "pending";
+        (function () {
+            const inner = new Promise((resolve) => { globalThis.release = resolve; });
+            inner.finally(() => { globalThis.outcome = "ran"; });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.release;
+            delete globalThis.release;
+            settle("v");
+        })();
+        "#,
+    ]);
+    assert_eq!(global_string(&interp, "outcome"), "ran");
+}
+
+#[test]
+fn promise_finally_forwards_value_across_major_gc() {
+    let interp = run_steps_with_major_gc_between(&[
+        r#"
+        globalThis.outcome = "pending";
+        (function () {
+            const inner = new Promise((resolve) => { globalThis.release = resolve; });
+            inner.finally(() => {}).then((v) => { globalThis.outcome = "value:" + v.marker; });
+        })();
+        "#,
+        r#"
+        (function () {
+            var settle = globalThis.release;
+            delete globalThis.release;
+            settle({ marker: "kept" });
+        })();
+        "#,
+    ]);
+    assert_eq!(global_string(&interp, "outcome"), "value:kept");
+}
+
+/// Number of GC pins recorded on the object held by global `name`.
+fn global_pin_count(interp: &Interpreter, name: &str) -> usize {
+    let value = interp
+        .get_global_var_ref(name)
+        .unwrap_or_else(|| panic!("expected global {name}"));
+    let id = value
+        .as_object_id()
+        .unwrap_or_else(|| panic!("global {name} must be an object"));
+    interp
+        .get_object_cell(id)
+        .expect("global object must be live")
+        .borrow()
+        .gc_native_roots
+        .as_ref()
+        .map_or(0, Vec::len)
+}
+
+#[test]
+fn combinator_pins_do_not_accumulate_on_a_reused_capability_function() {
+    // A constructor may hand the same resolving function to every capability it
+    // builds. Pins are never removed, so anchoring the accumulated values on the
+    // capability function would leave one settled value pinned per call — growth
+    // without bound. The anchor must be per-invocation instead.
+    let interp = run_steps_with_major_gc_between(&[r#"
+        globalThis.sharedResolve = function () {};
+        globalThis.sharedReject = function () {};
+        globalThis.Ctor = function (executor) {
+            executor(globalThis.sharedResolve, globalThis.sharedReject);
+        };
+        globalThis.Ctor.resolve = function (value) { return Promise.resolve(value); };
+
+        for (var i = 0; i < 50; i++) {
+            Promise.all.call(globalThis.Ctor, [{ marker: i }]);
+            Promise.allSettled.call(globalThis.Ctor, [{ marker: i }]);
+        }
+        "#]);
+
+    assert_eq!(
+        global_pin_count(&interp, "sharedResolve"),
+        0,
+        "a reused capability resolve function must not accumulate combinator pins"
+    );
+    assert_eq!(
+        global_pin_count(&interp, "sharedReject"),
+        0,
+        "a reused capability reject function must not accumulate combinator pins"
     );
 }
 
@@ -2578,6 +2794,57 @@ fn date_set_utc_full_year_on_invalid_date_seeds_missing_args_from_epoch_not_nan(
     assert_eq!(global_number(&interp, "__y"), 2024.0);
     assert_eq!(global_number(&interp, "__mo"), 0.0);
     assert_eq!(global_number(&interp, "__d"), 1.0);
+}
+
+// #165: the per-body hoisting-analysis cache pins each body it memoises, so an
+// unbounded map would retain every `new Function` / `eval` body the program ever
+// ran. These pin the bound and the memoisation it must not lose.
+#[test]
+fn hoist_cache_stays_bounded_across_many_distinct_dynamic_function_bodies() {
+    let bodies = super::hoist_cache::DEFAULT_CAPACITY + 2000;
+    let interp = run_script(&format!(
+        r#"
+        var sum = 0;
+        for (var i = 0; i < {bodies}; i++) {{
+          // A distinct source per iteration, so each call dispatches a body the
+          // cache has never seen, with both var and Annex-B names to collect.
+          var f = new Function("var x" + i + " = 1; {{ function g" + i + "(){{}} }} return x" + i + ";");
+          sum += f();
+        }}
+        globalThis.__sum = sum;
+        "#
+    ));
+    assert_eq!(global_number(&interp, "__sum"), bodies as f64);
+    assert!(
+        interp.hoist_cache.len() <= super::hoist_cache::DEFAULT_CAPACITY,
+        "hoist cache grew to {} entries for {bodies} dynamic bodies",
+        interp.hoist_cache.len()
+    );
+    // Guards against the bound passing vacuously: these bodies must really be
+    // reaching the cache, which means it fills and then evicts.
+    assert!(
+        interp.hoist_cache.len() > super::hoist_cache::DEFAULT_CAPACITY / 2,
+        "expected the dynamic bodies to fill the cache, got {} entries",
+        interp.hoist_cache.len()
+    );
+}
+
+#[test]
+fn hoist_cache_still_reuses_one_analysis_across_repeated_calls() {
+    let interp = run_script(
+        r#"
+        function f(n) { var acc = 0; for (var i = 0; i < n; i++) { acc += i; } return acc; }
+        var total = 0;
+        for (var k = 0; k < 50; k++) { total += f(3); }
+        globalThis.__total = total;
+        "#,
+    );
+    assert_eq!(global_number(&interp, "__total"), 150.0);
+    assert!(
+        interp.hoist_cache.hits() >= 49,
+        "expected the repeatedly-called body to be memoised, got {} hits",
+        interp.hoist_cache.hits()
+    );
 }
 
 // Loop and labelled-statement completion values are the observable surface of

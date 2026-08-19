@@ -172,6 +172,39 @@ impl GcPacer {
 }
 
 impl Interpreter {
+    /// Make an object reference that only exists as a native-closure capture
+    /// visible to the tracer, by pinning it on `anchor`'s `gc_native_roots`.
+    ///
+    /// A `JsFunction::native` closure captures its `JsValue`s inside an
+    /// `Rc<dyn Fn>`, which `trace_object_fields` cannot walk. Anything reachable
+    /// only that way is free to be collected while the closure is still live —
+    /// the closure then calls or reads a dead id, silently. Pinning records the
+    /// edge on an object the tracer does visit.
+    ///
+    /// `anchor` must be an object that stays reachable for at least as long as
+    /// the closure needs the value. Usually that is the closure's own function
+    /// object, once something traced (a promise reaction list, a property) holds
+    /// it; where a value must outlive the individual closure that produced it,
+    /// anchor it on the longer-lived object they share instead.
+    ///
+    /// `borrow_mut` runs the generational write barrier, so an old anchor that
+    /// gains a young root is remembered for the next minor collection. Pins only
+    /// ever accumulate: there is no unpin, so they are released when the anchor
+    /// itself dies.
+    pub(crate) fn pin_native_root(&self, anchor: &JsValue, value: &JsValue) {
+        if value.as_object_id().is_none() {
+            return;
+        }
+        if let Some(anchor_id) = anchor.as_object_id()
+            && let Some(cell) = self.get_object_cell(anchor_id)
+        {
+            cell.borrow_mut()
+                .gc_native_roots
+                .get_or_insert_with(Vec::new)
+                .push(value.clone());
+        }
+    }
+
     /// Allocate a fresh object slot for `data` and return its id. The id is
     /// written to `data.id` inside the arena's `alloc`, so the field is set
     /// exactly once at allocation and never reassigned.

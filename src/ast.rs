@@ -96,6 +96,16 @@ impl Body {
     pub(crate) fn as_slice(&self) -> &[Statement] {
         &self.statements
     }
+
+    /// Identity of this Body, for side tables keyed by Body (`interpreter::ic_store`,
+    /// `interpreter::hoist_cache`). Stable across `Body` clones, since they share
+    /// the statement `Rc`. The pointer is an identity only and is never
+    /// dereferenced; a table keyed by it must pin the `Rc` for as long as the key
+    /// lives, so a freed Body's address cannot be reused for an unrelated entry
+    /// (ABA).
+    pub(crate) fn key(&self) -> *const Vec<Statement> {
+        Rc::as_ptr(&self.statements)
+    }
 }
 
 /// Assign dense `CallSiteId` and `PropSiteId` values to every call, new, and

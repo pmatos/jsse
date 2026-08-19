@@ -428,7 +428,7 @@ impl Interpreter {
                     return self.create_rejected_promise(e);
                 }
             };
-            let resolved_canon = resolved.canonicalize().unwrap_or(resolved.clone());
+            let resolved_canon = Interpreter::canonicalize_module_path(&resolved);
             let mut stack = vec![];
             if let Err(ref e) = self.inner_module_evaluation(&resolved_canon, &mut stack, 0) {
                 for m_path in &stack {
@@ -461,9 +461,7 @@ impl Interpreter {
             Box::new(move |interp: &mut Interpreter| {
                 match interp.load_module(&resolved_path) {
                     Ok(m) => {
-                        let resolved_canon = resolved_path
-                            .canonicalize()
-                            .unwrap_or(resolved_path.clone());
+                        let resolved_canon = Interpreter::canonicalize_module_path(&resolved_path);
                         let mut stack = vec![];
                         if let Err(ref e) =
                             interp.inner_module_evaluation(&resolved_canon, &mut stack, 0)
@@ -555,7 +553,7 @@ impl Interpreter {
             let m = module.borrow();
             m.cycle_root
                 .clone()
-                .unwrap_or_else(|| m.path.canonicalize().unwrap_or_else(|_| m.path.clone()))
+                .unwrap_or_else(|| Interpreter::canonicalize_module_path(&m.path))
         };
         let root_module = self
             .module_registry_get(&root_path)

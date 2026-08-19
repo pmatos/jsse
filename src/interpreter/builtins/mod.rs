@@ -8078,7 +8078,7 @@ impl Interpreter {
                         return interp.create_rejected_promise(err);
                     }
                 };
-                let resolved_canon = module_path.canonicalize().unwrap_or(module_path.clone());
+                let resolved_canon = Interpreter::canonicalize_module_path(&module_path);
                 let mut stack = vec![];
                 if interp
                     .inner_module_evaluation(&resolved_canon, &mut stack, 0)
