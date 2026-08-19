@@ -135,6 +135,25 @@ assert.sameValue(
   'a repeated import.source() resolves to the same record'
 );
 
+// --- an import-type attribute the host cannot honour must not reach the disk ---
+// ModuleRequestsEqual compares [[Attributes]] too, so `('<module source>', text)`
+// is a *different* module request; the host has no text/bytes representation for a
+// Module Source module and must throw rather than fall through to a file read.
+for (const type of ['text', 'bytes']) {
+  let err = null;
+  try {
+    await import('<module source>', { with: { type } });
+  } catch (e) {
+    err = e;
+  }
+  assert.notSameValue(err, null, 'import(<module source>, type: ' + type + ') rejects');
+  assert.sameValue(
+    String(err).indexOf('No such file') >= 0,
+    false,
+    'the rejection for type: ' + type + ' must not leak a filesystem error'
+  );
+}
+
 // --- reaching the record through the evaluation phase adds no bindings ---
 // The host module has no exports, so its namespace carries Symbol.toStringTag
 // and nothing else, whichever phase materialised it.

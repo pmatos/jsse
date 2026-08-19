@@ -3209,6 +3209,11 @@ impl Interpreter {
     }
 
     fn load_text_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        if Self::is_module_source_path(path) {
+            return Err(JsValue::string(JsString::from_str(&format!(
+                "Module '{MODULE_SOURCE_SPECIFIER}' has no text representation"
+            ))));
+        }
         let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let key = (canon.clone(), ImportModuleType::Text);
         if let Some(existing) = self.synthetic_module_registry.get(&key) {
@@ -3228,6 +3233,11 @@ impl Interpreter {
     }
 
     fn load_bytes_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        if Self::is_module_source_path(path) {
+            return Err(JsValue::string(JsString::from_str(&format!(
+                "Module '{MODULE_SOURCE_SPECIFIER}' has no bytes representation"
+            ))));
+        }
         let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let key = (canon.clone(), ImportModuleType::Bytes);
         if let Some(existing) = self.synthetic_module_registry.get(&key) {
