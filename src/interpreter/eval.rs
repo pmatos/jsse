@@ -2662,19 +2662,28 @@ impl Interpreter {
                 // §13.4 UpdateExpression on a private reference desugars to
                 // PrivateGet -> ToNumeric -> PrivateSet, so accessor-backed
                 // privates read through their getter and write through their
-                // setter just like a data field does.
-                let old = match self.private_get(&obj_val, name, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                let (old_val, new_val) = match self.apply_update_numeric(&old, op) {
-                    Ok(pair) => pair,
-                    Err(e) => return Completion::Throw(e),
-                };
-                if let Err(e) = self.set_private_field(&obj_val, name, new_val.clone(), env) {
-                    return Completion::Throw(e);
-                }
-                return Completion::Normal(if prefix { new_val } else { old_val });
+                // setter just like a data field does. The receiver has to stay
+                // rooted across all three steps: ToNumeric runs a user
+                // `valueOf` that can reach a GC safepoint while `obj_val`
+                // exists only as a Rust local, invisible to the collector.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&obj_val);
+                let result = (|| {
+                    let old = match self.private_get(&obj_val, name, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let (old_val, new_val) = match self.apply_update_numeric(&old, op) {
+                        Ok(pair) => pair,
+                        Err(e) => return Completion::Throw(e),
+                    };
+                    if let Err(e) = self.set_private_field(&obj_val, name, new_val.clone(), env) {
+                        return Completion::Throw(e);
+                    }
+                    Completion::Normal(if prefix { new_val } else { old_val })
+                })();
+                self.gc_unroot_frame(gc_frame);
+                return result;
             }
             let key = match prop {
                 MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
@@ -3817,27 +3826,38 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                let lval = match self.private_get(&obj_val, name, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                let should_assign = match op {
-                    AssignOp::LogicalAndAssign => self.to_boolean_val(&lval),
-                    AssignOp::LogicalOrAssign => !self.to_boolean_val(&lval),
-                    AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
-                    _ => unreachable!(),
-                };
-                if !should_assign {
-                    return Completion::Normal(lval);
-                }
-                let rval = match self.eval_expr(right, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                if let Err(e) = self.set_private_field(&obj_val, name, rval.clone(), env) {
-                    return Completion::Throw(e);
-                }
-                Completion::Normal(rval)
+                // The receiver has to survive PrivateGet (which may call a
+                // user getter) and the right-hand side evaluation before
+                // PrivateSet writes through the setter. Both steps run user
+                // code that can reach a GC safepoint while `obj_val` exists
+                // only as a Rust local, invisible to the collector.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&obj_val);
+                let result = (|| {
+                    let lval = match self.private_get(&obj_val, name, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    let should_assign = match op {
+                        AssignOp::LogicalAndAssign => self.to_boolean_val(&lval),
+                        AssignOp::LogicalOrAssign => !self.to_boolean_val(&lval),
+                        AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
+                        _ => unreachable!(),
+                    };
+                    if !should_assign {
+                        return Completion::Normal(lval);
+                    }
+                    let rval = match self.eval_expr(right, env) {
+                        Completion::Normal(v) => v,
+                        other => return other,
+                    };
+                    if let Err(e) = self.set_private_field(&obj_val, name, rval.clone(), env) {
+                        return Completion::Throw(e);
+                    }
+                    Completion::Normal(rval)
+                })();
+                self.gc_unroot_frame(gc_frame);
+                result
             }
             Expression::Member(obj_expr, prop, _) => {
                 // Super property logical assignment: super.p &&= / ||= / ??=

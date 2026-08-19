@@ -883,6 +883,51 @@ fn array_literal_releases_temp_roots_after_abrupt_completion() {
 }
 
 #[test]
+fn private_update_releases_temp_roots_after_abrupt_completion() {
+    // The private update branch roots its receiver across
+    // PrivateGet -> ToNumeric -> PrivateSet. Every abrupt exit inside that
+    // window must still release the temp-root frame.
+    let interp = run_script(
+        r#"
+        class C {
+            get #x() { return { valueOf() { throw new Error("coercion"); } }; }
+            set #x(v) {}
+            static bump() { return (new C()).#x++; }
+        }
+        try { C.bump(); } catch (e) {}
+        "#,
+    );
+
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "private update temporary roots must be released after a throw"
+    );
+}
+
+#[test]
+fn private_logical_assign_releases_temp_roots_after_abrupt_completion() {
+    // Same contract for the logical-assignment branch, whose rooted window
+    // spans PrivateGet -> right-hand side evaluation -> PrivateSet.
+    let interp = run_script(
+        r#"
+        class C {
+            get #x() { return undefined; }
+            set #x(v) {}
+            static assign() {
+                return (new C()).#x ??= (function () { throw new Error("rhs"); })();
+            }
+        }
+        try { C.assign(); } catch (e) {}
+        "#,
+    );
+
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "private logical-assignment temporary roots must be released after a throw"
+    );
+}
+
+#[test]
 fn private_method_call_with_non_iterable_spread_throws() {
     // A spread argument that is not iterable must throw a TypeError, even when the
     // callee is a private method reached through `this.#m(...)`. The private-call
