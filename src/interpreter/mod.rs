@@ -1004,7 +1004,9 @@ impl Interpreter {
     /// whenever the process happens to run in a directory holding a real entry of
     /// that name — silently rebinding the specifier to that file's registry slot.
     /// Every site that canonicalizes a path which may have come from
-    /// `resolve_module_specifier` must go through here.
+    /// `resolve_module_specifier` must go through here — twelve of them, spanning
+    /// export resolution, DFS evaluation, `import.defer`, and
+    /// `ShadowRealm.prototype.importValue`.
     fn canonicalize_module_path(path: &Path) -> PathBuf {
         if Self::is_module_source_path(path) {
             return path.to_path_buf();

@@ -1257,7 +1257,7 @@ impl Interpreter {
                 };
                 match self.load_module_no_eval(&resolved) {
                     Ok(module) => {
-                        let resolved_canon = resolved.canonicalize().unwrap_or(resolved.clone());
+                        let resolved_canon = Self::canonicalize_module_path(&resolved);
                         self.evaluate_async_transitive_deps(&resolved_canon);
                         self.drain_microtasks();
                         let ns = self.create_deferred_module_namespace(&module);
