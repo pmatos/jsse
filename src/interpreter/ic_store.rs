@@ -27,6 +27,10 @@ pub(crate) struct IcStore {
     /// same cache. Each `BodyIcStore` pins a clone of the body's statement `Rc`
     /// so the pointer key cannot be reused by a freed-then-reallocated body
     /// (ABA), matching the `HoistAnalysis` cache pattern.
+    ///
+    /// Unlike that cache (`super::hoist_cache`, bounded per #165), this table
+    /// never evicts, so it retains every body it has ever run — bounding it
+    /// needs handle-lifetime work and is tracked in #468.
     index: HashMap<*const Vec<crate::ast::Statement>, usize>,
     stores: Vec<BodyIcStore>,
 }

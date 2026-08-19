@@ -2292,6 +2292,57 @@ fn date_set_utc_full_year_on_invalid_date_seeds_missing_args_from_epoch_not_nan(
     assert_eq!(global_number(&interp, "__d"), 1.0);
 }
 
+// #165: the per-body hoisting-analysis cache pins each body it memoises, so an
+// unbounded map would retain every `new Function` / `eval` body the program ever
+// ran. These pin the bound and the memoisation it must not lose.
+#[test]
+fn hoist_cache_stays_bounded_across_many_distinct_dynamic_function_bodies() {
+    let bodies = super::hoist_cache::DEFAULT_CAPACITY + 2000;
+    let interp = run_script(&format!(
+        r#"
+        var sum = 0;
+        for (var i = 0; i < {bodies}; i++) {{
+          // A distinct source per iteration, so each call dispatches a body the
+          // cache has never seen, with both var and Annex-B names to collect.
+          var f = new Function("var x" + i + " = 1; {{ function g" + i + "(){{}} }} return x" + i + ";");
+          sum += f();
+        }}
+        globalThis.__sum = sum;
+        "#
+    ));
+    assert_eq!(global_number(&interp, "__sum"), bodies as f64);
+    assert!(
+        interp.hoist_cache.len() <= super::hoist_cache::DEFAULT_CAPACITY,
+        "hoist cache grew to {} entries for {bodies} dynamic bodies",
+        interp.hoist_cache.len()
+    );
+    // Guards against the bound passing vacuously: these bodies must really be
+    // reaching the cache, which means it fills and then evicts.
+    assert!(
+        interp.hoist_cache.len() > super::hoist_cache::DEFAULT_CAPACITY / 2,
+        "expected the dynamic bodies to fill the cache, got {} entries",
+        interp.hoist_cache.len()
+    );
+}
+
+#[test]
+fn hoist_cache_still_reuses_one_analysis_across_repeated_calls() {
+    let interp = run_script(
+        r#"
+        function f(n) { var acc = 0; for (var i = 0; i < n; i++) { acc += i; } return acc; }
+        var total = 0;
+        for (var k = 0; k < 50; k++) { total += f(3); }
+        globalThis.__total = total;
+        "#,
+    );
+    assert_eq!(global_number(&interp, "__total"), 150.0);
+    assert!(
+        interp.hoist_cache.hits() >= 49,
+        "expected the repeatedly-called body to be memoised, got {} hits",
+        interp.hoist_cache.hits()
+    );
+}
+
 // Loop and labelled-statement completion values are the observable surface of
 // the `v = val` folding consolidated into `handle_loop_body_completion`
 // (src/interpreter/exec.rs). These pin the behaviour across the six loop heads
