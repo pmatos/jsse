@@ -5088,8 +5088,15 @@ impl Interpreter {
     /// Capped at the next timer deadline: an in-process timer never signals
     /// that queue, so an uncapped wait would sleep straight past it. Call
     /// before taking the queue lock — resolving the deadline needs `&mut self`.
+    ///
+    /// A drain nested inside a timer callback is not servicing timers, so their
+    /// deadlines must not shorten its wait: capping on an overdue deadline this
+    /// level cannot act on would return zero every time and spin.
     fn completion_wait(&mut self, remaining: std::time::Duration) -> std::time::Duration {
         let wait = remaining.min(std::time::Duration::from_millis(100));
+        if self.dispatching_timers {
+            return wait;
+        }
         match self.scheduler.next_timer_deadline() {
             Some(at) => wait.min(at.saturating_duration_since(std::time::Instant::now())),
             None => wait,
