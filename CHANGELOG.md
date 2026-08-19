@@ -1,3 +1,13 @@
+## [0.4.18](https://github.com/pmatos/jsse/compare/v0.4.17...v0.4.18) (2026-08-19)
+
+
+### Bug Fixes
+
+* **arraybuffer:** resolve slice bounds via shared relative-index helpers ([#453](https://github.com/pmatos/jsse/issues/453)) ([2364170](https://github.com/pmatos/jsse/commit/23641706d52283523b4a6e4ef9f4e621127024b5))
+* **bigint:** unify StringToBigInt into one spec-correct operation ([#455](https://github.com/pmatos/jsse/issues/455)) ([020aa9d](https://github.com/pmatos/jsse/commit/020aa9d850441897b3a645664f27424be4309ab1))
+* **interpreter:** route private accessor get/set through one PrivateGet/PrivateSet MOP ([#463](https://github.com/pmatos/jsse/issues/463)) ([5c306b9](https://github.com/pmatos/jsse/commit/5c306b9a12862f7bed788bcff72099f9f939c813))
+* **interpreter:** throw on non-iterable spread in private-method calls ([#454](https://github.com/pmatos/jsse/issues/454)) ([b425f5c](https://github.com/pmatos/jsse/commit/b425f5c829093f03ded671f7c0d52c5e8ec507bd))
+
 ## [0.4.17](https://github.com/pmatos/jsse/compare/v0.4.16...v0.4.17) (2026-07-31)
 
 
