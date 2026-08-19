@@ -33,22 +33,25 @@ and a monotonic recency clock. Its capacity is 8,192 entries: large enough to
 avoid churn for ordinary programs with many static Bodies while still placing a
 fixed upper bound on body-churning `Function` and `eval` workloads.
 
-On a hit, the wrapper updates the entry's recency tick and returns the cached
-analysis. On a miss at capacity, it selects the median recency tick and removes
-the entries below it, keeping the newer half (`ceil(len / 2)`, so the most
-recently used entry always survives) before inserting the new analysis. The
-capacity is floored at two entries, which is what guarantees a sweep frees a slot
-for the incoming one. Every retained entry
-continues to own its Body `Rc`, preserving ABA safety. Removing an entry drops
-that ownership; a later call of the evicted Body recomputes and safely reinserts
-its analysis.
+The bound is an entry count, and an entry costs its own few hundred bytes plus
+whatever Body it pins, so it caps retention rather than naming a byte figure.
+Note also that `IcStore` pins the same Bodies and does not evict, so a churning
+workload's memory does not level off until that table is bounded too (#468);
+this design only stops this cache from being the reason a Body is retained.
 
-The wrapper owns the key, recency metadata, and pinned analysis together so the
-evaluator cannot update only part of an entry. It exposes a single
-`get_or_insert_with` entry point taking the `Body` itself, mirroring
-`IcStore::for_body`, so the evaluator neither derives the key nor decides when to
-evict, and a hit and a miss cannot diverge. No ECMAScript-visible behavior
-changes.
+On a hit, the wrapper updates the entry's recency tick and returns the cached
+analysis. On a miss at capacity, it selects the median recency tick and keeps the
+newer half, so the most recently used entry always survives a sweep, then inserts
+the new analysis. Every retained entry continues to pin its Body, preserving ABA
+safety. Removing an entry drops that pin; a later call of the evicted Body
+recomputes and safely reinserts its analysis.
+
+The wrapper owns the key, the recency metadata, the pin, and the collection
+itself, so the evaluator cannot update part of an entry or pair a key with a
+different analysis. It exposes one `analysis_for(&Body)` entry point — taking the
+Body, whose `key` method both Body-keyed side tables share — so the evaluator
+neither derives the key, nor decides when to evict, nor supplies the analysis. No
+ECMAScript-visible behavior changes.
 
 ## Validation
 

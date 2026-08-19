@@ -22,15 +22,13 @@ pub(crate) struct BodyStoreHandle(pub usize);
 
 /// Interpreter-side side table that maps a body identity to its cache.
 pub(crate) struct IcStore {
-    /// Map from the body statement-vector pointer to the store index. The key
-    /// is the `Rc` pointer so that cloned ASTs sharing the same body share the
-    /// same cache. Each `BodyIcStore` pins a clone of the body's statement `Rc`
-    /// so the pointer key cannot be reused by a freed-then-reallocated body
-    /// (ABA), matching the `HoistAnalysis` cache pattern.
+    /// Map from `Body::key` to the store index, so cloned ASTs sharing a Body
+    /// share its cache. Each `BodyIcStore` pins the Body for as long as its key
+    /// lives, per the ABA contract on `Body::key`.
     ///
-    /// Unlike that cache (`super::hoist_cache`, bounded per #165), this table
-    /// never evicts, so it retains every body it has ever run — bounding it
-    /// needs handle-lifetime work and is tracked in #468.
+    /// Unlike `super::hoist_cache` (bounded per #165), this table never evicts,
+    /// so it retains every Body it has ever run — bounding it needs
+    /// handle-lifetime work and is tracked in #468.
     index: HashMap<*const Vec<crate::ast::Statement>, usize>,
     stores: Vec<BodyIcStore>,
 }
@@ -47,7 +45,7 @@ impl IcStore {
     /// The body must already have had its IC sites assigned (e.g. by the
     /// parser or by `ast::assign_ic_sites` for dynamic code).
     pub(crate) fn for_body(&mut self, body: &Body) -> BodyStoreHandle {
-        let key = Rc::as_ptr(&body.statements);
+        let key = body.key();
         if let Some(&idx) = self.index.get(&key) {
             return BodyStoreHandle(idx);
         }
@@ -69,9 +67,9 @@ impl IcStore {
 pub(crate) struct BodyIcStore {
     call_slots: Vec<CallIcSlot>,
     prop_slots: Vec<PropIcSlot>,
-    /// Pins the body's statement `Rc` alive so its `Rc::as_ptr` address (used as
-    /// the `IcStore` key) cannot be reused by an unrelated body after this one
-    /// is dropped, which would otherwise alias a stale, wrongly-sized store.
+    /// Pins the Body so its `Body::key` address cannot be reused by an unrelated
+    /// Body after this one is dropped, which would alias a stale, wrongly-sized
+    /// store.
     _body: Rc<Vec<crate::ast::Statement>>,
 }
 

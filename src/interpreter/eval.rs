@@ -2075,18 +2075,9 @@ impl Interpreter {
                 return result;
             }
         }
-        // #72: memoise the hoisting *name collection* for this Body, keyed by
-        // its statement `Rc` identity — stable across function-object clones,
-        // so repeated calls reuse the analysis. The memo is capacity-bounded
-        // (#165), so a miss can also mean this Body's entry was evicted.
-        let analysis = self.hoist_cache.get_or_insert_with(body, |stmts| {
-            let mut var_set = std::collections::HashSet::new();
-            Self::collect_var_names_from_stmts(stmts, &mut var_set);
-            let mut names = Vec::new();
-            let mut blocked = Vec::new();
-            Self::collect_annexb_function_names(stmts, &mut names, &mut blocked);
-            (var_set.into_iter().collect(), names)
-        });
+        // #72: the declared-name collection for this Body is memoised, bounded
+        // per #165.
+        let analysis = self.hoist_cache.analysis_for(body);
         let handle = self.ic_store.for_body(body);
         let prev = self.current_ic_handle;
         self.current_ic_handle = handle;
