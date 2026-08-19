@@ -2078,23 +2078,18 @@ impl Interpreter {
         // #72: cache the hoisting *name collection* for this function body,
         // keyed by the body's Rc pointer identity. The body Rc is stable across
         // function-object clones, so repeated calls reuse the analysis. ASTs are
-        // immutable post-parse, so the cache cannot go stale.
-        let key = Rc::as_ptr(&body.statements);
-        let analysis = match self.hoist_cache.get(&key) {
-            Some(a) => a.clone(),
+        // immutable post-parse, so the cache cannot go stale. The cache is
+        // capacity-bounded (#165), so a miss here can also be an eviction.
+        let analysis = match self.hoist_cache.get(&body.statements) {
+            Some(a) => a,
             None => {
                 let mut var_set = std::collections::HashSet::new();
                 Self::collect_var_names_from_stmts(body.as_slice(), &mut var_set);
                 let mut names = Vec::new();
                 let mut blocked = Vec::new();
                 Self::collect_annexb_function_names(body.as_slice(), &mut names, &mut blocked);
-                let a = Rc::new(HoistAnalysis {
-                    var_names: var_set.into_iter().collect(),
-                    annexb_names: names,
-                    _body: body.statements.clone(),
-                });
-                self.hoist_cache.insert(key, a.clone());
-                a
+                self.hoist_cache
+                    .insert(&body.statements, var_set.into_iter().collect(), names)
             }
         };
         let handle = self.ic_store.for_body(body);
