@@ -33,21 +33,32 @@ and a monotonic recency clock. Its capacity is 8,192 entries: large enough to
 avoid churn for ordinary programs with many static Bodies while still placing a
 fixed upper bound on body-churning `Function` and `eval` workloads.
 
-On a hit, the wrapper updates the entry's recency tick and returns the cached
-analysis. On a miss at capacity, it selects the median recency tick and removes
-the older half before inserting the new analysis. Every retained entry
-continues to own its Body `Rc`, preserving ABA safety. Removing an entry drops
-that ownership; a later call of the evicted Body recomputes and safely reinserts
-its analysis.
+The bound is an entry count, and an entry costs its own few hundred bytes plus
+whatever Body it pins, so it caps retention rather than naming a byte figure.
+Note also that `IcStore` pins the same Bodies and does not evict, so a churning
+workload's memory does not level off until that table is bounded too (#468);
+this design only stops this cache from being the reason a Body is retained.
 
-The wrapper owns the key, recency metadata, and pinned analysis together so the
-evaluator cannot update only part of an entry. No ECMAScript-visible behavior
-changes.
+On a hit, the wrapper updates the entry's recency tick and returns the cached
+analysis. On a miss at capacity, it selects the median recency tick and keeps the
+newer half, so the most recently used entry always survives a sweep, then inserts
+the new analysis. Every retained entry continues to pin its Body, preserving ABA
+safety. Removing an entry drops that pin; a later call of the evicted Body
+recomputes and safely reinserts its analysis.
+
+The wrapper owns the key, the recency metadata, the pin, and the collection
+itself, so the evaluator cannot update part of an entry or pair a key with a
+different analysis. It exposes one `analysis_for(&Body)` entry point — taking the
+Body, whose `key` method both Body-keyed side tables share — so the evaluator
+neither derives the key, nor decides when to evict, nor supplies the analysis. No
+ECMAScript-visible behavior changes.
 
 ## Validation
 
 Add focused cache tests for identity memoization, hit accounting, the capacity
-bound, release of an evicted Body's pin, recency-aware eviction, and reinsertion.
+bound, release of an evicted Body's pin, recency-aware eviction, and a sweep at
+the capacity floor (where a median cutoff that dropped its own tick would evict
+the newest entry).
 Add interpreter integration tests that execute more than 8,192 distinct
 `Function` constructor Bodies through the normal call path and verify both the
 computed result and cache occupancy, plus repeated calls that must keep hitting
