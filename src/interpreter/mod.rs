@@ -174,6 +174,10 @@ pub(crate) struct Interpreter {
     /// or module top-level await — and is read by `main`/`run` to set the
     /// process exit status. Always `None` when `node_host_enabled` is false.
     pub(crate) pending_exit: Option<i32>,
+    /// True while a timer callback is running. Timer callbacks are tasks and
+    /// must not re-enter one another, so a nested interpreter run started from
+    /// inside one neither fires timers nor stays alive waiting for them.
+    dispatching_timers: bool,
     /// Monotonic clock anchor for `__host_hrtime`. Set when the host floor is
     /// enabled so elapsed nanoseconds are measured from a stable origin.
     pub(crate) host_clock_start: Option<std::time::Instant>,
@@ -428,6 +432,7 @@ impl Interpreter {
             bytecode_chunks_executed: 0,
             node_host_enabled: false,
             pending_exit: None,
+            dispatching_timers: false,
             host_clock_start: None,
             hoist_cache: FxHashMap::default(),
             ic_store: ic_store::IcStore::new(),
@@ -5105,10 +5110,19 @@ impl Interpreter {
     /// only as it is about to run, so a callback can still cancel a sibling
     /// that has not fired yet, and the queue goes on rooting the ones waiting.
     pub(crate) fn run_due_timers(&mut self) -> bool {
+        // One task must never re-enter another. A callback that nests a whole
+        // interpreter run (`$262.evalScript`, say) reaches this again, and
+        // would find the rest of its own batch — or a zero-delay interval
+        // already re-armed for the next turn — due, and recurse until the
+        // drain deadline.
+        if self.dispatching_timers {
+            return false;
+        }
         let due = self.scheduler.take_due_timers(std::time::Instant::now());
         if due.is_empty() {
             return false;
         }
+        self.dispatching_timers = true;
         for id in due {
             let Some((callback, args)) = self.scheduler.take_timer_for_firing(id) else {
                 continue; // cancelled by an earlier callback in this batch
@@ -5123,17 +5137,18 @@ impl Interpreter {
             self.gc_unroot_frame(frame);
             if let Completion::Exit(code) = result {
                 self.pending_exit = Some(code);
-                return true;
+                break;
             }
             if self.pending_exit.is_some() {
-                return true;
+                break;
             }
             // Microtask checkpoint between tasks, as on the HTML/Node loop.
             self.drain_microtasks();
             if self.pending_exit.is_some() {
-                return true;
+                break;
             }
         }
+        self.dispatching_timers = false;
         true
     }
 
@@ -5152,7 +5167,11 @@ impl Interpreter {
         if self.pending_exit.is_some() {
             return;
         }
-        if !self.has_awaited_pending_async() && !self.scheduler.has_timers() {
+        // Timers belong to the outermost drain. A drain nested inside a timer
+        // callback neither fires them nor waits on them.
+        let servicing_timers = !self.dispatching_timers;
+        let waiting_on_timers = |interp: &Self| servicing_timers && interp.scheduler.has_timers();
+        if !self.has_awaited_pending_async() && !waiting_on_timers(self) {
             return;
         }
 
@@ -5167,7 +5186,7 @@ impl Interpreter {
             if self.pending_exit.is_some() {
                 return;
             }
-            if !self.has_awaited_pending_async() && !self.scheduler.has_timers() {
+            if !self.has_awaited_pending_async() && !waiting_on_timers(self) {
                 break;
             }
             if std::time::Instant::now() >= deadline {

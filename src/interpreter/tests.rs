@@ -579,6 +579,44 @@ fn a_gc_inside_one_timer_callback_does_not_collect_the_rest_of_the_batch() {
 }
 
 #[test]
+fn a_nested_interpreter_run_does_not_re_enter_timer_dispatch() {
+    // A zero-delay interval re-arms for the next turn before its callback runs.
+    // If a nested run (`$262.evalScript`) serviced timers, it would find that
+    // re-armed interval due and recurse until the drain deadline — the callback
+    // never reached its own clearInterval, and the process hung.
+    let interp = run_script(
+        r#"
+        var ticks = 0;
+        var id = setInterval(function () {
+          ticks++;
+          $262.evalScript("void 0;");
+          clearInterval(id);
+        }, 0);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "ticks"), 1.0);
+}
+
+#[test]
+fn a_timer_scheduled_inside_a_callback_waits_for_the_next_turn() {
+    // The child timeout must not be fired by the nested run started inside its
+    // parent's callback: tasks do not re-enter one another.
+    let interp = run_script(
+        r#"
+        var order = "";
+        setTimeout(function () {
+          order += "a";
+          setTimeout(function () { order += "b"; }, 0);
+          order += "c";
+          $262.evalScript("void 0;");
+          order += "d";
+        }, 0);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "order"), "acdb");
+}
+
+#[test]
 fn many_concurrent_timers_run_without_a_thread_per_timer() {
     // The failure in issue #254: a thread per setTimeout exhausted the OS
     // thread limit once enough timers were armed at once.
