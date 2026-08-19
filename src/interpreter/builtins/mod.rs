@@ -115,6 +115,12 @@ fn disarm_timer(interp: &mut Interpreter, args: &[JsValue]) -> Completion {
     // representable integer range cannot name a live timer.
     const MAX_SAFE_INTEGER: f64 = 9007199254740991.0;
     let id_val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+    // Node resolves an id only from a number or a string and ignores anything
+    // else without coercing it. Coercing here instead would run an object's
+    // `valueOf` as an observable side effect Node does not have.
+    if id_val.as_number().is_none() && id_val.as_string().is_none() {
+        return Completion::Normal(JsValue::UNDEFINED);
+    }
     if let Ok(n) = interp.to_number_value(&id_val)
         && (1.0..=MAX_SAFE_INTEGER).contains(&n)
         && n.fract() == 0.0

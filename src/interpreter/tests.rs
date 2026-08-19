@@ -463,6 +463,31 @@ fn clear_timeout_of_an_unknown_id_is_a_no_op() {
 }
 
 #[test]
+fn clear_timeout_does_not_coerce_a_non_primitive_id() {
+    // Node resolves an id only from a number or a string and ignores anything
+    // else outright, so clearing with an object must not run its valueOf.
+    let interp = run_script(
+        r#"
+        var coerced = "no";
+        clearTimeout({ valueOf: function () { coerced = "yes"; return 1; } });
+        "#,
+    );
+    assert_eq!(global_string(&interp, "coerced"), "no");
+}
+
+#[test]
+fn clear_timeout_accepts_a_string_id() {
+    let interp = run_script(
+        r#"
+        var log = "";
+        var id = setTimeout(function () { log += "ran"; }, 0);
+        clearTimeout(String(id));
+        "#,
+    );
+    assert_eq!(global_string(&interp, "log"), "");
+}
+
+#[test]
 fn interval_repeats_until_cleared() {
     let interp = run_script(
         r#"
