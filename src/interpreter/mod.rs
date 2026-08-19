@@ -28,6 +28,8 @@ mod exec;
 mod gc;
 pub(crate) mod generator_analysis;
 pub(crate) mod generator_transform;
+mod hoist_cache;
+pub(crate) use hoist_cache::{HoistAnalysis, HoistCache};
 mod hoisting;
 pub(crate) mod ic;
 pub(crate) mod ic_store;
@@ -58,25 +60,6 @@ fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
         }
     }
     None
-}
-
-/// Cached output of the var/Annex-B hoisting *name collection* for a single
-/// function body, keyed by the body's `Rc` pointer identity (#72).
-///
-/// Only the raw name collection is cached. The Annex-B post-processing that
-/// inspects live env/parameter/lexical state still runs per call, and function
-/// declarations are never cached as values (fresh closures are built per call).
-/// The body `Rc` is pinned to prevent pointer (ABA) reuse from aliasing a
-/// freed body onto a fresh one with the same address.
-pub(crate) struct HoistAnalysis {
-    /// Deduped output of `collect_var_names_from_stmts`.
-    pub(crate) var_names: Vec<String>,
-    /// Raw `names` output of `collect_annexb_function_names`. (The companion
-    /// `blocked` accumulator is internal to the walk and discarded afterwards
-    /// by the original code, so it is intentionally not cached.)
-    pub(crate) annexb_names: Vec<String>,
-    /// Pins the body so its `Rc::as_ptr` key cannot be reused for another body.
-    _body: Rc<Vec<Statement>>,
 }
 
 pub(crate) struct Interpreter {
@@ -178,10 +161,9 @@ pub(crate) struct Interpreter {
     /// enabled so elapsed nanoseconds are measured from a stable origin.
     pub(crate) host_clock_start: Option<std::time::Instant>,
     /// Per-function-body hoisting-analysis cache keyed by body `Rc` identity
-    /// (#72). The key `*const Vec<Statement>` is used purely as an identity —
-    /// never dereferenced. Cannot go stale: ASTs are immutable post-parse and
-    /// the keyed body is pinned in the value.
-    pub(crate) hoist_cache: FxHashMap<*const Vec<Statement>, Rc<HoistAnalysis>>,
+    /// (#72), bounded so body-churning workloads cannot retain every body they
+    /// ever ran (#165). See `hoist_cache`.
+    pub(crate) hoist_cache: HoistCache,
     /// Per-body inline-cache store. Bodies are keyed by the `Rc` pointer to
     /// their statement vector so closures of the same function body share the
     /// same cache. See `docs/adr/0001-inline-cache-ast-seam.md`.
@@ -429,7 +411,7 @@ impl Interpreter {
             node_host_enabled: false,
             pending_exit: None,
             host_clock_start: None,
-            hoist_cache: FxHashMap::default(),
+            hoist_cache: HoistCache::new(),
             ic_store: ic_store::IcStore::new(),
             current_ic_handle: ic_store::BodyStoreHandle(0),
             call_depth: 0,
