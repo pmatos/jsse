@@ -288,6 +288,7 @@ impl Interpreter {
                                             Completion::Normal(value_clone.clone())
                                         },
                                     ));
+                                    interp.pin_native_root(&return_fn, &value);
                                     // Step 6a.v: Return ? Invoke(promise, "then", « valueThunk »).
                                     let p_id = p.as_object_id().unwrap_or_default();
                                     let then_method =
@@ -305,7 +306,7 @@ impl Interpreter {
 
                     // Step 6c: catchFinally closure
                     let on_finally_clone2 = on_finally.clone();
-                    let c_clone2 = c;
+                    let c_clone2 = c.clone();
                     let catch_finally = interp.create_function(JsFunction::native(
                         "".to_string(),
                         1,
@@ -333,6 +334,7 @@ impl Interpreter {
                                             Completion::Throw(reason_clone.clone())
                                         },
                                     ));
+                                    interp.pin_native_root(&throw_fn, &reason);
                                     // Step 6c.v: Return ? Invoke(promise, "then", « thrower »).
                                     let p_id = p.as_object_id().unwrap_or_default();
                                     let then_method =
@@ -347,6 +349,11 @@ impl Interpreter {
                             }
                         },
                     ));
+
+                    interp.pin_native_root(&then_finally, &on_finally);
+                    interp.pin_native_root(&then_finally, &c);
+                    interp.pin_native_root(&catch_finally, &on_finally);
+                    interp.pin_native_root(&catch_finally, &c);
 
                     (then_finally, catch_finally)
                 };
@@ -811,22 +818,12 @@ impl Interpreter {
         ));
 
         // The native closures above capture promise_id as a bare u64, which is
-        // invisible to the GC. Pin the Promise via gc_native_roots on both
-        // resolving functions so the Promise survives as long as either
-        // resolve or reject is reachable.
+        // invisible to the GC, so the Promise must survive as long as either
+        // resolving function is reachable.
         if promise_id != 0 {
             let pin = JsValue::object(promise_id);
-            for fn_val in [&resolve_fn, &reject_fn] {
-                if let Some(o) = fn_val.as_object_id()
-                    && let Some(fn_obj) = self.get_object_cell(o)
-                {
-                    let mut borrowed = fn_obj.borrow_mut();
-                    borrowed
-                        .gc_native_roots
-                        .get_or_insert_with(Vec::new)
-                        .push(pin.clone());
-                }
-            }
+            self.pin_native_root(&resolve_fn, &pin);
+            self.pin_native_root(&reject_fn, &pin);
         }
 
         (resolve_fn, reject_fn)
@@ -1239,6 +1236,13 @@ impl Interpreter {
             Err(e) => return self.if_abrupt_reject_promise(e, &cap),
         };
 
+        // Accumulated element values are pinned on this fresh, JS-unreachable
+        // object rather than on the capability function. A custom constructor may
+        // hand the same resolving function to every capability it builds, and
+        // pins are never removed, so anchoring there would retain one settled
+        // value per call on a long-lived object — unbounded growth. Every element
+        // function pins this anchor, so it outlives them all and dies with them.
+        let value_anchor = JsValue::object(self.create_object_id());
         let remaining = Rc::new(Cell::new(1)); // starts at 1 per spec (decremented at end)
         let results: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
         let mut index = 0usize;
@@ -1292,6 +1296,7 @@ impl Interpreter {
             let remaining = remaining.clone();
             let results = results.clone();
             let resolve_fn = cap.resolve.clone();
+            let anchor = value_anchor.clone();
             let already_called = Rc::new(Cell::new(false));
 
             let ac = already_called.clone();
@@ -1304,6 +1309,7 @@ impl Interpreter {
                     }
                     ac.set(true);
                     let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    interp.pin_native_root(&anchor, &val);
                     results.borrow_mut()[i] = val;
                     let r = remaining.get() - 1;
                     remaining.set(r);
@@ -1319,6 +1325,8 @@ impl Interpreter {
                     Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
+            self.pin_native_root(&on_fulfilled, &cap.resolve);
+            self.pin_native_root(&on_fulfilled, &value_anchor);
 
             let reject_fn_clone = cap.reject.clone();
             let p_id = p.as_object_id().unwrap_or_default();
@@ -1363,6 +1371,9 @@ impl Interpreter {
             Err(e) => return self.if_abrupt_reject_promise(e, &cap),
         };
 
+        // Fresh, JS-unreachable anchor for the accumulated values; see promise_all
+        // for why they must not hang off the capability function.
+        let value_anchor = JsValue::object(self.create_object_id());
         let remaining = Rc::new(Cell::new(1));
         let results: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
         let mut index = 0usize;
@@ -1417,6 +1428,8 @@ impl Interpreter {
             let remaining_r = remaining.clone();
             let results_r = results.clone();
             let resolve_fn_r = cap.resolve.clone();
+            let anchor_f = value_anchor.clone();
+            let anchor_r = value_anchor.clone();
             let already_called = Rc::new(Cell::new(false));
 
             let ac_f = already_called.clone();
@@ -1438,8 +1451,9 @@ impl Interpreter {
                         );
                         o.insert_value("value".to_string(), val);
                     }
-                    let oid = obj_id;
-                    results_f.borrow_mut()[i] = JsValue::object(oid);
+                    let record = JsValue::object(obj_id);
+                    interp.pin_native_root(&anchor_f, &record);
+                    results_f.borrow_mut()[i] = record;
                     let r = remaining_f.get() - 1;
                     remaining_f.set(r);
                     if r == 0 {
@@ -1473,8 +1487,9 @@ impl Interpreter {
                         );
                         o.insert_value("reason".to_string(), val);
                     }
-                    let oid = obj_id;
-                    results_r.borrow_mut()[i] = JsValue::object(oid);
+                    let record = JsValue::object(obj_id);
+                    interp.pin_native_root(&anchor_r, &record);
+                    results_r.borrow_mut()[i] = record;
                     let r = remaining_r.get() - 1;
                     remaining_r.set(r);
                     if r == 0 {
@@ -1489,6 +1504,11 @@ impl Interpreter {
                     Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
+
+            self.pin_native_root(&on_fulfilled, &cap.resolve);
+            self.pin_native_root(&on_rejected, &cap.resolve);
+            self.pin_native_root(&on_fulfilled, &value_anchor);
+            self.pin_native_root(&on_rejected, &value_anchor);
 
             let p_id = p.as_object_id().unwrap_or_default();
             let then_fn = match self.get_object_property(p_id, "then", &p) {
@@ -1541,6 +1561,9 @@ impl Interpreter {
             Err(e) => return self.if_abrupt_reject_promise(e, &cap),
         };
 
+        // Fresh, JS-unreachable anchor for the accumulated values; see promise_all
+        // for why they must not hang off the capability function.
+        let value_anchor = JsValue::object(self.create_object_id());
         let remaining = Rc::new(Cell::new(1u64));
         let keys: Rc<RefCell<Vec<JsPropertyKey>>> = Rc::new(RefCell::new(Vec::new()));
         let values: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
@@ -1590,6 +1613,7 @@ impl Interpreter {
             let keys_c = keys.clone();
             let values_c = values.clone();
             let resolve_fn = cap.resolve.clone();
+            let anchor = value_anchor.clone();
             let already_called = Rc::new(Cell::new(false));
             let ac = already_called.clone();
 
@@ -1602,6 +1626,7 @@ impl Interpreter {
                     }
                     ac.set(true);
                     let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    interp.pin_native_root(&anchor, &val);
                     values_c.borrow_mut()[i] = val;
                     let r = remaining_c.get() - 1;
                     remaining_c.set(r);
@@ -1618,6 +1643,9 @@ impl Interpreter {
                     Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
+
+            self.pin_native_root(&on_fulfilled, &cap.resolve);
+            self.pin_native_root(&on_fulfilled, &value_anchor);
 
             let p_id = p.as_object_id().unwrap_or_default();
             let then_fn = match self.get_object_property(p_id, "then", &p) {
@@ -1681,6 +1709,9 @@ impl Interpreter {
             Err(e) => return self.if_abrupt_reject_promise(e, &cap),
         };
 
+        // Fresh, JS-unreachable anchor for the accumulated values; see promise_all
+        // for why they must not hang off the capability function.
+        let value_anchor = JsValue::object(self.create_object_id());
         let remaining = Rc::new(Cell::new(1u64));
         let keys: Rc<RefCell<Vec<JsPropertyKey>>> = Rc::new(RefCell::new(Vec::new()));
         let values: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
@@ -1729,6 +1760,7 @@ impl Interpreter {
             let keys_f = keys.clone();
             let values_f = values.clone();
             let resolve_fn_f = cap.resolve.clone();
+            let anchor_f = value_anchor.clone();
             let ac_f = already_called.clone();
             let on_fulfilled = self.create_function(JsFunction::native(
                 "".to_string(),
@@ -1748,7 +1780,9 @@ impl Interpreter {
                         );
                         o.insert_value("value".to_string(), val);
                     }
-                    values_f.borrow_mut()[i] = JsValue::object(obj_id);
+                    let record = JsValue::object(obj_id);
+                    interp.pin_native_root(&anchor_f, &record);
+                    values_f.borrow_mut()[i] = record;
                     let r = remaining_f.get() - 1;
                     remaining_f.set(r);
                     if r == 0 {
@@ -1769,6 +1803,7 @@ impl Interpreter {
             let keys_r = keys.clone();
             let values_r = values.clone();
             let resolve_fn_r = cap.resolve.clone();
+            let anchor_r = value_anchor.clone();
             let ac_r = already_called.clone();
             let on_rejected = self.create_function(JsFunction::native(
                 "".to_string(),
@@ -1788,7 +1823,9 @@ impl Interpreter {
                         );
                         o.insert_value("reason".to_string(), reason);
                     }
-                    values_r.borrow_mut()[i] = JsValue::object(obj_id);
+                    let record = JsValue::object(obj_id);
+                    interp.pin_native_root(&anchor_r, &record);
+                    values_r.borrow_mut()[i] = record;
                     let r = remaining_r.get() - 1;
                     remaining_r.set(r);
                     if r == 0 {
@@ -1804,6 +1841,11 @@ impl Interpreter {
                     Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
+
+            self.pin_native_root(&on_fulfilled, &cap.resolve);
+            self.pin_native_root(&on_rejected, &cap.resolve);
+            self.pin_native_root(&on_fulfilled, &value_anchor);
+            self.pin_native_root(&on_rejected, &value_anchor);
 
             let p_id = p.as_object_id().unwrap_or_default();
             let then_fn = match self.get_object_property(p_id, "then", &p) {
@@ -1939,6 +1981,9 @@ impl Interpreter {
             Err(e) => return self.if_abrupt_reject_promise(e, &cap),
         };
 
+        // Fresh, JS-unreachable anchor for the accumulated values; see promise_all
+        // for why they must not hang off the capability function.
+        let value_anchor = JsValue::object(self.create_object_id());
         let remaining = Rc::new(Cell::new(1));
         let errors: Rc<RefCell<Vec<JsValue>>> = Rc::new(RefCell::new(Vec::new()));
         let mut index = 0usize;
@@ -1986,6 +2031,7 @@ impl Interpreter {
             let remaining = remaining.clone();
             let errors = errors.clone();
             let reject_fn_clone = cap.reject.clone();
+            let anchor = value_anchor.clone();
             let already_called = Rc::new(Cell::new(false));
 
             let ac = already_called.clone();
@@ -1998,6 +2044,7 @@ impl Interpreter {
                     }
                     ac.set(true);
                     let val = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
+                    interp.pin_native_root(&anchor, &val);
                     errors.borrow_mut()[i] = val;
                     let r = remaining.get() - 1;
                     remaining.set(r);
@@ -2013,6 +2060,9 @@ impl Interpreter {
                     Completion::Normal(JsValue::UNDEFINED)
                 },
             ));
+
+            self.pin_native_root(&on_rejected, &cap.reject);
+            self.pin_native_root(&on_rejected, &value_anchor);
 
             let p_id = p.as_object_id().unwrap_or_default();
             let then_fn = match self.get_object_property(p_id, "then", &p) {
