@@ -674,33 +674,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                let branded = self.resolve_private_name(name, env);
-                let Some(obj_id) = obj_val.as_object_id() else {
-                    return Completion::Throw(self.create_type_error(&format!(
-                        "Cannot read private member #{name} from a non-object"
-                    )));
-                };
-                return if let Some(obj_rc) = self.get_object_cell(obj_id) {
-                    let elem = obj_rc.borrow().private_fields.get(&branded).cloned();
-                    match elem {
-                        Some(PrivateElement::Field(v))
-                        | Some(PrivateElement::Method(v)) => Completion::Normal(v),
-                        Some(PrivateElement::Accessor { get, .. }) => {
-                            if let Some(getter) = get {
-                                self.call_function(&getter, &obj_val, &[])
-                            } else {
-                                Completion::Throw(self.create_type_error(&format!(
-                                    "Cannot read private member #{name} which has no getter"
-                                )))
-                            }
-                        }
-                        None => Completion::Throw(self.create_type_error(&format!(
-                            "Cannot read private member #{name} from an object whose class did not declare it"
-                        ))),
-                    }
-                } else {
-                    Completion::Normal(JsValue::UNDEFINED)
-                };
+                return self.private_get(&obj_val, name, env);
             }
 
             // Step 2: GetThisBinding — throws ReferenceError if this is in TDZ
@@ -750,34 +724,7 @@ impl Interpreter {
             other => return other,
         };
         if let MemberProperty::Private(name) = prop {
-            let branded = self.resolve_private_name(name, env);
-            let Some(obj_id) = obj_val.as_object_id() else {
-                return Completion::Throw(self.create_type_error(&format!(
-                    "Cannot read private member #{name} from a non-object"
-                )));
-            };
-            return if let Some(obj) = self.get_object_cell(obj_id) {
-                let elem = obj.borrow().private_fields.get(&branded).cloned();
-                match elem {
-                    Some(PrivateElement::Field(v)) | Some(PrivateElement::Method(v)) => {
-                        Completion::Normal(v)
-                    }
-                    Some(PrivateElement::Accessor { get, .. }) => {
-                        if let Some(getter) = get {
-                            self.call_function(&getter, &obj_val, &[])
-                        } else {
-                            Completion::Throw(self.create_type_error(&format!(
-                                "Cannot read private member #{name} which has no getter"
-                            )))
-                        }
-                    }
-                    None => Completion::Throw(self.create_type_error(&format!(
-                        "Cannot read private member #{name} from an object whose class did not declare it"
-                    ))),
-                }
-            } else {
-                Completion::Normal(JsValue::UNDEFINED)
-            };
+            return self.private_get(&obj_val, name, env);
         }
         // For computed properties, evaluate the expression but defer ToPropertyKey
         // until after we check that the base is not null/undefined (spec: ToObject
