@@ -1469,11 +1469,12 @@ impl Interpreter {
         JsValue::object(id)
     }
 
+    /// Pin every value an iterator-helper closure captured. A thin adapter over
+    /// `pin_native_root` so `gc_native_roots` has a single mutator; each helper
+    /// object is fresh here, so appending matches the previous assignment.
     fn set_helper_gc_roots(&mut self, helper: &JsValue, roots: Vec<JsValue>) {
-        if let Some(helper_id) = helper.as_object_id()
-            && let Some(obj) = self.get_object_cell(helper_id)
-        {
-            obj.borrow_mut().gc_native_roots = Some(roots);
+        for root in &roots {
+            self.pin_native_root(helper, root);
         }
     }
 

@@ -20,7 +20,6 @@ const tapAfterEach = globalThis.afterEach;
 const allowsEval = core.util.allowsEval;
 const allowsEvalAccessor = Object.getOwnPropertyDescriptor(allowsEval, "value");
 const bundleJitless = (globalThis as any).__ZOD_BUNDLE_JITLESS__ === true;
-const jitlessSkipNames = new Set(["function with async refinements"]);
 let defaultConfig: Record<string, unknown> | undefined;
 
 if (!allowsEvalAccessor?.get) {
@@ -236,9 +235,7 @@ function wrapTest(fn: Function, jitless: boolean) {
 
 export function test(name: unknown, fn: Function, timeout?: number) {
   const mode = bundleJitless ? "jitless" : "normal";
-  const register =
-    bundleJitless && jitlessSkipNames.has(String(name)) ? tapTest.skip : tapTest;
-  return register(`${String(name)} [${mode}]`, wrapTest(fn, bundleJitless), timeout);
+  return tapTest(`${String(name)} [${mode}]`, wrapTest(fn, bundleJitless), timeout);
 }
 
 test.skip = function (name: unknown, fn: Function, timeout?: number) {
