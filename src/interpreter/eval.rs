@@ -1271,6 +1271,7 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
+                let mut source_import_type: Option<super::ImportModuleType> = None;
                 if let Some(opts_expr) = options_expr {
                     match self.eval_expr(opts_expr, env) {
                         Completion::Normal(opts_val) => {
@@ -1286,11 +1287,31 @@ impl Interpreter {
                                     .map(|id| crate::types::JsObject { id })
                                 {
                                     let wv = self.get_property_on_id(o.id, "with");
-                                    if !wv.is_undefined() && !(wv).is_object() {
-                                        let err = self.create_type_error(
-                                            "The 'with' option must be an object",
-                                        );
-                                        return self.create_rejected_promise(err);
+                                    if !wv.is_undefined() {
+                                        if !(wv).is_object() {
+                                            let err = self.create_type_error(
+                                                "The 'with' option must be an object",
+                                            );
+                                            return self.create_rejected_promise(err);
+                                        }
+                                        // The requested type is part of the module
+                                        // request, so the source phase must see it
+                                        // too — otherwise the completion for one
+                                        // (referrer, specifier, attributes) triple
+                                        // would depend on the phase.
+                                        if let Some(with_obj) = (wv)
+                                            .as_object_id()
+                                            .map(|id| crate::types::JsObject { id })
+                                        {
+                                            let tv = self.get_property_on_id(with_obj.id, "type");
+                                            if let Some(sv) = (tv).as_string() {
+                                                source_import_type = match sv.to_string().as_str() {
+                                                    "text" => Some(super::ImportModuleType::Text),
+                                                    "bytes" => Some(super::ImportModuleType::Bytes),
+                                                    _ => None,
+                                                };
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -1306,7 +1327,11 @@ impl Interpreter {
                 // target module's [[ModuleSource]]. A Source Text Module has an
                 // empty [[ModuleSource]] (GetModuleSource throws SyntaxError).
                 let referrer = self.current_module_path.clone();
-                match self.resolve_source_phase_target(&source, referrer.as_deref()) {
+                match self.resolve_source_phase_target(
+                    &source,
+                    referrer.as_deref(),
+                    source_import_type,
+                ) {
                     Ok((_, Some(ms))) => self.create_resolved_promise(ms),
                     Ok((_, None)) => {
                         let err = self.create_error(

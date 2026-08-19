@@ -244,9 +244,9 @@ const MAX_POOLED_FUNCTION_BINDING_CAPACITY: usize = 256;
 /// non-empty; see `Interpreter::get_or_create_module_source_module`.
 ///
 /// `HostLoadImportedModule` must hand back the same Module Record for a given
-/// (referrer, specifier) pair regardless of the request's phase, so this string
-/// is recognised by the host resolvers — not by the source-phase path alone. It
-/// is intercepted before any filesystem resolution and doubles as the module
+/// (referrer, specifier) pair regardless of the request's phase.
+///
+/// It is intercepted before any filesystem resolution and doubles as the module
 /// registry key, so it never reaches a real file of the same name.
 pub(crate) const MODULE_SOURCE_SPECIFIER: &str = "<module source>";
 
@@ -977,9 +977,13 @@ impl Interpreter {
         &mut self,
         specifier: &str,
         referrer: Option<&Path>,
+        import_type: Option<ImportModuleType>,
     ) -> Result<(PathBuf, Option<JsValue>), JsValue> {
         let resolved = self.resolve_module_specifier(specifier, referrer)?;
         if Self::is_module_source_path(&resolved) {
+            if let Some(itype) = import_type {
+                return Err(self.module_source_type_error(itype));
+            }
             let module = self.load_module(&resolved)?;
             let module_source = module.borrow().module_source.clone();
             return Ok((resolved, module_source));
@@ -990,7 +994,21 @@ impl Interpreter {
     /// Whether `path` is the module-registry key of the synthetic
     /// `<module source>` host module rather than a filesystem path.
     fn is_module_source_path(path: &Path) -> bool {
-        path.as_os_str() == std::ffi::OsStr::new(MODULE_SOURCE_SPECIFIER)
+        path == Path::new(MODULE_SOURCE_SPECIFIER)
+    }
+
+    /// The host has no text or bytes to hand back for a Module Source module, in
+    /// any import phase. Built in one place so the source phase and the
+    /// evaluation phase cannot report an unsatisfiable request differently.
+    fn module_source_type_error(&mut self, itype: ImportModuleType) -> JsValue {
+        let repr = match itype {
+            ImportModuleType::Text => "text",
+            ImportModuleType::Bytes => "bytes",
+        };
+        self.create_error(
+            "TypeError",
+            &format!("Module '{MODULE_SOURCE_SPECIFIER}' has no {repr} representation"),
+        )
     }
 
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
@@ -2196,7 +2214,8 @@ impl Interpreter {
         // before the generic path, which binds a namespace and loads the target
         // graph; the source phase binds `[[ModuleSource]]` and stays shallow.
         if let [ImportSpecifier::SourcePhase(local)] = import.specifiers.as_slice() {
-            return self.process_source_phase_import(local, &import.source, env);
+            let itype = import_module_type(&import.attributes);
+            return self.process_source_phase_import(local, &import.source, itype, env);
         }
 
         let resolved = self.resolve_module_specifier(&import.source, module_path.as_deref())?;
@@ -2312,11 +2331,12 @@ impl Interpreter {
         &mut self,
         local: &str,
         specifier: &str,
+        import_type: Option<ImportModuleType>,
         env: &EnvRef,
     ) -> Result<(), JsValue> {
         let referrer = self.current_module_path.clone();
         let (target_path, module_source) =
-            self.resolve_source_phase_target(specifier, referrer.as_deref())?;
+            self.resolve_source_phase_target(specifier, referrer.as_deref(), import_type)?;
 
         let Some(module_source) = module_source else {
             return Err(self.create_error(
@@ -3210,9 +3230,7 @@ impl Interpreter {
 
     fn load_text_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
         if Self::is_module_source_path(path) {
-            return Err(JsValue::string(JsString::from_str(&format!(
-                "Module '{MODULE_SOURCE_SPECIFIER}' has no text representation"
-            ))));
+            return Err(self.module_source_type_error(ImportModuleType::Text));
         }
         let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let key = (canon.clone(), ImportModuleType::Text);
@@ -3234,9 +3252,7 @@ impl Interpreter {
 
     fn load_bytes_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
         if Self::is_module_source_path(path) {
-            return Err(JsValue::string(JsString::from_str(&format!(
-                "Module '{MODULE_SOURCE_SPECIFIER}' has no bytes representation"
-            ))));
+            return Err(self.module_source_type_error(ImportModuleType::Bytes));
         }
         let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         let key = (canon.clone(), ImportModuleType::Bytes);
