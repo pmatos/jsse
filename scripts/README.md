@@ -572,10 +572,13 @@ characteristic surfaced by the suite, tracked as a follow-up:
   doesn't exist relative to the esbuild bundle. These already fall back to
   `skipAssert` in lodash's own browser path.
 
-Timer-heavy suites (`debounce`/`throttle`) pass because `node-test-harness.js`
-backs `setTimeout`/`clearTimeout`/`setInterval` with a single-pump userland queue:
-jsse's native `setTimeout` spawns a thread per call and offers no cancellation, so
-running those thousands of timers natively would otherwise exhaust OS threads.
+Timer-heavy suites (`debounce`/`throttle`) run through the single-pump userland
+timer queue in `node-test-harness.js`. That queue was originally required: jsse's
+native `setTimeout` spawned a thread per call, returned id `0`, and had no
+cancellation, so thousands of concurrent timers exhausted OS threads. jsse#254
+replaced that with an event-loop timer model — native `setTimeout`,
+`clearTimeout`, `setInterval` and `clearInterval` with real ids — so the queue is
+now a convenience for the runner rather than a workaround.
 
 ### Engine bugs surfaced
 

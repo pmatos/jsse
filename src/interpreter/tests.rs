@@ -403,6 +403,147 @@ fn nested_microtasks_run_to_quiescence_in_order() {
 }
 
 #[test]
+fn timers_fire_before_run_returns() {
+    let interp = run_script(
+        r#"
+        var result = "pending";
+        setTimeout(() => { result = "done"; }, 0);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "result"), "done");
+}
+
+#[test]
+fn timer_ids_are_distinct_and_never_zero() {
+    // Issue #254: setTimeout used to return 0 for every call, so nothing could
+    // be cancelled even once clearTimeout existed.
+    let interp = run_script(
+        r#"
+        var a = setTimeout(() => {}, 1000);
+        var b = setTimeout(() => {}, 1000);
+        var distinct = a !== b && a !== 0 && b !== 0;
+        clearTimeout(a);
+        clearTimeout(b);
+        "#,
+    );
+    assert_eq!(
+        interp
+            .get_global_var_ref("distinct")
+            .and_then(|v| v.as_boolean()),
+        Some(true)
+    );
+}
+
+#[test]
+fn clear_timeout_cancels_a_pending_timer() {
+    let interp = run_script(
+        r#"
+        var log = "";
+        var cancelled = setTimeout(() => { log += "cancelled"; }, 0);
+        setTimeout(() => { log += "kept"; }, 0);
+        clearTimeout(cancelled);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "log"), "kept");
+}
+
+#[test]
+fn clear_timeout_of_an_unknown_id_is_a_no_op() {
+    let interp = run_script(
+        r#"
+        var log = "";
+        clearTimeout(0);
+        clearTimeout(9999);
+        clearTimeout(undefined);
+        clearTimeout("not an id");
+        setTimeout(() => { log += "ran"; }, 0);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "log"), "ran");
+}
+
+#[test]
+fn interval_repeats_until_cleared() {
+    let interp = run_script(
+        r#"
+        var ticks = 0;
+        var id = setInterval(() => {
+          ticks++;
+          if (ticks === 3) clearInterval(id);
+        }, 1);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "ticks"), 3.0);
+}
+
+#[test]
+fn microtasks_drain_between_timer_callbacks() {
+    // Each timer callback is a task, so its microtasks run before the next
+    // callback — matching the HTML/Node event loop.
+    let interp = run_script(
+        r#"
+        var order = "";
+        setTimeout(() => {
+          order += "t1";
+          Promise.resolve().then(() => { order += "m1"; });
+        }, 0);
+        setTimeout(() => { order += "t2"; }, 0);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "order"), "t1m1t2");
+}
+
+#[test]
+fn same_delay_timers_fire_in_arming_order() {
+    let interp = run_script(
+        r#"
+        var order = "";
+        setTimeout(() => { order += "c"; }, 5);
+        setTimeout(() => { order += "a"; }, 0);
+        setTimeout(() => { order += "b"; }, 0);
+        "#,
+    );
+    assert_eq!(global_string(&interp, "order"), "abc");
+}
+
+#[test]
+fn timer_extra_arguments_are_forwarded_to_the_callback() {
+    let interp = run_script(
+        r#"
+        var seen = "";
+        setTimeout((x, y) => { seen = x + "," + y; }, 0, "first", "second");
+        "#,
+    );
+    assert_eq!(global_string(&interp, "seen"), "first,second");
+}
+
+#[test]
+fn non_callable_timer_callback_throws_a_type_error() {
+    for source in [
+        "try { setTimeout(42, 0); } catch (e) { var name = e.constructor.name; }",
+        "try { setInterval(42, 0); } catch (e) { var name = e.constructor.name; }",
+    ] {
+        let interp = run_script(source);
+        assert_eq!(global_string(&interp, "name"), "TypeError");
+    }
+}
+
+#[test]
+fn many_concurrent_timers_run_without_a_thread_per_timer() {
+    // The failure in issue #254: a thread per setTimeout exhausted the OS
+    // thread limit once enough timers were armed at once.
+    let interp = run_script(
+        r#"
+        var fired = 0;
+        var ids = [];
+        for (var i = 0; i < 20000; i++) ids.push(setTimeout(() => { fired++; }, 20));
+        for (var i = 0; i < 20000; i += 2) clearTimeout(ids[i]);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "fired"), 10000.0);
+}
+
+#[test]
 fn dynamic_import_uses_run_path_during_microtask_drain() {
     let dir = temp_case_dir("dynamic-import");
     let main_path = write_case_file(
@@ -804,6 +945,65 @@ fn missing_named_module_import_throws_syntax_error() {
     assert!(message.contains("has no export named 'missing'"));
 
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn clear_timeout_from_js_disarms_the_timer_and_releases_its_callback() {
+    let mut interp = Interpreter::new();
+    interp.run(&parse_program(
+        "var cb = () => {}; clearTimeout(setTimeout(cb, 3600000));",
+    ));
+    assert!(
+        !interp.scheduler.has_timers(),
+        "clearTimeout must reach the timer queue, not just return undefined"
+    );
+
+    let callback_id = global_object_id(&interp, "cb");
+    interp.run(&parse_program("cb = null;"));
+    interp.gc.request();
+    interp.gc_safepoint();
+    assert!(
+        interp.get_object_cell(callback_id).is_none(),
+        "a timer cleared from JS must stop rooting its callback"
+    );
+}
+
+#[test]
+fn gc_keeps_timer_roots_alive_until_the_timer_is_cleared() {
+    let mut interp = Interpreter::new();
+    let callback_id = interp.create_object_id();
+    let arg_id = interp.create_object_id();
+
+    let timer_id = interp.scheduler.add_timer(
+        JsValue::object(callback_id),
+        vec![JsValue::object(arg_id)],
+        std::time::Duration::from_secs(3600),
+        false,
+    );
+    interp.gc.request();
+    interp.gc_safepoint();
+    assert!(
+        interp.get_object_cell(callback_id).is_some(),
+        "an armed timer must keep its callback alive"
+    );
+    assert!(
+        interp.get_object_cell(arg_id).is_some(),
+        "an armed timer must keep its bound arguments alive"
+    );
+
+    // Cancellation drops the roots; the thread-per-timer model leaked them
+    // instead, because only a fired timer ever unrooted.
+    interp.scheduler.clear_timer(timer_id);
+    interp.gc.request();
+    interp.gc_safepoint();
+    assert!(
+        interp.get_object_cell(callback_id).is_none(),
+        "a cleared timer must release its callback"
+    );
+    assert!(
+        interp.get_object_cell(arg_id).is_none(),
+        "a cleared timer must release its bound arguments"
+    );
 }
 
 #[test]

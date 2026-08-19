@@ -313,6 +313,13 @@ impl Interpreter {
                 Self::collect_value_roots(val, &mut roots);
             }
         }
+        // An armed timer keeps its callback and bound arguments alive (#254).
+        for (callback, args) in self.scheduler.iter_timer_roots() {
+            Self::collect_value_roots(callback, &mut roots);
+            for val in args {
+                Self::collect_value_roots(val, &mut roots);
+            }
+        }
         for val in &self.pending_iter_close {
             Self::collect_value_roots(val, &mut roots);
         }

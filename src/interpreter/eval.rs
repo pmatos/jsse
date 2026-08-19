@@ -9896,15 +9896,26 @@ impl Interpreter {
                 if remaining.is_zero() {
                     break;
                 }
+                // Timers are in-process (#254), so this loop has to fire them
+                // itself rather than wait for a completion that never comes.
+                if self.run_due_timers() {
+                    continue;
+                }
+                let timer_wait = self
+                    .scheduler
+                    .next_timer_deadline()
+                    .map(|at| at.saturating_duration_since(std::time::Instant::now()));
                 let (ref mtx, ref cvar) = *self.agent_async_completions;
                 let lock = mtx.lock().unwrap();
                 if !lock.is_empty() {
                     drop(lock);
                     continue;
                 }
-                let _ = cvar
-                    .wait_timeout(lock, remaining.min(std::time::Duration::from_millis(100)))
-                    .unwrap();
+                let mut wait = remaining.min(std::time::Duration::from_millis(100));
+                if let Some(until_timer) = timer_wait {
+                    wait = wait.min(until_timer);
+                }
+                let _ = cvar.wait_timeout(lock, wait).unwrap();
                 continue;
             }
             break;

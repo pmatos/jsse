@@ -1,6 +1,8 @@
-use std::collections::{HashSet, VecDeque};
+use std::cmp::Reverse;
+use std::collections::{BinaryHeap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use rustc_hash::FxHashMap;
 
@@ -12,6 +14,127 @@ use super::Completion;
 use super::Interpreter;
 
 pub(crate) type MicrotaskJob = Box<dyn FnOnce(&mut Interpreter) -> Completion>;
+
+/// A host timer armed by `setTimeout` or `setInterval`.
+struct Timer {
+    callback: JsValue,
+    args: Vec<JsValue>,
+    /// `None` when the requested delay is too far out to represent, e.g.
+    /// `setTimeout(fn, Infinity)`. Such a timer never fires but still keeps the
+    /// event loop alive, matching the thread-per-timer model it replaced.
+    fire_at: Option<Instant>,
+    /// `Some` for `setInterval`; the timer re-arms after every fire.
+    interval: Option<Duration>,
+}
+
+/// Timers owned by the interpreter and serviced on the event loop, replacing a
+/// thread per `setTimeout` call (issue #254).
+///
+/// `timers` is the source of truth and the GC root set. `heap` is a deadline
+/// index that may hold stale entries: cancelling a timer drops it from `timers`
+/// only, and re-arming an interval leaves the previous deadline behind. An
+/// entry is stale when its id is gone or its deadline no longer matches the
+/// map, and is skipped on pop — so cancellation stays O(1).
+#[derive(Default)]
+pub(crate) struct TimerQueue {
+    next_id: u64,
+    timers: FxHashMap<u64, Timer>,
+    heap: BinaryHeap<Reverse<(Instant, u64)>>,
+}
+
+impl TimerQueue {
+    /// Arm a timer and return its id. Ids start at 1, so an id is always truthy
+    /// in JS and `clearTimeout(0)` remains a no-op.
+    pub(crate) fn add(
+        &mut self,
+        callback: JsValue,
+        args: Vec<JsValue>,
+        delay: Duration,
+        repeating: bool,
+    ) -> u64 {
+        self.next_id += 1;
+        let id = self.next_id;
+        let fire_at = Instant::now().checked_add(delay);
+        if let Some(at) = fire_at {
+            self.heap.push(Reverse((at, id)));
+        }
+        self.timers.insert(
+            id,
+            Timer {
+                callback,
+                args,
+                fire_at,
+                interval: repeating.then_some(delay),
+            },
+        );
+        id
+    }
+
+    pub(crate) fn clear(&mut self, id: u64) {
+        self.timers.remove(&id);
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.timers.is_empty()
+    }
+
+    /// Earliest live deadline, pruning stale heap entries off the top. `None`
+    /// when nothing is armed, or when every armed timer has an unrepresentable
+    /// deadline.
+    pub(crate) fn next_deadline(&mut self) -> Option<Instant> {
+        while let Some(&Reverse((at, id))) = self.heap.peek() {
+            if self.timers.get(&id).is_some_and(|t| t.fire_at == Some(at)) {
+                return Some(at);
+            }
+            self.heap.pop();
+        }
+        None
+    }
+
+    /// Remove and return every timer due at `now`, in deadline then arming
+    /// order. Repeating timers re-arm relative to `now` — measuring from the
+    /// deadline instead would let a long synchronous block queue a burst of
+    /// catch-up ticks. Re-armed entries land in the heap only after the batch is
+    /// collected, so a zero-delay interval fires at most once per loop turn.
+    pub(crate) fn take_due(&mut self, now: Instant) -> Vec<(JsValue, Vec<JsValue>)> {
+        let mut due = Vec::new();
+        let mut rearmed = Vec::new();
+        while let Some(&Reverse((at, id))) = self.heap.peek() {
+            if at > now {
+                break;
+            }
+            self.heap.pop();
+            let Some(timer) = self.timers.get_mut(&id) else {
+                continue; // cancelled
+            };
+            if timer.fire_at != Some(at) {
+                continue; // superseded by a re-arm
+            }
+            match timer.interval {
+                Some(interval) => {
+                    timer.fire_at = now.checked_add(interval);
+                    due.push((timer.callback.clone(), timer.args.clone()));
+                    if let Some(next) = timer.fire_at {
+                        rearmed.push(Reverse((next, id)));
+                    }
+                }
+                None => {
+                    let timer = self.timers.remove(&id).expect("looked up above");
+                    due.push((timer.callback, timer.args));
+                }
+            }
+        }
+        self.heap.extend(rearmed);
+        due
+    }
+
+    /// GC roots: an armed timer keeps its callback and arguments alive.
+    pub(crate) fn iter_roots(&self) -> impl Iterator<Item = (&JsValue, &[JsValue])> {
+        self.timers
+            .values()
+            .map(|t| (&t.callback, t.args.as_slice()))
+    }
+}
 
 #[derive(Default)]
 pub(crate) struct JobScheduler {
@@ -25,10 +148,10 @@ pub(crate) struct JobScheduler {
     /// Promise IDs whose resolution is blocked on a host-async worker thread
     /// (e.g. Atomics.waitAsync, $262.agent.getReportAsync).
     pending_async_promise_ids: Arc<Mutex<HashSet<u64>>>,
-    /// Host timer callbacks scheduled by setTimeout. These are intentionally
-    /// tracked separately from promise-backed host async jobs so detached
-    /// Atomics.waitAsync jobs do not keep the process alive.
-    pending_timer_jobs: Arc<AtomicUsize>,
+    /// Timers armed by setTimeout/setInterval. Tracked separately from
+    /// promise-backed host async jobs so detached Atomics.waitAsync jobs do not
+    /// keep the process alive.
+    timers: TimerQueue,
 }
 
 impl JobScheduler {
@@ -114,12 +237,34 @@ impl JobScheduler {
         self.pending_async_promise_ids.lock().unwrap()
     }
 
-    pub(crate) fn pending_timer_jobs_handle(&self) -> Arc<AtomicUsize> {
-        Arc::clone(&self.pending_timer_jobs)
+    pub(crate) fn add_timer(
+        &mut self,
+        callback: JsValue,
+        args: Vec<JsValue>,
+        delay: Duration,
+        repeating: bool,
+    ) -> u64 {
+        self.timers.add(callback, args, delay, repeating)
     }
 
-    pub(crate) fn pending_timer_jobs_count(&self) -> usize {
-        self.pending_timer_jobs.load(Ordering::SeqCst)
+    pub(crate) fn clear_timer(&mut self, id: u64) {
+        self.timers.clear(id);
+    }
+
+    pub(crate) fn has_timers(&self) -> bool {
+        !self.timers.is_empty()
+    }
+
+    pub(crate) fn next_timer_deadline(&mut self) -> Option<Instant> {
+        self.timers.next_deadline()
+    }
+
+    pub(crate) fn take_due_timers(&mut self, now: Instant) -> Vec<(JsValue, Vec<JsValue>)> {
+        self.timers.take_due(now)
+    }
+
+    pub(crate) fn iter_timer_roots(&self) -> impl Iterator<Item = (&JsValue, &[JsValue])> {
+        self.timers.iter_roots()
     }
 
     #[cfg(test)]
@@ -276,6 +421,194 @@ mod tests {
         let mut sched = JobScheduler::default();
         let ids: Vec<u64> = (0..3).map(|_| sched.alloc_async_function_id()).collect();
         assert_eq!(ids, vec![0, 1, 2]);
+    }
+
+    fn timer_tag(n: f64) -> JsValue {
+        JsValue::number(n)
+    }
+
+    /// Tags of the callbacks a `take_due` batch returned, in order.
+    fn due_tags(batch: &[(JsValue, Vec<JsValue>)]) -> Vec<f64> {
+        batch
+            .iter()
+            .map(|(cb, _)| cb.as_number().expect("callback tag must be a Number"))
+            .collect()
+    }
+
+    #[test]
+    fn timer_ids_are_monotonic_unique_and_never_zero() {
+        let mut q = TimerQueue::default();
+        let ids: Vec<u64> = (0..3)
+            .map(|i| q.add(timer_tag(i as f64), Vec::new(), Duration::ZERO, false))
+            .collect();
+
+        assert_eq!(
+            ids,
+            vec![1, 2, 3],
+            "ids start at 1 so a timer id is always truthy in JS"
+        );
+    }
+
+    #[test]
+    fn due_timers_fire_in_deadline_then_arming_order() {
+        let mut q = TimerQueue::default();
+        q.add(timer_tag(1.0), Vec::new(), Duration::from_millis(50), false);
+        q.add(timer_tag(2.0), Vec::new(), Duration::ZERO, false);
+        q.add(timer_tag(3.0), Vec::new(), Duration::ZERO, false);
+
+        let now = Instant::now() + Duration::from_millis(100);
+        assert_eq!(
+            due_tags(&q.take_due(now)),
+            vec![2.0, 3.0, 1.0],
+            "same-deadline timers keep arming order; earlier deadlines come first"
+        );
+        assert!(q.is_empty(), "one-shot timers are removed once they fire");
+    }
+
+    #[test]
+    fn cleared_timer_never_fires_and_drops_its_roots() {
+        let mut q = TimerQueue::default();
+        let id = q.add(timer_tag(1.0), Vec::new(), Duration::ZERO, false);
+        q.add(timer_tag(2.0), Vec::new(), Duration::ZERO, false);
+
+        q.clear(id);
+        assert_eq!(
+            q.iter_roots().count(),
+            1,
+            "a cleared timer must stop rooting its callback"
+        );
+
+        let due = q.take_due(Instant::now() + Duration::from_millis(10));
+        assert_eq!(due_tags(&due), vec![2.0]);
+    }
+
+    #[test]
+    fn clearing_an_unknown_id_is_a_no_op() {
+        let mut q = TimerQueue::default();
+        q.add(timer_tag(1.0), Vec::new(), Duration::ZERO, false);
+
+        q.clear(0);
+        q.clear(999);
+
+        assert_eq!(
+            due_tags(&q.take_due(Instant::now() + Duration::from_millis(10))),
+            vec![1.0]
+        );
+    }
+
+    #[test]
+    fn interval_rearms_but_does_not_refire_within_one_batch() {
+        let mut q = TimerQueue::default();
+        q.add(timer_tag(7.0), Vec::new(), Duration::ZERO, true);
+
+        // A zero-delay interval re-arms to exactly `now`; it must still fire
+        // only once per batch, or `take_due` would never terminate.
+        let now = Instant::now() + Duration::from_millis(10);
+        assert_eq!(due_tags(&q.take_due(now)), vec![7.0]);
+        assert!(!q.is_empty(), "an interval stays armed after firing");
+
+        assert_eq!(
+            due_tags(&q.take_due(now + Duration::from_millis(1))),
+            vec![7.0],
+            "the re-armed interval fires again on the next turn"
+        );
+    }
+
+    #[test]
+    fn cleared_interval_stops_firing() {
+        let mut q = TimerQueue::default();
+        let id = q.add(timer_tag(7.0), Vec::new(), Duration::ZERO, true);
+
+        let now = Instant::now() + Duration::from_millis(10);
+        assert_eq!(due_tags(&q.take_due(now)), vec![7.0]);
+
+        q.clear(id);
+        assert!(q.is_empty());
+        assert!(
+            q.take_due(now + Duration::from_secs(1)).is_empty(),
+            "the heap entry left behind by the re-arm must be skipped as stale"
+        );
+    }
+
+    #[test]
+    fn effectively_infinite_delay_never_fires_but_keeps_the_loop_alive() {
+        // What `setTimeout(fn, Infinity)` produces. The deadline is
+        // representable — hundreds of millions of years out — so the timer is
+        // armed normally and simply never comes due.
+        let mut q = TimerQueue::default();
+        q.add(
+            timer_tag(1.0),
+            Vec::new(),
+            Duration::from_millis(u64::MAX),
+            false,
+        );
+
+        assert!(!q.is_empty(), "the timer still keeps the event loop alive");
+        assert!(
+            q.take_due(Instant::now() + Duration::from_secs(60))
+                .is_empty(),
+            "it must not fire"
+        );
+    }
+
+    #[test]
+    fn unrepresentable_deadline_is_armed_without_overflowing() {
+        // A delay past what `Instant` can represent must not panic; the timer
+        // holds the loop open but has no deadline to wait on.
+        let mut q = TimerQueue::default();
+        q.add(timer_tag(1.0), Vec::new(), Duration::MAX, false);
+
+        assert!(!q.is_empty(), "the timer still keeps the event loop alive");
+        assert!(q.next_deadline().is_none(), "it has no reachable deadline");
+        assert!(
+            q.take_due(Instant::now() + Duration::from_secs(60))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn next_deadline_skips_cleared_timers() {
+        let mut q = TimerQueue::default();
+        let soon = q.add(timer_tag(1.0), Vec::new(), Duration::ZERO, false);
+        q.add(timer_tag(2.0), Vec::new(), Duration::from_secs(60), false);
+
+        let with_soon = q.next_deadline().expect("a deadline is armed");
+        q.clear(soon);
+        let after_clear = q.next_deadline().expect("the later timer remains");
+
+        assert!(
+            after_clear > with_soon,
+            "clearing the soonest timer must push the reported deadline out"
+        );
+    }
+
+    #[test]
+    fn timer_roots_cover_the_callback_and_its_bound_arguments() {
+        let mut q = TimerQueue::default();
+        q.add(
+            timer_tag(1.0),
+            vec![timer_tag(2.0), timer_tag(3.0)],
+            Duration::ZERO,
+            false,
+        );
+
+        let (callback, args) = q.iter_roots().next().expect("one armed timer");
+        assert_eq!(callback.as_number(), Some(1.0));
+        assert_eq!(
+            args.len(),
+            2,
+            "bound arguments are rooted alongside the callback"
+        );
+    }
+
+    #[test]
+    fn timers_carry_their_bound_arguments_to_the_fire_site() {
+        let mut q = TimerQueue::default();
+        q.add(timer_tag(1.0), vec![timer_tag(9.0)], Duration::ZERO, false);
+
+        let due = q.take_due(Instant::now() + Duration::from_millis(10));
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].1[0].as_number(), Some(9.0));
     }
 
     #[test]

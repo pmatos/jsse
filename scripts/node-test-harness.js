@@ -55,15 +55,24 @@
   var nativeSetTimeout =
     typeof setTimeout === "function" ? setTimeout : null;
 
-  // jsse's setTimeout spawns a fresh OS thread per call and always returns a
-  // timer id of 0 (see src/interpreter/builtins/mod.rs), and it provides no
-  // clearTimeout/setInterval/clearInterval at all. Timer-heavy libraries
-  // (lodash's debounce/throttle churn thousands of setTimeout/clearTimeout
-  // calls) both need cancellation *and* exhaust OS threads under that model,
-  // which stalls the run. So back all four globals with a single userland timer
-  // queue driven by ONE native timer at a time (the "pump"): library timers
-  // become cheap queue entries with real ids, cancellation works, and the
-  // process never holds more than one native timer thread.
+  // Back all four timer globals with a single userland queue driven by ONE
+  // native timer at a time (the "pump"), so library timers are cheap queue
+  // entries with real, cancellable ids.
+  //
+  // This began as a workaround: jsse's setTimeout used to spawn an OS thread per
+  // call, always return a timer id of 0, and offer no clearTimeout/setInterval/
+  // clearInterval, so timer-heavy libraries (lodash's debounce/throttle churn
+  // thousands of timers) both needed cancellation and exhausted OS threads.
+  // jsse#254 fixed that in the engine — the four globals are now native and
+  // event-loop driven — so the queue is no longer load-bearing. It is kept
+  // because the runner's own scheduling depends on it (below), and because
+  // routing through it keeps the runner immune to a suite that swaps the global
+  // setTimeout.
+  //
+  // Retiring it is NOT a mechanical deletion: a native timer left armed keeps
+  // jsse's event loop alive until its ~120s deadline, so any suite that leaves
+  // an interval running at teardown (qunit-extras' progress ticker, say) would
+  // hang for two minutes instead of exiting. Audit interval teardown first.
   //
   // `queueAdd`/`queueRemove` are also what the runner's own scheduling
   // (`schedule`/`unschedule` below) uses, so the async guard, the global
@@ -94,11 +103,10 @@
         }
       }
       if (soonest === Infinity) return; // nothing pending → no native timer
-      // Cap the native delay: jsse spawns a thread per native timer and can't
-      // cancel one, so a far-future entry (e.g. the 600s watchdog) must NOT arm a
-      // long-lived native timer — that would keep the process's pending-timer
-      // count nonzero and delay exit. Instead poll at MAX_PUMP_DELAY_MS and let
-      // the queue empty naturally.
+      // Cap the native delay: an armed native timer keeps jsse's event loop
+      // alive, so a far-future entry (e.g. the 600s watchdog) must NOT arm a
+      // long-lived native timer — that would delay process exit. Instead poll at
+      // MAX_PUMP_DELAY_MS and let the queue empty naturally.
       var target = Math.min(soonest, Date.now() + MAX_PUMP_DELAY_MS);
       if (target >= pumpArmedFor) return; // an armed pump already wakes by then
       pumpArmedFor = target;
@@ -919,8 +927,8 @@
           // wait: a test whose done() never fires (e.g. a deferred callback
           // that throws on jsse before calling it) must not stall the whole
           // run. On timeout, record a failure and move on — mirrors QUnit's
-          // config.testTimeout. jsse has no clearTimeout, so the guard timer
-          // fires harmlessly later (it no-ops once _asyncResolve is cleared).
+          // config.testTimeout. The guard is cancelled below, and no-ops anyway
+          // once _asyncResolve is cleared.
           var guardId = -1;
           await new Promise(function (resolve) {
             testObj._asyncResolve = resolve;

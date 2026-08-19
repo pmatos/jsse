@@ -5030,10 +5030,10 @@ impl Interpreter {
                         let mut lock = self.agent_async_completions.0.lock().unwrap();
                         lock.drain(..).collect()
                     };
-                    if completions.is_empty()
-                        && (self.has_awaited_pending_async()
-                            || self.scheduler.pending_timer_jobs_count() != 0)
-                    {
+                    // Only host-async work can arrive on this queue now that
+                    // timers live in-process (#254); waiting on it for a timer
+                    // would just burn a millisecond per 64 microtasks.
+                    if completions.is_empty() && self.has_awaited_pending_async() {
                         let (ref mtx, ref cvar) = *self.agent_async_completions;
                         let lock = mtx.lock().unwrap();
                         if lock.is_empty() {
@@ -5078,6 +5078,46 @@ impl Interpreter {
         }
     }
 
+    /// Fire every timer that has come due, in deadline then arming order, and
+    /// report whether any ran.
+    ///
+    /// Timer callbacks are macrotasks: they run from an event-loop boundary
+    /// rather than from inside a microtask drain, and the microtask queue is
+    /// drained after each one so a promise settled by one callback is observed
+    /// before the next callback runs. A callback that throws is ignored (as
+    /// when each timer had its own thread, and as for an unhandled rejection);
+    /// a `__host_exit` latches the terminal sink and abandons the rest.
+    pub(crate) fn run_due_timers(&mut self) -> bool {
+        let due = self.scheduler.take_due_timers(std::time::Instant::now());
+        if due.is_empty() {
+            return false;
+        }
+        for (callback, args) in due {
+            // The queue no longer roots these — `take_due_timers` removed them —
+            // so hold them for the duration of the call.
+            let frame = self.gc_root_frame();
+            self.gc_root_value(&callback);
+            for arg in &args {
+                self.gc_root_value(arg);
+            }
+            let result = self.call_function(&callback, &JsValue::UNDEFINED, &args);
+            self.gc_unroot_frame(frame);
+            if let Completion::Exit(code) = result {
+                self.pending_exit = Some(code);
+                return true;
+            }
+            if self.pending_exit.is_some() {
+                return true;
+            }
+            // Microtask checkpoint between tasks, as on the HTML/Node loop.
+            self.drain_microtasks();
+            if self.pending_exit.is_some() {
+                return true;
+            }
+        }
+        true
+    }
+
     /// Drain already-queued jobs, then wait for host async jobs such as
     /// Atomics.waitAsync/getReportAsync when JS code is still awaiting them.
     ///
@@ -5093,10 +5133,12 @@ impl Interpreter {
         if self.pending_exit.is_some() {
             return;
         }
-        if !self.has_awaited_pending_async() && self.scheduler.pending_timer_jobs_count() == 0 {
+        if !self.has_awaited_pending_async() && !self.scheduler.has_timers() {
             return;
         }
 
+        // An armed timer keeps the loop alive, so an uncleared `setInterval`
+        // runs until this cap rather than forever as it would under Node.
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         loop {
             self.drain_microtasks();
@@ -5106,13 +5148,32 @@ impl Interpreter {
             if self.pending_exit.is_some() {
                 return;
             }
-            if !self.has_awaited_pending_async() && self.scheduler.pending_timer_jobs_count() == 0 {
+            if !self.has_awaited_pending_async() && !self.scheduler.has_timers() {
                 break;
             }
             if std::time::Instant::now() >= deadline {
                 break;
             }
 
+            // Run due timers, then loop so the microtask drain above handles
+            // whatever their callbacks queued. Timers armed by a callback wait
+            // for the next turn, so a recursive `setTimeout(fn, 0)` cannot
+            // starve the host-async completions below.
+            if self.run_due_timers() {
+                if self.pending_exit.is_some() {
+                    return;
+                }
+                continue;
+            }
+
+            // Nothing is due: sleep until a host async completion arrives or
+            // the earliest timer comes due, whichever is sooner. Without the
+            // timer cap an in-process timer would wait on a condvar that
+            // nothing is going to signal.
+            let timer_wait = self
+                .scheduler
+                .next_timer_deadline()
+                .map(|at| at.saturating_duration_since(std::time::Instant::now()));
             let (ref mtx, ref cvar) = *self.agent_async_completions;
             let lock = mtx.lock().unwrap();
             if !lock.is_empty() {
@@ -5123,9 +5184,11 @@ impl Interpreter {
             if remaining.is_zero() {
                 break;
             }
-            let (_guard, _timeout_result) = cvar
-                .wait_timeout(lock, remaining.min(std::time::Duration::from_millis(100)))
-                .unwrap();
+            let mut wait = remaining.min(std::time::Duration::from_millis(100));
+            if let Some(until_timer) = timer_wait {
+                wait = wait.min(until_timer);
+            }
+            let (_guard, _timeout_result) = cvar.wait_timeout(lock, wait).unwrap();
             drop(_guard);
         }
 
@@ -5187,7 +5250,20 @@ impl Interpreter {
             if std::time::Instant::now() >= deadline {
                 break;
             }
-            // Wait for async completions with a timeout
+            // An agent thread services its own timers (#254); nothing arrives
+            // cross-thread on its behalf.
+            if self.run_due_timers() {
+                if self.pending_exit.is_some() {
+                    return;
+                }
+                continue;
+            }
+            // Wait for async completions with a timeout, capped by the next
+            // timer deadline.
+            let timer_wait = self
+                .scheduler
+                .next_timer_deadline()
+                .map(|at| at.saturating_duration_since(std::time::Instant::now()));
             let (ref mtx, ref cvar) = *self.agent_async_completions;
             let lock = mtx.lock().unwrap();
             if !lock.is_empty() {
@@ -5198,9 +5274,11 @@ impl Interpreter {
             if remaining.is_zero() {
                 break;
             }
-            let (_guard, _timeout_result) = cvar
-                .wait_timeout(lock, remaining.min(std::time::Duration::from_millis(100)))
-                .unwrap();
+            let mut wait = remaining.min(std::time::Duration::from_millis(100));
+            if let Some(until_timer) = timer_wait {
+                wait = wait.min(until_timer);
+            }
+            let (_guard, _timeout_result) = cvar.wait_timeout(lock, wait).unwrap();
             drop(_guard);
         }
     }
