@@ -125,33 +125,77 @@ assert.sameValue(
 // The host has no text or bytes for a Module Source module. Attributes are part
 // of the module request, so this is a distinct request the host may reject; what
 // it must not do is reject in one phase and resolve in the other.
-for (const type of ['text', 'bytes']) {
-  const attrs = { with: { type } };
-  let evalErr = null;
-  let sourceErr = null;
-  try {
-    await import('<module source>', attrs);
-  } catch (e) {
-    evalErr = e;
-  }
-  try {
-    await import.source('<module source>', attrs);
-  } catch (e) {
-    sourceErr = e;
-  }
+const dynamicForms = {
+  'import()': (s, o) => import(s, o),
+  'import.source()': (s, o) => import.source(s, o),
+  'import.defer()': (s, o) => import.defer(s, o),
+};
 
+async function rejection(fn, specifier, options) {
+  try {
+    await fn(specifier, options);
+  } catch (e) {
+    return e;
+  }
+  return null;
+}
+
+// Cases are flattened into one list because `await` inside a loop nested in
+// another loop loses the outer iteration's bindings on jsse (see jsse#476);
+// a single loop level is unaffected.
+const typedCases = [];
+for (const type of ['text', 'bytes']) {
+  for (const name of Object.keys(dynamicForms)) {
+    typedCases.push([name, type]);
+  }
+}
+
+const messagesByType = {};
+for (const [name, type] of typedCases) {
+  const err = await rejection(dynamicForms[name], '<module source>', { with: { type } });
   assert(
-    evalErr instanceof TypeError,
-    'import(<module source>, type: ' + type + ') rejects with a TypeError'
+    err instanceof TypeError,
+    name + ' rejects a type: ' + type + ' request with a TypeError, got: ' + err
   );
-  assert(
-    sourceErr instanceof TypeError,
-    'import.source(<module source>, type: ' + type + ') rejects with a TypeError'
-  );
+  if (!messagesByType[type]) {
+    messagesByType[type] = [];
+  }
+  messagesByType[type].push(err.message);
+}
+
+for (const type of Object.keys(messagesByType)) {
   assert.sameValue(
-    sourceErr.message,
-    evalErr.message,
-    'both phases reject a type: ' + type + ' request with the same message'
+    new Set(messagesByType[type]).size,
+    1,
+    'every form rejects a type: ' + type + ' request with the same message, got: ' +
+      JSON.stringify(messagesByType[type])
+  );
+}
+
+// --- attributes come from enumerable own properties of `with` only ---
+// EvaluateImportCall enumerates `with`, so an inherited or non-enumerable `type`
+// is not an import attribute and must not turn into a rejection. Reading `type`
+// straight off the object instead of enumerating gets this wrong.
+const inheritedType = Object.create({ type: 'text' });
+const nonEnumerableType = {};
+Object.defineProperty(nonEnumerableType, 'type', { value: 'text', enumerable: false });
+
+const attributeCases = [];
+for (const [label, withValue] of [
+  ['an inherited', inheritedType],
+  ['a non-enumerable own', nonEnumerableType],
+]) {
+  for (const name of ['import()', 'import.source()']) {
+    attributeCases.push([label, withValue, name]);
+  }
+}
+
+for (const [label, withValue, name] of attributeCases) {
+  const err = await rejection(dynamicForms[name], '<module source>', { with: withValue });
+  assert.sameValue(
+    err,
+    null,
+    name + ' must ignore ' + label + ' `type` on `with`, but rejected with: ' + err
   );
 }
 
