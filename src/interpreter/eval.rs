@@ -9901,19 +9901,12 @@ impl Interpreter {
                 if self.run_due_timers() {
                     continue;
                 }
-                let timer_wait = self
-                    .scheduler
-                    .next_timer_deadline()
-                    .map(|at| at.saturating_duration_since(std::time::Instant::now()));
+                let wait = self.completion_wait(remaining);
                 let (ref mtx, ref cvar) = *self.agent_async_completions;
                 let lock = mtx.lock().unwrap();
                 if !lock.is_empty() {
                     drop(lock);
                     continue;
-                }
-                let mut wait = remaining.min(std::time::Duration::from_millis(100));
-                if let Some(until_timer) = timer_wait {
-                    wait = wait.min(until_timer);
                 }
                 let _ = cvar.wait_timeout(lock, wait).unwrap();
                 continue;

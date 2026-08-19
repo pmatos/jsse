@@ -69,12 +69,12 @@ fn sanitize_native_fn_name(name: &str) -> String {
 /// Shared body of `setTimeout` / `setInterval`: validate the callback, coerce
 /// the delay, and arm a timer. Extra arguments are passed to the callback when
 /// it fires. Returns the timer id.
-fn arm_timer(
-    interp: &mut Interpreter,
-    args: &[JsValue],
-    repeating: bool,
-    name: &str,
-) -> Completion {
+fn arm_timer(interp: &mut Interpreter, args: &[JsValue], repeating: bool) -> Completion {
+    let name = if repeating {
+        "setInterval"
+    } else {
+        "setTimeout"
+    };
     let callback = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
     if !interp.is_callable(&callback) {
         return Completion::Throw(
@@ -518,14 +518,14 @@ impl Interpreter {
             "setTimeout",
             BindingKind::Var,
             JsFunction::native("setTimeout".to_string(), 2, |interp, _this, args| {
-                arm_timer(interp, args, false, "setTimeout")
+                arm_timer(interp, args, false)
             }),
         );
         self.register_global_fn(
             "setInterval",
             BindingKind::Var,
             JsFunction::native("setInterval".to_string(), 2, |interp, _this, args| {
-                arm_timer(interp, args, true, "setInterval")
+                arm_timer(interp, args, true)
             }),
         );
         self.register_global_fn(

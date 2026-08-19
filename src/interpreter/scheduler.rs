@@ -34,7 +34,11 @@ struct Timer {
 /// index that may hold stale entries: cancelling a timer drops it from `timers`
 /// only, and re-arming an interval leaves the previous deadline behind. An
 /// entry is stale when its id is gone or its deadline no longer matches the
-/// map, and is skipped on pop — so cancellation stays O(1).
+/// map, and is skipped on pop — so cancellation stays O(1). Stale entries are
+/// only reclaimed on pop, so the index is compacted once they outnumber the live
+/// timers; without that, arm-then-cancel churn on far-future deadlines
+/// (lodash-style `debounce`/`throttle`) grows the heap without bound, because no
+/// pop ever reaches them.
 #[derive(Default)]
 pub(crate) struct TimerQueue {
     next_id: u64,
@@ -67,11 +71,29 @@ impl TimerQueue {
                 interval: repeating.then_some(delay),
             },
         );
+        self.compact_index_if_stale();
         id
     }
 
     pub(crate) fn clear(&mut self, id: u64) {
         self.timers.remove(&id);
+        self.compact_index_if_stale();
+    }
+
+    /// Rebuild the deadline index from the live timers once stale entries
+    /// outnumber them. Each rebuild drops at least half the index, so the
+    /// amortised cost per arm/cancel stays constant, and a queue with no stale
+    /// entries never pays it.
+    fn compact_index_if_stale(&mut self) {
+        const MIN_INDEX_LEN: usize = 32;
+        if self.heap.len() <= MIN_INDEX_LEN || self.heap.len() <= 2 * self.timers.len() {
+            return;
+        }
+        self.heap = self
+            .timers
+            .iter()
+            .filter_map(|(&id, timer)| timer.fire_at.map(|at| Reverse((at, id))))
+            .collect();
     }
 
     pub(crate) fn is_empty(&self) -> bool {
@@ -91,12 +113,18 @@ impl TimerQueue {
         None
     }
 
-    /// Remove and return every timer due at `now`, in deadline then arming
-    /// order. Repeating timers re-arm relative to `now` — measuring from the
-    /// deadline instead would let a long synchronous block queue a burst of
-    /// catch-up ticks. Re-armed entries land in the heap only after the batch is
+    /// Ids of every timer due at `now`, in deadline then arming order.
+    ///
+    /// The timers stay in the queue: a callback earlier in the batch must be
+    /// able to cancel a sibling that has not run yet (as on Node), and until a
+    /// timer actually fires the queue is what keeps its callback GC-rooted.
+    /// Call [`TimerQueue::take_for_firing`] for each id in turn to collect it.
+    ///
+    /// Repeating timers re-arm relative to `now` — measuring from the deadline
+    /// instead would let a long synchronous block queue a burst of catch-up
+    /// ticks. Re-armed entries land in the index only after the batch is
     /// collected, so a zero-delay interval fires at most once per loop turn.
-    pub(crate) fn take_due(&mut self, now: Instant) -> Vec<(JsValue, Vec<JsValue>)> {
+    pub(crate) fn take_due(&mut self, now: Instant) -> Vec<u64> {
         let mut due = Vec::new();
         let mut rearmed = Vec::new();
         while let Some(&Reverse((at, id))) = self.heap.peek() {
@@ -113,19 +141,35 @@ impl TimerQueue {
             match timer.interval {
                 Some(interval) => {
                     timer.fire_at = now.checked_add(interval);
-                    due.push((timer.callback.clone(), timer.args.clone()));
                     if let Some(next) = timer.fire_at {
                         rearmed.push(Reverse((next, id)));
                     }
                 }
-                None => {
-                    let timer = self.timers.remove(&id).expect("looked up above");
-                    due.push((timer.callback, timer.args));
-                }
+                // Keep the timer, but off the index: it is spoken for by this
+                // batch and must not be collected twice.
+                None => timer.fire_at = None,
             }
+            due.push(id);
         }
         self.heap.extend(rearmed);
         due
+    }
+
+    /// Callback and arguments for a due timer, or `None` if a callback earlier
+    /// in the same batch cancelled it. A one-shot leaves the queue here, at the
+    /// moment it is about to run.
+    pub(crate) fn take_for_firing(&mut self, id: u64) -> Option<(JsValue, Vec<JsValue>)> {
+        if self.timers.get(&id)?.interval.is_some() {
+            let timer = &self.timers[&id];
+            return Some((timer.callback.clone(), timer.args.clone()));
+        }
+        let timer = self.timers.remove(&id)?;
+        Some((timer.callback, timer.args))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn index_len(&self) -> usize {
+        self.heap.len()
     }
 
     /// GC roots: an armed timer keeps its callback and arguments alive.
@@ -259,8 +303,12 @@ impl JobScheduler {
         self.timers.next_deadline()
     }
 
-    pub(crate) fn take_due_timers(&mut self, now: Instant) -> Vec<(JsValue, Vec<JsValue>)> {
+    pub(crate) fn take_due_timers(&mut self, now: Instant) -> Vec<u64> {
         self.timers.take_due(now)
+    }
+
+    pub(crate) fn take_timer_for_firing(&mut self, id: u64) -> Option<(JsValue, Vec<JsValue>)> {
+        self.timers.take_for_firing(id)
     }
 
     pub(crate) fn iter_timer_roots(&self) -> impl Iterator<Item = (&JsValue, &[JsValue])> {
@@ -427,10 +475,12 @@ mod tests {
         JsValue::number(n)
     }
 
-    /// Tags of the callbacks a `take_due` batch returned, in order.
-    fn due_tags(batch: &[(JsValue, Vec<JsValue>)]) -> Vec<f64> {
-        batch
-            .iter()
+    /// Collect a due batch the way the event loop does — take the ids, then
+    /// fire each in turn — and return the callback tags in order.
+    fn drain_due(q: &mut TimerQueue, now: Instant) -> Vec<f64> {
+        q.take_due(now)
+            .into_iter()
+            .filter_map(|id| q.take_for_firing(id))
             .map(|(cb, _)| cb.as_number().expect("callback tag must be a Number"))
             .collect()
     }
@@ -458,7 +508,7 @@ mod tests {
 
         let now = Instant::now() + Duration::from_millis(100);
         assert_eq!(
-            due_tags(&q.take_due(now)),
+            drain_due(&mut q, now),
             vec![2.0, 3.0, 1.0],
             "same-deadline timers keep arming order; earlier deadlines come first"
         );
@@ -478,8 +528,10 @@ mod tests {
             "a cleared timer must stop rooting its callback"
         );
 
-        let due = q.take_due(Instant::now() + Duration::from_millis(10));
-        assert_eq!(due_tags(&due), vec![2.0]);
+        assert_eq!(
+            drain_due(&mut q, Instant::now() + Duration::from_millis(10)),
+            vec![2.0]
+        );
     }
 
     #[test]
@@ -491,7 +543,7 @@ mod tests {
         q.clear(999);
 
         assert_eq!(
-            due_tags(&q.take_due(Instant::now() + Duration::from_millis(10))),
+            drain_due(&mut q, Instant::now() + Duration::from_millis(10)),
             vec![1.0]
         );
     }
@@ -504,11 +556,11 @@ mod tests {
         // A zero-delay interval re-arms to exactly `now`; it must still fire
         // only once per batch, or `take_due` would never terminate.
         let now = Instant::now() + Duration::from_millis(10);
-        assert_eq!(due_tags(&q.take_due(now)), vec![7.0]);
+        assert_eq!(drain_due(&mut q, now), vec![7.0]);
         assert!(!q.is_empty(), "an interval stays armed after firing");
 
         assert_eq!(
-            due_tags(&q.take_due(now + Duration::from_millis(1))),
+            drain_due(&mut q, now + Duration::from_millis(1)),
             vec![7.0],
             "the re-armed interval fires again on the next turn"
         );
@@ -520,7 +572,7 @@ mod tests {
         let id = q.add(timer_tag(7.0), Vec::new(), Duration::ZERO, true);
 
         let now = Instant::now() + Duration::from_millis(10);
-        assert_eq!(due_tags(&q.take_due(now)), vec![7.0]);
+        assert_eq!(drain_due(&mut q, now), vec![7.0]);
 
         q.clear(id);
         assert!(q.is_empty());
@@ -567,6 +619,101 @@ mod tests {
     }
 
     #[test]
+    fn a_timer_can_be_cancelled_after_its_batch_is_collected() {
+        // Node semantics: a timer cleared from inside a sibling's callback in
+        // the same tick does not run. The batch is collected as ids, so the
+        // sibling is still in the queue and `clear` still reaches it.
+        let mut q = TimerQueue::default();
+        q.add(timer_tag(1.0), Vec::new(), Duration::ZERO, false);
+        let doomed = q.add(timer_tag(2.0), Vec::new(), Duration::ZERO, false);
+
+        let due = q.take_due(Instant::now() + Duration::from_millis(10));
+        assert_eq!(due.len(), 2, "both timers are due");
+
+        // Fire the first, and let it cancel the second.
+        assert!(q.take_for_firing(due[0]).is_some());
+        q.clear(doomed);
+
+        assert!(
+            q.take_for_firing(due[1]).is_none(),
+            "a timer cancelled mid-batch must not fire"
+        );
+    }
+
+    #[test]
+    fn a_due_timer_stays_rooted_until_it_actually_fires() {
+        // Collecting the batch must not drop the GC roots of timers that have
+        // not run yet, or a collection during an earlier callback would take
+        // them with it.
+        let mut q = TimerQueue::default();
+        q.add(timer_tag(1.0), Vec::new(), Duration::ZERO, false);
+        q.add(timer_tag(2.0), Vec::new(), Duration::ZERO, false);
+
+        let due = q.take_due(Instant::now() + Duration::from_millis(10));
+        assert_eq!(
+            q.iter_roots().count(),
+            2,
+            "both callbacks are still rooted while the batch is pending"
+        );
+
+        q.take_for_firing(due[0]);
+        assert_eq!(
+            q.iter_roots().count(),
+            1,
+            "a timer stops being rooted only once it is taken to run"
+        );
+    }
+
+    #[test]
+    fn arm_then_cancel_churn_does_not_grow_the_index() {
+        // The workload from the issue: debounce/throttle arms a far-future
+        // timer and cancels it, over and over. Those deadlines are never
+        // reached by a pop, so without compaction the index grows for ever.
+        let mut q = TimerQueue::default();
+        for _ in 0..10_000 {
+            let id = q.add(timer_tag(1.0), Vec::new(), Duration::from_secs(3600), false);
+            q.clear(id);
+        }
+
+        assert!(q.is_empty(), "every timer was cancelled");
+        assert!(
+            q.index_len() <= 64,
+            "stale index entries must be reclaimed, found {}",
+            q.index_len()
+        );
+    }
+
+    #[test]
+    fn compaction_preserves_the_live_timers_and_their_order() {
+        // Interleave keep/cancel pairs so compaction runs with live timers
+        // present, then check every survivor still fires, in order.
+        let mut q = TimerQueue::default();
+        for i in 0..200u64 {
+            let doomed = q.add(
+                timer_tag(-1.0),
+                Vec::new(),
+                Duration::from_secs(3600),
+                false,
+            );
+            q.add(
+                timer_tag(i as f64),
+                Vec::new(),
+                Duration::from_millis(i),
+                false,
+            );
+            q.clear(doomed);
+        }
+
+        let fired = drain_due(&mut q, Instant::now() + Duration::from_secs(60));
+        assert_eq!(fired.len(), 200, "no live timer may be lost to compaction");
+        assert_eq!(
+            fired,
+            (0..200).map(|i| i as f64).collect::<Vec<_>>(),
+            "compaction must not disturb deadline order"
+        );
+    }
+
+    #[test]
     fn next_deadline_skips_cleared_timers() {
         let mut q = TimerQueue::default();
         let soon = q.add(timer_tag(1.0), Vec::new(), Duration::ZERO, false);
@@ -608,7 +755,8 @@ mod tests {
 
         let due = q.take_due(Instant::now() + Duration::from_millis(10));
         assert_eq!(due.len(), 1);
-        assert_eq!(due[0].1[0].as_number(), Some(9.0));
+        let (_, args) = q.take_for_firing(due[0]).expect("timer is still armed");
+        assert_eq!(args[0].as_number(), Some(9.0));
     }
 
     #[test]

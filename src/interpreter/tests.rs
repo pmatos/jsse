@@ -529,6 +529,31 @@ fn non_callable_timer_callback_throws_a_type_error() {
 }
 
 #[test]
+fn a_gc_inside_one_timer_callback_does_not_collect_the_rest_of_the_batch() {
+    // The due batch is handed out of the scheduler before any of it runs, so
+    // nothing in the queue roots it any more. A callback that allocates enough
+    // to trigger a collection must not take its unrun siblings with it.
+    let interp = run_script(
+        r#"
+        var fired = 0;
+        for (var i = 0; i < 200; i++) {
+          (function (n) {
+            setTimeout(function () {
+              fired++;
+              if (n === 0) {
+                var junk = [];
+                for (var k = 0; k < 400000; k++) junk.push({ a: k, b: [k, k] });
+                junk = null;
+              }
+            }, 0);
+          })(i);
+        }
+        "#,
+    );
+    assert_eq!(global_number(&interp, "fired"), 200.0);
+}
+
+#[test]
 fn many_concurrent_timers_run_without_a_thread_per_timer() {
     // The failure in issue #254: a thread per setTimeout exhausted the OS
     // thread limit once enough timers were armed at once.
