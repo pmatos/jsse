@@ -39,6 +39,76 @@ enum DestructLRef {
 }
 
 impl Interpreter {
+    /// §2.1.1.1 EvaluateImportCall steps 9-11: evaluate an import call's options
+    /// expression and read the requested module type off its `with` attributes.
+    /// `Err` carries the `Completion` the caller should return — an abrupt
+    /// completion from the options expression, or a rejected promise.
+    ///
+    /// Import attributes are the *enumerable own* properties of `with`, so an
+    /// inherited or non-enumerable `type` is not an attribute. `import()`,
+    /// `import.source()` and `import.defer()` all go through here; they each had
+    /// their own copy, and the two shorter copies read `type` straight off the
+    /// object, turning an inherited `type` into a spurious rejection.
+    fn import_call_options_type(
+        &mut self,
+        options_expr: Option<&Expression>,
+        env: &EnvRef,
+        callee: &str,
+    ) -> Result<Option<super::ImportModuleType>, Completion> {
+        let Some(options_expr) = options_expr else {
+            return Ok(None);
+        };
+        let opts_val = match self.eval_expr(options_expr, env) {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        self.import_call_module_type(&opts_val, callee)
+            .map_err(|e| self.create_rejected_promise(e))
+    }
+
+    fn import_call_module_type(
+        &mut self,
+        opts_val: &JsValue,
+        callee: &str,
+    ) -> Result<Option<super::ImportModuleType>, JsValue> {
+        if opts_val.is_undefined() {
+            return Ok(None);
+        }
+        let Some(opts_id) = opts_val.as_object_id() else {
+            return Err(self.create_type_error(&format!(
+                "The second argument to {callee} must be an object"
+            )));
+        };
+        let wv = match self.get_object_property(opts_id, "with", opts_val) {
+            Completion::Normal(v) => v,
+            Completion::Throw(e) => return Err(e),
+            _ => return Err(self.create_type_error("Invalid import options")),
+        };
+        if wv.is_undefined() {
+            return Ok(None);
+        }
+        let Some(with_id) = wv.as_object_id() else {
+            return Err(self.create_type_error("The 'with' option must be an object"));
+        };
+
+        let mut itype = None;
+        for k in crate::interpreter::helpers::enumerable_own_keys(self, with_id)? {
+            let v = match self.get_object_property(with_id, &k, &wv) {
+                Completion::Normal(v) => v,
+                Completion::Throw(e) => return Err(e),
+                _ => return Err(self.create_type_error("Invalid import attribute")),
+            };
+            let Some(sv) = (v).as_string() else {
+                return Err(self.create_type_error("Import attribute values must be strings"));
+            };
+            // Every value is string-checked, so keep going past "type".
+            if k.eq_str("type") {
+                itype = super::ImportModuleType::from_attr_value(&sv.to_rust_string());
+            }
+        }
+        Ok(itype)
+    }
+
     fn resolve_private_name(&self, source_name: &str, env: &EnvRef) -> String {
         let mut current = Some(env.clone());
         while let Some(e) = current {
@@ -1122,88 +1192,11 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                // Evaluate options expression if present (abrupt completions propagate directly)
-                let mut dynamic_import_type: Option<super::ImportModuleType> = None;
-                if let Some(opts_expr) = options_expr {
-                    match self.eval_expr(opts_expr, env) {
-                        Completion::Normal(opts_val) => {
-                            // Steps 9-10: If options is not undefined, validate it
-                            if !opts_val.is_undefined() {
-                                if !(opts_val).is_object() {
-                                    let err = self.create_type_error(
-                                        "The second argument to import() must be an object",
-                                    );
-                                    return self.create_rejected_promise(err);
-                                }
-                                // Step 11: Get "with" property (must use [[Get]] to invoke getters)
-                                if let Some(o) = opts_val
-                                    .clone()
-                                    .as_object_id()
-                                    .map(|id| crate::types::JsObject { id })
-                                {
-                                    let wv = match self.get_object_property(o.id, "with", &opts_val)
-                                    {
-                                        Completion::Normal(v) => v,
-                                        Completion::Throw(e) => {
-                                            return self.create_rejected_promise(e);
-                                        }
-                                        other => return other,
-                                    };
-                                    if !wv.is_undefined() {
-                                        if !(wv).is_object() {
-                                            let err = self.create_type_error(
-                                                "The 'with' option must be an object",
-                                            );
-                                            return self.create_rejected_promise(err);
-                                        }
-                                        // §2.1.1.1 step 10d: enumerate properties, each value must be a string
-                                        if let Some(with_obj) = (wv)
-                                            .as_object_id()
-                                            .map(|id| crate::types::JsObject { id })
-                                        {
-                                            let keys = match crate::interpreter::helpers::enumerable_own_keys(self, with_obj.id) {
-                                                Ok(k) => k,
-                                                Err(e) => return self.create_rejected_promise(e),
-                                            };
-                                            for k in keys {
-                                                let v = match self.get_object_property(
-                                                    with_obj.id,
-                                                    &k,
-                                                    &wv,
-                                                ) {
-                                                    Completion::Normal(v) => v,
-                                                    Completion::Throw(e) => {
-                                                        return self.create_rejected_promise(e);
-                                                    }
-                                                    other => return other,
-                                                };
-                                                if let Some(sv) = (v).as_string() {
-                                                    if k.eq_str("type") {
-                                                        let s = sv.to_string();
-                                                        if s == "text" {
-                                                            dynamic_import_type =
-                                                                Some(super::ImportModuleType::Text);
-                                                        } else if s == "bytes" {
-                                                            dynamic_import_type = Some(
-                                                                super::ImportModuleType::Bytes,
-                                                            );
-                                                        }
-                                                    }
-                                                } else {
-                                                    let err = self.create_type_error(
-                                                        "Import attribute values must be strings",
-                                                    );
-                                                    return self.create_rejected_promise(err);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        other => return other,
-                    }
-                }
+                let dynamic_import_type =
+                    match self.import_call_options_type(options_expr.as_deref(), env, "import()") {
+                        Ok(t) => t,
+                        Err(c) => return c,
+                    };
                 // Per spec: ToString(specifier) errors produce a rejected promise
                 let source = match self.to_string_value(&source_val) {
                     Ok(s) => s,
@@ -1216,33 +1209,14 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if let Some(opts_expr) = options_expr {
-                    match self.eval_expr(opts_expr, env) {
-                        Completion::Normal(opts_val) => {
-                            if !opts_val.is_undefined() {
-                                if !(opts_val).is_object() {
-                                    let err = self.create_type_error(
-                                        "The second argument to import.defer() must be an object",
-                                    );
-                                    return self.create_rejected_promise(err);
-                                }
-                                if let Some(o) = opts_val
-                                    .as_object_id()
-                                    .map(|id| crate::types::JsObject { id })
-                                {
-                                    let wv = self.get_property_on_id(o.id, "with");
-                                    if !wv.is_undefined() && !(wv).is_object() {
-                                        let err = self.create_type_error(
-                                            "The 'with' option must be an object",
-                                        );
-                                        return self.create_rejected_promise(err);
-                                    }
-                                }
-                            }
-                        }
-                        other => return other,
-                    }
-                }
+                let defer_import_type = match self.import_call_options_type(
+                    options_expr.as_deref(),
+                    env,
+                    "import.defer()",
+                ) {
+                    Ok(t) => t,
+                    Err(c) => return c,
+                };
                 let source = match self.to_string_value(&source_val) {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
@@ -1255,9 +1229,18 @@ impl Interpreter {
                     Ok(r) => r,
                     Err(e) => return self.create_rejected_promise(e),
                 };
+                // The synthetic Module Source module has no text or bytes in any
+                // phase, so a typed request must be refused here too, exactly as
+                // import() and import.source() refuse it.
+                if let Some(itype) = defer_import_type
+                    && Self::is_module_source_path(&resolved)
+                {
+                    let err = self.module_source_type_error(itype);
+                    return self.create_rejected_promise(err);
+                }
                 match self.load_module_no_eval(&resolved) {
                     Ok(module) => {
-                        let resolved_canon = resolved.canonicalize().unwrap_or(resolved.clone());
+                        let resolved_canon = Self::canonicalize_module_path(&resolved);
                         self.evaluate_async_transitive_deps(&resolved_canon);
                         self.drain_microtasks();
                         let ns = self.create_deferred_module_namespace(&module);
@@ -1271,33 +1254,14 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                if let Some(opts_expr) = options_expr {
-                    match self.eval_expr(opts_expr, env) {
-                        Completion::Normal(opts_val) => {
-                            if !opts_val.is_undefined() {
-                                if !(opts_val).is_object() {
-                                    let err = self.create_type_error(
-                                        "The second argument to import.source() must be an object",
-                                    );
-                                    return self.create_rejected_promise(err);
-                                }
-                                if let Some(o) = opts_val
-                                    .as_object_id()
-                                    .map(|id| crate::types::JsObject { id })
-                                {
-                                    let wv = self.get_property_on_id(o.id, "with");
-                                    if !wv.is_undefined() && !(wv).is_object() {
-                                        let err = self.create_type_error(
-                                            "The 'with' option must be an object",
-                                        );
-                                        return self.create_rejected_promise(err);
-                                    }
-                                }
-                            }
-                        }
-                        other => return other,
-                    }
-                }
+                let source_import_type = match self.import_call_options_type(
+                    options_expr.as_deref(),
+                    env,
+                    "import.source()",
+                ) {
+                    Ok(t) => t,
+                    Err(c) => return c,
+                };
                 let source = match self.to_string_value(&source_val) {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
@@ -1306,7 +1270,11 @@ impl Interpreter {
                 // target module's [[ModuleSource]]. A Source Text Module has an
                 // empty [[ModuleSource]] (GetModuleSource throws SyntaxError).
                 let referrer = self.current_module_path.clone();
-                match self.resolve_source_phase_target(&source, referrer.as_deref()) {
+                match self.resolve_source_phase_target(
+                    &source,
+                    referrer.as_deref(),
+                    source_import_type,
+                ) {
                     Ok((_, Some(ms))) => self.create_resolved_promise(ms),
                     Ok((_, None)) => {
                         let err = self.create_error(

@@ -49,17 +49,31 @@ enum ImportModuleType {
     Bytes,
 }
 
-fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
-    for (key, value) in attrs {
-        if key == "type" {
-            return match value.as_str() {
-                "text" => Some(ImportModuleType::Text),
-                "bytes" => Some(ImportModuleType::Bytes),
-                _ => None,
-            };
+impl ImportModuleType {
+    /// The `type` import-attribute values jsse serves synthetic modules for.
+    /// `None` covers both an unknown type and one jsse decides another way
+    /// (`"json"` is chosen by file extension — see #475).
+    fn from_attr_value(value: &str) -> Option<Self> {
+        match value {
+            "text" => Some(Self::Text),
+            "bytes" => Some(Self::Bytes),
+            _ => None,
         }
     }
-    None
+
+    fn attr_value(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Bytes => "bytes",
+        }
+    }
+}
+
+fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
+    attrs
+        .iter()
+        .find(|(key, _)| key == "type")
+        .and_then(|(_, value)| ImportModuleType::from_attr_value(value))
 }
 
 pub(crate) struct Interpreter {
@@ -235,6 +249,20 @@ pub(crate) const EVAL_DEPTH_LIMIT: usize = 50_000;
 
 const MAX_POOLED_FUNCTION_ENVIRONMENTS: usize = 256;
 const MAX_POOLED_FUNCTION_BINDING_CAPACITY: usize = 256;
+
+/// test262's host specifier for a Module Source. `test262/INTERPRETING.md`
+/// requires implementers to "resolve the specifier `<module source>` to a module
+/// that provides a valid Module Source" — a module record, not a source-phase-only
+/// stand-in. jsse has no concrete Module Source kind (no WebAssembly), so it
+/// resolves to a synthetic module, the only one whose `[[ModuleSource]]` is
+/// non-empty; see `Interpreter::get_or_create_module_source_module`.
+///
+/// `HostLoadImportedModule` must hand back the same Module Record for a given
+/// (referrer, specifier) pair regardless of the request's phase.
+///
+/// It is intercepted before any filesystem resolution and doubles as the module
+/// registry key, so it never reaches a real file of the same name.
+pub(crate) const MODULE_SOURCE_SPECIFIER: &str = "<module source>";
 
 pub(crate) struct DeferredCallArguments {
     first: Option<JsValue>,
@@ -886,11 +914,12 @@ impl Interpreter {
         None
     }
 
-    /// Get (or lazily create) the host module that the `<module source>`
-    /// test262 specifier resolves to. Its `[[ModuleSource]]` is a fresh
-    /// %AbstractModuleSource% instance; it exposes no bindings.
+    /// Get (or lazily create) the host module that test262's
+    /// `MODULE_SOURCE_SPECIFIER` resolves to, in every import phase. Its
+    /// `[[ModuleSource]]` is a fresh %AbstractModuleSource% instance; it exposes
+    /// no bindings.
     fn get_or_create_module_source_module(&mut self) -> Rc<RefCell<LoadedModule>> {
-        let sentinel = PathBuf::from("<module source>");
+        let sentinel = PathBuf::from(MODULE_SOURCE_SPECIFIER);
         if let Some(existing) = self.module_registry_get(&sentinel) {
             return existing;
         }
@@ -943,29 +972,69 @@ impl Interpreter {
     /// resolved path and the source object (`None` when the target has no
     /// source-phase representation, which the caller turns into a SyntaxError).
     ///
-    /// The test262 `<module source>` host specifier maps to a synthetic host
-    /// module whose `[[ModuleSource]]` is populated. For any other specifier,
-    /// source-phase loading is *shallow*: it resolves the requested specifier
-    /// (a genuine host-resolution failure of that specifier surfaces here as a
-    /// non-SyntaxError) but must NOT load, link, or evaluate the target — the
-    /// source phase never triggers host loads for the target's transitive
-    /// dependencies, nor consults `[[EvaluationError]]`. jsse has no concrete
-    /// Module Source kind, so every resolvable file is an ordinary Source Text
-    /// Module with an empty `[[ModuleSource]]`; returning `None` here lets the
-    /// caller reject with the source-phase SyntaxError without exposing the
-    /// target's dependency-resolution, link, or cached evaluation errors.
+    /// Host resolution runs through the shared `resolve_module_specifier`, so the
+    /// phase never changes *which* module a specifier names — only what is read
+    /// off the resulting record. `MODULE_SOURCE_SPECIFIER` resolves to the
+    /// synthetic host module whose `[[ModuleSource]]` is populated.
+    ///
+    /// For any other specifier, source-phase loading is *shallow*: it resolves
+    /// the requested specifier (a genuine host-resolution failure of that
+    /// specifier surfaces here as a non-SyntaxError) but must NOT load, link, or
+    /// evaluate the target — the source phase never triggers host loads for the
+    /// target's transitive dependencies, nor consults `[[EvaluationError]]`.
+    /// jsse has no concrete Module Source kind, so every resolvable file is an
+    /// ordinary Source Text Module with an empty `[[ModuleSource]]`; returning
+    /// `None` here lets the caller reject with the source-phase SyntaxError
+    /// without exposing the target's dependency-resolution, link, or cached
+    /// evaluation errors.
     fn resolve_source_phase_target(
         &mut self,
         specifier: &str,
         referrer: Option<&Path>,
+        import_type: Option<ImportModuleType>,
     ) -> Result<(PathBuf, Option<JsValue>), JsValue> {
-        if specifier == "<module source>" {
-            let module = self.get_or_create_module_source_module();
-            let module_source = module.borrow().module_source.clone();
-            return Ok((PathBuf::from("<module source>"), module_source));
-        }
         let resolved = self.resolve_module_specifier(specifier, referrer)?;
+        if Self::is_module_source_path(&resolved) {
+            if let Some(itype) = import_type {
+                return Err(self.module_source_type_error(itype));
+            }
+            let module = self.load_module(&resolved)?;
+            let module_source = module.borrow().module_source.clone();
+            return Ok((resolved, module_source));
+        }
         Ok((resolved, None))
+    }
+
+    /// Whether `path` is the module-registry key of the synthetic
+    /// `<module source>` host module rather than a filesystem path.
+    fn is_module_source_path(path: &Path) -> bool {
+        path == Path::new(MODULE_SOURCE_SPECIFIER)
+    }
+
+    /// Canonicalize a module *target* path, leaving the synthetic
+    /// `<module source>` key untouched.
+    ///
+    /// The key is a bare relative path, so a plain `canonicalize()` succeeds
+    /// whenever the process happens to run in a directory holding a real entry of
+    /// that name — silently rebinding the specifier to that file's registry slot.
+    /// Every site that canonicalizes a path which may have come from
+    /// `resolve_module_specifier` goes through here, so the key also keeps
+    /// resolving to the synthetic record rather than missing the registry.
+    fn canonicalize_module_path(path: &Path) -> PathBuf {
+        if Self::is_module_source_path(path) {
+            return path.to_path_buf();
+        }
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    }
+
+    /// The host has no text or bytes to hand back for a Module Source module, in
+    /// any import phase. Built in one place so the source phase and the
+    /// evaluation phase cannot report an unsatisfiable request differently.
+    fn module_source_type_error(&mut self, itype: ImportModuleType) -> JsValue {
+        self.create_type_error(&format!(
+            "Module '{MODULE_SOURCE_SPECIFIER}' has no {} representation",
+            itype.attr_value()
+        ))
     }
 
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
@@ -2168,10 +2237,11 @@ impl Interpreter {
 
         // Source-phase import (`import source X from '...'`) — a source-phase
         // ImportDeclaration has exactly one SourcePhase specifier. Handle it
-        // before the generic specifier resolution, which cannot resolve the
-        // host `<module source>` specifier.
+        // before the generic path, which binds a namespace and loads the target
+        // graph; the source phase binds `[[ModuleSource]]` and stays shallow.
         if let [ImportSpecifier::SourcePhase(local)] = import.specifiers.as_slice() {
-            return self.process_source_phase_import(local, &import.source, env);
+            let itype = import_module_type(&import.attributes);
+            return self.process_source_phase_import(local, &import.source, itype, env);
         }
 
         let resolved = self.resolve_module_specifier(&import.source, module_path.as_deref())?;
@@ -2180,7 +2250,7 @@ impl Interpreter {
 
         // Text/bytes imports use synthetic module registry
         if let Some(ref it) = itype {
-            let canon = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+            let canon = Self::canonicalize_module_path(&resolved);
             let key = (canon, it.clone());
             let loaded = self
                 .synthetic_module_registry
@@ -2287,11 +2357,12 @@ impl Interpreter {
         &mut self,
         local: &str,
         specifier: &str,
+        import_type: Option<ImportModuleType>,
         env: &EnvRef,
     ) -> Result<(), JsValue> {
         let referrer = self.current_module_path.clone();
         let (target_path, module_source) =
-            self.resolve_source_phase_target(specifier, referrer.as_deref())?;
+            self.resolve_source_phase_target(specifier, referrer.as_deref(), import_type)?;
 
         let Some(module_source) = module_source else {
             return Err(self.create_error(
@@ -2526,6 +2597,12 @@ impl Interpreter {
         specifier: &str,
         referrer: Option<&Path>,
     ) -> Result<PathBuf, JsValue> {
+        // Host-provided synthetic module. Resolved here rather than in the
+        // source-phase path so that every phase names the same Module Record.
+        if specifier == MODULE_SOURCE_SPECIFIER {
+            return Ok(PathBuf::from(MODULE_SOURCE_SPECIFIER));
+        }
+
         // Relative paths: ./ or ../
         if specifier.starts_with("./") || specifier.starts_with("../") {
             if let Some(referrer) = referrer {
@@ -2570,7 +2647,11 @@ impl Interpreter {
     }
 
     fn load_module_inner(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if Self::is_module_source_path(path) {
+            return Ok(self.get_or_create_module_source_module());
+        }
+
+        let canon_path = Self::canonicalize_module_path(path);
 
         // Check if module is already loaded
         if let Some(existing) = self.module_registry_get(&canon_path) {
@@ -2779,12 +2860,11 @@ impl Interpreter {
                 }) => Some(s.as_str()),
                 _ => None,
             };
-            // The test262 `<module source>` host specifier is resolved by the
-            // host (source-phase imports), not as a file path; every other
-            // specifier — including source-phase targets like `<do not resolve>`
-            // — must still surface unresolvable-specifier errors here.
+            // `resolve_module_specifier` handles the host `<module source>`
+            // specifier itself; every other specifier — including source-phase
+            // targets like `<do not resolve>` — must surface unresolvable
+            // specifier errors here.
             if let Some(spec) = specifier
-                && spec != "<module source>"
                 && let Err(e) = self.resolve_module_specifier(spec, Some(&canon_path))
             {
                 Self::cache_module_error(&loaded_module, &e);
@@ -2899,7 +2979,11 @@ impl Interpreter {
     /// Load a module without evaluating it (for deferred imports).
     /// Parses, links, resolves exports, but does NOT execute the module body.
     fn load_module_no_eval(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if Self::is_module_source_path(path) {
+            return Ok(self.get_or_create_module_source_module());
+        }
+
+        let canon_path = Self::canonicalize_module_path(path);
 
         if let Some(existing) = self.module_registry_get(&canon_path) {
             // Propagate parse/link errors (module never finished loading) eagerly.
@@ -3171,7 +3255,10 @@ impl Interpreter {
     }
 
     fn load_text_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if Self::is_module_source_path(path) {
+            return Err(self.module_source_type_error(ImportModuleType::Text));
+        }
+        let canon = Self::canonicalize_module_path(path);
         let key = (canon.clone(), ImportModuleType::Text);
         if let Some(existing) = self.synthetic_module_registry.get(&key) {
             return Ok(existing.clone());
@@ -3190,7 +3277,10 @@ impl Interpreter {
     }
 
     fn load_bytes_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if Self::is_module_source_path(path) {
+            return Err(self.module_source_type_error(ImportModuleType::Bytes));
+        }
+        let canon = Self::canonicalize_module_path(path);
         let key = (canon.clone(), ImportModuleType::Bytes);
         if let Some(existing) = self.synthetic_module_registry.get(&key) {
             return Ok(existing.clone());
@@ -3448,9 +3538,7 @@ impl Interpreter {
         stack: &mut Vec<PathBuf>,
         index: u32,
     ) -> Result<u32, JsValue> {
-        let canon = module_path
-            .canonicalize()
-            .unwrap_or_else(|_| module_path.to_path_buf());
+        let canon = Self::canonicalize_module_path(module_path);
         let module = match self.module_registry_get(&canon) {
             Some(m) => m,
             None => return Ok(index),
@@ -3912,9 +4000,7 @@ impl Interpreter {
         result: &mut Vec<PathBuf>,
         seen: &mut HashSet<PathBuf>,
     ) {
-        let canon = module_path
-            .canonicalize()
-            .unwrap_or_else(|_| module_path.to_path_buf());
+        let canon = Self::canonicalize_module_path(module_path);
         if !seen.insert(canon.clone()) {
             return;
         }
@@ -3972,6 +4058,9 @@ impl Interpreter {
         specifier: &str,
         referrer: Option<&Path>,
     ) -> Result<PathBuf, JsValue> {
+        if specifier == MODULE_SOURCE_SPECIFIER {
+            return Ok(PathBuf::from(MODULE_SOURCE_SPECIFIER));
+        }
         if specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/')
         {
             let base = referrer.and_then(|r| r.parent()).unwrap_or(Path::new("."));
@@ -3995,7 +4084,7 @@ impl Interpreter {
 
     /// Check if a module and all its transitive deps are ready for synchronous execution
     fn ready_for_sync_execution(&self, path: &Path, seen: &mut HashSet<PathBuf>) -> bool {
-        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canon = Self::canonicalize_module_path(path);
         if !seen.insert(canon.clone()) {
             return true; // cycle — spec says return true
         }
@@ -4071,9 +4160,7 @@ impl Interpreter {
         export_name: &str,
         visited: &mut HashSet<(PathBuf, String)>,
     ) -> Result<(EnvRef, String), JsValue> {
-        let canon_path = module_path
-            .canonicalize()
-            .unwrap_or_else(|_| module_path.to_path_buf());
+        let canon_path = Self::canonicalize_module_path(module_path);
         let key = (canon_path.clone(), export_name.to_string());
 
         if visited.contains(&key) {
@@ -4178,9 +4265,7 @@ impl Interpreter {
         export_name: &str,
         visited: &mut HashSet<(PathBuf, String)>,
     ) -> Result<(), JsValue> {
-        let canon_path = module_path
-            .canonicalize()
-            .unwrap_or_else(|_| module_path.to_path_buf());
+        let canon_path = Self::canonicalize_module_path(module_path);
         let key = (canon_path.clone(), export_name.to_string());
 
         // §16.2.1.6.3 step 2: circular reference → return null (not resolved)
