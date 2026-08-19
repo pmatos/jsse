@@ -997,6 +997,21 @@ impl Interpreter {
         path == Path::new(MODULE_SOURCE_SPECIFIER)
     }
 
+    /// Canonicalize a module *target* path, leaving the synthetic
+    /// `<module source>` key untouched.
+    ///
+    /// The key is a bare relative path, so a plain `canonicalize()` succeeds
+    /// whenever the process happens to run in a directory holding a real entry of
+    /// that name — silently rebinding the specifier to that file's registry slot.
+    /// Every site that canonicalizes a path which may have come from
+    /// `resolve_module_specifier` must go through here.
+    fn canonicalize_module_path(path: &Path) -> PathBuf {
+        if Self::is_module_source_path(path) {
+            return path.to_path_buf();
+        }
+        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+    }
+
     /// The host has no text or bytes to hand back for a Module Source module, in
     /// any import phase. Built in one place so the source phase and the
     /// evaluation phase cannot report an unsatisfiable request differently.
@@ -2224,7 +2239,7 @@ impl Interpreter {
 
         // Text/bytes imports use synthetic module registry
         if let Some(ref it) = itype {
-            let canon = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());
+            let canon = Self::canonicalize_module_path(&resolved);
             let key = (canon, it.clone());
             let loaded = self
                 .synthetic_module_registry
@@ -3512,9 +3527,7 @@ impl Interpreter {
         stack: &mut Vec<PathBuf>,
         index: u32,
     ) -> Result<u32, JsValue> {
-        let canon = module_path
-            .canonicalize()
-            .unwrap_or_else(|_| module_path.to_path_buf());
+        let canon = Self::canonicalize_module_path(module_path);
         let module = match self.module_registry_get(&canon) {
             Some(m) => m,
             None => return Ok(index),
@@ -3976,9 +3989,7 @@ impl Interpreter {
         result: &mut Vec<PathBuf>,
         seen: &mut HashSet<PathBuf>,
     ) {
-        let canon = module_path
-            .canonicalize()
-            .unwrap_or_else(|_| module_path.to_path_buf());
+        let canon = Self::canonicalize_module_path(module_path);
         if !seen.insert(canon.clone()) {
             return;
         }
@@ -4062,7 +4073,7 @@ impl Interpreter {
 
     /// Check if a module and all its transitive deps are ready for synchronous execution
     fn ready_for_sync_execution(&self, path: &Path, seen: &mut HashSet<PathBuf>) -> bool {
-        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canon = Self::canonicalize_module_path(path);
         if !seen.insert(canon.clone()) {
             return true; // cycle — spec says return true
         }
@@ -4138,9 +4149,7 @@ impl Interpreter {
         export_name: &str,
         visited: &mut HashSet<(PathBuf, String)>,
     ) -> Result<(EnvRef, String), JsValue> {
-        let canon_path = module_path
-            .canonicalize()
-            .unwrap_or_else(|_| module_path.to_path_buf());
+        let canon_path = Self::canonicalize_module_path(module_path);
         let key = (canon_path.clone(), export_name.to_string());
 
         if visited.contains(&key) {
@@ -4245,9 +4254,7 @@ impl Interpreter {
         export_name: &str,
         visited: &mut HashSet<(PathBuf, String)>,
     ) -> Result<(), JsValue> {
-        let canon_path = module_path
-            .canonicalize()
-            .unwrap_or_else(|_| module_path.to_path_buf());
+        let canon_path = Self::canonicalize_module_path(module_path);
         let key = (canon_path.clone(), export_name.to_string());
 
         // §16.2.1.6.3 step 2: circular reference → return null (not resolved)
