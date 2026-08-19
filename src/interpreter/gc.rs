@@ -308,18 +308,9 @@ impl Interpreter {
         roots.extend_from_slice(&self.gc_temp_roots);
         // Values held by active bytecode operand stacks
         roots.extend_from_slice(&self.gc_bytecode_roots);
-        for microtask_roots in self.scheduler.iter_microtask_roots() {
-            for val in microtask_roots {
-                Self::collect_value_roots(val, &mut roots);
-            }
-        }
-        // An armed timer keeps its callback and bound arguments alive (#254).
-        for (callback, args) in self.scheduler.iter_timer_roots() {
-            Self::collect_value_roots(callback, &mut roots);
-            for val in args {
-                Self::collect_value_roots(val, &mut roots);
-            }
-        }
+        // Queued microtasks and armed timers both keep their values alive.
+        self.scheduler
+            .for_each_root(|val| Self::collect_value_roots(val, &mut roots));
         for val in &self.pending_iter_close {
             Self::collect_value_roots(val, &mut roots);
         }

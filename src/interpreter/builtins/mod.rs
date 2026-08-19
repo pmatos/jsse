@@ -83,19 +83,18 @@ fn arm_timer(interp: &mut Interpreter, args: &[JsValue], repeating: bool) -> Com
     }
 
     let delay_val = args.get(1).cloned().unwrap_or(JsValue::UNDEFINED);
-    let delay_num = match interp.to_number_value(&delay_val) {
+    let delay = match interp.to_integer_or_infinity_value(&delay_val) {
         Ok(n) => n,
         Err(e) => return Completion::Throw(e),
     };
-    // An infinite delay saturates to a deadline hundreds of millions of years
-    // out, so the timer never fires but still holds the event loop open — the
-    // same outcome as the thread that used to sleep for u64::MAX milliseconds.
-    let delay_ms = if delay_num.is_nan() || delay_num <= 0.0 {
+    // A non-positive delay (NaN included, which coerces to 0) fires on the next
+    // turn. An infinite one saturates to a deadline hundreds of millions of
+    // years out, so the timer never fires but still holds the event loop open —
+    // the same outcome as the thread that used to sleep for u64::MAX ms.
+    let delay_ms = if delay <= 0.0 {
         0
-    } else if delay_num.is_infinite() {
-        u64::MAX
     } else {
-        delay_num.trunc().min(u64::MAX as f64) as u64
+        delay.min(u64::MAX as f64) as u64
     };
 
     let timer_args: Vec<JsValue> = args.iter().skip(2).cloned().collect();

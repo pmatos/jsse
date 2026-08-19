@@ -19,9 +19,11 @@ pub(crate) type MicrotaskJob = Box<dyn FnOnce(&mut Interpreter) -> Completion>;
 struct Timer {
     callback: JsValue,
     args: Vec<JsValue>,
-    /// `None` when the requested delay is too far out to represent, e.g.
-    /// `setTimeout(fn, Infinity)`. Such a timer never fires but still keeps the
-    /// event loop alive, matching the thread-per-timer model it replaced.
+    /// Deadline, or `None` when the timer is not in the index. That happens
+    /// two ways: the requested delay was too far out to represent (e.g.
+    /// `setTimeout(fn, Infinity)`, which never fires but still keeps the event
+    /// loop alive, matching the thread-per-timer model it replaced), or a
+    /// one-shot has been claimed by the current batch and is about to run.
     fire_at: Option<Instant>,
     /// `Some` for `setInterval`; the timer re-arms after every fire.
     interval: Option<Duration>,
@@ -211,10 +213,21 @@ impl JobScheduler {
         }
     }
 
-    pub(crate) fn iter_microtask_roots(&self) -> impl Iterator<Item = &[JsValue]> {
-        self.microtask_queue
-            .iter()
-            .map(|(roots, _)| roots.as_slice())
+    /// Every value the scheduler keeps alive: roots held by queued microtasks
+    /// and by armed timers. Centralised here so a queue added later cannot be
+    /// forgotten by the collector.
+    pub(crate) fn for_each_root(&self, mut visit: impl FnMut(&JsValue)) {
+        for (roots, _) in &self.microtask_queue {
+            for value in roots {
+                visit(value);
+            }
+        }
+        for (callback, args) in self.timers.iter_roots() {
+            visit(callback);
+            for value in args {
+                visit(value);
+            }
+        }
     }
 
     pub(crate) fn async_gen_queue_or_default(
@@ -309,10 +322,6 @@ impl JobScheduler {
 
     pub(crate) fn take_timer_for_firing(&mut self, id: u64) -> Option<(JsValue, Vec<JsValue>)> {
         self.timers.take_for_firing(id)
-    }
-
-    pub(crate) fn iter_timer_roots(&self) -> impl Iterator<Item = (&JsValue, &[JsValue])> {
-        self.timers.iter_roots()
     }
 
     #[cfg(test)]
