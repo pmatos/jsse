@@ -236,6 +236,20 @@ pub(crate) const EVAL_DEPTH_LIMIT: usize = 50_000;
 const MAX_POOLED_FUNCTION_ENVIRONMENTS: usize = 256;
 const MAX_POOLED_FUNCTION_BINDING_CAPACITY: usize = 256;
 
+/// test262's host specifier for a Module Source. `test262/INTERPRETING.md`
+/// requires implementers to "resolve the specifier `<module source>` to a module
+/// that provides a valid Module Source" — a module record, not a source-phase-only
+/// stand-in. jsse has no concrete Module Source kind (no WebAssembly), so it
+/// resolves to a synthetic module, the only one whose `[[ModuleSource]]` is
+/// non-empty; see `Interpreter::get_or_create_module_source_module`.
+///
+/// `HostLoadImportedModule` must hand back the same Module Record for a given
+/// (referrer, specifier) pair regardless of the request's phase, so this string
+/// is recognised by the host resolvers — not by the source-phase path alone. It
+/// is intercepted before any filesystem resolution and doubles as the module
+/// registry key, so it never reaches a real file of the same name.
+pub(crate) const MODULE_SOURCE_SPECIFIER: &str = "<module source>";
+
 pub(crate) struct DeferredCallArguments {
     first: Option<JsValue>,
     rest: Vec<JsValue>,
@@ -886,11 +900,12 @@ impl Interpreter {
         None
     }
 
-    /// Get (or lazily create) the host module that the `<module source>`
-    /// test262 specifier resolves to. Its `[[ModuleSource]]` is a fresh
-    /// %AbstractModuleSource% instance; it exposes no bindings.
+    /// Get (or lazily create) the host module that test262's
+    /// `MODULE_SOURCE_SPECIFIER` resolves to, in every import phase. Its
+    /// `[[ModuleSource]]` is a fresh %AbstractModuleSource% instance; it exposes
+    /// no bindings.
     fn get_or_create_module_source_module(&mut self) -> Rc<RefCell<LoadedModule>> {
-        let sentinel = PathBuf::from("<module source>");
+        let sentinel = PathBuf::from(MODULE_SOURCE_SPECIFIER);
         if let Some(existing) = self.module_registry_get(&sentinel) {
             return existing;
         }
@@ -943,29 +958,39 @@ impl Interpreter {
     /// resolved path and the source object (`None` when the target has no
     /// source-phase representation, which the caller turns into a SyntaxError).
     ///
-    /// The test262 `<module source>` host specifier maps to a synthetic host
-    /// module whose `[[ModuleSource]]` is populated. For any other specifier,
-    /// source-phase loading is *shallow*: it resolves the requested specifier
-    /// (a genuine host-resolution failure of that specifier surfaces here as a
-    /// non-SyntaxError) but must NOT load, link, or evaluate the target — the
-    /// source phase never triggers host loads for the target's transitive
-    /// dependencies, nor consults `[[EvaluationError]]`. jsse has no concrete
-    /// Module Source kind, so every resolvable file is an ordinary Source Text
-    /// Module with an empty `[[ModuleSource]]`; returning `None` here lets the
-    /// caller reject with the source-phase SyntaxError without exposing the
-    /// target's dependency-resolution, link, or cached evaluation errors.
+    /// Host resolution runs through the shared `resolve_module_specifier`, so the
+    /// phase never changes *which* module a specifier names — only what is read
+    /// off the resulting record. `MODULE_SOURCE_SPECIFIER` resolves to the
+    /// synthetic host module whose `[[ModuleSource]]` is populated.
+    ///
+    /// For any other specifier, source-phase loading is *shallow*: it resolves
+    /// the requested specifier (a genuine host-resolution failure of that
+    /// specifier surfaces here as a non-SyntaxError) but must NOT load, link, or
+    /// evaluate the target — the source phase never triggers host loads for the
+    /// target's transitive dependencies, nor consults `[[EvaluationError]]`.
+    /// jsse has no concrete Module Source kind, so every resolvable file is an
+    /// ordinary Source Text Module with an empty `[[ModuleSource]]`; returning
+    /// `None` here lets the caller reject with the source-phase SyntaxError
+    /// without exposing the target's dependency-resolution, link, or cached
+    /// evaluation errors.
     fn resolve_source_phase_target(
         &mut self,
         specifier: &str,
         referrer: Option<&Path>,
     ) -> Result<(PathBuf, Option<JsValue>), JsValue> {
-        if specifier == "<module source>" {
-            let module = self.get_or_create_module_source_module();
-            let module_source = module.borrow().module_source.clone();
-            return Ok((PathBuf::from("<module source>"), module_source));
-        }
         let resolved = self.resolve_module_specifier(specifier, referrer)?;
+        if Self::is_module_source_path(&resolved) {
+            let module = self.load_module(&resolved)?;
+            let module_source = module.borrow().module_source.clone();
+            return Ok((resolved, module_source));
+        }
         Ok((resolved, None))
+    }
+
+    /// Whether `path` is the module-registry key of the synthetic
+    /// `<module source>` host module rather than a filesystem path.
+    fn is_module_source_path(path: &Path) -> bool {
+        path.as_os_str() == std::ffi::OsStr::new(MODULE_SOURCE_SPECIFIER)
     }
 
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
@@ -2168,8 +2193,8 @@ impl Interpreter {
 
         // Source-phase import (`import source X from '...'`) — a source-phase
         // ImportDeclaration has exactly one SourcePhase specifier. Handle it
-        // before the generic specifier resolution, which cannot resolve the
-        // host `<module source>` specifier.
+        // before the generic path, which binds a namespace and loads the target
+        // graph; the source phase binds `[[ModuleSource]]` and stays shallow.
         if let [ImportSpecifier::SourcePhase(local)] = import.specifiers.as_slice() {
             return self.process_source_phase_import(local, &import.source, env);
         }
@@ -2526,6 +2551,12 @@ impl Interpreter {
         specifier: &str,
         referrer: Option<&Path>,
     ) -> Result<PathBuf, JsValue> {
+        // Host-provided synthetic module. Resolved here rather than in the
+        // source-phase path so that every phase names the same Module Record.
+        if specifier == MODULE_SOURCE_SPECIFIER {
+            return Ok(PathBuf::from(MODULE_SOURCE_SPECIFIER));
+        }
+
         // Relative paths: ./ or ../
         if specifier.starts_with("./") || specifier.starts_with("../") {
             if let Some(referrer) = referrer {
@@ -2570,6 +2601,10 @@ impl Interpreter {
     }
 
     fn load_module_inner(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        if Self::is_module_source_path(path) {
+            return Ok(self.get_or_create_module_source_module());
+        }
+
         let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
         // Check if module is already loaded
@@ -2779,12 +2814,11 @@ impl Interpreter {
                 }) => Some(s.as_str()),
                 _ => None,
             };
-            // The test262 `<module source>` host specifier is resolved by the
-            // host (source-phase imports), not as a file path; every other
-            // specifier — including source-phase targets like `<do not resolve>`
-            // — must still surface unresolvable-specifier errors here.
+            // `resolve_module_specifier` handles the host `<module source>`
+            // specifier itself; every other specifier — including source-phase
+            // targets like `<do not resolve>` — must surface unresolvable
+            // specifier errors here.
             if let Some(spec) = specifier
-                && spec != "<module source>"
                 && let Err(e) = self.resolve_module_specifier(spec, Some(&canon_path))
             {
                 Self::cache_module_error(&loaded_module, &e);
@@ -2899,6 +2933,10 @@ impl Interpreter {
     /// Load a module without evaluating it (for deferred imports).
     /// Parses, links, resolves exports, but does NOT execute the module body.
     fn load_module_no_eval(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        if Self::is_module_source_path(path) {
+            return Ok(self.get_or_create_module_source_module());
+        }
+
         let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
         if let Some(existing) = self.module_registry_get(&canon_path) {
@@ -3972,6 +4010,9 @@ impl Interpreter {
         specifier: &str,
         referrer: Option<&Path>,
     ) -> Result<PathBuf, JsValue> {
+        if specifier == MODULE_SOURCE_SPECIFIER {
+            return Ok(PathBuf::from(MODULE_SOURCE_SPECIFIER));
+        }
         if specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/')
         {
             let base = referrer.and_then(|r| r.parent()).unwrap_or(Path::new("."));
