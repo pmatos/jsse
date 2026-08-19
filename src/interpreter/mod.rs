@@ -49,17 +49,31 @@ enum ImportModuleType {
     Bytes,
 }
 
-fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
-    for (key, value) in attrs {
-        if key == "type" {
-            return match value.as_str() {
-                "text" => Some(ImportModuleType::Text),
-                "bytes" => Some(ImportModuleType::Bytes),
-                _ => None,
-            };
+impl ImportModuleType {
+    /// The `type` import-attribute values jsse serves synthetic modules for.
+    /// `None` covers both an unknown type and one jsse decides another way
+    /// (`"json"` is chosen by file extension — see #475).
+    fn from_attr_value(value: &str) -> Option<Self> {
+        match value {
+            "text" => Some(Self::Text),
+            "bytes" => Some(Self::Bytes),
+            _ => None,
         }
     }
-    None
+
+    fn attr_value(self) -> &'static str {
+        match self {
+            Self::Text => "text",
+            Self::Bytes => "bytes",
+        }
+    }
+}
+
+fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
+    attrs
+        .iter()
+        .find(|(key, _)| key == "type")
+        .and_then(|(_, value)| ImportModuleType::from_attr_value(value))
 }
 
 pub(crate) struct Interpreter {
@@ -1004,9 +1018,8 @@ impl Interpreter {
     /// whenever the process happens to run in a directory holding a real entry of
     /// that name — silently rebinding the specifier to that file's registry slot.
     /// Every site that canonicalizes a path which may have come from
-    /// `resolve_module_specifier` must go through here — twelve of them, spanning
-    /// export resolution, DFS evaluation, `import.defer`, and
-    /// `ShadowRealm.prototype.importValue`.
+    /// `resolve_module_specifier` goes through here, so the key also keeps
+    /// resolving to the synthetic record rather than missing the registry.
     fn canonicalize_module_path(path: &Path) -> PathBuf {
         if Self::is_module_source_path(path) {
             return path.to_path_buf();
@@ -1018,14 +1031,10 @@ impl Interpreter {
     /// any import phase. Built in one place so the source phase and the
     /// evaluation phase cannot report an unsatisfiable request differently.
     fn module_source_type_error(&mut self, itype: ImportModuleType) -> JsValue {
-        let repr = match itype {
-            ImportModuleType::Text => "text",
-            ImportModuleType::Bytes => "bytes",
-        };
-        self.create_error(
-            "TypeError",
-            &format!("Module '{MODULE_SOURCE_SPECIFIER}' has no {repr} representation"),
-        )
+        self.create_type_error(&format!(
+            "Module '{MODULE_SOURCE_SPECIFIER}' has no {} representation",
+            itype.attr_value()
+        ))
     }
 
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
@@ -2642,7 +2651,7 @@ impl Interpreter {
             return Ok(self.get_or_create_module_source_module());
         }
 
-        let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canon_path = Self::canonicalize_module_path(path);
 
         // Check if module is already loaded
         if let Some(existing) = self.module_registry_get(&canon_path) {
@@ -2974,7 +2983,7 @@ impl Interpreter {
             return Ok(self.get_or_create_module_source_module());
         }
 
-        let canon_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canon_path = Self::canonicalize_module_path(path);
 
         if let Some(existing) = self.module_registry_get(&canon_path) {
             // Propagate parse/link errors (module never finished loading) eagerly.
@@ -3249,7 +3258,7 @@ impl Interpreter {
         if Self::is_module_source_path(path) {
             return Err(self.module_source_type_error(ImportModuleType::Text));
         }
-        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canon = Self::canonicalize_module_path(path);
         let key = (canon.clone(), ImportModuleType::Text);
         if let Some(existing) = self.synthetic_module_registry.get(&key) {
             return Ok(existing.clone());
@@ -3271,7 +3280,7 @@ impl Interpreter {
         if Self::is_module_source_path(path) {
             return Err(self.module_source_type_error(ImportModuleType::Bytes));
         }
-        let canon = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let canon = Self::canonicalize_module_path(path);
         let key = (canon.clone(), ImportModuleType::Bytes);
         if let Some(existing) = self.synthetic_module_registry.get(&key) {
             return Ok(existing.clone());

@@ -84,6 +84,27 @@ if (typeof S !== 'object' || S === null) throw new Error('no Module Source');
 if (Object.keys(ns).length !== 0) throw new Error('namespace leaked: ' + Object.keys(ns));
 if (Object.keys(dyn).length !== 0) throw new Error('dynamic namespace leaked');
 if (ns !== dyn) throw new Error('phases disagree on the record');
+
+// import.defer and ShadowRealm.prototype.importValue canonicalize the resolved
+// path themselves. These two are a canary, not a regression guard: the record is
+// already evaluated with no exports and no async dependencies, so a misdirected
+// registry lookup misses and no-ops, and reverting either site to a raw
+// canonicalize() still passes (verified). They start discriminating the moment
+// the synthetic record gains exports or async dependencies.
+const deferred = await import.defer('<module source>');
+if (Object.keys(deferred).length !== 0) {
+  throw new Error('deferred namespace leaked: ' + Object.keys(deferred));
+}
+
+let realmError = null;
+try {
+  await new ShadowRealm().importValue('<module source>', 'x');
+} catch (e) {
+  realmError = e;
+}
+if (realmError === null) {
+  throw new Error("ShadowRealm importValue resolved 'x' from the on-disk file");
+}
 "#,
     )
     .unwrap();

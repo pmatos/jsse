@@ -150,16 +150,13 @@ for (const type of ['text', 'bytes']) {
   }
 }
 
-const messagesByType = {};
+const messagesByType = { text: [], bytes: [] };
 for (const [name, type] of typedCases) {
   const err = await rejection(dynamicForms[name], '<module source>', { with: { type } });
   assert(
     err instanceof TypeError,
     name + ' rejects a type: ' + type + ' request with a TypeError, got: ' + err
   );
-  if (!messagesByType[type]) {
-    messagesByType[type] = [];
-  }
   messagesByType[type].push(err.message);
 }
 
@@ -185,7 +182,7 @@ for (const [label, withValue] of [
   ['an inherited', inheritedType],
   ['a non-enumerable own', nonEnumerableType],
 ]) {
-  for (const name of ['import()', 'import.source()']) {
+  for (const name of Object.keys(dynamicForms)) {
     attributeCases.push([label, withValue, name]);
   }
 }

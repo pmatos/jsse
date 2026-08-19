@@ -39,15 +39,33 @@ enum DestructLRef {
 }
 
 impl Interpreter {
-    /// §2.1.1.1 EvaluateImportCall steps 9-11: validate an import call's options
-    /// object and read the requested module type off its `with` attributes.
+    /// §2.1.1.1 EvaluateImportCall steps 9-11: evaluate an import call's options
+    /// expression and read the requested module type off its `with` attributes.
+    /// `Err` carries the `Completion` the caller should return — an abrupt
+    /// completion from the options expression, or a rejected promise.
     ///
     /// Import attributes are the *enumerable own* properties of `with`, so an
-    /// inherited or non-enumerable `type` is not an attribute. All three import
-    /// forms (`import()`, `import.source()`, `import.defer()`) go through here —
-    /// they previously each had their own copy, and the shorter copies read
-    /// `type` straight off the object, turning an inherited `type` into a
-    /// spurious rejection.
+    /// inherited or non-enumerable `type` is not an attribute. `import()`,
+    /// `import.source()` and `import.defer()` all go through here; they each had
+    /// their own copy, and the two shorter copies read `type` straight off the
+    /// object, turning an inherited `type` into a spurious rejection.
+    fn import_call_options_type(
+        &mut self,
+        options_expr: Option<&Expression>,
+        env: &EnvRef,
+        callee: &str,
+    ) -> Result<Option<super::ImportModuleType>, Completion> {
+        let Some(options_expr) = options_expr else {
+            return Ok(None);
+        };
+        let opts_val = match self.eval_expr(options_expr, env) {
+            Completion::Normal(v) => v,
+            other => return Err(other),
+        };
+        self.import_call_module_type(&opts_val, callee)
+            .map_err(|e| self.create_rejected_promise(e))
+    }
+
     fn import_call_module_type(
         &mut self,
         opts_val: &JsValue,
@@ -56,18 +74,12 @@ impl Interpreter {
         if opts_val.is_undefined() {
             return Ok(None);
         }
-        if !opts_val.is_object() {
+        let Some(opts_id) = opts_val.as_object_id() else {
             return Err(self.create_type_error(&format!(
                 "The second argument to {callee} must be an object"
             )));
-        }
-        let Some(o) = opts_val
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        else {
-            return Ok(None);
         };
-        let wv = match self.get_object_property(o.id, "with", opts_val) {
+        let wv = match self.get_object_property(opts_id, "with", opts_val) {
             Completion::Normal(v) => v,
             Completion::Throw(e) => return Err(e),
             _ => return Err(self.create_type_error("Invalid import options")),
@@ -75,16 +87,13 @@ impl Interpreter {
         if wv.is_undefined() {
             return Ok(None);
         }
-        if !wv.is_object() {
+        let Some(with_id) = wv.as_object_id() else {
             return Err(self.create_type_error("The 'with' option must be an object"));
-        }
-        let Some(with_obj) = (wv).as_object_id().map(|id| crate::types::JsObject { id }) else {
-            return Ok(None);
         };
 
         let mut itype = None;
-        for k in crate::interpreter::helpers::enumerable_own_keys(self, with_obj.id)? {
-            let v = match self.get_object_property(with_obj.id, &k, &wv) {
+        for k in crate::interpreter::helpers::enumerable_own_keys(self, with_id)? {
+            let v = match self.get_object_property(with_id, &k, &wv) {
                 Completion::Normal(v) => v,
                 Completion::Throw(e) => return Err(e),
                 _ => return Err(self.create_type_error("Invalid import attribute")),
@@ -92,12 +101,9 @@ impl Interpreter {
             let Some(sv) = (v).as_string() else {
                 return Err(self.create_type_error("Import attribute values must be strings"));
             };
+            // Every value is string-checked, so keep going past "type".
             if k.eq_str("type") {
-                itype = match sv.to_string().as_str() {
-                    "text" => Some(super::ImportModuleType::Text),
-                    "bytes" => Some(super::ImportModuleType::Bytes),
-                    _ => None,
-                };
+                itype = super::ImportModuleType::from_attr_value(&sv.to_rust_string());
             }
         }
         Ok(itype)
@@ -1186,18 +1192,11 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                // Evaluate options expression if present (abrupt completions propagate directly)
-                let mut dynamic_import_type: Option<super::ImportModuleType> = None;
-                if let Some(opts_expr) = options_expr {
-                    let opts_val = match self.eval_expr(opts_expr, env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
+                let dynamic_import_type =
+                    match self.import_call_options_type(options_expr.as_deref(), env, "import()") {
+                        Ok(t) => t,
+                        Err(c) => return c,
                     };
-                    match self.import_call_module_type(&opts_val, "import()") {
-                        Ok(t) => dynamic_import_type = t,
-                        Err(e) => return self.create_rejected_promise(e),
-                    }
-                }
                 // Per spec: ToString(specifier) errors produce a rejected promise
                 let source = match self.to_string_value(&source_val) {
                     Ok(s) => s,
@@ -1210,17 +1209,14 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                let mut defer_import_type: Option<super::ImportModuleType> = None;
-                if let Some(opts_expr) = options_expr {
-                    let opts_val = match self.eval_expr(opts_expr, env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    match self.import_call_module_type(&opts_val, "import.defer()") {
-                        Ok(t) => defer_import_type = t,
-                        Err(e) => return self.create_rejected_promise(e),
-                    }
-                }
+                let defer_import_type = match self.import_call_options_type(
+                    options_expr.as_deref(),
+                    env,
+                    "import.defer()",
+                ) {
+                    Ok(t) => t,
+                    Err(c) => return c,
+                };
                 let source = match self.to_string_value(&source_val) {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
@@ -1258,17 +1254,14 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                let mut source_import_type: Option<super::ImportModuleType> = None;
-                if let Some(opts_expr) = options_expr {
-                    let opts_val = match self.eval_expr(opts_expr, env) {
-                        Completion::Normal(v) => v,
-                        other => return other,
-                    };
-                    match self.import_call_module_type(&opts_val, "import.source()") {
-                        Ok(t) => source_import_type = t,
-                        Err(e) => return self.create_rejected_promise(e),
-                    }
-                }
+                let source_import_type = match self.import_call_options_type(
+                    options_expr.as_deref(),
+                    env,
+                    "import.source()",
+                ) {
+                    Ok(t) => t,
+                    Err(c) => return c,
+                };
                 let source = match self.to_string_value(&source_val) {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
