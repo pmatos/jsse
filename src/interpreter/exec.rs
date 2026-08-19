@@ -95,7 +95,7 @@ impl Interpreter {
         for stmt in stmts {
             // Check for function declarations (including inside labels). This
             // builds fresh closures per call and is never cached.
-            if let Some(f) = Self::unwrap_labeled_function(stmt) {
+            if let Some(f) = super::hoisting::unwrap_labeled_function(stmt) {
                 self.hoist_function_decl(f, env, is_global);
             }
         }
@@ -231,14 +231,6 @@ impl Interpreter {
         result
     }
 
-    pub(crate) fn unwrap_labeled_function(stmt: &Statement) -> Option<&FunctionDecl> {
-        match stmt {
-            Statement::FunctionDeclaration(f) => Some(f),
-            Statement::Labeled(_, inner) => Self::unwrap_labeled_function(inner),
-            _ => None,
-        }
-    }
-
     /// §9.1.1.4.16 CanDeclareGlobalFunction
     fn can_declare_global_function(gb: &JsObjectData, name: &str) -> bool {
         if let Some(desc) = gb.properties.get(name) {
@@ -344,7 +336,7 @@ impl Interpreter {
         // Collect function declaration names (step 10)
         let mut declared_function_names: Vec<String> = Vec::new();
         for stmt in stmts.iter().rev() {
-            if let Some(f) = Self::unwrap_labeled_function(stmt)
+            if let Some(f) = super::hoisting::unwrap_labeled_function(stmt)
                 && !declared_function_names.contains(&f.name)
             {
                 // Step 6 also applies to function decl names
@@ -2305,7 +2297,7 @@ impl Interpreter {
         // (only regular functions, not generators/async — those stay block-scoped)
         for case in &s.cases {
             for stmt in &case.consequent {
-                let unwrapped = Self::unwrap_labeled_function(stmt);
+                let unwrapped = super::hoisting::unwrap_labeled_function(stmt);
                 if let Some(f) = unwrapped
                     && !f.is_generator
                     && !f.is_async
