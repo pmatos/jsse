@@ -35,19 +35,27 @@ fixed upper bound on body-churning `Function` and `eval` workloads.
 
 On a hit, the wrapper updates the entry's recency tick and returns the cached
 analysis. On a miss at capacity, it selects the median recency tick and removes
-the older half before inserting the new analysis. Every retained entry
+the entries below it, keeping the newer half (`ceil(len / 2)`, so the most
+recently used entry always survives) before inserting the new analysis. The
+capacity is floored at two entries, which is what guarantees a sweep frees a slot
+for the incoming one. Every retained entry
 continues to own its Body `Rc`, preserving ABA safety. Removing an entry drops
 that ownership; a later call of the evicted Body recomputes and safely reinserts
 its analysis.
 
 The wrapper owns the key, recency metadata, and pinned analysis together so the
-evaluator cannot update only part of an entry. No ECMAScript-visible behavior
+evaluator cannot update only part of an entry. It exposes a single
+`get_or_insert_with` entry point taking the `Body` itself, mirroring
+`IcStore::for_body`, so the evaluator neither derives the key nor decides when to
+evict, and a hit and a miss cannot diverge. No ECMAScript-visible behavior
 changes.
 
 ## Validation
 
 Add focused cache tests for identity memoization, hit accounting, the capacity
-bound, release of an evicted Body's pin, recency-aware eviction, and reinsertion.
+bound, release of an evicted Body's pin, recency-aware eviction, and a sweep at
+the capacity floor (where a median cutoff that dropped its own tick would evict
+the newest entry).
 Add interpreter integration tests that execute more than 8,192 distinct
 `Function` constructor Bodies through the normal call path and verify both the
 computed result and cache occupancy, plus repeated calls that must keep hitting
