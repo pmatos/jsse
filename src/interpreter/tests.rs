@@ -1600,6 +1600,39 @@ fn typed_array_clamps_assigned_values() {
     assert_eq!(global_string(&interp, "result"), "255");
 }
 
+#[test]
+fn typed_array_define_own_property_coerces_string_value_via_tonumber() {
+    // A typed array's [[DefineOwnProperty]] runs IntegerIndexedElementSet, which
+    // coerces a String [[Value]] with the canonical ToNumber (§7.1.4). Reached via
+    // Object.defineProperties with a raw descriptor value, this must honour the
+    // 0x/0o/0b prefixes, trim exactly the ECMAScript whitespace set, and treat
+    // "inf" as NaN — not defer to a naive float parse.
+    let interp = run_script(
+        r#"
+        function define(TA, v) { var a = new TA(1); Object.defineProperties(a, { 0: { value: v } }); return a[0]; }
+        var hexInt8 = define(Int8Array, "0x10");
+        var octInt8 = define(Int8Array, "0o17");
+        var binInt8 = define(Int8Array, "0b101");
+        var wsInt8  = define(Int8Array, "\t\n\r 5 ");
+        var hexF64  = define(Float64Array, "0x10");
+        var wsF64   = define(Float64Array, " 3.5 ");
+        var infF64  = String(define(Float64Array, "inf"));
+        var num300  = define(Int8Array, 300);
+        var boolT   = define(Int8Array, true);
+        "#,
+    );
+    assert_eq!(global_number(&interp, "hexInt8"), 16.0);
+    assert_eq!(global_number(&interp, "octInt8"), 15.0);
+    assert_eq!(global_number(&interp, "binInt8"), 5.0);
+    assert_eq!(global_number(&interp, "wsInt8"), 5.0);
+    assert_eq!(global_number(&interp, "hexF64"), 16.0);
+    assert_eq!(global_number(&interp, "wsF64"), 3.5);
+    assert_eq!(global_string(&interp, "infF64"), "NaN");
+    // Non-String branches of ToNumber are unchanged.
+    assert_eq!(global_number(&interp, "num300"), 44.0);
+    assert_eq!(global_number(&interp, "boolT"), 1.0);
+}
+
 // -- Resizable ArrayBuffer / growable SharedArrayBuffer invariants (issue #25) -----
 // Whitebox checks on the length-tracking bookkeeping in types.rs. A bug here is a
 // Rust panic or an out-of-bounds slice access, not just a wrong JS-visible value, so
