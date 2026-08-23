@@ -3754,3 +3754,125 @@ mod node_host_tests {
         assert_eq!(global_string(&interp, "after"), "no");
     }
 }
+
+// Spec-derived property-descriptor invariants for the builtin methods installed
+// by iterators.rs, promise.rs and disposable.rs. Every built-in method must be
+// a `{ writable: true, enumerable: false, configurable: true }` own property
+// whose function object carries `name`/`length` own props that are
+// `{ writable: false, enumerable: false, configurable: true }` (ECMAScript
+// §10.2.9 SetFunctionName / §10.2.10 SetFunctionLength, §20 built-in intro).
+// Expected `name`/`length` values are the reference values reported by Node
+// (v26), an independent source of truth — not read off jsse's implementation.
+// These pin the observable shape so the define_method adoption refactor is
+// verifiably behavior-preserving.
+mod builtin_method_descriptors {
+    use super::run_script;
+
+    // JS helpers shared by every descriptor check. `checkMethod` returns the
+    // function object so aliased-symbol checks can assert value identity.
+    const PRELUDE: &str = r#"
+        function _attrs(d) { return [d.writable, d.enumerable, d.configurable]; }
+        function checkMethod(obj, objName, key, expName, expLen) {
+            var d = Object.getOwnPropertyDescriptor(obj, key);
+            if (!d) throw new Error(objName + "." + String(key) + " missing");
+            var a = _attrs(d);
+            if (!(a[0] === true && a[1] === false && a[2] === true))
+                throw new Error(objName + "." + String(key) + " method attrs " + a);
+            var f = d.value;
+            if (typeof f !== "function")
+                throw new Error(objName + "." + String(key) + " value not a function");
+            var nd = Object.getOwnPropertyDescriptor(f, "name");
+            var na = _attrs(nd);
+            if (!(na[0] === false && na[1] === false && na[2] === true))
+                throw new Error(objName + "." + String(key) + " name attrs " + na);
+            if (nd.value !== expName)
+                throw new Error(objName + "." + String(key) + " name " + nd.value + " != " + expName);
+            var ld = Object.getOwnPropertyDescriptor(f, "length");
+            var la = _attrs(ld);
+            if (!(la[0] === false && la[1] === false && la[2] === true))
+                throw new Error(objName + "." + String(key) + " length attrs " + la);
+            if (ld.value !== expLen)
+                throw new Error(objName + "." + String(key) + " length " + ld.value + " != " + expLen);
+            return f;
+        }
+        // A symbol-keyed method that must be the *same* function object as a
+        // named data-key method (e.g. @@dispose === dispose), same attrs.
+        function checkAlias(obj, objName, symKey, dataKey) {
+            var d = Object.getOwnPropertyDescriptor(obj, symKey);
+            if (!d) throw new Error(objName + " @@" + " alias missing");
+            var a = _attrs(d);
+            if (!(a[0] === true && a[1] === false && a[2] === true))
+                throw new Error(objName + " alias attrs " + a);
+            if (d.value !== obj[dataKey])
+                throw new Error(objName + " alias not same object as " + dataKey);
+        }
+    "#;
+
+    fn run_checks(checks: &str) {
+        run_script(&format!("{PRELUDE}\n{checks}"));
+    }
+
+    #[test]
+    fn promise_builtin_method_descriptors() {
+        run_checks(
+            r#"
+            var P = Promise.prototype;
+            checkMethod(P, "Promise.prototype", "then", "then", 2);
+            checkMethod(P, "Promise.prototype", "catch", "catch", 1);
+            checkMethod(P, "Promise.prototype", "finally", "finally", 1);
+            checkMethod(Promise, "Promise", "resolve", "resolve", 1);
+            checkMethod(Promise, "Promise", "reject", "reject", 1);
+            checkMethod(Promise, "Promise", "all", "all", 1);
+            checkMethod(Promise, "Promise", "allSettled", "allSettled", 1);
+            checkMethod(Promise, "Promise", "race", "race", 1);
+            checkMethod(Promise, "Promise", "any", "any", 1);
+            checkMethod(Promise, "Promise", "withResolvers", "withResolvers", 0);
+        "#,
+        );
+    }
+
+    #[test]
+    fn iterator_helper_builtin_method_descriptors() {
+        run_checks(
+            r#"
+            var I = Iterator.prototype;
+            checkMethod(I, "Iterator.prototype", "map", "map", 1);
+            checkMethod(I, "Iterator.prototype", "filter", "filter", 1);
+            checkMethod(I, "Iterator.prototype", "take", "take", 1);
+            checkMethod(I, "Iterator.prototype", "drop", "drop", 1);
+            checkMethod(I, "Iterator.prototype", "flatMap", "flatMap", 1);
+            checkMethod(I, "Iterator.prototype", "toArray", "toArray", 0);
+            checkMethod(I, "Iterator.prototype", "forEach", "forEach", 1);
+            checkMethod(I, "Iterator.prototype", "some", "some", 1);
+            checkMethod(I, "Iterator.prototype", "every", "every", 1);
+            checkMethod(I, "Iterator.prototype", "find", "find", 1);
+            checkMethod(I, "Iterator.prototype", "reduce", "reduce", 1);
+            checkMethod(Iterator, "Iterator", "from", "from", 1);
+            checkMethod(Iterator, "Iterator", "concat", "concat", 0);
+        "#,
+        );
+    }
+
+    #[test]
+    fn disposable_stack_builtin_method_descriptors() {
+        run_checks(
+            r#"
+            var D = DisposableStack.prototype;
+            checkMethod(D, "DisposableStack.prototype", "dispose", "dispose", 0);
+            checkMethod(D, "DisposableStack.prototype", "use", "use", 1);
+            checkMethod(D, "DisposableStack.prototype", "adopt", "adopt", 2);
+            checkMethod(D, "DisposableStack.prototype", "defer", "defer", 1);
+            checkMethod(D, "DisposableStack.prototype", "move", "move", 0);
+            checkAlias(D, "DisposableStack.prototype", Symbol.dispose, "dispose");
+
+            var A = AsyncDisposableStack.prototype;
+            checkMethod(A, "AsyncDisposableStack.prototype", "disposeAsync", "disposeAsync", 0);
+            checkMethod(A, "AsyncDisposableStack.prototype", "use", "use", 1);
+            checkMethod(A, "AsyncDisposableStack.prototype", "adopt", "adopt", 2);
+            checkMethod(A, "AsyncDisposableStack.prototype", "defer", "defer", 1);
+            checkMethod(A, "AsyncDisposableStack.prototype", "move", "move", 0);
+            checkAlias(A, "AsyncDisposableStack.prototype", Symbol.asyncDispose, "disposeAsync");
+        "#,
+        );
+    }
+}
