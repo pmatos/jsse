@@ -8,7 +8,6 @@
 //! A re-entrant `set` trap that calls back into `env_set` would otherwise
 //! double-borrow the same env.
 
-use super::types::*;
 use super::*;
 use crate::types::JsValue;
 
