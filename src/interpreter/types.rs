@@ -1,9 +1,9 @@
 use crate::ast::*;
 use crate::interpreter::PropertyMap;
 use crate::interpreter::generator_transform::{GeneratorStateMachine, SentValueBinding};
-use crate::interpreter::helpers::same_value;
+use crate::interpreter::helpers::{same_value, to_number};
 use crate::interpreter::key_intern::intern_js_key;
-use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, ValueKind, number_ops};
+use crate::types::{JsPropertyKey, JsString, JsValue, PropertyKeyLike, number_ops};
 use rustc_hash::FxHashMap;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
@@ -3691,29 +3691,12 @@ pub(crate) fn typed_array_set_index(ta: &TypedArrayInfo, idx: usize, value: &JsV
     })
 }
 
-fn to_number(v: &JsValue) -> f64 {
-    match v.kind() {
-        ValueKind::Number => v.as_number().expect("kind checked"),
-        ValueKind::Boolean => {
-            if v.as_boolean().expect("kind checked") {
-                1.0
-            } else {
-                0.0
-            }
-        }
-        ValueKind::Null => 0.0,
-        ValueKind::Undefined => f64::NAN,
-        ValueKind::String => v
-            .with_string(|units| {
-                String::from_utf16_lossy(units)
-                    .parse::<f64>()
-                    .unwrap_or(f64::NAN)
-            })
-            .expect("kind checked"),
-        ValueKind::Symbol | ValueKind::BigInt | ValueKind::Object => f64::NAN,
-    }
-}
-
+// Typed-array element writes coerce their value with the single canonical
+// ToNumber (§7.1.4) in `helpers`; these encoders (ToInt8 … Float branches) apply
+// ToInt32/ToUint32 etc. on top of it. `to_bigint64`/`to_biguint64` below still
+// only read an already-`BigInt` value — a raw non-BigInt reaching them yields 0
+// rather than running the throwing ToBigInt, a pre-existing gap that requires an
+// error-propagating set-index signature to close and is out of scope here.
 fn to_int8(v: &JsValue) -> i8 {
     number_ops::to_int32(to_number(v)) as i8
 }
