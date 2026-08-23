@@ -1,3 +1,17 @@
+# [0.5.0](https://github.com/pmatos/jsse/compare/v0.4.18...v0.5.0) (2026-08-23)
+
+
+### Bug Fixes
+
+* **interpreter:** bound the per-body hoist-analysis cache ([#472](https://github.com/pmatos/jsse/issues/472)) ([97b35b1](https://github.com/pmatos/jsse/commit/97b35b128a55b391fdda733bb2540bcac14fd76a))
+* **interpreter:** pin promise combinator captures against major GC ([#473](https://github.com/pmatos/jsse/issues/473)) ([01fd282](https://github.com/pmatos/jsse/commit/01fd282c1d9f11441150731e28a3cb69c78ff717))
+* **modules:** resolve the <module source> host specifier in every import phase ([#470](https://github.com/pmatos/jsse/issues/470)) ([68c3502](https://github.com/pmatos/jsse/commit/68c35029308d28a25b9efa92d7c2e2555cc292dc)), closes [#471](https://github.com/pmatos/jsse/issues/471) [#475](https://github.com/pmatos/jsse/issues/475) [#476](https://github.com/pmatos/jsse/issues/476) [#479](https://github.com/pmatos/jsse/issues/479) [#480](https://github.com/pmatos/jsse/issues/480) [#222](https://github.com/pmatos/jsse/issues/222)
+
+
+### Features
+
+* **interpreter:** serve setTimeout/setInterval from an event-loop timer queue ([#474](https://github.com/pmatos/jsse/issues/474)) ([483a940](https://github.com/pmatos/jsse/commit/483a940c5a276301392a925ba1a48b0fb69f763b))
+
 ## [0.4.18](https://github.com/pmatos/jsse/compare/v0.4.17...v0.4.18) (2026-08-19)
 
 
