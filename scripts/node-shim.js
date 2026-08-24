@@ -388,8 +388,14 @@
     }
 
     function renderError(v) {
-      var stack = errorField(v, "stack", "");
-      if (stack) return stack;
+      // Test the raw descriptor value first. Stringifying a falsy primitive
+      // such as 0 or false would otherwise turn it into a truthy string and
+      // suppress the normal `[Error: message]` fallback.
+      var stackValue = dataDescriptorValue(findPropertyDescriptor(v, "stack"));
+      if (stackValue) {
+        var stack = primitiveString(stackValue, "");
+        if (stack) return stack;
+      }
 
       var name = errorField(v, "name", "Error");
       var message = errorField(v, "message", "");

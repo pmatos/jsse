@@ -1047,6 +1047,24 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
     "inspect stringifies a null Error name"
   );
 
+  // Stack truthiness is decided before primitive stringification. Otherwise a
+  // falsy value such as 0 becomes the truthy string "0" and replaces the Error
+  // fallback entirely.
+  var falsyStacks = [0, -0, 0n, false, NaN, null, ""];
+  for (var falsyIndex = 0; falsyIndex < falsyStacks.length; falsyIndex++) {
+    var falsyStackError = new Error("m");
+    Object.defineProperty(falsyStackError, "stack", {
+      configurable: true,
+      value: falsyStacks[falsyIndex],
+      writable: true,
+    });
+    eq(
+      util.inspect(falsyStackError),
+      "[Error: m]",
+      "inspect ignores falsy Error stack " + falsyIndex
+    );
+  }
+
   // A hole has no own descriptor. Inspection must preserve it rather than
   // falling through to an inherited indexed getter.
   var inheritedReads = 0;
