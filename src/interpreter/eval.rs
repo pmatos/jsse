@@ -4224,6 +4224,20 @@ impl Interpreter {
         result
     }
 
+    /// Root every object a destructuring lRef depends on until PutValue.
+    /// The base, the raw key awaiting ToPropertyKey, and a super reference's
+    /// receiver are all held only by Rust locals across arbitrary user code.
+    fn gc_root_destruct_lref(&mut self, lref: &DestructLRef) {
+        match lref {
+            DestructLRef::Member(base, raw_key) => {
+                self.gc_root_value(base);
+                self.gc_root_value(raw_key);
+            }
+            DestructLRef::Private(base, _) => self.gc_root_value(base),
+            DestructLRef::Super(_, _, this_val, _) => self.gc_root_value(this_val),
+        }
+    }
+
     /// Evaluate a member expression as an lref (Reference) for destructuring.
     /// Returns base + key info or suspension explicitly; ToPropertyKey is
     /// deferred to PutValue time per spec.
@@ -4344,11 +4358,11 @@ impl Interpreter {
                         }
                     };
 
-                    // Keep a private lRef's receiver alive through iterator
-                    // collection and the eventual PutValue.
+                    // Keep the lRef's base, pending key, and receiver alive
+                    // through iterator collection and the eventual PutValue.
                     let gc_frame = self.gc_root_frame();
-                    if let Some(DestructLRef::Private(base, _)) = &precomp {
-                        self.gc_root_value(base);
+                    if let Some(lref) = &precomp {
+                        self.gc_root_destruct_lref(lref);
                     }
 
                     let result = (|| {
@@ -4358,7 +4372,12 @@ impl Interpreter {
                             loop {
                                 match self.iterator_step(&iterator) {
                                     Ok(Some(result)) => match self.iterator_value(&result) {
-                                        Ok(v) => rest.push(v),
+                                        Ok(v) => {
+                                            // Later steps run user code; the
+                                            // Vec is invisible to the GC.
+                                            self.gc_root_value(&v);
+                                            rest.push(v);
+                                        }
                                         Err(e) => {
                                             done = true;
                                             return Completion::Throw(e);
@@ -4377,6 +4396,8 @@ impl Interpreter {
                         }
 
                         let arr = self.create_array(rest);
+                        // ToPropertyKey and the write itself can run user code.
+                        self.gc_root_value(&arr);
                         match precomp {
                             Some(DestructLRef::Member(base, raw_key)) => {
                                 match self.to_property_key(&raw_key) {
@@ -4451,10 +4472,10 @@ impl Interpreter {
                     };
 
                     // The target was evaluated before iterator/default user
-                    // code; its private receiver must survive until PutValue.
+                    // code; its lRef must survive until PutValue.
                     let gc_frame = self.gc_root_frame();
-                    if let Some(DestructLRef::Private(base, _)) = &precomp {
-                        self.gc_root_value(base);
+                    if let Some(lref) = &precomp {
+                        self.gc_root_destruct_lref(lref);
                     }
 
                     let result = (|| {
@@ -4502,6 +4523,8 @@ impl Interpreter {
                             item
                         };
 
+                        // ToPropertyKey and the write itself can run user code.
+                        self.gc_root_value(&val);
                         match precomp {
                             Some(DestructLRef::Member(base, raw_key)) => {
                                 match self.to_property_key(&raw_key) {
@@ -4693,10 +4716,10 @@ impl Interpreter {
                     };
 
                     // GetV and an initializer can run user code after the
-                    // target is evaluated, so retain a private receiver.
+                    // target is evaluated, so retain the whole lRef.
                     let gc_frame = self.gc_root_frame();
-                    if let Some(DestructLRef::Private(base, _)) = &pre_ref {
-                        self.gc_root_value(base);
+                    if let Some(lref) = &pre_ref {
+                        self.gc_root_destruct_lref(lref);
                     }
 
                     let result = (|| {
@@ -4737,6 +4760,8 @@ impl Interpreter {
                             val
                         };
 
+                        // ToPropertyKey and the write itself can run user code.
+                        self.gc_root_value(&val);
                         if let Some(lref) = pre_ref {
                             match lref {
                                 DestructLRef::Member(base_val, raw_key) => {
