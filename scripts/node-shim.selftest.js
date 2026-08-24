@@ -657,9 +657,19 @@ eq(
     }
   );
   var formatted = util.format("%s", proxy);
+  // Node reads [[ProxyTarget]] before any property access, so the trap-provided
+  // toString never runs and the target is inspected instead ("Proxy({})" with
+  // Node's marker, "{}" from the shim, which adds no marker). "PROXY STRING" is
+  // the degraded no-host fallback, where a Proxy stays opaque.
   truthy(
-    formatted === "PROXY STRING" || formatted === "Proxy({})",
+    formatted === "PROXY STRING" ||
+      formatted === "Proxy({})" ||
+      formatted === "{}",
     "%s handles a throwing Proxy prototype walk"
+  );
+  truthy(
+    typeof __host_proxy_target === "undefined" || formatted !== "PROXY STRING",
+    "%s does not invoke a Proxy get trap"
   );
 })();
 (function () {
@@ -939,9 +949,15 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
   );
   eq(proxyCalls, 0, "inspect invokes no nested Proxy traps");
 
+  // util.inspect output is never byte-compared against Node (see the header),
+  // so the exact revoked-Proxy marker is asserted only for the shim under test.
   var revocable = Proxy.revocable({ a: 1 }, proxyHandler);
   revocable.revoke();
-  eq(util.inspect(revocable.proxy), "<Revoked Proxy>", "inspect renders a revoked Proxy");
+  truthy(
+    typeof __host_proxy_target === "undefined" ||
+      util.inspect(revocable.proxy) === "<Revoked Proxy>",
+    "inspect renders a revoked Proxy"
+  );
   eq(proxyCalls, 0, "inspect invokes no revoked Proxy traps");
 
   // Error metadata must be read from descriptors. Throwing accessors shadow

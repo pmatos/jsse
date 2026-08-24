@@ -45,13 +45,22 @@
   // heuristics, `<ref *N>` back-references, hidden keys, getters, Map/Set
   // internals — a bottomless pit); it only needs to be correct on depth,
   // cycles, and the common types.
+  // `String.prototype.replace` with a RegExp dispatches through
+  // `RegExp.prototype[@@replace]`, which reads `rx.exec` — a bundled library
+  // that monkey-patches `RegExp.prototype.exec` would therefore run during a
+  // diagnostic print. Split/join on a plain string separator is equivalent and
+  // touches no user-replaceable hook.
+  function replaceAll(s, needle, replacement) {
+    return arrayJoin(stringSplit(s, needle), replacement);
+  }
+
   function quoteString(s) {
     s = stringConstructor(s);
     return (
       "'" +
-      stringReplace(
-        stringReplace(stringReplace(s, /\\/g, "\\\\"), /'/g, "\\'"),
-        /\n/g,
+      replaceAll(
+        replaceAll(replaceAll(s, "\\", "\\\\"), "'", "\\'"),
+        "\n",
         "\\n"
       ) +
       "'"
@@ -59,7 +68,7 @@
   }
 
   function isIdentifierKey(k) {
-    return regexpTest(/^[A-Za-z_$][A-Za-z0-9_$]*$/, k);
+    return regexpExec(identifierKeyPattern, k) !== null;
   }
 
   // Capture uncurried intrinsics before bundled library code runs. Node's
@@ -82,21 +91,27 @@
   var objectGetOwnPropertyDescriptor =
     objectConstructor.getOwnPropertyDescriptor;
   var objectGetPrototypeOf = objectConstructor.getPrototypeOf;
+  var objectHasOwnProperty = functionCall.bind(
+    objectConstructor.prototype.hasOwnProperty
+  );
   var objectIs = objectConstructor.is;
   var objectKeys = objectConstructor.keys;
+  var objectPrototype = objectConstructor.prototype;
   var numberIsNaN = numberConstructor.isNaN;
   var dateGetTime = functionCall.bind(dateConstructor.prototype.getTime);
   var dateToISOString = functionCall.bind(
     dateConstructor.prototype.toISOString
   );
   var errorIsError = errorConstructor.isError;
+  var errorPrototype = errorConstructor.prototype;
   var regexpGetSource = functionCall.bind(
     objectGetOwnPropertyDescriptor(regexpConstructor.prototype, "source").get
   );
   var regexpToString = functionCall.bind(
     regexpConstructor.prototype.toString
   );
-  var regexpTest = functionCall.bind(regexpConstructor.prototype.test);
+  var regexpExec = functionCall.bind(regexpConstructor.prototype.exec);
+  var identifierKeyPattern = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
   var numberValueOf = functionCall.bind(numberConstructor.prototype.valueOf);
   var stringValueOf = functionCall.bind(stringConstructor.prototype.valueOf);
   var booleanValueOf = functionCall.bind(
@@ -106,7 +121,7 @@
   var symbolToString = functionCall.bind(
     symbolConstructor.prototype.toString
   );
-  var stringReplace = functionCall.bind(stringConstructor.prototype.replace);
+  var stringSplit = functionCall.bind(stringConstructor.prototype.split);
 
   function tryApplyIntrinsic(intrinsic, value) {
     try {
@@ -124,6 +139,88 @@
     } catch (e) {
       return false;
     }
+  }
+
+  // Walk a Proxy chain down to its non-Proxy target without dispatching to any
+  // handler. Returns the value unchanged when it is not a Proxy (or when the
+  // host floor is absent) and null for a revoked Proxy.
+  function unwrapProxy(v) {
+    if (!hostProxyTarget) return v;
+    while (true) {
+      var target = hostProxyTarget(v);
+      if (target === undefined) return v;
+      if (target === null) return null;
+      v = target;
+    }
+  }
+
+  // `desc` is always FromPropertyDescriptor output — an ordinary object whose
+  // fields are own data properties — so an own-property check is enough to keep
+  // a polluted `Object.prototype.get`/`set`/`value` out of the result.
+  function descriptorField(desc, key) {
+    if (!desc) return undefined;
+    return objectHasOwnProperty(desc, key) ? desc[key] : undefined;
+  }
+
+  function dataDescriptorValue(desc) {
+    if (!desc) return undefined;
+    if (
+      descriptorField(desc, "get") !== undefined ||
+      descriptorField(desc, "set") !== undefined
+    ) {
+      return undefined;
+    }
+    return descriptorField(desc, "value");
+  }
+
+  function findPropertyDescriptor(v, key) {
+    try {
+      var current = v;
+      while (current !== null) {
+        current = unwrapProxy(current);
+        if (current === null) return null;
+        var desc = objectGetOwnPropertyDescriptor(current, key);
+        if (desc) return desc;
+        current = objectGetPrototypeOf(current);
+      }
+    } catch (e) {
+      // The pure-JS no-host fallback cannot unwrap exotic objects. A failed
+      // metadata walk degrades to the caller's default instead of escaping.
+    }
+    return null;
+  }
+
+  function primitiveString(value, fallback) {
+    var type = typeof value;
+    if (type === "object" || type === "function" || type === "undefined") {
+      return fallback;
+    }
+    return type === "symbol" ? symbolToString(value) : stringConstructor(value);
+  }
+
+  // Node's isError is `isNativeError(e) || e instanceof Error`, so a plain
+  // object that merely inherits Error.prototype still renders as an error. The
+  // `instanceof` half is OrdinaryHasInstance, which would dispatch to a
+  // getPrototypeOf trap for a Proxy anywhere in the chain — unwrap at every
+  // step instead so no handler ever runs. %Object.prototype% terminates the
+  // walk: nothing below it can reach Error.prototype, so the common plain
+  // object costs a single trap-free [[GetPrototypeOf]].
+  function inheritsErrorPrototype(v) {
+    try {
+      var current = objectGetPrototypeOf(v);
+      while (current !== null && current !== objectPrototype) {
+        if (current === errorPrototype) return true;
+        var target = unwrapProxy(current);
+        if (target !== current) {
+          current = target;
+          continue;
+        }
+        current = objectGetPrototypeOf(current);
+      }
+    } catch (e) {
+      // The no-host fallback cannot unwrap an exotic chain; leave it opaque.
+    }
+    return false;
   }
 
   function inspect(value, opts) {
@@ -165,9 +262,15 @@
 
       // Objects.
       if (arrayIndexOf(seen, v) !== -1) return "[Circular *1]";
-      if (errorIsError(v)) return renderError(v);
+      if (errorIsError(v) || inheritsErrorPrototype(v)) return renderError(v);
       var boxed;
-      boxed = tryApplyIntrinsic(regexpGetSource, v);
+      // `get RegExp.prototype.source` uniquely does NOT throw for
+      // %RegExp.prototype% (it answers "(?:)"), so the slot probe alone would
+      // misreport the prototype itself as a RegExp.
+      boxed =
+        v === regexpConstructor.prototype
+          ? null
+          : tryApplyIntrinsic(regexpGetSource, v);
       if (boxed) return regexpToString(v);
       boxed = tryApplyIntrinsic(dateGetTime, v);
       if (boxed) {
@@ -204,12 +307,18 @@
         if (arrayIsArray(v)) {
           out = renderArray(v, depth);
         } else {
+          // Own properties are rendered from their descriptors WITHOUT
+          // invoking accessors — Node's util.inspect shows [Getter]/[Setter]
+          // rather than calling the getter, so a throwing or side-effecting
+          // accessor cannot make a diagnostic print throw/mutate under jsse
+          // where it would not under Node.
           var keys = objectKeys(v);
           var parts = [];
           for (var j = 0; j < keys.length; j++) {
             var k = keys[j];
             var label = isIdentifierKey(k) ? k : quoteString(k);
-            parts.push(label + ": " + renderMember(v, k, depth));
+            var memberDesc = objectGetOwnPropertyDescriptor(v, k);
+            parts.push(label + ": " + renderDescriptor(memberDesc, depth));
           }
           var ctorName = constructorName(v);
           out = parts.length
@@ -220,33 +329,6 @@
         seen.pop();
       }
       return out;
-    }
-
-    function unwrapProxy(v) {
-      if (!hostProxyTarget) return v;
-      while (true) {
-        var target = hostProxyTarget(v);
-        if (target === undefined) return v;
-        if (target === null) return null;
-        v = target;
-      }
-    }
-
-    function descriptorField(desc, key) {
-      if (!desc) return undefined;
-      var field = objectGetOwnPropertyDescriptor(desc, key);
-      return field ? field.value : undefined;
-    }
-
-    function dataDescriptorValue(desc) {
-      if (!desc) return undefined;
-      if (
-        descriptorField(desc, "get") !== undefined ||
-        descriptorField(desc, "set") !== undefined
-      ) {
-        return undefined;
-      }
-      return descriptorField(desc, "value");
     }
 
     function renderDescriptor(desc, depth) {
@@ -260,16 +342,6 @@
           : "[Setter]";
       }
       return render(descriptorField(desc, "value"), depth - 1);
-    }
-
-    // Render one own property/element WITHOUT invoking accessors — Node's
-    // util.inspect shows [Getter]/[Setter] rather than calling the getter, so a
-    // throwing or side-effecting accessor (object property or array element)
-    // cannot make a diagnostic print throw/mutate under jsse where it would not
-    // under Node.
-    function renderMember(container, key, depth) {
-      var desc = objectGetOwnPropertyDescriptor(container, key);
-      return desc ? renderDescriptor(desc, depth) : "undefined";
     }
 
     // Array length and elements are read from own descriptors on the unwrapped
@@ -310,31 +382,6 @@
       return hasPart ? "[ " + body + " ]" : "[]";
     }
 
-    function findPropertyDescriptor(v, key) {
-      try {
-        var current = v;
-        while (current !== null) {
-          current = unwrapProxy(current);
-          if (current === null) return null;
-          var desc = objectGetOwnPropertyDescriptor(current, key);
-          if (desc) return desc;
-          current = objectGetPrototypeOf(current);
-        }
-      } catch (e) {
-        // The pure-JS no-host fallback cannot unwrap exotic objects. A failed
-        // metadata walk degrades to the caller's default instead of escaping.
-      }
-      return null;
-    }
-
-    function primitiveString(value, fallback) {
-      var type = typeof value;
-      if (type === "object" || type === "function" || type === "undefined") {
-        return fallback;
-      }
-      return type === "symbol" ? symbolToString(value) : stringConstructor(value);
-    }
-
     function renderError(v) {
       var stackDesc = findPropertyDescriptor(v, "stack");
       var stack = primitiveString(dataDescriptorValue(stackDesc), "");
@@ -363,19 +410,23 @@
         if (own) {
           ctor = dataDescriptorValue(own);
         } else {
-          var proto = objectGetPrototypeOf(v);
-          proto = proto === null ? null : unwrapProxy(proto);
+          var proto = unwrapProxy(objectGetPrototypeOf(v));
           var pd = proto
             ? objectGetOwnPropertyDescriptor(proto, "constructor")
             : null;
           if (pd) ctor = dataDescriptorValue(pd);
         }
-        if (typeof ctor !== "object" && typeof ctor !== "function") return "";
+        // Node's getConstructorName only accepts a callable `constructor` with
+        // a non-empty name; anything else yields no prefix at all (never a bare
+        // leading space).
         ctor = unwrapProxy(ctor);
-        var name = ctor
-          ? dataDescriptorValue(objectGetOwnPropertyDescriptor(ctor, "name"))
-          : undefined;
-        return typeof name === "string" && name !== "Object" ? name + " " : "";
+        if (typeof ctor !== "function") return "";
+        var name = dataDescriptorValue(
+          objectGetOwnPropertyDescriptor(ctor, "name")
+        );
+        return typeof name === "string" && name && name !== "Object"
+          ? name + " "
+          : "";
       } catch (e) {
         return "";
       }
@@ -449,9 +500,6 @@
     }
     return names;
   })();
-  var objectHasOwnProperty = functionCall.bind(
-    objectConstructor.prototype.hasOwnProperty
-  );
   var symbolToPrimitive = symbolConstructor.toPrimitive;
 
   function hasOwnProperty(value, key) {
@@ -468,6 +516,12 @@
   function hasBuiltInToString(value) {
     var hasOwnToString = hasOwnProperty;
     var hasOwnToPrimitive = hasOwnProperty;
+
+    // Node reads [[ProxyTarget]] here before touching a single property, so a
+    // Proxy's get trap never runs for `%s`. Do the same via the host floor; a
+    // revoked Proxy has no coercion hook at all, so it routes to inspect.
+    value = unwrapProxy(value);
+    if (value === null) return true;
 
     if (typeof value.toString !== "function") {
       if (typeof value[symbolToPrimitive] !== "function") return true;
@@ -491,14 +545,14 @@
         !hasOwnToPrimitive(pointer, symbolToPrimitive)
       );
     } catch (e) {
-      // Node can unwrap proxies without invoking their prototype traps. The
-      // pure-JS shim cannot, so a failed owner walk uses ordinary coercion.
+      // Without the host floor the shim cannot unwrap an exotic object, so a
+      // failed owner walk falls back to ordinary coercion.
       return false;
     }
 
-    // A callable hook visible through a Proxy get trap may not have an owner in
-    // the reported prototype chain. Node can unwrap proxies internally; the
-    // pure-JS shim cannot, so treat that hook as user-defined.
+    // A callable hook with no owner in the reported prototype chain (only
+    // reachable on the no-host fallback, where a Proxy stays opaque) is treated
+    // as user-defined.
     if (pointer === null) return false;
 
     var descriptor = objectGetOwnPropertyDescriptor(pointer, "constructor");
