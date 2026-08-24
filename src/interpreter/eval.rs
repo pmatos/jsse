@@ -9141,9 +9141,18 @@ impl Interpreter {
         // The borrow must end before `iterator_close_result` runs the user's
         // `return` method, which may write bindings in this same environment.
         let iterator = func_env.borrow().get(&loop_state.iter_var);
+        if matches!(completion, Completion::Exit(_)) {
+            if let Some(iterator) = iterator {
+                self.unroot_async_for_of_iterator(&iterator);
+            }
+            return completion;
+        }
         if let Some(iterator) = iterator {
             let close_result = self.iterator_close_result(&iterator);
             self.unroot_async_for_of_iterator(&iterator);
+            if let Some(code) = self.pending_exit {
+                return Completion::Exit(code);
+            }
             if !completion.is_abrupt()
                 && let Err(error) = close_result
             {
