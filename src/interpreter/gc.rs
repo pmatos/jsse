@@ -365,8 +365,11 @@ impl Interpreter {
             if let Some(ref v) = afs.saved_finally_exception {
                 Self::collect_value_roots(v, &mut roots);
             }
-            if let Some(ref env) = afs.for_of_iter_env {
-                Self::collect_env_roots(env, &mut roots, &mut seen_envs);
+            for loop_state in &afs.for_of_stack {
+                Self::collect_env_roots(&loop_state.outer_env, &mut roots, &mut seen_envs);
+                if let Some(ref env) = loop_state.iteration_env {
+                    Self::collect_env_roots(env, &mut roots, &mut seen_envs);
+                }
             }
         }
 

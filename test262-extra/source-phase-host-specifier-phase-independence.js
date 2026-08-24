@@ -140,24 +140,16 @@ async function rejection(fn, specifier, options) {
   return null;
 }
 
-// Cases are flattened into one list because `await` inside a loop nested in
-// another loop loses the outer iteration's bindings on jsse (see jsse#476);
-// a single loop level is unaffected.
-const typedCases = [];
+const messagesByType = { text: [], bytes: [] };
 for (const type of ['text', 'bytes']) {
   for (const name of Object.keys(dynamicForms)) {
-    typedCases.push([name, type]);
+    const err = await rejection(dynamicForms[name], '<module source>', { with: { type } });
+    assert(
+      err instanceof TypeError,
+      name + ' rejects a type: ' + type + ' request with a TypeError, got: ' + err
+    );
+    messagesByType[type].push(err.message);
   }
-}
-
-const messagesByType = { text: [], bytes: [] };
-for (const [name, type] of typedCases) {
-  const err = await rejection(dynamicForms[name], '<module source>', { with: { type } });
-  assert(
-    err instanceof TypeError,
-    name + ' rejects a type: ' + type + ' request with a TypeError, got: ' + err
-  );
-  messagesByType[type].push(err.message);
 }
 
 for (const type of Object.keys(messagesByType)) {

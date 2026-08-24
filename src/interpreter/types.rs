@@ -317,9 +317,27 @@ pub(crate) struct AsyncFunctionState {
     pub saved_finally_exception: Option<JsValue>,
     pub resolve_fn: JsValue,
     pub reject_fn: JsValue,
-    pub for_of_stack: Vec<(String, usize, usize)>,
-    pub for_of_iter_env: Option<EnvRef>,
+    pub for_of_stack: Vec<AsyncForOfLoopState>,
     pub module_path: Option<std::path::PathBuf>,
+}
+
+#[derive(Clone)]
+pub(crate) struct AsyncForOfLoopState {
+    pub(crate) iter_var: String,
+    pub(crate) head_state: usize,
+    pub(crate) after_state: usize,
+    /// The LexicalEnvironment active when ForIn/OfBodyEvaluation began.
+    pub(crate) outer_env: EnvRef,
+    /// The current lexical head's per-iteration environment, when any.
+    pub(crate) iteration_env: Option<EnvRef>,
+}
+
+impl AsyncForOfLoopState {
+    pub(crate) fn effective_env(&self) -> EnvRef {
+        self.iteration_env
+            .clone()
+            .unwrap_or_else(|| self.outer_env.clone())
+    }
 }
 
 #[derive(Debug, Clone)]

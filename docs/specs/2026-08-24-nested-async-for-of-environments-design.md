@@ -77,7 +77,7 @@ uncatchable host exit continues to propagate immediately.
 
 ## Validation
 
-Add a `test262-extra` async regression covering:
+Add `test262-extra` async regressions covering:
 
 - outer `const` and a lexical declaration in its body across an inner
   `for-of` suspension;
@@ -90,4 +90,3 @@ Add a `test262-extra` async regression covering:
 
 Run the focused regression, relevant upstream async-function and `for-of`
 test262 directories, the custom suite, and the repository's full quality gate.
-

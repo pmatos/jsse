@@ -3518,7 +3518,6 @@ impl Interpreter {
                 resolve_fn,
                 reject_fn,
                 for_of_stack: vec![],
-                for_of_iter_env: None,
                 module_path: Some(module_path.to_path_buf()),
             },
         );
