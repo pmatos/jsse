@@ -1483,6 +1483,41 @@ fn private_logical_assign_releases_temp_roots_after_abrupt_completion() {
 }
 
 #[test]
+fn private_destructuring_releases_temp_roots_after_abrupt_completion() {
+    // Destructuring evaluates each private target before iterator/property
+    // access. Throws from those intervening operations must release both the
+    // private receiver's scoped root and the array iterator's existing root.
+    let interp = run_script(
+        r#"
+        var throwingIterable = {
+            [Symbol.iterator]: function () {
+                return {
+                    next: function () { throw new Error("iterator step"); }
+                };
+            }
+        };
+        var throwingSource = {
+            get item() { throw new Error("source getter"); }
+        };
+        class C {
+            set #x(v) {}
+            static element() { [(new C()).#x] = throwingIterable; }
+            static rest() { [...(new C()).#x] = throwingIterable; }
+            static property() { ({ item: (new C()).#x } = throwingSource); }
+        }
+        try { C.element(); } catch (e) {}
+        try { C.rest(); } catch (e) {}
+        try { C.property(); } catch (e) {}
+        "#,
+    );
+
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "private destructuring temporary roots must be released after a throw"
+    );
+}
+
+#[test]
 fn private_method_call_with_non_iterable_spread_throws() {
     // A spread argument that is not iterable must throw a TypeError, even when the
     // callee is a private method reached through `this.#m(...)`. The private-call
