@@ -318,7 +318,7 @@ pub(crate) struct AsyncFunctionState {
     pub resolve_fn: JsValue,
     pub reject_fn: JsValue,
     pub for_of_stack: Vec<AsyncForOfLoopState>,
-    pub module_path: Option<std::path::PathBuf>,
+    pub module_path: Option<super::ModuleKey>,
 }
 
 #[derive(Clone)]
@@ -722,7 +722,7 @@ pub(crate) struct Environment {
     // §9.1.1.5.5 CreateImportBinding: indirect bindings for module imports
     pub(crate) indirect_bindings: Option<HashMap<String, (EnvRef, String)>>,
     // Module path for import.meta resolution (§16.2.1.5.2 GetActiveScriptOrModule)
-    pub(crate) module_path: Option<std::path::PathBuf>,
+    pub(crate) module_path: Option<super::ModuleKey>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -870,7 +870,7 @@ impl Environment {
         self.module_path = None;
     }
 
-    pub(crate) fn find_module_path(env: &EnvRef) -> Option<std::path::PathBuf> {
+    pub(crate) fn find_module_path(env: &EnvRef) -> Option<super::ModuleKey> {
         if let Some(ref mp) = env.borrow().module_path {
             return Some(mp.clone());
         }
@@ -1700,7 +1700,7 @@ pub(crate) struct ModuleNamespaceData {
     pub env: EnvRef,
     pub export_names: Vec<String>,
     pub export_to_binding: HashMap<String, String>,
-    pub module_path: Option<std::path::PathBuf>,
+    pub module_path: Option<super::ModuleKey>,
     pub deferred: bool,
 }
 

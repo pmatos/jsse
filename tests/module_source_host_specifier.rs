@@ -1,11 +1,10 @@
 //! The `<module source>` host specifier must not be capturable by a real
 //! filesystem entry of the same name (jsse#222 review finding).
 //!
-//! Its module-registry key is a bare relative path, so any `canonicalize()` on
-//! it succeeds whenever jsse runs in a directory holding an entry called
-//! `<module source>` — rebinding the specifier to that file's registry slot.
-//! This lives in `tests/` rather than `test262-extra/` because the condition is
-//! the *process working directory*, which only a spawned child can control.
+//! The registry now uses an opaque Module Key whose total canonicalization
+//! preserves host identity and exposes a filesystem path only for file-backed
+//! modules. This child-process regression keeps the original collision
+//! scenario covered because the condition is the process working directory.
 
 use std::fs;
 use std::process::Command;
@@ -85,12 +84,8 @@ if (Object.keys(ns).length !== 0) throw new Error('namespace leaked: ' + Object.
 if (Object.keys(dyn).length !== 0) throw new Error('dynamic namespace leaked');
 if (ns !== dyn) throw new Error('phases disagree on the record');
 
-// import.defer and ShadowRealm.prototype.importValue canonicalize the resolved
-// path themselves. These two are a canary, not a regression guard: the record is
-// already evaluated with no exports and no async dependencies, so a misdirected
-// registry lookup misses and no-ops, and reverting either site to a raw
-// canonicalize() still passes (verified). They start discriminating the moment
-// the synthetic record gains exports or async dependencies.
+// import.defer and ShadowRealm.prototype.importValue exercise downstream
+// Module Key consumers as well as the static and ordinary dynamic forms above.
 const deferred = await import.defer('<module source>');
 if (Object.keys(deferred).length !== 0) {
   throw new Error('deferred namespace leaked: ' + Object.keys(deferred));

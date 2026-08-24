@@ -462,142 +462,33 @@ pub(crate) fn is_array_value(interp: &mut Interpreter, obj_id: u64) -> Result<bo
     Ok(false)
 }
 
-pub(crate) fn sort_own_keys(keys: Vec<JsPropertyKey>) -> Vec<JsPropertyKey> {
-    let mut indices: Vec<(u64, usize)> = Vec::new();
-    let mut strings: Vec<(JsPropertyKey, usize)> = Vec::new();
-    for (pos, k) in keys.iter().enumerate() {
-        if let Ok(n) = k.parse::<u64>()
-            && k.eq_str(&n.to_string())
-        {
-            indices.push((n, pos));
-            continue;
-        }
-        strings.push((k.clone(), pos));
-    }
-    indices.sort_by_key(|&(n, _)| n);
-    let mut result: Vec<JsPropertyKey> = Vec::with_capacity(keys.len());
-    for (n, _) in indices {
-        result.push(JsPropertyKey::from(n.to_string()));
-    }
-    for (s, _) in strings {
-        result.push(s);
-    }
-    result
-}
-
 pub(crate) fn enumerable_own_keys(
     interp: &mut Interpreter,
     obj_id: u64,
 ) -> Result<Vec<JsPropertyKey>, JsValue> {
-    if let Some(obj) = interp.get_object_cell(obj_id) {
-        if obj.borrow().is_proxy() || obj.borrow().is_proxy_revoked() {
-            let target_val = interp.get_proxy_target_val(obj_id);
-            match interp.invoke_proxy_trap(obj_id, "ownKeys", vec![target_val.clone()]) {
-                Ok(Some(v)) => {
-                    interp.validate_ownkeys_invariant(&v, &target_val)?;
-                    let mut keys = Vec::new();
-                    if let Some(arr_id) = v.as_object_id() {
-                        const MAX_PROXY_OWNKEYS_RESULT_LEN: usize = 1_000_000;
-                        let len = match interp.get_property_on_id(arr_id, "length").as_number() {
-                            Some(n) if n.is_finite() && n > 0.0 => {
-                                let len = n.floor() as usize;
-                                if len > MAX_PROXY_OWNKEYS_RESULT_LEN {
-                                    return Err(interp.create_type_error(
-                                        "'ownKeys' on proxy: trap result length exceeds supported limit",
-                                    ));
-                                }
-                                len
-                            }
-                            _ => 0,
-                        };
-                        for i in 0..len {
-                            let k = interp.get_property_on_id(arr_id, &i.to_string());
-                            if let Some(s) = k.into_string() {
-                                let key = JsPropertyKey::from_js_string(&s);
-                                let key_val = JsValue::string(s);
-                                match interp.invoke_proxy_trap(
-                                    obj_id,
-                                    "getOwnPropertyDescriptor",
-                                    vec![target_val.clone(), key_val],
-                                ) {
-                                    Ok(Some(desc_val)) => {
-                                        if let Some(desc_id) = desc_val.as_object_id() {
-                                            let enum_val =
-                                                interp.get_property_on_id(desc_id, "enumerable");
-                                            if interp.to_boolean_val(&enum_val) {
-                                                keys.push(key.clone());
-                                            }
-                                        }
-                                    }
-                                    Ok(None) => {
-                                        if let Some(target_id) = target_val.as_object_id()
-                                            && let Some(tobj) = interp.get_object_cell(target_id)
-                                            && let Some(d) = tobj.borrow().properties.get(&key)
-                                            && d.enumerable != Some(false)
-                                        {
-                                            keys.push(key);
-                                        }
-                                    }
-                                    Err(e) => return Err(e),
-                                }
-                            }
-                        }
-                    }
-                    return Ok(keys);
-                }
-                Ok(None) => {
-                    // No ownKeys trap — delegate to the target
-                    if let Some(target_id) = target_val.as_object_id() {
-                        return enumerable_own_keys(interp, target_id);
-                    }
-                    return Ok(Vec::new());
-                }
-                Err(e) => return Err(e),
-            }
+    let own_keys = interp.proxy_own_keys(obj_id)?;
+    let mut enumerable_keys = Vec::new();
+
+    for key_value in own_keys {
+        let Some(key_string) = key_value.as_string() else {
+            continue;
+        };
+        let key = JsPropertyKey::from_js_string(&key_string);
+        let descriptor_value = interp.proxy_get_own_property_descriptor(obj_id, &key)?;
+        if descriptor_value.is_undefined() {
+            continue;
         }
-        let b = obj.borrow();
-        // String exotic object: character indices come first
-        let mut result: Vec<JsPropertyKey> = Vec::new();
-        if let Some(len) = b
-            .primitive_value
-            .as_ref()
-            .and_then(|pv| pv.with_string(|units| units.len()))
-        {
-            for i in 0..len {
-                result.push(JsPropertyKey::from(i.to_string()));
-            }
+        let descriptor = match interp.to_property_descriptor(&descriptor_value) {
+            Ok(descriptor) => descriptor,
+            Err(Some(error)) => return Err(error),
+            Err(None) => continue,
+        };
+        if descriptor.enumerable == Some(true) {
+            enumerable_keys.push(key);
         }
-        // TypedArray [[OwnPropertyKeys]]: virtual indexed properties are enumerable
-        if let Some(ta) = b.typed_array_info() {
-            for i in 0..ta.array_length {
-                result.push(JsPropertyKey::from(i.to_string()));
-            }
-        }
-        let is_string_wrapper = b.primitive_value.as_ref().is_some_and(|pv| pv.is_string());
-        let keys: Vec<JsPropertyKey> = b
-            .property_order
-            .iter()
-            .filter(|k| {
-                if result.contains(k) {
-                    return false;
-                }
-                if is_string_wrapper && k.eq_str("length") {
-                    return false;
-                }
-                !k.is_symbol()
-                    && b.properties
-                        .get(k)
-                        .is_some_and(|d| d.enumerable != Some(false))
-            })
-            .cloned()
-            .collect();
-        if !result.is_empty() {
-            result.extend(sort_own_keys(keys));
-            return Ok(result);
-        }
-        return Ok(sort_own_keys(keys));
     }
-    Ok(Vec::new())
+
+    Ok(enumerable_keys)
 }
 
 pub(crate) fn json_stringify_full(

@@ -32,6 +32,10 @@ _Avoid_: cache header, IC metadata.
 The runtime cache of IC slot values for a Body, keyed by the Body's identity and shared by all closures of that Body.
 _Avoid_: cache table, IC map.
 
+**Module Key**:
+The canonical host identity of a resolved ECMAScript module, whether it is backed by a file or supplied directly by the host.
+_Avoid_: module path, registry path
+
 **Seam**:
 A place where one module's interface ends and another's begins. In JSSE, the seams between the AST, the inline-cache system, and the interpreter are intentionally narrow: the AST carries site identifiers, the runtime carries slot values, and the interpreter maps one to the other.
 _Avoid_: boundary, layer.

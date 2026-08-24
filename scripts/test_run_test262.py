@@ -12,27 +12,27 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 RUNNER = REPO_ROOT / "scripts" / "run-test262.py"
 
 
+def frontmatter(*lines: str) -> str:
+    body = "\n".join(lines)
+    return f"/*---\n{body}\n---*/\n"
+
+
 class RunTest262ExitStatusTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.test262 = self.root / "test262"
-        test_dir = self.test262 / "test"
-        test_dir.mkdir(parents=True)
-        self.test_file = test_dir / "sample.js"
-        self.test_file.write_text(
-            textwrap.dedent(
-                """\
-                /*---
-                flags: [raw]
-                ---*/
-                """
-            ),
-            encoding="utf-8",
+        self.test_file = self.write_file(
+            "test262/test/sample.js", frontmatter("flags: [raw]")
         )
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def write_file(self, relpath: str, content: str = "") -> Path:
+        path = self.root / relpath
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        return path
 
     def write_engine(self, exit_code: int) -> Path:
         engine = self.root / f"engine_exit_{exit_code}.py"
@@ -49,7 +49,12 @@ class RunTest262ExitStatusTests(unittest.TestCase):
         engine.chmod(engine.stat().st_mode | stat.S_IXUSR)
         return engine
 
-    def run_runner(self, engine: Path, *extra_args: str) -> subprocess.CompletedProcess:
+    def run_runner(
+        self,
+        engine: Path,
+        *extra_args: str,
+        paths: tuple[str, ...] = ("test262/test/sample.js",),
+    ) -> subprocess.CompletedProcess:
         return subprocess.run(
             [
                 sys.executable,
@@ -63,7 +68,7 @@ class RunTest262ExitStatusTests(unittest.TestCase):
                 "-j",
                 "1",
                 *extra_args,
-                "test262/test/sample.js",
+                *paths,
             ],
             cwd=self.root,
             env={**os.environ, "TZ": "America/New_York"},
@@ -116,6 +121,49 @@ class RunTest262ExitStatusTests(unittest.TestCase):
         result = self.run_runner(engine, "--fail-on-failures")
 
         self.assertEqual(result.returncode, 0)
+
+    def test_explicit_non_fixture_mjs_is_rejected(self):
+        self.write_file("test262-extra/module-test.mjs")
+
+        result = self.run_runner(
+            self.write_engine(0), paths=("test262-extra/module-test.mjs",)
+        )
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("non-fixture .mjs files would not be collected", result.stderr)
+        self.assertIn("test262-extra/module-test.mjs", result.stderr)
+        self.assertIn("flags: [module]", result.stderr)
+
+    def test_directory_with_non_fixture_mjs_is_rejected(self):
+        self.write_file("test262-extra/nested/module-test.mjs")
+
+        result = self.run_runner(self.write_engine(0), paths=("test262-extra",))
+
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("test262-extra/nested/module-test.mjs", result.stderr)
+
+    def test_directory_allows_mjs_fixtures(self):
+        self.write_file("test262-extra/module-test.js", frontmatter("flags: [module]"))
+        self.write_file("test262-extra/dep_FIXTURE.mjs")
+
+        result = self.run_runner(
+            self.write_engine(0),
+            "--fail-on-failures",
+            paths=("test262-extra",),
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("Files:   1", result.stdout)
+
+    def test_test262_submodule_mjs_does_not_block_collection(self):
+        self.write_file("test262/tools/generator.mjs")
+
+        result = self.run_runner(
+            self.write_engine(0), "--fail-on-failures", paths=("test262",)
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("would not be collected", result.stderr)
 
 
 if __name__ == "__main__":

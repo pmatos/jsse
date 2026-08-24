@@ -43,7 +43,7 @@ mod scheduler;
 #[cfg(test)]
 mod tests;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum ImportModuleType {
     Text,
     Bytes,
@@ -76,6 +76,62 @@ fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
         .and_then(|(_, value)| ImportModuleType::from_attr_value(value))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ModuleLoadMode {
+    Evaluate,
+    Defer,
+}
+
+/// Canonical host identity for a resolved module.
+///
+/// Most keys name files, but the host-provided `<module source>` record does
+/// not. Deliberately do not implement `Deref<Target = Path>`: callers must
+/// prove that a key is file-backed before crossing into filesystem code.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) struct ModuleKey(PathBuf);
+
+impl ModuleKey {
+    fn for_file(path: PathBuf) -> Self {
+        Self(path).canonicalize()
+    }
+
+    fn module_source() -> Self {
+        Self(PathBuf::from(MODULE_SOURCE_SPECIFIER))
+    }
+
+    fn is_module_source(&self) -> bool {
+        self.0 == Path::new(MODULE_SOURCE_SPECIFIER)
+    }
+
+    /// Return the backing file path, or `None` for a host-provided module.
+    fn file_path(&self) -> Option<&Path> {
+        (!self.is_module_source()).then_some(self.0.as_path())
+    }
+
+    fn is_empty(&self) -> bool {
+        self.0.as_os_str().is_empty()
+    }
+
+    fn display(&self) -> std::path::Display<'_> {
+        self.0.display()
+    }
+
+    /// Canonicalize every Module Key without interpreting a host key as a
+    /// filesystem path. Missing files retain their resolved fallback spelling.
+    fn canonicalize(&self) -> Self {
+        if self.is_module_source() || self.0.as_os_str().is_empty() {
+            return self.clone();
+        }
+        Self(self.0.canonicalize().unwrap_or_else(|_| self.0.clone()))
+    }
+}
+
+impl std::fmt::Display for ModuleKey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.display().fmt(f)
+    }
+}
+
 pub(crate) struct Interpreter {
     pub(crate) realms: Vec<Realm>,
     pub(crate) current_realm_id: usize,
@@ -99,9 +155,9 @@ pub(crate) struct Interpreter {
     pub(crate) generator_inline_iters: FxHashMap<u64, Vec<JsValue>>,
     pub(crate) scheduler: scheduler::JobScheduler,
     cached_has_instance_key: Option<JsPropertyKey>,
-    module_registry: HashMap<(usize, PathBuf), Rc<RefCell<LoadedModule>>>,
-    synthetic_module_registry: HashMap<(PathBuf, ImportModuleType), Rc<RefCell<LoadedModule>>>,
-    current_module_path: Option<PathBuf>,
+    module_registry: HashMap<(usize, ModuleKey), Rc<RefCell<LoadedModule>>>,
+    synthetic_module_registry: HashMap<(ModuleKey, ImportModuleType), Rc<RefCell<LoadedModule>>>,
+    current_module_path: Option<ModuleKey>,
     loading_deferred: bool,
     last_call_had_explicit_return: bool,
     last_call_this_value: Option<JsValue>,
@@ -139,7 +195,7 @@ pub(crate) struct Interpreter {
     pub(crate) pending_async_dispose_await: bool,
     pub(crate) static_module_load_depth: u32,
     module_async_evaluation_count: u64,
-    module_async_info: FxHashMap<u64, PathBuf>,
+    module_async_info: FxHashMap<u64, ModuleKey>,
     pub(crate) with_scope_depth: u32,
     pub(crate) has_ever_entered_with: bool,
     /// IC hit counter for Phase-2 telemetry/tests. Issue #71. Cell so the
@@ -323,7 +379,7 @@ pub(crate) enum AsyncGenRequestKind {
 }
 
 pub(crate) struct LoadedModule {
-    pub path: PathBuf,
+    pub path: ModuleKey,
     pub env: EnvRef,
     pub exports: HashMap<String, JsValue>,
     pub export_bindings: HashMap<String, String>, // export_name -> binding_name
@@ -331,8 +387,8 @@ pub(crate) struct LoadedModule {
     pub cached_deferred_namespace: Option<JsValue>, // cached deferred namespace (separate from eager)
     pub cached_import_meta: Option<JsValue>,        // cached import.meta object per §16.2.1.5.2
     pub error: Option<JsValue>,                     // if module evaluation threw, the error
-    pub namespace_imports: HashMap<String, PathBuf>, // local_name -> source module path (for `import * as ns`)
-    pub source_imports: HashMap<String, PathBuf>, // local_name -> source-phase target path (for `import source X`)
+    pub namespace_imports: HashMap<String, ModuleKey>, // local_name -> source module (for `import * as ns`)
+    pub source_imports: HashMap<String, ModuleKey>, // local_name -> source-phase target (for `import source X`)
     pub module_source: Option<JsValue>, // [[ModuleSource]]: source-phase representation (empty for Source Text Modules)
     pub star_export_sources: Vec<String>, // source specifiers from `export * from '...'`
     pub evaluated: bool,
@@ -342,8 +398,8 @@ pub(crate) struct LoadedModule {
     pub program_ast: Option<crate::ast::Program>,
     pub async_evaluation_order: Option<u64>,
     pub pending_async_dependencies: u32,
-    pub async_parent_modules: Vec<PathBuf>,
-    pub cycle_root: Option<PathBuf>,
+    pub async_parent_modules: Vec<ModuleKey>,
+    pub cycle_root: Option<ModuleKey>,
     pub top_level_capability: Option<(JsValue, JsValue, JsValue)>,
     pub dfs_index: Option<u32>,
     pub dfs_ancestor_index: Option<u32>,
@@ -923,9 +979,9 @@ impl Interpreter {
     /// `MODULE_SOURCE_SPECIFIER` resolves to, in every import phase. Its
     /// `[[ModuleSource]]` is a fresh %AbstractModuleSource% instance; it exposes
     /// no bindings.
-    fn get_or_create_module_source_module(&mut self) -> Rc<RefCell<LoadedModule>> {
-        let sentinel = PathBuf::from(MODULE_SOURCE_SPECIFIER);
-        if let Some(existing) = self.module_registry_get(&sentinel) {
+    fn get_or_create_module_source_module(&mut self, key: &ModuleKey) -> Rc<RefCell<LoadedModule>> {
+        debug_assert!(key.is_module_source());
+        if let Some(existing) = self.module_registry_get(key) {
             return existing;
         }
 
@@ -943,7 +999,7 @@ impl Interpreter {
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
         let module = Rc::new(RefCell::new(LoadedModule {
-            path: sentinel.clone(),
+            path: key.clone(),
             env: module_env,
             exports: HashMap::new(),
             export_bindings: HashMap::new(),
@@ -968,7 +1024,7 @@ impl Interpreter {
             dfs_index: None,
             dfs_ancestor_index: None,
         }));
-        self.module_registry_insert(sentinel, module.clone());
+        self.module_registry_insert(key.clone(), module.clone());
         module
     }
 
@@ -997,39 +1053,15 @@ impl Interpreter {
         specifier: &str,
         referrer: Option<&Path>,
         import_type: Option<ImportModuleType>,
-    ) -> Result<(PathBuf, Option<JsValue>), JsValue> {
+    ) -> Result<(ModuleKey, Option<JsValue>), JsValue> {
         let resolved = self.resolve_module_specifier(specifier, referrer)?;
-        if Self::is_module_source_path(&resolved) {
-            if let Some(itype) = import_type {
-                return Err(self.module_source_type_error(itype));
-            }
-            let module = self.load_module(&resolved)?;
+        if resolved.is_module_source() {
+            let module =
+                self.load_module_for_type(&resolved, import_type, ModuleLoadMode::Evaluate)?;
             let module_source = module.borrow().module_source.clone();
             return Ok((resolved, module_source));
         }
         Ok((resolved, None))
-    }
-
-    /// Whether `path` is the module-registry key of the synthetic
-    /// `<module source>` host module rather than a filesystem path.
-    fn is_module_source_path(path: &Path) -> bool {
-        path == Path::new(MODULE_SOURCE_SPECIFIER)
-    }
-
-    /// Canonicalize a module *target* path, leaving the synthetic
-    /// `<module source>` key untouched.
-    ///
-    /// The key is a bare relative path, so a plain `canonicalize()` succeeds
-    /// whenever the process happens to run in a directory holding a real entry of
-    /// that name — silently rebinding the specifier to that file's registry slot.
-    /// Every site that canonicalizes a path which may have come from
-    /// `resolve_module_specifier` goes through here, so the key also keeps
-    /// resolving to the synthetic record rather than missing the registry.
-    fn canonicalize_module_path(path: &Path) -> PathBuf {
-        if Self::is_module_source_path(path) {
-            return path.to_path_buf();
-        }
-        path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
     }
 
     /// The host has no text or bytes to hand back for a Module Source module, in
@@ -1040,6 +1072,32 @@ impl Interpreter {
             "Module '{MODULE_SOURCE_SPECIFIER}' has no {} representation",
             itype.attr_value()
         ))
+    }
+
+    /// Load a resolved module request through the one host/type/mode dispatch
+    /// seam. File-only loaders sit behind this method, so the host-provided
+    /// `<module source>` key can never reach a filesystem read.
+    fn load_module_for_type(
+        &mut self,
+        key: &ModuleKey,
+        import_type: Option<ImportModuleType>,
+        mode: ModuleLoadMode,
+    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        let Some(path) = key.file_path() else {
+            return match import_type {
+                Some(itype) => Err(self.module_source_type_error(itype)),
+                None => Ok(self.get_or_create_module_source_module(key)),
+            };
+        };
+
+        match import_type {
+            Some(ImportModuleType::Text) => self.load_text_module(key, path),
+            Some(ImportModuleType::Bytes) => self.load_bytes_module(key, path),
+            None => match mode {
+                ModuleLoadMode::Evaluate => self.load_module(key, path),
+                ModuleLoadMode::Defer => self.load_module_no_eval(key, path),
+            },
+        }
     }
 
     pub(crate) fn gc_root_value(&mut self, val: &JsValue) {
@@ -1967,7 +2025,7 @@ impl Interpreter {
         match program.source_type {
             SourceType::Script => {
                 let prev = self.current_module_path.take();
-                self.current_module_path = Some(path.to_path_buf());
+                self.current_module_path = Some(ModuleKey::for_file(path.to_path_buf()));
                 let global = self.realm().global_env.clone();
                 if program.body_is_strict {
                     global.borrow_mut().strict = true;
@@ -1984,13 +2042,14 @@ impl Interpreter {
                 r
             }
             SourceType::Module => {
-                let r = self.run_module(program, Some(path.to_path_buf()));
+                let module_key = ModuleKey::for_file(path.to_path_buf());
+                let r = self.run_module(program, Some(module_key.clone()));
                 if let Completion::Exit(code) = &r {
                     self.pending_exit = Some(*code);
                 }
                 // Keep path set during microtask draining so async callbacks can use relative imports
                 let prev = self.current_module_path.take();
-                self.current_module_path = Some(path.to_path_buf());
+                self.current_module_path = Some(module_key);
                 self.drain_microtasks_until_idle();
                 self.current_module_path = prev;
                 r
@@ -1998,18 +2057,18 @@ impl Interpreter {
         }
     }
 
-    pub(crate) fn module_registry_get(&self, path: &Path) -> Option<Rc<RefCell<LoadedModule>>> {
+    pub(crate) fn module_registry_get(&self, key: &ModuleKey) -> Option<Rc<RefCell<LoadedModule>>> {
         self.module_registry
-            .get(&(self.current_realm_id, path.to_path_buf()))
+            .get(&(self.current_realm_id, key.clone()))
             .cloned()
     }
 
-    fn module_registry_insert(&mut self, path: PathBuf, module: Rc<RefCell<LoadedModule>>) {
+    fn module_registry_insert(&mut self, key: ModuleKey, module: Rc<RefCell<LoadedModule>>) {
         self.module_registry
-            .insert((self.current_realm_id, path), module);
+            .insert((self.current_realm_id, key), module);
     }
 
-    fn run_module(&mut self, program: &Program, module_path: Option<PathBuf>) -> Completion {
+    fn run_module(&mut self, program: &Program, module_path: Option<ModuleKey>) -> Completion {
         let prev_module_path = self.current_module_path.take();
         self.current_module_path = module_path.clone();
 
@@ -2022,9 +2081,8 @@ impl Interpreter {
 
         // Register entry-point module in registry to handle self-imports
         let canon_path_entry = module_path
-            .as_ref()
-            .map(|p| p.canonicalize().unwrap_or_else(|_| p.clone()))
-            .unwrap_or_default();
+            .clone()
+            .unwrap_or_else(|| ModuleKey::for_file(PathBuf::new()));
         let has_tla_entry = Self::module_has_tla(program);
         let loaded_module = Rc::new(RefCell::new(LoadedModule {
             path: canon_path_entry.clone(),
@@ -2052,9 +2110,8 @@ impl Interpreter {
             dfs_index: None,
             dfs_ancestor_index: None,
         }));
-        if let Some(ref path) = module_path {
-            let canon_path = path.canonicalize().unwrap_or_else(|_| path.clone());
-            self.module_registry_insert(canon_path, loaded_module.clone());
+        if let Some(ref key) = module_path {
+            self.module_registry_insert(key.clone(), loaded_module.clone());
         }
         // Note: is_evaluating is managed by inner_module_evaluation
 
@@ -2129,34 +2186,21 @@ impl Interpreter {
             };
             if let Some(spec) = specifier {
                 let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
-                    match import_type {
-                        Some(ImportModuleType::Text) => {
-                            if let Err(e) = self.load_text_module(&resolved) {
-                                self.current_module_path = prev_module_path;
-                                return Completion::Throw(e);
-                            }
+                if let Ok(resolved) = self.resolve_module_specifier(
+                    spec,
+                    module_path.as_ref().and_then(ModuleKey::file_path),
+                ) {
+                    let mode = if is_deferred {
+                        ModuleLoadMode::Defer
+                    } else {
+                        ModuleLoadMode::Evaluate
+                    };
+                    if let Err(e) = self.load_module_for_type(&resolved, import_type, mode) {
+                        if import_type.is_none() {
+                            Self::cache_module_error(&loaded_module, &e);
                         }
-                        Some(ImportModuleType::Bytes) => {
-                            if let Err(e) = self.load_bytes_module(&resolved) {
-                                self.current_module_path = prev_module_path;
-                                return Completion::Throw(e);
-                            }
-                        }
-                        None if is_deferred => {
-                            if let Err(e) = self.load_module_no_eval(&resolved) {
-                                Self::cache_module_error(&loaded_module, &e);
-                                self.current_module_path = prev_module_path;
-                                return Completion::Throw(e);
-                            }
-                        }
-                        None => {
-                            if let Err(e) = self.load_module(&resolved) {
-                                Self::cache_module_error(&loaded_module, &e);
-                                self.current_module_path = prev_module_path;
-                                return Completion::Throw(e);
-                            }
-                        }
+                        self.current_module_path = prev_module_path;
+                        return Completion::Throw(e);
                     }
                 }
             }
@@ -2187,14 +2231,15 @@ impl Interpreter {
         }
 
         // Validate named re-exports (export { x } from './mod')
-        if let Some(ref canon_path) = module_path {
+        if module_path.is_some() {
             for item in &program.module_items {
                 if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
                     specifiers,
                     source: Some(source),
                     ..
                 }) = item
-                    && let Err(e) = self.validate_named_reexports(canon_path, source, specifiers)
+                    && let Err(e) =
+                        self.validate_named_reexports(&canon_path_entry, source, specifiers)
                 {
                     Self::cache_module_error(&loaded_module, &e);
                     self.current_module_path = prev_module_path;
@@ -2249,14 +2294,16 @@ impl Interpreter {
             return self.process_source_phase_import(local, &import.source, itype, env);
         }
 
-        let resolved = self.resolve_module_specifier(&import.source, module_path.as_deref())?;
+        let resolved = self.resolve_module_specifier(
+            &import.source,
+            module_path.as_ref().and_then(ModuleKey::file_path),
+        )?;
 
         let itype = import_module_type(&import.attributes);
 
         // Text/bytes imports use synthetic module registry
         if let Some(ref it) = itype {
-            let canon = Self::canonicalize_module_path(&resolved);
-            let key = (canon, it.clone());
+            let key = (resolved.clone(), *it);
             let loaded = self
                 .synthetic_module_registry
                 .get(&key)
@@ -2298,9 +2345,9 @@ impl Interpreter {
         // For deferred imports or when loading in deferred context,
         // use load_module_no_eval to avoid premature evaluation
         let loaded = if is_deferred || self.loading_deferred {
-            self.load_module_no_eval(&resolved)?
+            self.load_module_for_type(&resolved, None, ModuleLoadMode::Defer)?
         } else {
-            self.load_module(&resolved)?
+            self.load_module_for_type(&resolved, None, ModuleLoadMode::Evaluate)?
         };
 
         for spec in &import.specifiers {
@@ -2316,7 +2363,7 @@ impl Interpreter {
                     env.borrow_mut().declare(local, BindingKind::Const);
                     env.borrow_mut().initialize_binding(local, ns);
                     if let Some(ref mp) = self.current_module_path {
-                        let canon = mp.canonicalize().unwrap_or_else(|_| mp.clone());
+                        let canon = mp.canonicalize();
                         if let Some(current_mod) = self.module_registry_get(&canon) {
                             current_mod
                                 .borrow_mut()
@@ -2366,8 +2413,11 @@ impl Interpreter {
         env: &EnvRef,
     ) -> Result<(), JsValue> {
         let referrer = self.current_module_path.clone();
-        let (target_path, module_source) =
-            self.resolve_source_phase_target(specifier, referrer.as_deref(), import_type)?;
+        let (target_path, module_source) = self.resolve_source_phase_target(
+            specifier,
+            referrer.as_ref().and_then(ModuleKey::file_path),
+            import_type,
+        )?;
 
         let Some(module_source) = module_source else {
             return Err(self.create_error(
@@ -2382,7 +2432,7 @@ impl Interpreter {
         // Record the source-phase target so `export { X }` re-exports resolve
         // to the same ResolvedBinding { [[Module]], [[BindingName]]: ~source~ }.
         if let Some(ref mp) = referrer {
-            let canon = mp.canonicalize().unwrap_or_else(|_| mp.clone());
+            let canon = mp.canonicalize();
             if let Some(current_mod) = self.module_registry_get(&canon) {
                 current_mod
                     .borrow_mut()
@@ -2398,7 +2448,7 @@ impl Interpreter {
         local: &str,
         imported: &str,
         loaded: &Rc<RefCell<LoadedModule>>,
-        resolved: &Path,
+        resolved: &ModuleKey,
         env: &EnvRef,
     ) -> Result<(), JsValue> {
         let binding_info = loaded.borrow().export_bindings.get(imported).cloned();
@@ -2480,8 +2530,11 @@ impl Interpreter {
         module: &Rc<RefCell<LoadedModule>>,
     ) -> Result<(), JsValue> {
         let module_path = self.current_module_path.clone();
-        let resolved = self.resolve_module_specifier(source, module_path.as_deref())?;
-        let source_module = self.load_module(&resolved)?;
+        let resolved = self.resolve_module_specifier(
+            source,
+            module_path.as_ref().and_then(ModuleKey::file_path),
+        )?;
+        let source_module = self.load_module_for_type(&resolved, None, ModuleLoadMode::Evaluate)?;
 
         if let Some(name) = exported_as {
             // export * as ns from './mod' - create namespace object
@@ -2522,15 +2575,17 @@ impl Interpreter {
                                 UseNew,
                                 Ambiguous,
                             }
-                            let decision = if let Some(ref mp) = module_path {
+                            let decision = if let Some(ref module_key) = module_path {
                                 let mut v1 = HashSet::new();
-                                let r1 = self.resolve_export_binding(mp, &export_name, &mut v1);
+                                let r1 =
+                                    self.resolve_export_binding(module_key, &export_name, &mut v1);
                                 module
                                     .borrow_mut()
                                     .export_bindings
                                     .insert(export_name.clone(), new_reexport.clone());
                                 let mut v2 = HashSet::new();
-                                let r2 = self.resolve_export_binding(mp, &export_name, &mut v2);
+                                let r2 =
+                                    self.resolve_export_binding(module_key, &export_name, &mut v2);
                                 module
                                     .borrow_mut()
                                     .export_bindings
@@ -2601,11 +2656,11 @@ impl Interpreter {
         &self,
         specifier: &str,
         referrer: Option<&Path>,
-    ) -> Result<PathBuf, JsValue> {
+    ) -> Result<ModuleKey, JsValue> {
         // Host-provided synthetic module. Resolved here rather than in the
         // source-phase path so that every phase names the same Module Record.
         if specifier == MODULE_SOURCE_SPECIFIER {
-            return Ok(PathBuf::from(MODULE_SOURCE_SPECIFIER));
+            return Ok(ModuleKey::module_source());
         }
 
         // Relative paths: ./ or ../
@@ -2614,7 +2669,7 @@ impl Interpreter {
                 let base = referrer.parent().unwrap_or(Path::new("."));
                 let resolved = base.join(specifier);
                 if resolved.exists() {
-                    return Ok(resolved.canonicalize().unwrap_or(resolved));
+                    return Ok(ModuleKey::for_file(resolved));
                 }
                 return Err(JsValue::string(JsString::from_str(&format!(
                     "Cannot find module '{}'",
@@ -2630,7 +2685,7 @@ impl Interpreter {
         // Absolute paths
         let path = Path::new(specifier);
         if path.is_absolute() && path.exists() {
-            return Ok(path.to_path_buf());
+            return Ok(ModuleKey::for_file(path.to_path_buf()));
         }
 
         // Bare specifiers not supported
@@ -2644,19 +2699,23 @@ impl Interpreter {
         module.borrow_mut().error = Some(err.clone());
     }
 
-    fn load_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+    fn load_module(
+        &mut self,
+        key: &ModuleKey,
+        path: &Path,
+    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
         self.static_module_load_depth += 1;
-        let result = self.load_module_inner(path);
+        let result = self.load_module_inner(key, path);
         self.static_module_load_depth -= 1;
         result
     }
 
-    fn load_module_inner(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        if Self::is_module_source_path(path) {
-            return Ok(self.get_or_create_module_source_module());
-        }
-
-        let canon_path = Self::canonicalize_module_path(path);
+    fn load_module_inner(
+        &mut self,
+        key: &ModuleKey,
+        path: &Path,
+    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        let canon_path = key.clone();
 
         // Check if module is already loaded
         if let Some(existing) = self.module_registry_get(&canon_path) {
@@ -2870,7 +2929,7 @@ impl Interpreter {
             // targets like `<do not resolve>` — must surface unresolvable
             // specifier errors here.
             if let Some(spec) = specifier
-                && let Err(e) = self.resolve_module_specifier(spec, Some(&canon_path))
+                && let Err(e) = self.resolve_module_specifier(spec, Some(path))
             {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_path;
@@ -2910,24 +2969,21 @@ impl Interpreter {
             };
             if let Some(spec) = specifier {
                 let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
-                    match itype {
-                        Some(ImportModuleType::Text) => {
-                            self.load_text_module(&resolved)?;
+                if let Ok(resolved) = self.resolve_module_specifier(
+                    spec,
+                    module_path.as_ref().and_then(ModuleKey::file_path),
+                ) {
+                    let mode = if is_deferred {
+                        ModuleLoadMode::Defer
+                    } else {
+                        ModuleLoadMode::Evaluate
+                    };
+                    if let Err(e) = self.load_module_for_type(&resolved, itype, mode) {
+                        if itype.is_none() && !is_deferred {
+                            Self::cache_module_error(&loaded_module, &e);
+                            self.current_module_path = prev_path;
                         }
-                        Some(ImportModuleType::Bytes) => {
-                            self.load_bytes_module(&resolved)?;
-                        }
-                        None if is_deferred => {
-                            self.load_module_no_eval(&resolved)?;
-                        }
-                        None => {
-                            if let Err(e) = self.load_module(&resolved) {
-                                Self::cache_module_error(&loaded_module, &e);
-                                self.current_module_path = prev_path;
-                                return Err(e);
-                            }
-                        }
+                        return Err(e);
                     }
                 }
             }
@@ -2983,12 +3039,12 @@ impl Interpreter {
 
     /// Load a module without evaluating it (for deferred imports).
     /// Parses, links, resolves exports, but does NOT execute the module body.
-    fn load_module_no_eval(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        if Self::is_module_source_path(path) {
-            return Ok(self.get_or_create_module_source_module());
-        }
-
-        let canon_path = Self::canonicalize_module_path(path);
+    fn load_module_no_eval(
+        &mut self,
+        key: &ModuleKey,
+        path: &Path,
+    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        let canon_path = key.clone();
 
         if let Some(existing) = self.module_registry_get(&canon_path) {
             // Propagate parse/link errors (module never finished loading) eagerly.
@@ -3007,7 +3063,7 @@ impl Interpreter {
 
         // JSON modules are always fully evaluated
         if path.extension().and_then(|e| e.to_str()) == Some("json") {
-            return self.load_module(path);
+            return self.load_module(key, path);
         }
 
         let source = std::fs::read_to_string(path).map_err(|e| {
@@ -3143,12 +3199,11 @@ impl Interpreter {
             };
             if let Some(spec) = specifier {
                 let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
-                    let result = match itype {
-                        Some(ImportModuleType::Text) => self.load_text_module(&resolved),
-                        Some(ImportModuleType::Bytes) => self.load_bytes_module(&resolved),
-                        None => self.load_module_no_eval(&resolved),
-                    };
+                if let Ok(resolved) = self.resolve_module_specifier(
+                    spec,
+                    module_path.as_ref().and_then(ModuleKey::file_path),
+                ) {
+                    let result = self.load_module_for_type(&resolved, itype, ModuleLoadMode::Defer);
                     if let Err(e) = result {
                         Self::cache_module_error(&loaded_module, &e);
                         self.current_module_path = prev_path;
@@ -3212,7 +3267,7 @@ impl Interpreter {
 
     fn create_synthetic_default_module(
         &mut self,
-        canon_path: PathBuf,
+        canon_path: ModuleKey,
         value: JsValue,
     ) -> Rc<RefCell<LoadedModule>> {
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
@@ -3259,11 +3314,12 @@ impl Interpreter {
         }))
     }
 
-    fn load_text_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        if Self::is_module_source_path(path) {
-            return Err(self.module_source_type_error(ImportModuleType::Text));
-        }
-        let canon = Self::canonicalize_module_path(path);
+    fn load_text_module(
+        &mut self,
+        key: &ModuleKey,
+        path: &Path,
+    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        let canon = key.clone();
         let key = (canon.clone(), ImportModuleType::Text);
         if let Some(existing) = self.synthetic_module_registry.get(&key) {
             return Ok(existing.clone());
@@ -3281,11 +3337,12 @@ impl Interpreter {
         Ok(module)
     }
 
-    fn load_bytes_module(&mut self, path: &Path) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
-        if Self::is_module_source_path(path) {
-            return Err(self.module_source_type_error(ImportModuleType::Bytes));
-        }
-        let canon = Self::canonicalize_module_path(path);
+    fn load_bytes_module(
+        &mut self,
+        key: &ModuleKey,
+        path: &Path,
+    ) -> Result<Rc<RefCell<LoadedModule>>, JsValue> {
+        let canon = key.clone();
         let key = (canon.clone(), ImportModuleType::Bytes);
         if let Some(existing) = self.synthetic_module_registry.get(&key) {
             return Ok(existing.clone());
@@ -3346,7 +3403,7 @@ impl Interpreter {
     }
 
     /// Execute a module's body synchronously (no DFS into dependencies).
-    fn execute_module_body_sync(&mut self, module_path: &Path) -> Result<(), JsValue> {
+    fn execute_module_body_sync(&mut self, module_path: &ModuleKey) -> Result<(), JsValue> {
         let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return Ok(()),
@@ -3357,7 +3414,7 @@ impl Interpreter {
         };
         let module_env = module.borrow().env.clone();
         let prev_path = self.current_module_path.take();
-        self.current_module_path = Some(module_path.to_path_buf());
+        self.current_module_path = Some(module_path.clone());
         self.static_module_load_depth += 1;
 
         let prev_ic_handle = self.current_ic_handle;
@@ -3396,7 +3453,7 @@ impl Interpreter {
         }
     }
 
-    fn collect_all_exports(&mut self, module_path: &Path) {
+    fn collect_all_exports(&mut self, module_path: &ModuleKey) {
         let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return,
@@ -3407,7 +3464,7 @@ impl Interpreter {
         };
         let module_env = module.borrow().env.clone();
         let prev_path = self.current_module_path.take();
-        self.current_module_path = Some(module_path.to_path_buf());
+        self.current_module_path = Some(module_path.clone());
         for item in &program.module_items {
             if let ModuleItem::ExportDeclaration(export) = item {
                 self.collect_exports(export, &module_env, &module);
@@ -3449,7 +3506,7 @@ impl Interpreter {
         stmts
     }
 
-    fn execute_async_module(&mut self, module_path: &Path) {
+    fn execute_async_module(&mut self, module_path: &ModuleKey) {
         let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return,
@@ -3479,15 +3536,15 @@ impl Interpreter {
                 module_env.borrow_mut().declare(&lv.name, bk);
             }
         }
-        let path_for_resolve = module_path.to_path_buf();
-        let path_for_reject = module_path.to_path_buf();
+        let key_for_resolve = module_path.clone();
+        let key_for_reject = module_path.clone();
         let resolve_fn = self.create_function(JsFunction::native(
             "asyncModuleResolve".to_string(),
             0,
             move |interp, _this, _args| {
                 let prev = interp.current_module_path.take();
-                interp.current_module_path = Some(path_for_resolve.clone());
-                interp.async_module_execution_fulfilled(&path_for_resolve.clone());
+                interp.current_module_path = Some(key_for_resolve.clone());
+                interp.async_module_execution_fulfilled(&key_for_resolve);
                 interp.current_module_path = prev;
                 Completion::Normal(JsValue::UNDEFINED)
             },
@@ -3497,13 +3554,12 @@ impl Interpreter {
             1,
             move |interp, _this, args| {
                 let error = args.first().cloned().unwrap_or(JsValue::UNDEFINED);
-                interp.async_module_execution_rejected(&path_for_reject.clone(), &error);
+                interp.async_module_execution_rejected(&key_for_reject, &error);
                 Completion::Normal(JsValue::UNDEFINED)
             },
         ));
         let async_id = self.scheduler.alloc_async_function_id();
-        self.module_async_info
-            .insert(async_id, module_path.to_path_buf());
+        self.module_async_info.insert(async_id, module_path.clone());
         self.scheduler.insert_async_function_state(
             async_id,
             AsyncFunctionState {
@@ -3518,11 +3574,11 @@ impl Interpreter {
                 resolve_fn,
                 reject_fn,
                 for_of_stack: vec![],
-                module_path: Some(module_path.to_path_buf()),
+                module_path: Some(module_path.clone()),
             },
         );
         let prev_path = self.current_module_path.take();
-        self.current_module_path = Some(module_path.to_path_buf());
+        self.current_module_path = Some(module_path.clone());
         self.static_module_load_depth += 1;
         // Module top-level `await` (issue #242): this driver returns `()`, so a
         // `__host_exit` from top-level module code is recorded in the terminal
@@ -3538,11 +3594,11 @@ impl Interpreter {
 
     fn inner_module_evaluation(
         &mut self,
-        module_path: &Path,
-        stack: &mut Vec<PathBuf>,
+        module_path: &ModuleKey,
+        stack: &mut Vec<ModuleKey>,
         index: u32,
     ) -> Result<u32, JsValue> {
-        let canon = Self::canonicalize_module_path(module_path);
+        let canon = module_path.canonicalize();
         let module = match self.module_registry_get(&canon) {
             Some(m) => m,
             None => return Ok(index),
@@ -3572,7 +3628,7 @@ impl Interpreter {
 
         // Build evaluationList per spec §16.2.1.5.3.1 step 7
         let dep_paths = self.get_module_dep_paths(&canon);
-        let mut evaluation_list: Vec<PathBuf> = Vec::new();
+        let mut evaluation_list: Vec<ModuleKey> = Vec::new();
         for (dep_canon, is_deferred) in &dep_paths {
             if *is_deferred {
                 let mut to_eval = Vec::new();
@@ -3669,7 +3725,7 @@ impl Interpreter {
         Ok(idx)
     }
 
-    fn get_module_dep_paths(&self, canon_path: &Path) -> Vec<(PathBuf, bool)> {
+    fn get_module_dep_paths(&self, canon_path: &ModuleKey) -> Vec<(ModuleKey, bool)> {
         let module = match self.module_registry_get(canon_path) {
             Some(m) => m,
             None => return Vec::new(),
@@ -3702,7 +3758,8 @@ impl Interpreter {
                 _ => (None, false),
             };
             if let Some(spec) = specifier
-                && let Ok(resolved) = self.resolve_module_specifier_pure(spec, Some(canon_path))
+                && let Ok(resolved) =
+                    self.resolve_module_specifier_pure(spec, canon_path.file_path())
             {
                 deps.push((resolved, is_deferred));
             }
@@ -3710,7 +3767,7 @@ impl Interpreter {
         deps
     }
 
-    fn gather_available_ancestors(&mut self, module_path: &Path) -> Vec<PathBuf> {
+    fn gather_available_ancestors(&mut self, module_path: &ModuleKey) -> Vec<ModuleKey> {
         let parents = match self.module_registry_get(module_path) {
             Some(m) => m.borrow().async_parent_modules.clone(),
             None => return Vec::new(),
@@ -3740,7 +3797,7 @@ impl Interpreter {
         result
     }
 
-    fn async_module_execution_rejected(&mut self, module_path: &Path, error: &JsValue) {
+    fn async_module_execution_rejected(&mut self, module_path: &ModuleKey, error: &JsValue) {
         let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return,
@@ -3763,7 +3820,7 @@ impl Interpreter {
         }
     }
 
-    fn async_module_execution_fulfilled(&mut self, module_path: &Path) {
+    fn async_module_execution_fulfilled(&mut self, module_path: &ModuleKey) {
         let module = match self.module_registry_get(module_path) {
             Some(m) => m,
             None => return,
@@ -3983,7 +4040,7 @@ impl Interpreter {
     }
 
     /// Eagerly evaluate async transitive dependencies of a deferred module
-    fn evaluate_async_transitive_deps(&mut self, deferred_path: &Path) {
+    fn evaluate_async_transitive_deps(&mut self, deferred_path: &ModuleKey) {
         let mut to_eval = Vec::new();
         let mut seen = HashSet::new();
         self.gather_async_transitive_deps(deferred_path, &mut to_eval, &mut seen);
@@ -4000,11 +4057,11 @@ impl Interpreter {
 
     fn gather_async_transitive_deps(
         &self,
-        module_path: &Path,
-        result: &mut Vec<PathBuf>,
-        seen: &mut HashSet<PathBuf>,
+        module_path: &ModuleKey,
+        result: &mut Vec<ModuleKey>,
+        seen: &mut HashSet<ModuleKey>,
     ) {
-        let canon = Self::canonicalize_module_path(module_path);
+        let canon = module_path.canonicalize();
         if !seen.insert(canon.clone()) {
             return;
         }
@@ -4048,7 +4105,8 @@ impl Interpreter {
                     _ => None,
                 };
                 if let Some(spec) = specifier
-                    && let Ok(resolved) = self.resolve_module_specifier_pure(spec, Some(&canon))
+                    && let Ok(resolved) =
+                        self.resolve_module_specifier_pure(spec, canon.file_path())
                 {
                     self.gather_async_transitive_deps(&resolved, result, seen);
                 }
@@ -4061,34 +4119,34 @@ impl Interpreter {
         &self,
         specifier: &str,
         referrer: Option<&Path>,
-    ) -> Result<PathBuf, JsValue> {
+    ) -> Result<ModuleKey, JsValue> {
         if specifier == MODULE_SOURCE_SPECIFIER {
-            return Ok(PathBuf::from(MODULE_SOURCE_SPECIFIER));
+            return Ok(ModuleKey::module_source());
         }
         if specifier.starts_with("./") || specifier.starts_with("../") || specifier.starts_with('/')
         {
             let base = referrer.and_then(|r| r.parent()).unwrap_or(Path::new("."));
             let resolved = base.join(specifier);
             if resolved.exists() {
-                return Ok(resolved.canonicalize().unwrap_or(resolved));
+                return Ok(ModuleKey::for_file(resolved));
             }
             // Try .js extension
             let with_js = resolved.with_extension("js");
             if with_js.exists() {
-                return Ok(with_js.canonicalize().unwrap_or(with_js));
+                return Ok(ModuleKey::for_file(with_js));
             }
             // Try /index.js
             let index = resolved.join("index.js");
             if index.exists() {
-                return Ok(index.canonicalize().unwrap_or(index));
+                return Ok(ModuleKey::for_file(index));
             }
         }
         Err(JsValue::UNDEFINED)
     }
 
     /// Check if a module and all its transitive deps are ready for synchronous execution
-    fn ready_for_sync_execution(&self, path: &Path, seen: &mut HashSet<PathBuf>) -> bool {
-        let canon = Self::canonicalize_module_path(path);
+    fn ready_for_sync_execution(&self, path: &ModuleKey, seen: &mut HashSet<ModuleKey>) -> bool {
+        let canon = path.canonicalize();
         if !seen.insert(canon.clone()) {
             return true; // cycle — spec says return true
         }
@@ -4130,7 +4188,8 @@ impl Interpreter {
                     _ => None,
                 };
                 if let Some(spec) = specifier
-                    && let Ok(resolved) = self.resolve_module_specifier_pure(spec, Some(&canon))
+                    && let Ok(resolved) =
+                        self.resolve_module_specifier_pure(spec, canon.file_path())
                     && !self.ready_for_sync_execution(&resolved, seen)
                 {
                     return false;
@@ -4143,11 +4202,11 @@ impl Interpreter {
 
     fn validate_named_reexports(
         &mut self,
-        current_module: &Path,
+        current_module: &ModuleKey,
         source: &str,
         specifiers: &[ExportSpecifier],
     ) -> Result<(), JsValue> {
-        let resolved = self.resolve_module_specifier(source, Some(current_module))?;
+        let resolved = self.resolve_module_specifier(source, current_module.file_path())?;
 
         for spec in specifiers {
             let mut visited = HashSet::new();
@@ -4160,11 +4219,11 @@ impl Interpreter {
     /// Returns (source_env, binding_name) for creating indirect import bindings.
     fn resolve_export_binding(
         &mut self,
-        module_path: &Path,
+        module_path: &ModuleKey,
         export_name: &str,
-        visited: &mut HashSet<(PathBuf, String)>,
+        visited: &mut HashSet<(ModuleKey, String)>,
     ) -> Result<(EnvRef, String), JsValue> {
-        let canon_path = Self::canonicalize_module_path(module_path);
+        let canon_path = module_path.canonicalize();
         let key = (canon_path.clone(), export_name.to_string());
 
         if visited.contains(&key) {
@@ -4175,7 +4234,7 @@ impl Interpreter {
         }
         visited.insert(key);
 
-        let module = self.load_module(&canon_path)?;
+        let module = self.load_module_for_type(&canon_path, None, ModuleLoadMode::Evaluate)?;
 
         let reexport_info = {
             let module_ref = module.borrow();
@@ -4196,8 +4255,9 @@ impl Interpreter {
                     let ns_source = ns_source.to_string();
                     drop(module_ref);
                     if let Ok(resolved) =
-                        self.resolve_module_specifier(&ns_source, Some(&canon_path))
-                        && let Ok(ns_mod) = self.load_module(&resolved)
+                        self.resolve_module_specifier(&ns_source, canon_path.file_path())
+                        && let Ok(ns_mod) =
+                            self.load_module_for_type(&resolved, None, ModuleLoadMode::Evaluate)
                     {
                         return Ok((ns_mod.borrow().env.clone(), "*namespace*".to_string()));
                     }
@@ -4220,7 +4280,8 @@ impl Interpreter {
                     drop(module_ref);
                     // Namespace import (import * as foo) resolves to the source module
                     if let Some(ns_path) = ns_path
-                        && let Ok(ns_mod) = self.load_module(&ns_path)
+                        && let Ok(ns_mod) =
+                            self.load_module_for_type(&ns_path, None, ModuleLoadMode::Evaluate)
                     {
                         return Ok((ns_mod.borrow().env.clone(), "*namespace*".to_string()));
                     }
@@ -4230,7 +4291,8 @@ impl Interpreter {
                     // re-exports of the same `<module source>` therefore compare
                     // equal (same target env + "*source*"), so are unambiguous.
                     if let Some(source_path) = source_path
-                        && let Ok(source_mod) = self.load_module(&source_path)
+                        && let Ok(source_mod) =
+                            self.load_module_for_type(&source_path, None, ModuleLoadMode::Evaluate)
                     {
                         return Ok((source_mod.borrow().env.clone(), "*source*".to_string()));
                     }
@@ -4249,7 +4311,8 @@ impl Interpreter {
         };
 
         if let Some((source_specifier, source_export)) = reexport_info {
-            let resolved = self.resolve_module_specifier(&source_specifier, Some(&canon_path))?;
+            let resolved =
+                self.resolve_module_specifier(&source_specifier, canon_path.file_path())?;
             return self.resolve_export_binding(&resolved, &source_export, visited);
         }
 
@@ -4265,11 +4328,11 @@ impl Interpreter {
 
     fn resolve_export(
         &mut self,
-        module_path: &Path,
+        module_path: &ModuleKey,
         export_name: &str,
-        visited: &mut HashSet<(PathBuf, String)>,
+        visited: &mut HashSet<(ModuleKey, String)>,
     ) -> Result<(), JsValue> {
-        let canon_path = Self::canonicalize_module_path(module_path);
+        let canon_path = module_path.canonicalize();
         let key = (canon_path.clone(), export_name.to_string());
 
         // §16.2.1.6.3 step 2: circular reference → return null (not resolved)
@@ -4286,7 +4349,7 @@ impl Interpreter {
         visited.insert(key);
 
         // Load the module if not already loaded
-        let module = self.load_module(&canon_path)?;
+        let module = self.load_module_for_type(&canon_path, None, ModuleLoadMode::Evaluate)?;
 
         // Check if this export is a local binding or a re-export (steps 4-5)
         let (reexport_info, star_sources) = {
@@ -4325,7 +4388,8 @@ impl Interpreter {
 
         // Step 5: follow indirect re-exports
         if let Some((source_specifier, source_export)) = reexport_info {
-            let resolved = self.resolve_module_specifier(&source_specifier, Some(&canon_path))?;
+            let resolved =
+                self.resolve_module_specifier(&source_specifier, canon_path.file_path())?;
             return self.resolve_export(&resolved, &source_export, visited);
         }
 
@@ -4343,9 +4407,9 @@ impl Interpreter {
 
         // §16.2.1.6.3 step 8: check star re-exports
         let mut found_in_star = false;
-        let mut first_star_source: Option<PathBuf> = None;
+        let mut first_star_source: Option<ModuleKey> = None;
         for star_source in &star_sources {
-            let resolved = self.resolve_module_specifier(star_source, Some(&canon_path))?;
+            let resolved = self.resolve_module_specifier(star_source, canon_path.file_path())?;
             let mut v2 = visited.clone();
             if self.resolve_export(&resolved, export_name, &mut v2).is_ok() {
                 if found_in_star {
@@ -4420,8 +4484,11 @@ impl Interpreter {
                 if let Some(src) = source {
                     // Re-export: get values from source module
                     let module_path = self.current_module_path.clone();
-                    if let Ok(resolved) = self.resolve_module_specifier(src, module_path.as_deref())
-                        && let Ok(source_mod) = self.load_module(&resolved)
+                    if let Ok(resolved) = self.resolve_module_specifier(
+                        src,
+                        module_path.as_ref().and_then(ModuleKey::file_path),
+                    ) && let Ok(source_mod) =
+                        self.load_module_for_type(&resolved, None, ModuleLoadMode::Evaluate)
                     {
                         let source_exports = source_mod.borrow().exports.clone();
                         for spec in specifiers {
@@ -4579,7 +4646,7 @@ impl Interpreter {
             let module_ref = module.borrow();
             let env = module_ref.env.clone();
             let export_bindings = module_ref.export_bindings.clone();
-            let module_path = if module_ref.path.as_os_str().is_empty() {
+            let module_path = if module_ref.path.is_empty() {
                 None
             } else {
                 Some(module_ref.path.clone())
@@ -4661,7 +4728,7 @@ impl Interpreter {
             let module_ref = module.borrow();
             let env = module_ref.env.clone();
             let export_bindings = module_ref.export_bindings.clone();
-            let module_path = if module_ref.path.as_os_str().is_empty() {
+            let module_path = if module_ref.path.is_empty() {
                 None
             } else {
                 Some(module_ref.path.clone())

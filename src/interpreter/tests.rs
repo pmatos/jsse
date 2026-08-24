@@ -717,6 +717,57 @@ fn module_cycle_preserves_live_bindings_and_reuses_registry_entries() {
 }
 
 #[test]
+fn module_key_canonicalization_distinguishes_host_identity_from_a_real_file() {
+    let dir = temp_case_dir("module-key");
+    let file_path = write_case_file(&dir, MODULE_SOURCE_SPECIFIER, "export const value = 1;");
+
+    let host_key = ModuleKey::module_source();
+    assert!(host_key.is_module_source());
+    assert!(host_key.file_path().is_none());
+    assert_eq!(host_key.canonicalize(), host_key);
+
+    let file_key = ModuleKey::for_file(file_path.clone());
+    assert!(!file_key.is_module_source());
+    assert_eq!(file_key.file_path(), Some(file_path.as_path()));
+    assert_eq!(file_key.canonicalize(), file_key);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn module_loader_dispatch_owns_host_type_and_mode_handling() {
+    let mut interp = Interpreter::new();
+    let key = interp
+        .resolve_module_specifier(MODULE_SOURCE_SPECIFIER, None)
+        .expect("host module should resolve");
+
+    let eager = interp
+        .load_module_for_type(&key, None, ModuleLoadMode::Evaluate)
+        .expect("untyped eager host module should load");
+    let deferred = interp
+        .load_module_for_type(&key, None, ModuleLoadMode::Defer)
+        .expect("untyped deferred host module should load");
+    assert!(Rc::ptr_eq(&eager, &deferred));
+
+    for import_type in [ImportModuleType::Text, ImportModuleType::Bytes] {
+        let mut messages = Vec::new();
+        for mode in [ModuleLoadMode::Evaluate, ModuleLoadMode::Defer] {
+            let error = match interp.load_module_for_type(&key, Some(import_type), mode) {
+                Ok(_) => panic!("typed host module request unexpectedly loaded"),
+                Err(error) => error,
+            };
+            let message = interp.format_value(&error);
+            assert!(
+                message.starts_with("TypeError:"),
+                "unexpected error: {message}"
+            );
+            messages.push(message);
+        }
+        assert_eq!(messages[0], messages[1]);
+    }
+}
+
+#[test]
 fn module_top_level_call_and_member_evaluate() {
     let dir = temp_case_dir("module-ic-fallback");
     let main_path = write_case_file(
@@ -909,11 +960,11 @@ fn transitive_module_import_link_error_aborts_parent_before_evaluation() {
     assert!(err.contains("nonExistent"), "unexpected error: {err}");
     assert!(interp.get_global_var_ref("marker").is_none());
 
-    let broken_canon = broken_path.canonicalize().unwrap_or(broken_path.clone());
+    let broken_key = ModuleKey::for_file(broken_path.clone());
     let realm_id = interp.current_realm_id;
     let cached = interp
         .module_registry
-        .get(&(realm_id, broken_canon))
+        .get(&(realm_id, broken_key))
         .expect("broken module registry entry")
         .borrow()
         .error
@@ -1342,9 +1393,9 @@ fn gc_keeps_module_exports_alive_until_registry_entry_is_removed() {
     let main_path = write_case_file(&dir, "main.js", r#"export const obj = { marker: 1 };"#);
 
     let mut interp = run_module_with_path(&fs::read_to_string(&main_path).unwrap(), &main_path);
-    let canon = main_path.canonicalize().unwrap_or(main_path.clone());
+    let module_key = ModuleKey::for_file(main_path.clone());
     let realm_id = interp.current_realm_id;
-    let key = (realm_id, canon.clone());
+    let key = (realm_id, module_key);
     let module = interp
         .module_registry
         .get(&key)
