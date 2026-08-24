@@ -106,8 +106,20 @@ fn validated_import_module_type(
     Ok(import_type)
 }
 
-fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
-    validated_import_module_type(attrs).ok().flatten()
+/// The module type selected by *already-validated* attributes.
+///
+/// Every static path reaches this only after `validate_static_import_attributes`
+/// has run for the enclosing program, so the error case is unreachable.
+/// Called out of that order it would silently downgrade an unsupported key or
+/// unknown `type` to "ordinary source module" — which is exactly the bug
+/// jsse#475 was about — so the ordering is asserted rather than remembered.
+fn prevalidated_import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
+    let validated = validated_import_module_type(attrs);
+    debug_assert!(
+        validated.is_ok(),
+        "import attributes must be validated before selecting a module type"
+    );
+    validated.ok().flatten()
 }
 
 /// One module item's request for *another* module: everything the graph and
@@ -126,7 +138,7 @@ struct ModuleItemRequest<'a> {
 
 impl ModuleItemRequest<'_> {
     fn import_type(&self) -> Option<ImportModuleType> {
-        import_module_type(self.attributes)
+        prevalidated_import_module_type(self.attributes)
     }
 }
 
@@ -2362,13 +2374,13 @@ impl Interpreter {
         // before the generic path, which binds a namespace and loads the target
         // graph; the source phase binds `[[ModuleSource]]` and stays shallow.
         if let [ImportSpecifier::SourcePhase(local)] = import.specifiers.as_slice() {
-            let itype = import_module_type(&import.attributes);
+            let itype = prevalidated_import_module_type(&import.attributes);
             return self.process_source_phase_import(local, &import.source, itype, env);
         }
 
         let resolved = self.resolve_module_specifier(&import.source, module_path.as_deref())?;
 
-        let itype = import_module_type(&import.attributes);
+        let itype = prevalidated_import_module_type(&import.attributes);
 
         // Typed imports are served by the synthetic module registry, which
         // `load_typed_module` owns and memoizes.
@@ -2612,7 +2624,7 @@ impl Interpreter {
     ) -> Result<(), JsValue> {
         let module_path = self.current_module_path.clone();
         let resolved = self.resolve_module_specifier(source, module_path.as_deref())?;
-        let import_type = import_module_type(attributes);
+        let import_type = prevalidated_import_module_type(attributes);
         let source_module = match import_type {
             Some(itype) => self.load_typed_module(&resolved, itype)?,
             None => self.load_module(&resolved)?,
@@ -4200,7 +4212,7 @@ impl Interpreter {
     ) -> Result<(), JsValue> {
         let resolved = self.resolve_module_specifier(source, Some(current_module))?;
 
-        if let Some(itype) = import_module_type(attributes) {
+        if let Some(itype) = prevalidated_import_module_type(attributes) {
             let loaded = self.load_typed_module(&resolved, itype)?;
             let canon_current = Self::canonicalize_module_path(current_module);
             for spec in specifiers {
@@ -4516,7 +4528,7 @@ impl Interpreter {
                     let module_path = self.current_module_path.clone();
                     if let Ok(resolved) = self.resolve_module_specifier(src, module_path.as_deref())
                     {
-                        let source_mod = match import_module_type(attributes) {
+                        let source_mod = match prevalidated_import_module_type(attributes) {
                             Some(itype) => self.load_typed_module(&resolved, itype),
                             None => self.load_module(&resolved),
                         };
