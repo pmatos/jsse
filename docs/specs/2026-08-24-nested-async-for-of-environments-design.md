@@ -75,6 +75,34 @@ outer before settling the async function.
 Any disposal error follows the driver's existing pending-exception path; an
 uncatchable host exit continues to propagate immediately.
 
+### Loop control through `finally`
+
+Transformed `break` and `continue` operations are abrupt completions, not
+ordinary state-machine edges. Their terminator records:
+
+- the state that execution reaches after the completion is handled;
+- the transform-time try-stack depth that remains active at that target; and
+- the number of transformed `for-of` loops that remain active at that target.
+
+The async-function driver routes this loop control through every intervening
+`finally` before taking the target edge. If a finalizer suspends, the pending
+target and both depths are stored in `AsyncFunctionState` along with the try
+and loop stacks. Normal completion of `TryExit` resumes routing; a throw,
+return, or new loop-control completion produced by the finalizer replaces the
+pending completion.
+
+Before each selected finalizer, the driver closes only loops nested inside
+that handler. Once no intervening finalizer remains, it unwinds to the target's
+recorded `for-of` depth and enters the target state. This preserves the spec
+ordering for a finalizer inside the exited loop (`finally`, IteratorClose,
+target) while retaining the existing ordering for a finalizer outside the loop
+(IteratorClose, later `finally`). It also makes an outer labeled `continue`
+close nested iterators while retaining the target loop.
+
+An ordinary `Goto` remains a normal state-machine edge. Keeping abrupt loop
+control distinct avoids inferring semantics from state-number equality, which
+is ambiguous when normal flow and abrupt flow converge on the same state.
+
 ## Validation
 
 Add `test262-extra` async regressions covering:
@@ -87,6 +115,10 @@ Add `test262-extra` async regressions covering:
   lexical; and
 - the same nested shape under module top-level await, which previously raised
   a spurious TDZ error.
+
+The review follow-up additionally covers an awaited break through `finally`,
+pending break across an await in `finally`, rejected await replacing the
+pending break, and labeled break/continue across nested `for-of` loops.
 
 Run the focused regression, relevant upstream async-function and `for-of`
 test262 directories, the custom suite, and the repository's full quality gate.
