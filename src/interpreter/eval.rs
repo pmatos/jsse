@@ -27,6 +27,17 @@ pub(super) enum IdentifierRef {
     SpecificEnv(EnvRef),
 }
 
+/// The state a rejected-[[Set]] diagnostic is chosen from, gathered once by
+/// `Interpreter::set_rejection_facts`. `[[Set]]` has already decided and
+/// discarded its reason by the time a message is needed, so the assignment
+/// paths re-derive it here rather than each walking the prototype chain again.
+struct SetRejection {
+    is_module_namespace: bool,
+    has_own: bool,
+    /// `None` when the lookup was skipped because a proxy is involved.
+    desc: Option<PropertyDescriptor>,
+}
+
 /// Pre-evaluated lref for destructuring assignment targets.
 /// ToPropertyKey is deferred to PutValue time per spec §13.15.5.
 enum DestructLRef {
@@ -3166,110 +3177,107 @@ impl Interpreter {
                             other => return other,
                         }
                     };
-                    if let Some(o) = (obj_val)
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                        && let Some(obj) = self.get_object(o.id)
+                    // Fast path for dense ordinary Array indexed writes: in-bounds
+                    // overwrite or append-at-end directly into the backing Vec,
+                    // bypassing the setter/prototype/Set machinery. Bails to the
+                    // slow path on holes, length mismatch, frozen/sealed/non-
+                    // -writable-length, non-extensible, proxies, or shadowed
+                    // indices so strict-throw and exotic behaviour stay correct.
+                    //
+                    // NB: in this engine `JsValue::UNDEFINED` in `array_elements`
+                    // (with no `properties` entry) is the HOLE sentinel (see
+                    // `has_own_property`/`get_own_property_full`). The fast path
+                    // therefore must not (a) treat an `Undefined` slot as a live
+                    // element to overwrite, nor (b) store `undefined` as a present
+                    // element without the `properties` presence marker the slow
+                    // path adds — doing either materialises/leaves a hole with the
+                    // wrong own-property state. Both cases bail to the slow path.
+                    //
+                    // The key and value tests gate the arena lookup: both are
+                    // pure and allocation-free, so a non-index write never pays
+                    // for an object handle it would immediately drop.
+                    if !(final_val).is_undefined()
+                        && let Some(idx_u32) = parse_array_index(&key)
+                        && let Some(obj_id) = obj_val.as_object_id()
+                        && let Some(obj) = self.get_object(obj_id)
                     {
-                        // Fast path for dense ordinary Array indexed writes: in-bounds
-                        // overwrite or append-at-end directly into the backing Vec,
-                        // bypassing the setter/prototype/Set machinery. Bails to the
-                        // slow path on holes, length mismatch, frozen/sealed/non-
-                        // -writable-length, non-extensible, proxies, or shadowed
-                        // indices so strict-throw and exotic behaviour stay correct.
-                        //
-                        // NB: in this engine `JsValue::UNDEFINED` in `array_elements`
-                        // (with no `properties` entry) is the HOLE sentinel (see
-                        // `has_own_property`/`get_own_property_full`). The fast path
-                        // therefore must not (a) treat an `Undefined` slot as a live
-                        // element to overwrite, nor (b) store `undefined` as a present
-                        // element without the `properties` presence marker the slow
-                        // path adds — doing either materialises/leaves a hole with the
-                        // wrong own-property state. Both cases bail to the slow path.
-                        if let Some(idx_u32) = parse_array_index(&key)
-                            && !(final_val).is_undefined()
-                        {
-                            let fast = {
-                                let b = obj.borrow();
-                                if b.class_name == "Array"
-                                    && !b.is_proxy()
-                                    && b.array_elements().is_some()
-                                    && !b.properties.contains_key(&key)
-                                {
-                                    let elems = b.array_elements().unwrap();
-                                    let elems_len = elems.len();
-                                    let idx = idx_u32 as usize;
-                                    // Overwrite is only sound on a genuinely live slot
-                                    // (not the hole sentinel).
-                                    let slot_is_hole =
-                                        idx < elems_len && (elems[idx]).is_undefined();
-                                    let len_desc = b.properties.get("length");
-                                    let cur_len = len_desc
-                                        .and_then(|d| d.value.as_ref())
-                                        .and_then(|v| (v).as_number().map(|n| n as u32))
-                                        .unwrap_or(0);
-                                    let length_writable = len_desc
-                                        .map(|d| d.writable != Some(false))
-                                        .unwrap_or(false);
-                                    Some((
-                                        elems_len,
-                                        cur_len,
-                                        length_writable,
-                                        b.extensible,
-                                        slot_is_hole,
-                                        b.prototype_id,
-                                    ))
-                                } else {
-                                    None
-                                }
-                            };
-                            if let Some((
-                                elems_len,
-                                cur_len,
-                                length_writable,
-                                extensible,
-                                slot_is_hole,
-                                proto_id,
-                            )) = fast
+                        let fast = {
+                            let b = obj.borrow();
+                            if b.class_name == "Array"
+                                && !b.is_proxy()
+                                && b.array_elements().is_some()
+                                && !b.properties.contains_key(&key)
                             {
+                                let elems = b.array_elements().unwrap();
+                                let elems_len = elems.len();
                                 let idx = idx_u32 as usize;
-                                if idx < elems_len && !slot_is_hole {
-                                    // In-bounds overwrite of a live slot: no length /
-                                    // extensible / shape / prototype involvement.
-                                    obj.borrow_mut().array_elements_mut().unwrap()[idx] =
-                                        final_val.clone();
-                                    return Completion::Normal(final_val);
-                                } else if idx == elems_len
-                                && idx_u32 >= cur_len
-                                && cur_len as usize == elems_len
-                                && extensible
-                                && length_writable
-                                && idx_u32 < 0xFFFF_FFFF
-                                // OrdinarySet walks the prototype chain when the
-                                // receiver has no own property for this index.
-                                // If the index ToString is inherited (setter or
-                                // data), or a Proxy sits anywhere in the chain,
-                                // we must honour the proto via the slow path's
-                                // OrdinarySet/proxy_set — a bare Proxy exposes no
-                                // own descriptor here, so check it explicitly.
-                                && !proto_id.is_some_and(|pid| {
-                                    self.has_proxy_in_prototype_chain(pid)
-                                        || self.get_property_descriptor_on_id(pid, &key).is_some()
-                                }) {
-                                    // Append at end: push and bump length + shape.
-                                    let mut b = obj.borrow_mut();
-                                    b.array_elements_mut().unwrap().push(final_val.clone());
-                                    if let Some(len_desc) = b.properties.get_mut("length") {
-                                        len_desc.value =
-                                            Some(JsValue::number((idx_u32 + 1) as f64));
-                                    }
-                                    b.shape_id = crate::interpreter::types::fresh_shape_id();
-                                    return Completion::Normal(final_val);
-                                }
-                                // Otherwise (hole creation/overwrite, length mismatch,
-                                // frozen/sealed/non-writable-length, non-extensible,
-                                // inherited index): fall through to the slow path.
+                                // Overwrite is only sound on a genuinely live slot
+                                // (not the hole sentinel).
+                                let slot_is_hole = idx < elems_len && (elems[idx]).is_undefined();
+                                let len_desc = b.properties.get("length");
+                                let cur_len = len_desc
+                                    .and_then(|d| d.value.as_ref())
+                                    .and_then(|v| (v).as_number().map(|n| n as u32))
+                                    .unwrap_or(0);
+                                let length_writable =
+                                    len_desc.map(|d| d.writable != Some(false)).unwrap_or(false);
+                                Some((
+                                    elems_len,
+                                    cur_len,
+                                    length_writable,
+                                    b.extensible,
+                                    slot_is_hole,
+                                    b.prototype_id,
+                                ))
+                            } else {
+                                None
                             }
+                        };
+                        if let Some((
+                            elems_len,
+                            cur_len,
+                            length_writable,
+                            extensible,
+                            slot_is_hole,
+                            proto_id,
+                        )) = fast
+                        {
+                            let idx = idx_u32 as usize;
+                            if idx < elems_len && !slot_is_hole {
+                                // In-bounds overwrite of a live slot: no length /
+                                // extensible / shape / prototype involvement.
+                                obj.borrow_mut().array_elements_mut().unwrap()[idx] =
+                                    final_val.clone();
+                                return Completion::Normal(final_val);
+                            } else if idx == elems_len
+                            && idx_u32 >= cur_len
+                            && cur_len as usize == elems_len
+                            && extensible
+                            && length_writable
+                            && idx_u32 < 0xFFFF_FFFF
+                            // OrdinarySet walks the prototype chain when the
+                            // receiver has no own property for this index.
+                            // If the index ToString is inherited (setter or
+                            // data), or a Proxy sits anywhere in the chain,
+                            // we must honour the proto via the slow path's
+                            // OrdinarySet/proxy_set — a bare Proxy exposes no
+                            // own descriptor here, so check it explicitly.
+                            && !proto_id.is_some_and(|pid| {
+                                self.has_proxy_in_prototype_chain(pid)
+                                    || self.get_property_descriptor_on_id(pid, &key).is_some()
+                            }) {
+                                // Append at end: push and bump length + shape.
+                                let mut b = obj.borrow_mut();
+                                b.array_elements_mut().unwrap().push(final_val.clone());
+                                if let Some(len_desc) = b.properties.get_mut("length") {
+                                    len_desc.value = Some(JsValue::number((idx_u32 + 1) as f64));
+                                }
+                                b.shape_id = crate::interpreter::types::fresh_shape_id();
+                                return Completion::Normal(final_val);
+                            }
+                            // Otherwise (hole creation/overwrite, length mismatch,
+                            // frozen/sealed/non-writable-length, non-extensible,
+                            // inherited index): fall through to the slow path.
                         }
                     }
                     let strict = env.borrow().strict;
@@ -3285,23 +3293,13 @@ impl Interpreter {
                     if !succeeded && strict {
                         return Completion::Throw(self.member_assignment_error(&obj_val, &key));
                     }
-                    // Mirror the write into the matching global environment
-                    // binding only when [[Set]] actually stored `final_val` as
-                    // an own data property of the base. An accessor, a Proxy
-                    // trap, or an inherited setter can store something else (or
-                    // nothing), and copying the RHS into the binding would
-                    // desynchronise the global lexical scope from the object.
+                    // The realm test comes before `as_str`, which validates the
+                    // whole key as UTF-8: it is both cheaper and false for
+                    // essentially every write in a real program.
                     if succeeded
                         && let Some(obj_id) = obj_val.as_object_id()
+                        && self.write_mirrors_global_binding(obj_id, &key)
                         && let Some(key_str) = key.as_str()
-                        && self.is_realm_global_object(obj_id)
-                        && self.get_object_cell(obj_id).is_some_and(|cell| {
-                            let b = cell.borrow();
-                            !b.is_proxy()
-                                && !b.is_proxy_revoked()
-                                && b.get_own_property(&key)
-                                    .is_some_and(|d| d.is_data_descriptor())
-                        })
                     {
                         self.sync_global_object_binding(obj_id, key_str, &final_val);
                     }
@@ -3771,7 +3769,11 @@ impl Interpreter {
         // "Receiver is not an Object" rejection (§10.1.9.2 step 3) applies —
         // capture it before boxing, not after.
         let receiver = obj_val.clone();
-        // Auto-box primitives for property access.
+        // Auto-box primitives for property access. The two bail-outs below
+        // yield `true` in the sense of "no rejection to report" — [[Set]] never
+        // ran, so there is nothing for a strict caller to throw about. Neither
+        // is reachable today: `to_object` on a non-object always completes
+        // normally with an object.
         let obj_val = if !(obj_val).is_object() {
             match self.to_object(&obj_val) {
                 Completion::Normal(v) => v,
@@ -3782,13 +3784,10 @@ impl Interpreter {
             obj_val
         };
 
-        let Some(o) = (obj_val)
-            .as_object_id()
-            .map(|id| crate::types::JsObject { id })
-        else {
+        let Some(base_id) = obj_val.as_object_id() else {
             return Ok(true);
         };
-        self.put_value_to_property(o.id, key, val, &receiver, strict)
+        self.put_value_to_property(base_id, key, val, &receiver, strict)
     }
 
     /// Property-Reference branch of §6.2.5.6 PutValue after ToObject and
@@ -3804,24 +3803,32 @@ impl Interpreter {
         receiver: &JsValue,
         strict: bool,
     ) -> Result<bool, JsValue> {
-        let key = key.to_js_property_key();
         // Delegate to the canonical [[Set]] entry point: proxy `set` trap,
         // module-namespace reject, TypedArray integer-index set, accessor
         // setters, and the OrdinarySet prototype-chain walk all live in
-        // `property.rs`.
-        let success = self.set_object_property(base_id, &key, val, receiver)?;
+        // `property.rs`. It is generic over the key, so only the error path
+        // below needs an owned `JsPropertyKey` — converting here would allocate
+        // on every write reached with a `&str` key.
+        let success = self.set_object_property(base_id, key, val, receiver)?;
         if !success && strict {
+            let key = key.to_js_property_key();
             // A non-object receiver never rejects because of a read-only
             // property: OrdinarySet bails at "Receiver is not an Object", and
             // `base_id` is only the throwaway ToObject wrapper, so describing
             // its descriptors would be misleading.
             if !receiver.is_object() {
-                return Err(self
-                    .create_type_error(&format!("Cannot create property '{key}' on {receiver}")));
+                return Err(self.non_object_receiver_error(receiver, &key));
             }
             return Err(self.read_only_assignment_error(base_id, &key));
         }
         Ok(success)
+    }
+
+    /// The strict-mode TypeError for a [[Set]] rejected at OrdinarySet's
+    /// "Receiver is not an Object" step (§10.1.9.2 step 3): no own property can
+    /// be created on a primitive, so the write simply cannot land.
+    fn non_object_receiver_error(&mut self, receiver: &JsValue, key: &JsPropertyKey) -> JsValue {
+        self.create_type_error(&format!("Cannot create property '{key}' on {receiver}"))
     }
 
     /// Builds the strict-mode TypeError for a rejected [[Set]] on `obj_id`,
@@ -3831,27 +3838,53 @@ impl Interpreter {
     /// is skipped when a proxy sits on the object or its prototype chain, so no
     /// trap is re-invoked on the error path.
     fn read_only_assignment_error(&mut self, obj_id: u64, key: &JsPropertyKey) -> JsValue {
-        let Some(cell) = self.get_object_cell(obj_id) else {
-            return self.create_type_error(&format!("Cannot assign to read only property '{key}'"));
+        let facts = self.set_rejection_facts(obj_id, key);
+        self.read_only_assignment_error_from(facts.as_ref(), key)
+    }
+
+    /// Reads, exactly once, every fact the two rejection formatters below
+    /// select a message from. Returns `None` when `obj_id` names no live
+    /// object, which both formatters report as the undecorated message.
+    ///
+    /// `desc` is deliberately left `None` when a proxy sits on the object or
+    /// its prototype chain, so no trap is re-invoked on the error path.
+    fn set_rejection_facts(&mut self, obj_id: u64, key: &JsPropertyKey) -> Option<SetRejection> {
+        let cell = self.get_object_cell(obj_id)?;
+        let (is_module_namespace, is_proxy, has_own) = {
+            let b = cell.borrow();
+            (
+                b.module_namespace().is_some(),
+                b.is_proxy() || b.is_proxy_revoked(),
+                b.has_own_property(key),
+            )
         };
-        let is_module_ns = cell.borrow().module_namespace().is_some();
-        let is_proxy = cell.borrow().is_proxy() || cell.borrow().is_proxy_revoked();
-        if is_module_ns {
-            return self.create_type_error(&format!(
+        let desc = if is_proxy || self.has_proxy_in_prototype_chain(obj_id) {
+            None
+        } else {
+            self.get_property_descriptor_on_id(obj_id, key)
+        };
+        Some(SetRejection {
+            is_module_namespace,
+            has_own,
+            desc,
+        })
+    }
+
+    fn read_only_assignment_error_from(
+        &mut self,
+        facts: Option<&SetRejection>,
+        key: &JsPropertyKey,
+    ) -> JsValue {
+        match facts {
+            Some(f) if f.is_module_namespace => self.create_type_error(&format!(
                 "Cannot assign to read only property '{key}' of module namespace"
-            ));
+            )),
+            Some(f) if f.desc.as_ref().is_some_and(|d| d.is_accessor_descriptor()) => self
+                .create_type_error(&format!(
+                    "Cannot set property '{key}' which has only a getter"
+                )),
+            _ => self.create_type_error(&format!("Cannot assign to read only property '{key}'")),
         }
-        if !is_proxy
-            && !self.has_proxy_in_prototype_chain(obj_id)
-            && self
-                .get_property_descriptor_on_id(obj_id, key)
-                .is_some_and(|d| d.is_accessor_descriptor())
-        {
-            return self.create_type_error(&format!(
-                "Cannot set property '{key}' which has only a getter"
-            ));
-        }
-        self.create_type_error(&format!("Cannot assign to read only property '{key}'"))
     }
 
     /// Preserve the host-compatible diagnostics historically produced by the
@@ -3860,30 +3893,26 @@ impl Interpreter {
     /// already happened inside `property.rs`; this only formats the TypeError.
     fn member_assignment_error(&mut self, base: &JsValue, key: &JsPropertyKey) -> JsValue {
         let Some(obj_id) = base.as_object_id() else {
-            return self.create_type_error(&format!("Cannot create property '{key}' on {base}"));
+            return self.non_object_receiver_error(base, key);
         };
-        let Some(cell) = self.get_object_cell(obj_id) else {
-            return self.create_type_error(&format!("Cannot assign to read only property '{key}'"));
-        };
-        if cell.borrow().module_namespace().is_some() {
-            return self.create_type_error(&format!(
-                "Cannot assign to read only property '{key}' of object '[object Module]'"
-            ));
+        let facts = self.set_rejection_facts(obj_id, key);
+        if let Some(f) = &facts {
+            if f.is_module_namespace {
+                return self.create_type_error(&format!(
+                    "Cannot assign to read only property '{key}' of object '[object Module]'"
+                ));
+            }
+            if !f.has_own
+                && f.desc
+                    .as_ref()
+                    .is_some_and(|d| d.is_data_descriptor() && d.writable == Some(false))
+            {
+                return self.create_type_error(&format!(
+                    "Cannot assign to read only property '{key}' of object '#<Object>'"
+                ));
+            }
         }
-        let is_proxy = cell.borrow().is_proxy() || cell.borrow().is_proxy_revoked();
-        let has_own = cell.borrow().has_own_property(key);
-        if !is_proxy
-            && !has_own
-            && !self.has_proxy_in_prototype_chain(obj_id)
-            && self
-                .get_property_descriptor_on_id(obj_id, key)
-                .is_some_and(|desc| desc.is_data_descriptor() && desc.writable == Some(false))
-        {
-            return self.create_type_error(&format!(
-                "Cannot assign to read only property '{key}' of object '#<Object>'"
-            ));
-        }
-        self.read_only_assignment_error(obj_id, key)
+        self.read_only_assignment_error_from(facts.as_ref(), key)
     }
 
     fn set_member_property(
@@ -7720,12 +7749,26 @@ impl Interpreter {
         }
     }
 
-    /// Whether `obj_id` is some realm's global object — the only case in which
-    /// a property write has a global environment binding to mirror.
-    fn is_realm_global_object(&self, obj_id: u64) -> bool {
+    /// Whether a just-succeeded [[Set]] of `key` on `obj_id` is one the global
+    /// environment must mirror: `obj_id` has to be some realm's global object
+    /// (the only case with a binding to mirror at all), and [[Set]] has to have
+    /// left the right-hand value there as an own data property. An accessor, a
+    /// Proxy trap, or an inherited setter can store something else — or nothing
+    /// — and copying the RHS into the binding would desynchronise the global
+    /// lexical scope from the object.
+    ///
+    /// The realm test is first: it is the cheap, highly selective one.
+    fn write_mirrors_global_binding(&self, obj_id: u64, key: &JsPropertyKey) -> bool {
         self.realms
             .iter()
             .any(|realm| realm.global_object == Some(obj_id))
+            && self.get_object_cell(obj_id).is_some_and(|cell| {
+                let b = cell.borrow();
+                !b.is_proxy()
+                    && !b.is_proxy_revoked()
+                    && b.get_own_property(key)
+                        .is_some_and(|d| d.is_data_descriptor())
+            })
     }
 
     /// Sync a property set on an object to the corresponding global env binding,
