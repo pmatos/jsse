@@ -9,8 +9,9 @@
 //! capacity-bounded with approximate-LRU eviction. Entries are pure
 //! memoisation, so eviction only ever costs a re-walk.
 //!
-//! Bounding this cache is necessary but not sufficient to let a dead Body be
-//! freed: `super::ic_store` pins the same Bodies and does not yet evict (#468).
+//! `super::ic_store` independently pins the same Bodies, so both caches must
+//! remain bounded for dead dynamic-function and eval Bodies to be freed
+//! (#165, #468).
 
 use rustc_hash::FxHashMap;
 use std::collections::HashSet;

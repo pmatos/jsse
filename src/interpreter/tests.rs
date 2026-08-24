@@ -2880,11 +2880,11 @@ fn date_set_utc_full_year_on_invalid_date_seeds_missing_args_from_epoch_not_nan(
     assert_eq!(global_number(&interp, "__d"), 1.0);
 }
 
-// #165: the per-body hoisting-analysis cache pins each body it memoises, so an
-// unbounded map would retain every `new Function` / `eval` body the program ever
-// ran. These pin the bound and the memoisation it must not lose.
+// #165 / #468: both per-Body caches pin each Body they memoise, so either
+// unbounded table would retain every `new Function` / `eval` Body the program
+// ever ran. This pins both independent bounds through the normal call path.
 #[test]
-fn hoist_cache_stays_bounded_across_many_distinct_dynamic_function_bodies() {
+fn per_body_caches_stay_bounded_across_many_distinct_dynamic_function_bodies() {
     let bodies = super::hoist_cache::DEFAULT_CAPACITY + 2000;
     let interp = run_script(&format!(
         r#"
@@ -2910,6 +2910,21 @@ fn hoist_cache_stays_bounded_across_many_distinct_dynamic_function_bodies() {
         interp.hoist_cache.len() > super::hoist_cache::DEFAULT_CAPACITY / 2,
         "expected the dynamic bodies to fill the cache, got {} entries",
         interp.hoist_cache.len()
+    );
+    assert!(
+        interp.ic_store.len() <= super::ic_store::DEFAULT_CAPACITY,
+        "IC store grew to {} entries for {bodies} dynamic bodies",
+        interp.ic_store.len()
+    );
+    assert!(
+        interp.ic_store.slot_count() <= super::ic_store::DEFAULT_CAPACITY,
+        "IC store allocated {} slots for {bodies} dynamic bodies",
+        interp.ic_store.slot_count()
+    );
+    assert!(
+        interp.ic_store.len() > super::ic_store::DEFAULT_CAPACITY / 2,
+        "expected the dynamic bodies to fill the IC store, got {} entries",
+        interp.ic_store.len()
     );
 }
 

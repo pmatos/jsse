@@ -35,9 +35,9 @@ fixed upper bound on body-churning `Function` and `eval` workloads.
 
 The bound is an entry count, and an entry costs its own few hundred bytes plus
 whatever Body it pins, so it caps retention rather than naming a byte figure.
-Note also that `IcStore` pins the same Bodies and does not evict, so a churning
-workload's memory does not level off until that table is bounded too (#468);
-this design only stops this cache from being the reason a Body is retained.
+`IcStore` independently pins the same Bodies, so this cache's bound alone did
+not make a churning workload level off. That table is now bounded separately by
+#468; both bounds are required before a dead Body can be released.
 
 On a hit, the wrapper updates the entry's recency tick and returns the cached
 analysis. On a miss at capacity, it selects the median recency tick and keeps the
