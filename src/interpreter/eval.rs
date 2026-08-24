@@ -8297,6 +8297,22 @@ impl Interpreter {
             self.current_module_path = Some(mp.clone());
         }
 
+        // §14.7.5.6 step 6.b: `Await(nextResult)` rejecting sets the iterator
+        // record's [[Done]] and returns without performing IteratorClose. The
+        // `<iter>__await` temp is only ever bound by a `for await` head, so a
+        // rejection resumed into it identifies that loop's protocol failure.
+        let mut for_of_protocol_failure: Option<String> = None;
+        if is_error
+            && let Some(ref binding) = pending_binding
+            && let SentValueBindingKind::Variable(name) = &binding.kind
+            && let Some(iter_var) = name.strip_suffix("__await")
+            && saved_for_of_stack
+                .iter()
+                .any(|loop_state| loop_state.iter_var == iter_var)
+        {
+            for_of_protocol_failure = Some(iter_var.to_string());
+        }
+
         if let Some(binding) = pending_binding {
             match &binding.kind {
                 SentValueBindingKind::Variable(name) => {
@@ -8510,10 +8526,32 @@ impl Interpreter {
                 )
                 && let Some(mut exc) = pending_exception.take()
             {
+                // §14.7.5.6 steps 6.b–6.g: an abrupt completion raised by the
+                // iterator protocol itself (IteratorStep, `Await(nextResult)`,
+                // IteratorValue) sets [[Done]] and skips IteratorClose, so drop
+                // that loop's entry without calling its `return` method.
+                if let Some(failed_iter_var) = for_of_protocol_failure.take()
+                    && let Some(pos) = for_of_stack
+                        .iter()
+                        .rposition(|loop_state| loop_state.iter_var == failed_iter_var)
+                {
+                    let loop_state = for_of_stack.remove(pos);
+                    let iterator = func_env.borrow().get(&loop_state.iter_var);
+                    if let Some(iterator) = iterator {
+                        self.unroot_async_for_of_iterator(&iterator);
+                    }
+                }
+
                 // A throw produced while an intervening finally was handling
                 // a return replaces that return completion.
                 let return_was_replaced = pending_return.take().is_some();
-                let needs_for_of_unwind = return_was_replaced || pending_for_of_unwind.is_some();
+                // §14.7.5.6: any abrupt body completion leaving a for-of closes
+                // its iterator, so every still-active loop crossed on the way to
+                // the handler unwinds — not just the ones a previous unwind
+                // retained.
+                let needs_for_of_unwind = return_was_replaced
+                    || pending_for_of_unwind.is_some()
+                    || !for_of_stack.is_empty();
                 // Genuine throws route through the async body's catch/finally
                 // handlers here. A `Completion::Exit` (issue #242) never becomes
                 // a `pending_exception`, so it is not routed and cannot be
@@ -9058,6 +9096,7 @@ impl Interpreter {
                             let raw_result = match self.iterator_next(&iterator) {
                                 Ok(v) => v,
                                 Err(e) => {
+                                    for_of_protocol_failure = Some(iter_var.clone());
                                     pending_exception = Some(e);
                                     continue;
                                 }
@@ -9099,6 +9138,7 @@ impl Interpreter {
                         match self.iterator_next(&iterator) {
                             Ok(v) => v,
                             Err(e) => {
+                                for_of_protocol_failure = Some(iter_var.clone());
                                 pending_exception = Some(e);
                                 continue;
                             }
@@ -9107,6 +9147,7 @@ impl Interpreter {
                     let done = match self.iterator_complete(&step_result) {
                         Ok(d) => d,
                         Err(e) => {
+                            for_of_protocol_failure = Some(iter_var.clone());
                             pending_exception = Some(e);
                             continue;
                         }
@@ -9123,6 +9164,7 @@ impl Interpreter {
                         let value = match self.iterator_value(&step_result) {
                             Ok(v) => v,
                             Err(e) => {
+                                for_of_protocol_failure = Some(iter_var.clone());
                                 pending_exception = Some(e);
                                 continue;
                             }

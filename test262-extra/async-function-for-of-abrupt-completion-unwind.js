@@ -354,6 +354,119 @@ async function throwingFinallyInsideOuterFinally() {
   }
 }
 
+var bodyThrowOrder = [];
+var bodyThrowOuter = replacementCloseIterator(bodyThrowOrder, 'outer');
+var bodyThrowInner = replacementCloseIterator(bodyThrowOrder, 'inner');
+
+async function bodyThrowClosesBeforeCatchOutsideLoops() {
+  try {
+    for (const outerValue of bodyThrowOuter) {
+      for (const innerValue of bodyThrowInner) {
+        await null;
+        throw 'body throw';
+      }
+    }
+  } catch (error) {
+    bodyThrowOrder.push('catch ' + error);
+    return 'caught';
+  }
+}
+
+var nextFailureOrder = [];
+var nextFailureIterator = {
+  calls: 0,
+  [Symbol.iterator]: function () {
+    return this;
+  },
+  next: function () {
+    this.calls += 1;
+    if (this.calls === 1) {
+      return { value: 1, done: false };
+    }
+    throw 'next failure';
+  },
+  return: function () {
+    nextFailureOrder.push('incorrect close');
+    return { value: undefined, done: true };
+  }
+};
+
+async function nextFailureSkipsIteratorClose() {
+  try {
+    for (const value of nextFailureIterator) {
+      await null;
+    }
+  } catch (error) {
+    nextFailureOrder.push('catch ' + error);
+    return 'caught';
+  }
+}
+
+var awaitedNextOrder = [];
+var awaitedNextIterator = {
+  calls: 0,
+  [Symbol.asyncIterator]: function () {
+    return this;
+  },
+  next: function () {
+    this.calls += 1;
+    if (this.calls === 1) {
+      return Promise.resolve({ value: 1, done: false });
+    }
+    return Promise.reject('awaited next failure');
+  },
+  return: function () {
+    awaitedNextOrder.push('incorrect close');
+    return Promise.resolve({ value: undefined, done: true });
+  }
+};
+
+async function awaitedNextRejectionSkipsIteratorClose() {
+  try {
+    for await (const value of awaitedNextIterator) {
+      await null;
+    }
+  } catch (error) {
+    awaitedNextOrder.push('catch ' + error);
+    return 'caught';
+  }
+}
+
+var valueFailureOrder = [];
+var valueFailureIterator = {
+  calls: 0,
+  [Symbol.iterator]: function () {
+    return this;
+  },
+  next: function () {
+    this.calls += 1;
+    if (this.calls === 1) {
+      return { value: 1, done: false };
+    }
+    return {
+      done: false,
+      get value() {
+        throw 'value failure';
+      }
+    };
+  },
+  return: function () {
+    valueFailureOrder.push('incorrect close');
+    return { value: undefined, done: true };
+  }
+};
+
+async function valueFailureSkipsIteratorClose() {
+  try {
+    for (const value of valueFailureIterator) {
+      await null;
+    }
+  } catch (error) {
+    valueFailureOrder.push('catch ' + error);
+    return 'caught';
+  }
+}
+
 nestedDisposalErrors()
   .then(
     function () {
@@ -491,4 +604,48 @@ nestedDisposalErrors()
       );
     }
   )
+  .then(function () {
+    return bodyThrowClosesBeforeCatchOutsideLoops();
+  })
+  .then(function (value) {
+    assert.sameValue(value, 'caught', 'the catch outside both loops handles the body throw');
+    assert.sameValue(
+      bodyThrowOrder.join(','),
+      'close inner,close outer,catch body throw',
+      'both loops close before a catch outside them runs'
+    );
+  })
+  .then(function () {
+    return nextFailureSkipsIteratorClose();
+  })
+  .then(function (value) {
+    assert.sameValue(value, 'caught', 'the IteratorStep failure reaches the catch');
+    assert.sameValue(
+      nextFailureOrder.join(','),
+      'catch next failure',
+      'an IteratorStep failure must not perform IteratorClose'
+    );
+  })
+  .then(function () {
+    return awaitedNextRejectionSkipsIteratorClose();
+  })
+  .then(function (value) {
+    assert.sameValue(value, 'caught', 'the rejected Await(nextResult) reaches the catch');
+    assert.sameValue(
+      awaitedNextOrder.join(','),
+      'catch awaited next failure',
+      'a rejected Await(nextResult) must not perform AsyncIteratorClose'
+    );
+  })
+  .then(function () {
+    return valueFailureSkipsIteratorClose();
+  })
+  .then(function (value) {
+    assert.sameValue(value, 'caught', 'the IteratorValue failure reaches the catch');
+    assert.sameValue(
+      valueFailureOrder.join(','),
+      'catch value failure',
+      'an IteratorValue failure must not perform IteratorClose'
+    );
+  })
   .then($DONE, $DONE);
