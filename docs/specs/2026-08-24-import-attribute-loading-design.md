@@ -28,6 +28,12 @@ pre-scanning only attributes for the whole module:
   `type` value is interpreted, so the error kind is independent of attribute
   source order.
 
+Dynamic import calls preserve the already-evaluated raw options value across
+the specifier's observable `ToString`. Only after that conversion succeeds do
+they inspect `options.with`, enumerate and validate attributes, and select a
+module type. This keeps argument-expression evaluation order while ensuring a
+specifier conversion failure wins over any options or attribute failure.
+
 Typed resources are loaded through one loader. JSON uses the existing JSON
 parser and the existing default-export synthetic-module representation, and is
 memoized like text and byte modules — by realm, canonical resource path, and
@@ -78,6 +84,9 @@ Custom module tests cover:
 - An unsupported key takes precedence over an unsupported `type` value in the
   same request, while an earlier request's resolution error takes precedence
   over a later request's attribute error.
+- Dynamic import options are evaluated before specifier conversion but are not
+  inspected until afterward, for `import()`, `import.defer()`, and
+  `import.source()`.
 - `<module source>` rejects a JSON request.
 - A typed re-export resolves through a namespace built during loading, and does
   not alias a same-named local declaration.

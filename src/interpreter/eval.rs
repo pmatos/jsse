@@ -51,30 +51,36 @@ enum DestructLRef {
 }
 
 impl Interpreter {
-    /// §2.1.1.1 EvaluateImportCall steps 9-11: evaluate an import call's options
-    /// expression and read the requested module type off its `with` attributes.
-    /// `Err` carries the `Completion` the caller should return — an abrupt
-    /// completion from the options expression, or a rejected promise.
+    /// §2.1.1.1 EvaluateImportCall: evaluate an import call's options expression
+    /// without inspecting the resulting value. The raw value must survive the
+    /// specifier's observable ToString; only after that succeeds may the caller
+    /// read `with` and validate its attributes.
     ///
-    /// Import attributes are the *enumerable own* properties of `with`, so an
-    /// inherited or non-enumerable `type` is not an attribute. `import()`,
-    /// `import.source()` and `import.defer()` all go through here; they each had
-    /// their own copy, and the two shorter copies read `type` straight off the
-    /// object, turning an inherited `type` into a spurious rejection.
-    fn import_call_options_type(
+    /// `Err` is an abrupt completion from evaluating the options expression.
+    fn eval_import_call_options(
         &mut self,
         options_expr: Option<&Expression>,
         env: &EnvRef,
+    ) -> Result<JsValue, Completion> {
+        let Some(options_expr) = options_expr else {
+            return Ok(JsValue::UNDEFINED);
+        };
+        match self.eval_expr(options_expr, env) {
+            Completion::Normal(v) => Ok(v),
+            other => Err(other),
+        }
+    }
+
+    /// Inspect an already-evaluated import options value after the specifier's
+    /// ToString has succeeded. Import attributes are the *enumerable own*
+    /// properties of `with`, so inherited or non-enumerable properties are not
+    /// attributes. All three dynamic import forms share this path.
+    fn import_call_options_type(
+        &mut self,
+        opts_val: &JsValue,
         callee: &str,
     ) -> Result<Option<super::ImportModuleType>, Completion> {
-        let Some(options_expr) = options_expr else {
-            return Ok(None);
-        };
-        let opts_val = match self.eval_expr(options_expr, env) {
-            Completion::Normal(v) => v,
-            other => return Err(other),
-        };
-        self.import_call_module_type(&opts_val, callee)
+        self.import_call_module_type(opts_val, callee)
             .map_err(|e| self.create_rejected_promise(e))
     }
 
@@ -1203,16 +1209,21 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                let dynamic_import_type =
-                    match self.import_call_options_type(options_expr.as_deref(), env, "import()") {
-                        Ok(t) => t,
-                        Err(c) => return c,
-                    };
+                let options_val = match self.eval_import_call_options(options_expr.as_deref(), env)
+                {
+                    Ok(v) => v,
+                    Err(c) => return c,
+                };
                 // Per spec: ToString(specifier) errors produce a rejected promise
                 let source = match self.to_string_value(&source_val) {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
                 };
+                let dynamic_import_type =
+                    match self.import_call_options_type(&options_val, "import()") {
+                        Ok(t) => t,
+                        Err(c) => return c,
+                    };
                 self.dynamic_import(&source, dynamic_import_type)
             }
             Expression::ImportDefer(source_expr, options_expr) => {
@@ -1220,18 +1231,20 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                let defer_import_type = match self.import_call_options_type(
-                    options_expr.as_deref(),
-                    env,
-                    "import.defer()",
-                ) {
-                    Ok(t) => t,
+                let options_val = match self.eval_import_call_options(options_expr.as_deref(), env)
+                {
+                    Ok(v) => v,
                     Err(c) => return c,
                 };
                 let source = match self.to_string_value(&source_val) {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
                 };
+                let defer_import_type =
+                    match self.import_call_options_type(&options_val, "import.defer()") {
+                        Ok(t) => t,
+                        Err(c) => return c,
+                    };
                 // import.defer() loads module without evaluation, returns deferred namespace
                 // but eagerly evaluates async transitive deps (spec ContinueDynamicImport step 25)
                 let module_path = self.current_module_path.clone();
@@ -1260,18 +1273,20 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                let source_import_type = match self.import_call_options_type(
-                    options_expr.as_deref(),
-                    env,
-                    "import.source()",
-                ) {
-                    Ok(t) => t,
+                let options_val = match self.eval_import_call_options(options_expr.as_deref(), env)
+                {
+                    Ok(v) => v,
                     Err(c) => return c,
                 };
                 let source = match self.to_string_value(&source_val) {
                     Ok(s) => s,
                     Err(e) => return self.create_rejected_promise(e),
                 };
+                let source_import_type =
+                    match self.import_call_options_type(&options_val, "import.source()") {
+                        Ok(t) => t,
+                        Err(c) => return c,
+                    };
                 // ContinueDynamicImport with source phase: resolve to the
                 // target module's [[ModuleSource]]. A Source Text Module has an
                 // empty [[ModuleSource]] (GetModuleSource throws SyntaxError).
