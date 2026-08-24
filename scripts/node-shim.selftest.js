@@ -442,6 +442,56 @@ eq(
     );
   }
 
+  var revokedCases = [
+    [
+      "RegExp",
+      function () {
+        return /x/gi;
+      },
+    ],
+  ].concat(cases);
+  var revokedPrototypeTrapCalls = 0;
+  var revokedPrototypeHandler = {
+    get: function () {
+      revokedPrototypeTrapCalls++;
+      throw new Error("revoked prototype get trap called");
+    },
+    getOwnPropertyDescriptor: function () {
+      revokedPrototypeTrapCalls++;
+      throw new Error("revoked prototype descriptor trap called");
+    },
+    getPrototypeOf: function () {
+      revokedPrototypeTrapCalls++;
+      throw new Error("revoked prototype getPrototypeOf trap called");
+    },
+    ownKeys: function () {
+      revokedPrototypeTrapCalls++;
+      throw new Error("revoked prototype ownKeys trap called");
+    },
+  };
+  for (var r = 0; r < revokedCases.length; r++) {
+    var revokedItem = revokedCases[r];
+    var revokedPrototype = Proxy.revocable({}, revokedPrototypeHandler);
+    var revokedValue = revokedItem[1]();
+    Object.setPrototypeOf(revokedValue, revokedPrototype.proxy);
+    revokedPrototype.revoke();
+    var revokedError;
+    try {
+      util.inspect(revokedValue);
+    } catch (e) {
+      revokedError = e;
+    }
+    truthy(
+      revokedError instanceof TypeError,
+      "inspect rejects a revoked-Proxy prototype on " + revokedItem[0]
+    );
+  }
+  eq(
+    revokedPrototypeTrapCalls,
+    0,
+    "inspect invokes no traps on revoked built-in prototypes"
+  );
+
   var prototypeTrapCalls = 0;
   var proxyPrototype = new Proxy(
     {},

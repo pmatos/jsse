@@ -92,6 +92,7 @@
   var regexpConstructor = RegExp;
   var stringConstructor = String;
   var symbolConstructor = Symbol;
+  var typeErrorConstructor = TypeError;
   var arrayIndexOf = functionCall.bind(arrayConstructor.prototype.indexOf);
   var arrayIsArray = arrayConstructor.isArray;
   var arrayJoin = functionCall.bind(arrayConstructor.prototype.join);
@@ -215,6 +216,10 @@
   // Sentinel for a [[Prototype]] read that threw — an exotic object in the
   // no-host fallback. Distinct from every value a real chain can hold.
   var UNKNOWN_PROTOTYPE = {};
+  // The host hook reports a revoked Proxy with null, which must stay distinct
+  // from a genuine null [[Prototype]]. The sentinel is private to this closure
+  // and therefore cannot collide with any object in a rendered value's chain.
+  var REVOKED_PROXY = {};
 
   // The unwrapped [[Prototype]] of `v`. Read once per value and threaded into
   // every builtinPrototypeKind() call below, so classifying eight built-in
@@ -240,10 +245,12 @@
   ) {
     var current = startPrototype;
     if (current === UNKNOWN_PROTOTYPE) return "ordinary";
+    if (current === REVOKED_PROXY) return "revoked";
     if (current === null) return "null";
     try {
       var hops = MAX_PROTOTYPE_HOPS;
       while (current !== null && current !== objectPrototype && hops-- > 0) {
+        if (current === REVOKED_PROXY) return "revoked";
         if (
           current === intrinsicPrototype ||
           (prototypeProbe && tryApplyIntrinsic(prototypeProbe, current))
@@ -260,7 +267,7 @@
 
   // Walk a Proxy chain down to its non-Proxy target without dispatching to any
   // handler. Returns the value unchanged when it is not a Proxy (or when the
-  // host floor is absent) and null for a revoked Proxy.
+  // host floor is absent) and REVOKED_PROXY for a revoked Proxy.
   function unwrapProxy(v) {
     if (!hostProxyTarget) return v;
     // Unbounded on purpose, unlike every prototype walk below: a Proxy's
@@ -270,7 +277,7 @@
     while (true) {
       var target = hostProxyTarget(v);
       if (target === undefined) return v;
-      if (target === null) return null;
+      if (target === null) return REVOKED_PROXY;
       v = target;
     }
   }
@@ -294,7 +301,7 @@
       var hops = MAX_PROTOTYPE_HOPS;
       while (current !== null && hops-- > 0) {
         current = unwrapProxy(current);
-        if (current === null) return null;
+        if (current === null || current === REVOKED_PROXY) return null;
         var desc = objectGetOwnPropertyDescriptor(current, key);
         if (desc) return desc;
         current = objectGetPrototypeOf(current);
@@ -371,7 +378,7 @@
         ctor = dataDescriptorValue(own);
       } else {
         var proto = unwrapProxy(objectGetPrototypeOf(v));
-        var pd = proto
+        var pd = proto && proto !== REVOKED_PROXY
           ? objectGetOwnPropertyDescriptor(proto, "constructor")
           : null;
         if (pd) ctor = dataDescriptorValue(pd);
@@ -421,7 +428,7 @@
       // unwrapped recursively; a revoked Proxy is an opaque terminal value.
       if (t === "object" || t === "function") {
         v = unwrapProxy(v);
-        if (v === null) return "<Revoked Proxy>";
+        if (v === REVOKED_PROXY) return "<Revoked Proxy>";
         t = typeof v;
       }
 
@@ -439,6 +446,11 @@
       var prototype = prototypeOf(v);
       if (prototype !== objectPrototype) {
         var errorKind = builtinPrototypeKind(prototype, errorPrototype, null);
+        if (errorKind === "revoked") {
+          throw new typeErrorConstructor(
+            "Cannot perform 'get' on a proxy that has been revoked"
+          );
+        }
         if (errorKind === "builtin") return renderError(v);
         if (errorKind === "null" && errorIsError && errorIsError(v)) {
           return renderNullPrototypeError(v);
@@ -707,7 +719,7 @@
     // inspect. (When classification answers "user-defined", `convS` still
     // coerces the ORIGINAL value, so the trap runs there — on Node too.)
     value = unwrapProxy(value);
-    if (value === null) return true;
+    if (value === REVOKED_PROXY) return true;
 
     if (typeof value.toString !== "function") {
       if (typeof value[symbolToPrimitive] !== "function") return true;
@@ -731,6 +743,7 @@
     try {
       do {
         pointer = unwrapProxy(objectGetPrototypeOf(pointer));
+        if (pointer === REVOKED_PROXY) return false;
       } while (
         pointer !== null &&
         hops-- > 0 &&
