@@ -752,8 +752,7 @@ impl Interpreter {
                 } else {
                     self.generator_inline_iters.insert(o.id, pending);
                 }
-                self.generator_for_of_stacks
-                    .insert(o.id, for_of_stack.clone());
+                self.sync_generator_for_of_stack(o.id, &for_of_stack);
                 obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                     IteratorState::StateMachineGenerator {
                         state_machine: state_machine.clone(),
@@ -1227,8 +1226,7 @@ impl Interpreter {
                     } else {
                         self.generator_inline_iters.insert(o.id, pending);
                     }
-                    self.generator_for_of_stacks
-                        .insert(o.id, for_of_stack.clone());
+                    self.sync_generator_for_of_stack(o.id, &for_of_stack);
                     obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
                         IteratorState::StateMachineGenerator {
                             state_machine,
@@ -1624,28 +1622,7 @@ impl Interpreter {
                     // §14.7.5.5: lexical head names are in TDZ while the RHS
                     // is evaluated, but that temporary environment is not the
                     // environment used by any loop iteration.
-                    let iterable_env = if let ForInOfLeft::Variable(decl) = left
-                        && !matches!(decl.kind, VarKind::Var)
-                    {
-                        let head_env = Environment::new(Some(term_env.clone()));
-                        let mut tdz_names = Vec::new();
-                        if let Some(d) = decl.declarations.first() {
-                            d.pattern.bound_names(&mut tdz_names);
-                        }
-                        let binding_kind = match decl.kind {
-                            VarKind::Let => BindingKind::Let,
-                            VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
-                                BindingKind::Const
-                            }
-                            VarKind::Var => unreachable!(),
-                        };
-                        for name in &tdz_names {
-                            head_env.borrow_mut().declare(name, binding_kind);
-                        }
-                        head_env
-                    } else {
-                        term_env.clone()
-                    };
+                    let iterable_env = Self::for_of_head_tdz_env(left, &term_env);
 
                     let iterable_val = match self.eval_expr(iterable, &iterable_env) {
                         Completion::Normal(v) => v,
@@ -1728,8 +1705,7 @@ impl Interpreter {
                         outer_env: term_env.clone(),
                         iteration_env: None,
                     });
-                    self.generator_for_of_stacks
-                        .insert(o.id, for_of_stack.clone());
+                    self.sync_generator_for_of_stack(o.id, &for_of_stack);
                     current_id = *head_state;
                 }
 
@@ -1760,19 +1736,54 @@ impl Interpreter {
                         }
                     };
 
-                    if let Some(iteration_env) = for_of_stack[loop_pos].iteration_env.take()
-                        && let Completion::Throw(e) =
-                            self.dispose_resources(&iteration_env, Completion::Empty)
-                    {
-                        return Completion::Throw(e);
-                    }
-
                     let iterator = func_env
                         .borrow()
                         .bindings
                         .get(iter_var)
                         .map(|b| b.value.clone())
                         .unwrap_or(JsValue::UNDEFINED);
+
+                    // §14.7.5.6 step 7.h: a throwing disposer ends the loop
+                    // with a throw completion, so the iterator still closes
+                    // and the generator's own handlers still see the error.
+                    if let Some(iteration_env) = for_of_stack[loop_pos].iteration_env.take()
+                        && let Completion::Throw(e) =
+                            self.dispose_resources(&iteration_env, Completion::Empty)
+                    {
+                        self.iterator_close(&iterator, e.clone());
+                        self.gc_unroot_value(&iterator);
+                        for_of_stack.remove(loop_pos);
+                        self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                        if let Some(try_info) = current_try_stack.pop() {
+                            if let Some(catch_state) = try_info.catch_state {
+                                pending_exception = Some(e);
+                                current_id = catch_state;
+                                continue;
+                            } else if let Some(finally_state) = try_info.finally_state {
+                                // TryExit re-throws whatever `pending_exception`
+                                // still holds once the finally body completes.
+                                pending_exception = Some(e);
+                                current_id = finally_state;
+                                continue;
+                            }
+                        }
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::StateMachineGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                _sent_value: JsValue::UNDEFINED,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                                pending_return: None,
+                            },
+                        );
+                        return Completion::Throw(e);
+                    }
+
                     let step_result = match self.iterator_next(&iterator) {
                         Ok(v) => v,
                         Err(e) => {
@@ -1824,12 +1835,7 @@ impl Interpreter {
                                 });
                             }
                             for_of_stack.remove(loop_pos);
-                            if for_of_stack.is_empty() {
-                                self.generator_for_of_stacks.remove(&o.id);
-                            } else {
-                                self.generator_for_of_stacks
-                                    .insert(o.id, for_of_stack.clone());
-                            }
+                            self.sync_generator_for_of_stack(o.id, &for_of_stack);
                             current_id = *after_state;
                         }
                         Ok(false) => {
@@ -1875,8 +1881,7 @@ impl Interpreter {
                             let bind_env = if needs_iteration_env {
                                 let iteration_env = Environment::new(Some(outer_env));
                                 for_of_stack[loop_pos].iteration_env = Some(iteration_env.clone());
-                                self.generator_for_of_stacks
-                                    .insert(o.id, for_of_stack.clone());
+                                self.sync_generator_for_of_stack(o.id, &for_of_stack);
                                 iteration_env
                             } else {
                                 outer_env
@@ -4679,8 +4684,7 @@ impl Interpreter {
                 } else {
                     self.generator_inline_iters.insert(o.id, pending);
                 }
-                self.generator_for_of_stacks
-                    .insert(o.id, for_of_stack.clone());
+                self.sync_generator_for_of_stack(o.id, &for_of_stack);
                 // Any Completion::Yield from exec_statements is an inline yield:
                 // it came from a loop body or complex control flow that isn't
                 // decomposed by the state machine transformer. Use InlineYield
@@ -5768,28 +5772,7 @@ impl Interpreter {
                     after_state: forinit_after,
                     is_await,
                 } => {
-                    let iterable_env = if let ForInOfLeft::Variable(decl) = left
-                        && !matches!(decl.kind, VarKind::Var)
-                    {
-                        let head_env = Environment::new(Some(term_env.clone()));
-                        let mut tdz_names = Vec::new();
-                        if let Some(d) = decl.declarations.first() {
-                            d.pattern.bound_names(&mut tdz_names);
-                        }
-                        let binding_kind = match decl.kind {
-                            VarKind::Let => BindingKind::Let,
-                            VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
-                                BindingKind::Const
-                            }
-                            VarKind::Var => unreachable!(),
-                        };
-                        for name in &tdz_names {
-                            head_env.borrow_mut().declare(name, binding_kind);
-                        }
-                        head_env
-                    } else {
-                        term_env.clone()
-                    };
+                    let iterable_env = Self::for_of_head_tdz_env(left, &term_env);
 
                     let iterable_val = match self.eval_expr(iterable, &iterable_env) {
                         Completion::Normal(v) => v,
@@ -5921,8 +5904,7 @@ impl Interpreter {
                         outer_env: term_env.clone(),
                         iteration_env: None,
                     });
-                    self.generator_for_of_stacks
-                        .insert(o.id, for_of_stack.clone());
+                    self.sync_generator_for_of_stack(o.id, &for_of_stack);
                     current_id = *head_state;
                 }
 
@@ -5953,21 +5935,57 @@ impl Interpreter {
                         }
                     };
 
-                    if let Some(iteration_env) = for_of_stack[loop_pos].iteration_env.take()
-                        && let Completion::Throw(e) =
-                            self.dispose_resources(&iteration_env, Completion::Empty)
-                    {
-                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
-                        self.drain_microtasks();
-                        return Completion::Normal(promise);
-                    }
-
                     let iterator = func_env
                         .borrow()
                         .bindings
                         .get(iter_var)
                         .map(|b| b.value.clone())
                         .unwrap_or(JsValue::UNDEFINED);
+
+                    // §14.7.5.6 step 7.h: a throwing disposer ends the loop
+                    // with a throw completion, so the iterator still closes
+                    // and the generator's own handlers still see the error.
+                    if let Some(iteration_env) = for_of_stack[loop_pos].iteration_env.take()
+                        && let Completion::Throw(e) =
+                            self.dispose_resources(&iteration_env, Completion::Empty)
+                    {
+                        self.iterator_close(&iterator, e.clone());
+                        self.gc_unroot_value(&iterator);
+                        for_of_stack.remove(loop_pos);
+                        self.sync_generator_for_of_stack(o.id, &for_of_stack);
+                        if let Some(try_info) = current_try_stack.pop() {
+                            if let Some(catch_state) = try_info.catch_state {
+                                pending_exception = Some(e);
+                                current_id = catch_state;
+                                continue;
+                            } else if let Some(finally_state) = try_info.finally_state {
+                                // TryExit re-throws whatever `pending_exception`
+                                // still holds once the finally body completes.
+                                pending_exception = Some(e);
+                                current_id = finally_state;
+                                continue;
+                            }
+                        }
+                        self.generator_inline_iters.remove(&o.id);
+                        obj_rc.borrow_mut().kind = crate::interpreter::types::ObjectKind::Iterator(
+                            IteratorState::StateMachineAsyncGenerator {
+                                state_machine,
+                                func_env,
+                                is_strict,
+                                execution_state: StateMachineExecutionState::Completed,
+                                _sent_value: JsValue::UNDEFINED,
+                                try_stack: vec![],
+                                pending_binding: None,
+                                delegated_iterator: None,
+                                pending_exception: None,
+                                pending_return: None,
+                            },
+                        );
+                        let _ = self.call_function(&reject_fn, &JsValue::UNDEFINED, &[e]);
+                        self.drain_microtasks();
+                        return Completion::Normal(promise);
+                    }
+
                     let step_result = match self.iterator_next(&iterator) {
                         Ok(v) => v,
                         Err(e) => {
@@ -6068,12 +6086,7 @@ impl Interpreter {
                                 });
                             }
                             for_of_stack.remove(loop_pos);
-                            if for_of_stack.is_empty() {
-                                self.generator_for_of_stacks.remove(&o.id);
-                            } else {
-                                self.generator_for_of_stacks
-                                    .insert(o.id, for_of_stack.clone());
-                            }
+                            self.sync_generator_for_of_stack(o.id, &for_of_stack);
                             current_id = *after_state;
                         }
                         Ok(false) => {
@@ -6123,8 +6136,7 @@ impl Interpreter {
                             let bind_env = if needs_iteration_env {
                                 let iteration_env = Environment::new(Some(outer_env));
                                 for_of_stack[loop_pos].iteration_env = Some(iteration_env.clone());
-                                self.generator_for_of_stacks
-                                    .insert(o.id, for_of_stack.clone());
+                                self.sync_generator_for_of_stack(o.id, &for_of_stack);
                                 iteration_env
                             } else {
                                 outer_env
@@ -7197,28 +7209,45 @@ impl Interpreter {
 
         while for_of_stack.len() > keep_len {
             let loop_state = for_of_stack.pop().expect("loop stack is non-empty");
-            if let Some(iteration_env) = loop_state.iteration_env
-                && let Completion::Throw(e) =
-                    self.dispose_resources(&iteration_env, Completion::Empty)
-            {
-                return Err(e);
-            }
-            if let Some(iterator) = func_env.borrow().get(&loop_state.iter_var) {
-                self.iterator_close_result(&iterator)?;
-                self.gc_unroot_value(&iterator);
-                if let Some(iterator_id) = iterator.as_object_id() {
-                    self.pending_iter_close
-                        .retain(|value| value.as_object_id() != Some(iterator_id));
+            let mut error = match loop_state.iteration_env {
+                Some(env) => match self.dispose_resources(&env, Completion::Empty) {
+                    Completion::Throw(e) => Some(e),
+                    _ => None,
+                },
+                None => None,
+            };
+            // The borrow must end before `iterator_close_result` runs the
+            // user's `return` method, which may write bindings in this same
+            // environment.
+            let iterator = func_env.borrow().get(&loop_state.iter_var);
+            if let Some(iterator) = iterator {
+                let close_result = self.iterator_close_result(&iterator);
+                self.unroot_async_for_of_iterator(&iterator);
+                if error.is_none()
+                    && let Err(e) = close_result
+                {
+                    error = Some(e);
                 }
+            }
+            if let Some(e) = error {
+                self.sync_generator_for_of_stack(generator_id, for_of_stack);
+                return Err(e);
             }
         }
 
+        self.sync_generator_for_of_stack(generator_id, for_of_stack);
+        Ok(())
+    }
+
+    /// Mirrors the driver's local loop stack into the GC-visible map, so a
+    /// collection triggered by user code sees exactly the environments the
+    /// driver still holds.
+    fn sync_generator_for_of_stack(&mut self, generator_id: u64, for_of_stack: &[ForOfLoopState]) {
         if for_of_stack.is_empty() {
             self.generator_for_of_stacks.remove(&generator_id);
         } else {
             self.generator_for_of_stacks
-                .insert(generator_id, for_of_stack.clone());
+                .insert(generator_id, for_of_stack.to_vec());
         }
-        Ok(())
     }
 }

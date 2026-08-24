@@ -9091,28 +9091,7 @@ impl Interpreter {
                 } => {
                     // §14.7.5.12 ForIn/OfHeadEvaluation: create TDZ bindings
                     // before evaluating the iterable expression
-                    let iterable_env = if let ForInOfLeft::Variable(decl) = left
-                        && !matches!(decl.kind, VarKind::Var)
-                    {
-                        let head_env = Environment::new(Some(term_env.clone()));
-                        let mut tdz_names = Vec::new();
-                        if let Some(d) = decl.declarations.first() {
-                            d.pattern.bound_names(&mut tdz_names);
-                        }
-                        let binding_kind = match decl.kind {
-                            VarKind::Let => BindingKind::Let,
-                            VarKind::Const | VarKind::Using | VarKind::AwaitUsing => {
-                                BindingKind::Const
-                            }
-                            VarKind::Var => unreachable!(),
-                        };
-                        for name in &tdz_names {
-                            head_env.borrow_mut().declare(name, binding_kind);
-                        }
-                        head_env
-                    } else {
-                        term_env.clone()
-                    };
+                    let iterable_env = Self::for_of_head_tdz_env(left, &term_env);
 
                     let iterable_result = self.eval_expr(iterable, &iterable_env);
 
@@ -9365,6 +9344,29 @@ impl Interpreter {
                 }
             }
         }
+    }
+
+    /// §14.7.5.12 ForIn/OfHeadEvaluation steps 1-2: the lexical head's names
+    /// are in TDZ while the iterable expression is evaluated, in a temporary
+    /// environment that no loop iteration ever uses.
+    fn for_of_head_tdz_env(left: &ForInOfLeft, env: &EnvRef) -> EnvRef {
+        let ForInOfLeft::Variable(decl) = left else {
+            return env.clone();
+        };
+        let binding_kind = match decl.kind {
+            VarKind::Var => return env.clone(),
+            VarKind::Let => BindingKind::Let,
+            VarKind::Const | VarKind::Using | VarKind::AwaitUsing => BindingKind::Const,
+        };
+        let head_env = Environment::new(Some(env.clone()));
+        let mut tdz_names = Vec::new();
+        if let Some(d) = decl.declarations.first() {
+            d.pattern.bound_names(&mut tdz_names);
+        }
+        for name in &tdz_names {
+            head_env.borrow_mut().declare(name, binding_kind);
+        }
+        head_env
     }
 
     fn unroot_async_for_of_iterator(&mut self, iterator: &JsValue) {
