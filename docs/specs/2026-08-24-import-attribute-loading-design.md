@@ -38,10 +38,13 @@ the same loader, retaining current host behavior and identity.
 
 A re-export carrying an attribute cannot round-trip through the `*reexport:` /
 `*ns:` binding formats, which record only a specifier and lose the request's
-type. Such re-exports are materialized as internal module-env bindings
-(`*synthetic-reexport:x*`, `*synthetic-ns:x*`) before imports are processed, so
-they are resolvable through any namespace built during loading and cannot
-collide with a same-named local declaration.
+type. Named re-exports therefore use collision-safe internal indirect bindings
+(`*synthetic-reexport:x*`) which point at the cached synthetic module's defining
+binding. Namespace re-exports materialize their value under an internal binding
+(`*synthetic-ns:x*`) and separately retain the typed target module. Both forms
+are installed before imports are processed, so namespaces built during loading
+see them, same-named local declarations cannot collide, and `ResolveExport`
+still compares the original synthetic module and binding identities.
 
 The `<module source>` host resource has no JSON representation, so the shared
 typed-resource error reports a `TypeError` for `json`, `text`, and `bytes` in
@@ -78,6 +81,8 @@ Custom module tests cover:
 - `<module source>` rejects a JSON request.
 - A typed re-export resolves through a namespace built during loading, and does
   not alias a same-named local declaration.
+- Two typed named or namespace re-exports of the same resource retain the same
+  target binding identity and are not ambiguous when combined through stars.
 - A JSON module loaded in a ShadowRealm uses that realm's intrinsics.
 
 The upstream import-attributes directories validate existing JSON and text

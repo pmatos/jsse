@@ -431,10 +431,10 @@ pub(crate) struct LoadedModule {
     /// - `*ns:{specifier}` and `*reexport:{specifier}:{name}` — *re-parsed* to
     ///   recover the specifier and walk to the source module (see
     ///   `eval/modules.rs` and `resolve_export_binding`).
-    /// - `*synthetic-ns:{name}*` and `*synthetic-reexport:{name}*` — opaque:
-    ///   materialized eagerly for typed (json/text/bytes) requests and resolved
-    ///   by plain env lookup, because re-resolving the specifier would reload
-    ///   the resource without the request's type.
+    /// - `*synthetic-ns:{name}*` — opaque: materialized eagerly for typed
+    ///   (json/text/bytes) namespace requests and resolved by plain env lookup,
+    ///   because re-resolving the specifier would reload the resource without
+    ///   the request's type.
     /// - `*ambiguous*` — a sentinel for a name exported by two `export *`
     ///   sources; not resolvable, and never overwritten once set.
     pub export_bindings: HashMap<String, String>,
@@ -443,6 +443,10 @@ pub(crate) struct LoadedModule {
     pub cached_import_meta: Option<JsValue>,        // cached import.meta object per §16.2.1.5.2
     pub error: Option<JsValue>,                     // if module evaluation threw, the error
     pub namespace_imports: HashMap<String, PathBuf>, // local_name -> source module path (for `import * as ns`)
+    /// Internal namespace binding -> typed target. Namespace values are
+    /// materialized locally, but ResolveExport must retain the synthetic
+    /// module's identity when comparing star-export resolutions.
+    synthetic_namespace_imports: HashMap<String, (PathBuf, ImportModuleType)>,
     pub source_imports: HashMap<String, PathBuf>, // local_name -> source-phase target path (for `import source X`)
     pub module_source: Option<JsValue>, // [[ModuleSource]]: source-phase representation (empty for Source Text Modules)
     pub star_export_sources: Vec<String>, // source specifiers from `export * from '...'`
@@ -1063,6 +1067,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: Some(source_val),
             star_export_sources: Vec::new(),
@@ -2220,6 +2225,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: None,
             star_export_sources: Vec::new(),
@@ -2681,6 +2687,12 @@ impl Interpreter {
                 .borrow_mut()
                 .export_bindings
                 .insert(name.clone(), binding.clone());
+            if let Some(itype) = import_type {
+                module
+                    .borrow_mut()
+                    .synthetic_namespace_imports
+                    .insert(binding.clone(), (resolved.clone(), itype));
+            }
             // Store in module env so indirect bindings can reference it
             let env_name: &str = if import_type.is_some() {
                 &binding
@@ -2914,6 +2926,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: None,
             star_export_sources: Vec::new(),
@@ -3141,6 +3154,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: None,
             star_export_sources: Vec::new(),
@@ -3330,6 +3344,7 @@ impl Interpreter {
             cached_import_meta: None,
             error: None,
             namespace_imports: HashMap::new(),
+            synthetic_namespace_imports: HashMap::new(),
             source_imports: HashMap::new(),
             module_source: None,
             star_export_sources: Vec::new(),
@@ -4224,21 +4239,29 @@ impl Interpreter {
             let loaded = self.load_typed_module(&resolved, itype)?;
             let canon_current = Self::canonicalize_module_path(current_module);
             for spec in specifiers {
-                let Some(value) = loaded.borrow().exports.get(&spec.local).cloned() else {
+                let (value, source_binding, source_env, loaded_path) = {
+                    let loaded = loaded.borrow();
+                    (
+                        loaded.exports.get(&spec.local).cloned(),
+                        loaded.export_bindings.get(&spec.local).cloned(),
+                        loaded.env.clone(),
+                        loaded.path.clone(),
+                    )
+                };
+                let (Some(value), Some(source_binding)) = (value, source_binding) else {
                     return Err(self.create_error(
                         "SyntaxError",
                         &format!(
                             "Module '{}' has no export named '{}'",
-                            loaded.borrow().path.display(),
+                            loaded_path.display(),
                             spec.local
                         ),
                     ));
                 };
 
-                // Typed synthetic-module exports are immutable after creation.
-                // Materialize the indirect re-export as an internal binding so
-                // later ResolveExport walks do not lose this request's type and
-                // reload the resource as ordinary source text.
+                // Keep a collision-safe internal binding, but make it indirect:
+                // ResolveExport must identify the defining synthetic module and
+                // binding, not a copied binding in this intermediary module.
                 let Some(current) = self.module_registry_get(&canon_current) else {
                     return Err(self.create_error(
                         "SyntaxError",
@@ -4251,8 +4274,8 @@ impl Interpreter {
                 };
                 let binding = format!("*synthetic-reexport:{}*", spec.exported);
                 let env = current.borrow().env.clone();
-                env.borrow_mut().declare(&binding, BindingKind::Const);
-                env.borrow_mut().initialize_binding(&binding, value.clone());
+                env.borrow_mut()
+                    .create_import_binding(&binding, source_env, source_binding);
                 let mut current = current.borrow_mut();
                 current.exports.insert(spec.exported.clone(), value);
                 current
@@ -4329,6 +4352,10 @@ impl Interpreter {
                     let binding_name = binding.clone();
                     let env = module_ref.env.clone();
                     let ns_path = module_ref.namespace_imports.get(&binding_name).cloned();
+                    let synthetic_ns = module_ref
+                        .synthetic_namespace_imports
+                        .get(&binding_name)
+                        .cloned();
                     let source_path = module_ref.source_imports.get(&binding_name).cloned();
                     drop(module_ref);
                     // Namespace import (import * as foo) resolves to the source module
@@ -4336,6 +4363,14 @@ impl Interpreter {
                         && let Ok(ns_mod) = self.load_module(&ns_path)
                     {
                         return Ok((ns_mod.borrow().env.clone(), "*namespace*".to_string()));
+                    }
+                    // Typed namespace re-export. Its value is materialized in
+                    // this module, but its ResolveExport identity belongs to
+                    // the cached synthetic target module.
+                    if let Some((target_path, import_type)) = synthetic_ns {
+                        let target = self.load_typed_module(&target_path, import_type)?;
+                        let target_env = target.borrow().env.clone();
+                        return Ok((target_env, "*namespace*".to_string()));
                     }
                     // Source-phase import (import source foo) re-exported via
                     // `export { foo }` resolves to ResolvedBinding { [[Module]]:
@@ -4846,11 +4881,18 @@ impl Interpreter {
 
     fn create_namespace_for_env(&mut self, target_env: &EnvRef) -> JsValue {
         let realm_id = self.current_realm_id;
-        let found = self
+        let ordinary_modules = self
             .module_registry
             .iter()
             .filter(|((rid, _), _)| *rid == realm_id)
-            .map(|(_, module)| module)
+            .map(|(_, module)| module);
+        let synthetic_modules = self
+            .synthetic_module_registry
+            .iter()
+            .filter(|((rid, _, _), _)| *rid == realm_id)
+            .map(|(_, module)| module);
+        let found = ordinary_modules
+            .chain(synthetic_modules)
             .find(|m| Rc::ptr_eq(&m.borrow().env, target_env))
             .cloned();
         if let Some(module) = found {
