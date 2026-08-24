@@ -60,6 +60,92 @@ async function closeFailureEscapesExitedCatch() {
   }
 }
 
+var caughtCloseOrder = [];
+
+function trackedCloseIterator(name, error) {
+  return {
+    done: false,
+    [Symbol.iterator]: function () {
+      return this;
+    },
+    next: function () {
+      if (this.done) {
+        return { value: undefined, done: true };
+      }
+      this.done = true;
+      return { value: name, done: false };
+    },
+    return: function () {
+      caughtCloseOrder.push('close ' + name);
+      if (error !== undefined) {
+        throw error;
+      }
+      return { value: undefined, done: true };
+    }
+  };
+}
+
+var caughtCloseOuter = trackedCloseIterator('outer');
+var caughtCloseInner = trackedCloseIterator('inner', 'inner close');
+
+async function innerCloseFailureReachesCatchBeforeOuterClose() {
+  for (const outerValue of caughtCloseOuter) {
+    try {
+      for (const innerValue of caughtCloseInner) {
+        await null;
+        return outerValue + innerValue;
+      }
+      caughtCloseOrder.push('inner exhausted');
+    } catch (error) {
+      caughtCloseOrder.push('catch ' + error);
+      return 'caught';
+    }
+  }
+}
+
+var finallyCloseOrder = [];
+
+function finallyCloseIterator(name, error) {
+  return {
+    done: false,
+    [Symbol.iterator]: function () {
+      return this;
+    },
+    next: function () {
+      if (this.done) {
+        return { value: undefined, done: true };
+      }
+      this.done = true;
+      return { value: name, done: false };
+    },
+    return: function () {
+      finallyCloseOrder.push('close ' + name);
+      if (error !== undefined) {
+        throw error;
+      }
+      return { value: undefined, done: true };
+    }
+  };
+}
+
+var finallyCloseOuter = finallyCloseIterator('outer');
+var finallyCloseInner = finallyCloseIterator('inner', 'inner close through finally');
+
+async function innerCloseFailureRunsFinallyBeforeOuterClose() {
+  for (const outerValue of finallyCloseOuter) {
+    try {
+      for (const innerValue of finallyCloseInner) {
+        await null;
+        return outerValue + innerValue;
+      }
+      finallyCloseOrder.push('inner exhausted');
+    } finally {
+      await null;
+      finallyCloseOrder.push('finally');
+    }
+  }
+}
+
 var retainedCloseCount = 0;
 var retainedIterator = {
   done: false,
@@ -178,6 +264,33 @@ nestedDisposalErrors()
     },
     function (error) {
       assert.sameValue(error, 'close', 'an exited catch cannot handle IteratorClose failure');
+    }
+  )
+  .then(function () {
+    return innerCloseFailureReachesCatchBeforeOuterClose();
+  })
+  .then(function (value) {
+    assert.sameValue(value, 'caught', 'the intervening catch handles the inner close failure');
+    assert.sameValue(
+      caughtCloseOrder.join(','),
+      'close inner,catch inner close,close outer',
+      'the close failure routes through the catch before outer loop unwinding'
+    );
+  })
+  .then(function () {
+    return innerCloseFailureRunsFinallyBeforeOuterClose();
+  })
+  .then(
+    function (value) {
+      throw new Test262Error('inner close failure through finally resolved with ' + value);
+    },
+    function (error) {
+      assert.sameValue(error, 'inner close through finally', 'the close failure remains abrupt');
+      assert.sameValue(
+        finallyCloseOrder.join(','),
+        'close inner,finally,close outer',
+        'an intervening finally runs before unwinding the outer loop'
+      );
     }
   )
   .then(function () {

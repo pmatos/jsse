@@ -8347,33 +8347,67 @@ impl Interpreter {
         let mut saved_finally_exception: Option<JsValue> = restored_saved_finally_exception;
         // Stack tracking active for-of loops for break/continue/return iterator close
         let mut for_of_stack: Vec<AsyncForOfLoopState> = saved_for_of_stack;
+        // A close failure may need to visit a catch/finally inside an enclosing
+        // loop before that loop itself can be closed.
+        let mut pending_for_of_unwind = saved_finally_exception.is_some();
 
         // Helper: close the for-of loops from `$from` inward, surfacing an
         // abrupt completion from a disposer or an iterator `return` method.
         macro_rules! unwind_for_of {
             ($from:expr) => {
                 let unwind_from = $from;
-                // Handlers entered inside the outermost loop being left have
-                // already completed before IteratorClose runs. A close error
-                // must not route back into one of those exited handlers.
-                if let Some(loop_state) = for_of_stack.get(unwind_from) {
+                let mut unwind_completion = Completion::Empty;
+                while for_of_stack.len() > unwind_from {
+                    let Some(loop_state) = for_of_stack.pop() else {
+                        break;
+                    };
+                    // Handlers entered inside this loop have already completed
+                    // before its IteratorClose runs. Handlers surrounding the
+                    // loop remain available for a close failure.
                     try_stack.truncate(loop_state.try_depth);
+                    unwind_completion =
+                        self.close_async_for_of_loop(loop_state, &func_env, unwind_completion);
+                    match &unwind_completion {
+                        Completion::Exit(code) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            return Completion::Exit(*code);
+                        }
+                        Completion::Throw(_) => {
+                            let handler_depth =
+                                try_stack
+                                    .iter()
+                                    .enumerate()
+                                    .rev()
+                                    .find_map(|(depth, handler)| {
+                                        if !handler.entered_catch
+                                            && !handler.entered_finally
+                                            && handler.catch_state.is_some()
+                                        {
+                                            Some(depth)
+                                        } else if !handler.entered_finally
+                                            && handler.finally_state.is_some()
+                                        {
+                                            Some(depth)
+                                        } else {
+                                            None
+                                        }
+                                    });
+                            let reached_unwind_boundary = for_of_stack.len() == unwind_from;
+                            let handler_precedes_next_loop = !reached_unwind_boundary
+                                && for_of_stack.last().is_some_and(|next_loop| {
+                                    handler_depth.is_some_and(|depth| depth >= next_loop.try_depth)
+                                });
+                            if reached_unwind_boundary || handler_precedes_next_loop {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
                 }
-                match self.unwind_async_for_of_loops(
-                    &mut for_of_stack,
-                    unwind_from,
-                    &func_env,
-                    Completion::Empty,
-                ) {
-                    Completion::Exit(code) => {
-                        self.scheduler.remove_async_function_state(async_id);
-                        return Completion::Exit(code);
-                    }
-                    Completion::Throw(e) => {
-                        pending_exception = Some(e);
-                        continue;
-                    }
-                    _ => {}
+                if let Completion::Throw(error) = unwind_completion {
+                    pending_for_of_unwind = true;
+                    pending_exception = Some(error);
+                    continue;
                 }
             };
         }
@@ -8493,10 +8527,10 @@ impl Interpreter {
                     }
                 }
 
-                if return_was_replaced {
-                    // route_return! retained loops enclosing the finally so
-                    // that it could run first. Close every retained loop that
-                    // the overriding throw crosses before its next handler.
+                if return_was_replaced || pending_for_of_unwind {
+                    // A return-replacing throw or an IteratorClose failure can
+                    // retain enclosing loops until an intervening handler has
+                    // run. Close only the loops crossed before the next handler.
                     let unwind_from = handler.map_or(0, |(depth, _, _)| {
                         for_of_stack
                             .iter()
@@ -8781,6 +8815,7 @@ impl Interpreter {
                     }
                     // Restore any exception saved from before the finally block
                     if let Some(exc) = saved_finally_exception.take() {
+                        pending_for_of_unwind = true;
                         pending_exception = Some(exc);
                         continue;
                     }
@@ -8791,6 +8826,7 @@ impl Interpreter {
                     body_state,
                     ref param,
                 } => {
+                    pending_for_of_unwind = false;
                     if let Some(ctx) = try_stack.last_mut() {
                         ctx.entered_catch = true;
                     }
