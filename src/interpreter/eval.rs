@@ -8456,36 +8456,70 @@ impl Interpreter {
                     terminator,
                     StateTerminator::EnterCatch { .. } | StateTerminator::EnterFinally { .. }
                 )
-                && let Some(exc) = pending_exception.take()
+                && let Some(mut exc) = pending_exception.take()
             {
+                // A throw produced while an intervening finally was handling
+                // a return replaces that return completion.
+                let return_was_replaced = pending_return.take().is_some();
                 // Genuine throws route through the async body's catch/finally
                 // handlers here. A `Completion::Exit` (issue #242) never becomes
                 // a `pending_exception`, so it is not routed and cannot be
                 // caught — it is handled at the body-execution site below.
-                let mut handled = false;
+                let mut handler = None;
                 for i in (0..try_stack.len()).rev() {
                     if !try_stack[i].entered_catch
                         && !try_stack[i].entered_finally
                         && let Some(catch_state) = try_stack[i].catch_state
                     {
-                        try_stack.truncate(i);
-                        pending_exception = Some(exc.clone());
-                        current_id = catch_state;
-                        handled = true;
+                        handler = Some((i, catch_state, true));
                         break;
                     }
                     if !try_stack[i].entered_finally
                         && let Some(finally_state) = try_stack[i].finally_state
                     {
-                        pending_exception = Some(exc.clone());
-                        current_id = finally_state;
-                        handled = true;
+                        handler = Some((i, finally_state, false));
                         break;
                     }
                 }
-                if handled {
+
+                if return_was_replaced {
+                    // route_return! retained loops enclosing the finally so
+                    // that it could run first. Close every retained loop that
+                    // the overriding throw crosses before its next handler.
+                    let unwind_from = handler.map_or(0, |(depth, _, _)| {
+                        for_of_stack
+                            .iter()
+                            .position(|loop_state| loop_state.try_depth > depth)
+                            .unwrap_or(for_of_stack.len())
+                    });
+                    match self.unwind_async_for_of_loops(
+                        &mut for_of_stack,
+                        unwind_from,
+                        &func_env,
+                        Completion::Throw(exc),
+                    ) {
+                        Completion::Throw(error) => exc = error,
+                        Completion::Exit(code) => {
+                            self.scheduler.remove_async_function_state(async_id);
+                            return Completion::Exit(code);
+                        }
+                        _ => unreachable!("unwinding a throw must stay abrupt"),
+                    }
+                }
+
+                if let Some((depth, state, is_catch)) = handler {
+                    if is_catch {
+                        try_stack.truncate(depth);
+                    } else if return_was_replaced {
+                        // Drop the completed inner finally contexts so
+                        // EnterFinally marks the handler selected above.
+                        try_stack.truncate(depth + 1);
+                    }
+                    pending_exception = Some(exc);
+                    current_id = state;
                     continue;
                 }
+
                 let disp = self.dispose_resources(&func_env, Completion::Throw(exc));
                 // A disposer that called `__host_exit` (issue #242) propagates
                 // out uncatchably instead of rejecting the promise.

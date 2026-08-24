@@ -60,6 +60,104 @@ async function closeFailureEscapesExitedCatch() {
   }
 }
 
+var retainedCloseCount = 0;
+var retainedIterator = {
+  done: false,
+  [Symbol.iterator]: function () {
+    return this;
+  },
+  next: function () {
+    if (this.done) {
+      return { value: undefined, done: true };
+    }
+    this.done = true;
+    return { value: 2, done: false };
+  },
+  return: function () {
+    retainedCloseCount += 1;
+    return { value: undefined, done: true };
+  }
+};
+
+async function finallyThrowOverridesReturn() {
+  for (const value of retainedIterator) {
+    try {
+      await null;
+      return value;
+    } finally {
+      throw 'finally';
+    }
+  }
+}
+
+var rejectedAwaitCloseCount = 0;
+var rejectedAwaitIterator = {
+  done: false,
+  [Symbol.iterator]: function () {
+    return this;
+  },
+  next: function () {
+    if (this.done) {
+      return { value: undefined, done: true };
+    }
+    this.done = true;
+    return { value: 3, done: false };
+  },
+  return: function () {
+    rejectedAwaitCloseCount += 1;
+    return { value: undefined, done: true };
+  }
+};
+
+async function rejectFromFinally() {
+  throw 'awaited finally';
+}
+
+async function finallyRejectedAwaitOverridesReturn() {
+  for (const value of rejectedAwaitIterator) {
+    try {
+      await null;
+      return value;
+    } finally {
+      await rejectFromFinally();
+    }
+  }
+}
+
+var outerFinallyOrder = [];
+var outerFinallyIterator = {
+  done: false,
+  [Symbol.iterator]: function () {
+    return this;
+  },
+  next: function () {
+    if (this.done) {
+      return { value: undefined, done: true };
+    }
+    this.done = true;
+    return { value: 4, done: false };
+  },
+  return: function () {
+    outerFinallyOrder.push('close');
+    return { value: undefined, done: true };
+  }
+};
+
+async function throwingFinallyInsideOuterFinally() {
+  try {
+    for (const value of outerFinallyIterator) {
+      try {
+        await null;
+        return value;
+      } finally {
+        throw 'nested finally';
+      }
+    }
+  } finally {
+    outerFinallyOrder.push('outer finally');
+  }
+}
+
 nestedDisposalErrors()
   .then(
     function () {
@@ -80,6 +178,46 @@ nestedDisposalErrors()
     },
     function (error) {
       assert.sameValue(error, 'close', 'an exited catch cannot handle IteratorClose failure');
+    }
+  )
+  .then(function () {
+    return finallyThrowOverridesReturn();
+  })
+  .then(
+    function (value) {
+      throw new Test262Error('throwing finally resolved with ' + value);
+    },
+    function (error) {
+      assert.sameValue(error, 'finally', 'finally throw replaces the pending return');
+      assert.sameValue(retainedCloseCount, 1, 'the loop retained for finally is still closed');
+    }
+  )
+  .then(function () {
+    return finallyRejectedAwaitOverridesReturn();
+  })
+  .then(
+    function (value) {
+      throw new Test262Error('rejected await in finally resolved with ' + value);
+    },
+    function (error) {
+      assert.sameValue(error, 'awaited finally', 'rejected await replaces the pending return');
+      assert.sameValue(rejectedAwaitCloseCount, 1, 'retained loop closes after rejected await');
+    }
+  )
+  .then(function () {
+    return throwingFinallyInsideOuterFinally();
+  })
+  .then(
+    function (value) {
+      throw new Test262Error('nested throwing finally resolved with ' + value);
+    },
+    function (error) {
+      assert.sameValue(error, 'nested finally', 'inner finally throw remains the rejection');
+      assert.sameValue(
+        outerFinallyOrder.join(','),
+        'close,outer finally',
+        'retained loop closes before a finally outside the loop'
+      );
     }
   )
   .then($DONE, $DONE);
