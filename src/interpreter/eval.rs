@@ -2744,30 +2744,42 @@ impl Interpreter {
                 if let MemberProperty::Private(name) = prop {
                     return self.set_private_field(&obj_val, name, value, env);
                 }
-                let key = match prop {
-                    MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
-                    MemberProperty::Computed(cexpr) => {
-                        let v = match self.eval_expr(cexpr, env) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Err(e),
-                            _ => return Ok(()),
-                        };
-                        self.to_property_key(&v)?
-                    }
-                    MemberProperty::Private(_) => unreachable!(),
-                };
-                if obj_val.is_null() || obj_val.is_undefined() {
-                    return Err(self.create_type_error(&format!(
-                        "Cannot set properties of {} (setting '{key}')",
-                        if obj_val.is_null() {
-                            "null"
-                        } else {
-                            "undefined"
+                // The base Reference and the value being written must survive
+                // the computed-key evaluation (arbitrary user code, plus
+                // ToPropertyKey) and PutValue. Both can reach a GC safepoint
+                // while these exist only as Rust locals, invisible to the
+                // tracing collector.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&obj_val);
+                self.gc_root_value(&value);
+                let result = (|| {
+                    let key = match prop {
+                        MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
+                        MemberProperty::Computed(cexpr) => {
+                            let v = match self.eval_expr(cexpr, env) {
+                                Completion::Normal(v) => v,
+                                Completion::Throw(e) => return Err(e),
+                                _ => return Ok(()),
+                            };
+                            self.to_property_key(&v)?
                         }
-                    )));
-                }
-                let strict = env.borrow().strict;
-                self.set_object_with_key(obj_val, &key, value, strict)
+                        MemberProperty::Private(_) => unreachable!(),
+                    };
+                    if obj_val.is_null() || obj_val.is_undefined() {
+                        return Err(self.create_type_error(&format!(
+                            "Cannot set properties of {} (setting '{key}')",
+                            if obj_val.is_null() {
+                                "null"
+                            } else {
+                                "undefined"
+                            }
+                        )));
+                    }
+                    let strict = env.borrow().strict;
+                    self.set_object_with_key(obj_val, &key, value, strict)
+                })();
+                self.gc_unroot_frame(gc_frame);
+                result
             }
             _ => Ok(()),
         }
@@ -3273,11 +3285,25 @@ impl Interpreter {
                     if !succeeded && strict {
                         return Completion::Throw(self.member_assignment_error(&obj_val, &key));
                     }
+                    // Mirror the write into the matching global environment
+                    // binding only when [[Set]] actually stored `final_val` as
+                    // an own data property of the base. An accessor, a Proxy
+                    // trap, or an inherited setter can store something else (or
+                    // nothing), and copying the RHS into the binding would
+                    // desynchronise the global lexical scope from the object.
                     if succeeded
                         && let Some(obj_id) = obj_val.as_object_id()
-                        && let Some(key) = key.as_str()
+                        && let Some(key_str) = key.as_str()
+                        && self.is_realm_global_object(obj_id)
+                        && self.get_object_cell(obj_id).is_some_and(|cell| {
+                            let b = cell.borrow();
+                            !b.is_proxy()
+                                && !b.is_proxy_revoked()
+                                && b.get_own_property(&key)
+                                    .is_some_and(|d| d.is_data_descriptor())
+                        })
                     {
-                        self.sync_global_object_binding(obj_id, key, &final_val);
+                        self.sync_global_object_binding(obj_id, key_str, &final_val);
                     }
                     Completion::Normal(final_val)
                 })();
@@ -3446,6 +3472,14 @@ impl Interpreter {
                 if matches!(obj_expr.as_ref(), Expression::Super)
                     && !matches!(prop, MemberProperty::Private(_))
                 {
+                    // §13.3.7.3 step 2: GetThisEnvironment().GetThisBinding()
+                    // runs before the key expression and throws for an
+                    // uninitialized `this` in a derived constructor.
+                    if Self::this_is_in_tdz(env) {
+                        return Completion::Throw(self.create_reference_error(
+                            "Must call super constructor in derived class before accessing 'this' or returning from derived constructor",
+                        ));
+                    }
                     let this_val = env.borrow().get("this").unwrap_or(JsValue::UNDEFINED);
                     let raw_key = match prop {
                         MemberProperty::Dot(name) => {
@@ -3495,82 +3529,99 @@ impl Interpreter {
                     Completion::Normal(v) => v,
                     other => return other,
                 };
-                // Evaluate key expression (but defer ToPropertyKey for null/undefined base)
-                let key_expr_val = match prop {
-                    MemberProperty::Computed(expr) => {
-                        let v = match self.eval_expr(expr, env) {
+                // The base Reference — and, for a primitive base, the ToObject
+                // wrapper GetValue and PutValue share — must survive the
+                // computed-key evaluation, the getter, the right-hand side, and
+                // the write-back. Each of those can hit a GC safepoint while
+                // these values exist only as Rust locals, invisible to the
+                // tracing collector.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&obj_val);
+                let result = (|| {
+                    // Evaluate key expression (but defer ToPropertyKey for null/undefined base)
+                    let key_expr_val = match prop {
+                        MemberProperty::Computed(expr) => {
+                            let v = match self.eval_expr(expr, env) {
+                                Completion::Normal(v) => v,
+                                other => return other,
+                            };
+                            Some(v)
+                        }
+                        _ => None,
+                    };
+                    // GetValue: ToObject(base) first, then ToPropertyKey
+                    let (boxed_obj, key) = if obj_val.is_object() {
+                        let key = match prop {
+                            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
+                            MemberProperty::Computed(_) => {
+                                match self.to_property_key(key_expr_val.as_ref().unwrap()) {
+                                    Ok(s) => s,
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
+                            MemberProperty::Private(_) => unreachable!(),
+                        };
+                        (obj_val.clone(), key)
+                    } else {
+                        let boxed = match self.to_object(&obj_val) {
+                            Completion::Normal(v) => v,
+                            Completion::Throw(e) => return Completion::Throw(e),
+                            _ => return Completion::Normal(JsValue::UNDEFINED),
+                        };
+                        self.gc_root_value(&boxed);
+                        let key = match prop {
+                            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
+                            MemberProperty::Computed(_) => {
+                                match self.to_property_key(key_expr_val.as_ref().unwrap()) {
+                                    Ok(s) => s,
+                                    Err(e) => return Completion::Throw(e),
+                                }
+                            }
+                            MemberProperty::Private(_) => unreachable!(),
+                        };
+                        (boxed, key)
+                    };
+                    let base_id = boxed_obj.as_object_id();
+                    let lval = if let Some(base_id) = base_id {
+                        match self.get_object_property(base_id, &key, &obj_val) {
                             Completion::Normal(v) => v,
                             other => return other,
-                        };
-                        Some(v)
+                        }
+                    } else {
+                        JsValue::UNDEFINED
+                    };
+                    let should_assign = match op {
+                        AssignOp::LogicalAndAssign => self.to_boolean_val(&lval),
+                        AssignOp::LogicalOrAssign => !self.to_boolean_val(&lval),
+                        AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
+                        _ => unreachable!(),
+                    };
+                    if !should_assign {
+                        return Completion::Normal(lval);
                     }
-                    _ => None,
-                };
-                // GetValue: ToObject(base) first, then ToPropertyKey
-                let (boxed_obj, key) = if let Some(_o) = (obj_val)
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                {
-                    let key = match prop {
-                        MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
-                        MemberProperty::Computed(_) => {
-                            match self.to_property_key(key_expr_val.as_ref().unwrap()) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        }
-                        MemberProperty::Private(_) => unreachable!(),
-                    };
-                    (obj_val.clone(), key)
-                } else {
-                    let boxed = match self.to_object(&obj_val) {
-                        Completion::Normal(v) => v,
-                        Completion::Throw(e) => return Completion::Throw(e),
-                        _ => return Completion::Normal(JsValue::UNDEFINED),
-                    };
-                    let key = match prop {
-                        MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
-                        MemberProperty::Computed(_) => {
-                            match self.to_property_key(key_expr_val.as_ref().unwrap()) {
-                                Ok(s) => s,
-                                Err(e) => return Completion::Throw(e),
-                            }
-                        }
-                        MemberProperty::Private(_) => unreachable!(),
-                    };
-                    (boxed, key)
-                };
-                let lval = if let Some(o) = (boxed_obj)
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                {
-                    match self.get_object_property(o.id, &key, &obj_val) {
+                    let rval = match self.eval_expr(right, env) {
                         Completion::Normal(v) => v,
                         other => return other,
+                    };
+                    // §6.2.5.6 PutValue: [[Set]] runs on ToObject(base) with the
+                    // original base as receiver. `boxed_obj` already is that
+                    // ToObject result, so reuse it instead of boxing again.
+                    let strict = env.borrow().strict;
+                    if let Some(base_id) = base_id
+                        && let Err(e) = self.put_value_to_property(
+                            base_id,
+                            &key,
+                            rval.clone(),
+                            &obj_val,
+                            strict,
+                        )
+                    {
+                        return Completion::Throw(e);
                     }
-                } else {
-                    JsValue::UNDEFINED
-                };
-                let should_assign = match op {
-                    AssignOp::LogicalAndAssign => self.to_boolean_val(&lval),
-                    AssignOp::LogicalOrAssign => !self.to_boolean_val(&lval),
-                    AssignOp::NullishAssign => lval.is_null() || lval.is_undefined(),
-                    _ => unreachable!(),
-                };
-                if !should_assign {
-                    return Completion::Normal(lval);
-                }
-                let rval = match self.eval_expr(right, env) {
-                    Completion::Normal(v) => v,
-                    other => return other,
-                };
-                let strict = env.borrow().strict;
-                if let Err(e) =
-                    self.set_object_with_key(obj_val.clone(), &key, rval.clone(), strict)
-                {
-                    return Completion::Throw(e);
-                }
-                Completion::Normal(rval)
+                    Completion::Normal(rval)
+                })();
+                self.gc_unroot_frame(gc_frame);
+                result
             }
             Expression::Sequence(exprs)
                 if exprs.len() == 1 && matches!(&exprs[0], Expression::Identifier(_)) =>
@@ -3760,6 +3811,14 @@ impl Interpreter {
         // `property.rs`.
         let success = self.set_object_property(base_id, &key, val, receiver)?;
         if !success && strict {
+            // A non-object receiver never rejects because of a read-only
+            // property: OrdinarySet bails at "Receiver is not an Object", and
+            // `base_id` is only the throwaway ToObject wrapper, so describing
+            // its descriptors would be misleading.
+            if !receiver.is_object() {
+                return Err(self
+                    .create_type_error(&format!("Cannot create property '{key}' on {receiver}")));
+            }
             return Err(self.read_only_assignment_error(base_id, &key));
         }
         Ok(success)
@@ -3970,22 +4029,34 @@ impl Interpreter {
             return self.set_private_field(&obj_val, name, val, env);
         }
 
-        let key = match prop {
-            MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
-            MemberProperty::Computed(expr) => {
-                let v = match self.eval_expr(expr, env) {
-                    Completion::Normal(v) => v,
-                    Completion::Throw(e) => return Err(e),
-                    _ => return Ok(()),
-                };
-                self.to_property_key(&v)?
-            }
-            MemberProperty::Private(_) => unreachable!(),
-        };
+        // The base Reference and the value being written must survive the
+        // computed-key evaluation (arbitrary user code, plus ToPropertyKey) and
+        // PutValue. Both can reach a GC safepoint while these exist only as
+        // Rust locals, invisible to the tracing collector.
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(&obj_val);
+        self.gc_root_value(&val);
+        let result = (|| {
+            let key = match prop {
+                MemberProperty::Dot(name) => JsPropertyKey::from(name.clone()),
+                MemberProperty::Computed(expr) => {
+                    let v = match self.eval_expr(expr, env) {
+                        Completion::Normal(v) => v,
+                        Completion::Throw(e) => return Err(e),
+                        _ => return Ok(()),
+                    };
+                    self.to_property_key(&v)?
+                }
+                MemberProperty::Private(_) => unreachable!(),
+            };
 
-        let strict = env.borrow().strict;
-        self.set_object_with_key(obj_val, &key, val, strict)
+            let strict = env.borrow().strict;
+            self.set_object_with_key(obj_val, &key, val, strict)
+        })();
+        self.gc_unroot_frame(gc_frame);
+        result
     }
+
     pub(crate) fn assign_to_for_pattern(
         &mut self,
         pat: &crate::ast::Pattern,
@@ -7647,6 +7718,14 @@ impl Interpreter {
             Ok(()) => Completion::Normal(value),
             Err(_) => Completion::Throw(self.create_type_error("Assignment to constant variable.")),
         }
+    }
+
+    /// Whether `obj_id` is some realm's global object — the only case in which
+    /// a property write has a global environment binding to mirror.
+    fn is_realm_global_object(&self, obj_id: u64) -> bool {
+        self.realms
+            .iter()
+            .any(|realm| realm.global_object == Some(obj_id))
     }
 
     /// Sync a property set on an object to the corresponding global env binding,
