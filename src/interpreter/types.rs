@@ -336,6 +336,9 @@ pub(crate) struct AsyncFunctionState {
 #[derive(Clone)]
 pub(crate) struct AsyncForOfLoopState {
     pub(crate) iter_var: String,
+    /// The labels attached to this iteration statement. `LoopContinues` uses
+    /// this set to decide whether a labelled continue begins its next iteration.
+    pub(crate) label_set: Vec<String>,
     pub(crate) head_state: usize,
     pub(crate) after_state: usize,
     /// Depth of the driver's try stack when the loop began, so an abrupt
@@ -351,6 +354,10 @@ pub(crate) struct AsyncForOfLoopState {
 impl AsyncForOfLoopState {
     pub(crate) fn effective_env(&self) -> &EnvRef {
         self.iteration_env.as_ref().unwrap_or(&self.outer_env)
+    }
+
+    pub(crate) fn matches_continue_target(&self, target: Option<&str>) -> bool {
+        target.is_none_or(|target| self.label_set.iter().any(|label| label == target))
     }
 }
 

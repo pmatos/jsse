@@ -8824,7 +8824,9 @@ impl Interpreter {
                     // An inline statement can surface continue directly rather
                     // than through a LoopControl terminator. Route it through
                     // intervening finalizers before returning to the loop head.
-                    if let Some(pos) = for_of_stack.iter().rposition(|_| label.is_none()) {
+                    if let Some(pos) = for_of_stack.iter().rposition(|loop_state| {
+                        loop_state.matches_continue_target(label.as_deref())
+                    }) {
                         let loop_state = &for_of_stack[pos];
                         let target = LoopControlTarget {
                             target_state: loop_state.head_state,
@@ -9093,6 +9095,7 @@ impl Interpreter {
                 StateTerminator::ForOfInit {
                     ref iterable,
                     ref iter_var,
+                    ref label_set,
                     ref left,
                     head_state,
                     after_state: forinit_after,
@@ -9156,6 +9159,7 @@ impl Interpreter {
                     self.env_set(&func_env, iter_var, iterator).ok();
                     for_of_stack.push(AsyncForOfLoopState {
                         iter_var: iter_var.clone(),
+                        label_set: label_set.clone(),
                         head_state,
                         after_state: forinit_after,
                         try_depth: try_stack.len(),
@@ -9184,6 +9188,7 @@ impl Interpreter {
                             debug_assert!(false, "for-of head without an active loop state");
                             for_of_stack.push(AsyncForOfLoopState {
                                 iter_var: iter_var.clone(),
+                                label_set: vec![],
                                 head_state: current_id,
                                 after_state,
                                 try_depth: try_stack.len(),

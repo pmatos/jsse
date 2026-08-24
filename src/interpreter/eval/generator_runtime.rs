@@ -1585,6 +1585,7 @@ impl Interpreter {
                 StateTerminator::ForOfInit {
                     iterable,
                     iter_var,
+                    label_set: _,
                     next_var: _,
                     left: _,
                     head_state,
@@ -5601,6 +5602,7 @@ impl Interpreter {
                 StateTerminator::ForOfInit {
                     iterable,
                     iter_var,
+                    label_set: _,
                     next_var: _,
                     left: _,
                     head_state,

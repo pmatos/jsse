@@ -139,6 +139,24 @@ async function continueFromNestedTryRunsFinally() {
   return log;
 }
 
+async function labeledContinueFromNestedInlineTry() {
+  var log = [];
+  outer: for (const outerValue of [1, 2]) {
+    for (const innerValue of trackedIterable(log, 'inline ' + outerValue, [3])) {
+      await null;
+      // This non-suspending try executes inline, so its labelled completion is
+      // resolved by the async driver rather than a LoopControl terminator.
+      try {
+        continue outer;
+      } finally {
+      }
+    }
+    log.push('unreachable');
+  }
+  log.push('after inline labeled continue');
+  return log;
+}
+
 breakThroughAwaitedFinally()
   .then(function (log) {
     assert.compareArray(
@@ -191,6 +209,14 @@ breakThroughAwaitedFinally()
       log,
       ['finally 1', 'finally 2', 'after continue'],
       'an inline continue completion runs the enclosing finally before reaching the loop head'
+    );
+    return labeledContinueFromNestedInlineTry();
+  })
+  .then(function (log) {
+    assert.compareArray(
+      log,
+      ['close inline 1', 'close inline 2', 'after inline labeled continue'],
+      'an inline labelled continue targets its outer loop and closes only the inner iterator'
     );
   })
   .then($DONE, $DONE);
