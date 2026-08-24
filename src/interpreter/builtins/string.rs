@@ -448,28 +448,22 @@ impl Interpreter {
                 "substring",
                 2,
                 Rc::new(|interp, this_val, args| {
-                    let s = match this_string_value(interp, this_val) {
+                    let js_str = match this_js_string(interp, this_val) {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let units = utf16_units(&s);
+                    let units = &js_str.code_units;
                     let len = units.len() as f64;
                     let int_start = match args.first() {
-                        Some(v) => match to_num(interp, v) {
-                            Ok(n) => {
-                                let i = to_integer_or_infinity(n);
-                                if n.is_nan() { 0.0 } else { i }
-                            }
+                        Some(v) => match to_int_or_inf(interp, v) {
+                            Ok(n) => n,
                             Err(c) => return c,
                         },
                         None => 0.0,
                     };
                     let int_end = match args.get(1) {
-                        Some(v) if !(v).is_undefined() => match to_num(interp, v) {
-                            Ok(n) => {
-                                let i = to_integer_or_infinity(n);
-                                if n.is_nan() { 0.0 } else { i }
-                            }
+                        Some(v) if !(v).is_undefined() => match to_int_or_inf(interp, v) {
+                            Ok(n) => n,
                             Err(c) => return c,
                         },
                         _ => len,
@@ -481,8 +475,9 @@ impl Interpreter {
                     } else {
                         (final_end, final_start)
                     };
-                    let result = utf16_substring(&units, from, to);
-                    Completion::Normal(JsValue::string(JsString::from_str(&result)))
+                    Completion::Normal(JsValue::string(JsString::from_vec(
+                        units[from..to].to_vec(),
+                    )))
                 }),
             ),
             (
@@ -1570,37 +1565,37 @@ impl Interpreter {
                 "substr".to_string(),
                 2,
                 Rc::new(|interp, this, args| {
-                    let s = match this_string_value(interp, this) {
+                    let js_str = match this_js_string(interp, this) {
                         Ok(s) => s,
                         Err(c) => return c,
                     };
-                    let units = utf16_units(&s);
+                    let units = &js_str.code_units;
                     let len = units.len() as f64;
                     let int_start = match args.first() {
-                        Some(v) => match to_num(interp, v) {
+                        Some(v) => match to_int_or_inf(interp, v) {
                             Ok(n) => n,
                             Err(c) => return c,
                         },
                         None => 0.0,
                     };
-                    let int_start = int_start as i64;
-                    let start = if int_start < 0 {
-                        (len as i64 + int_start).max(0) as usize
+                    let start = if int_start == f64::NEG_INFINITY {
+                        0
+                    } else if int_start < 0.0 {
+                        (len + int_start).max(0.0) as usize
                     } else {
-                        (int_start as usize).min(units.len())
+                        int_start.min(len) as usize
                     };
                     let result_len = match args.get(1) {
                         Some(v) if !(v).is_undefined() => {
-                            let l = match to_num(interp, v) {
+                            let int_length = match to_int_or_inf(interp, v) {
                                 Ok(n) => n,
                                 Err(c) => return c,
                             };
-                            let l = l as i64;
-                            l.max(0) as usize
+                            int_length.max(0.0).min(len) as usize
                         }
                         _ => units.len(),
                     };
-                    let end = (start + result_len).min(units.len());
+                    let end = start.saturating_add(result_len).min(units.len());
                     Completion::Normal(JsValue::string(JsString::from_vec(
                         units[start..end].to_vec(),
                     )))
