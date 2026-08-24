@@ -4224,6 +4224,20 @@ impl Interpreter {
         result
     }
 
+    /// Root every object a destructuring lRef depends on until PutValue.
+    /// The base, the raw key awaiting ToPropertyKey, and a super reference's
+    /// receiver are all held only by Rust locals across arbitrary user code.
+    fn gc_root_destruct_lref(&mut self, lref: &DestructLRef) {
+        match lref {
+            DestructLRef::Member(base, raw_key) => {
+                self.gc_root_value(base);
+                self.gc_root_value(raw_key);
+            }
+            DestructLRef::Private(base, _) => self.gc_root_value(base),
+            DestructLRef::Super(_, _, this_val, _) => self.gc_root_value(this_val),
+        }
+    }
+
     /// Evaluate a member expression as an lref (Reference) for destructuring.
     /// Returns base + key info or suspension explicitly; ToPropertyKey is
     /// deferred to PutValue time per spec.
@@ -4344,33 +4358,46 @@ impl Interpreter {
                         }
                     };
 
-                    // Collect remaining iterator values into rest array
-                    let mut rest = Vec::new();
-                    if !done {
-                        loop {
-                            match self.iterator_step(&iterator) {
-                                Ok(Some(result)) => match self.iterator_value(&result) {
-                                    Ok(v) => rest.push(v),
-                                    Err(e) => {
+                    // Keep the lRef's base, pending key, and receiver alive
+                    // through iterator collection and the eventual PutValue.
+                    let gc_frame = self.gc_root_frame();
+                    if let Some(lref) = &precomp {
+                        self.gc_root_destruct_lref(lref);
+                    }
+
+                    let result = (|| {
+                        // Collect remaining iterator values into rest array
+                        let mut rest = Vec::new();
+                        if !done {
+                            loop {
+                                match self.iterator_step(&iterator) {
+                                    Ok(Some(result)) => match self.iterator_value(&result) {
+                                        Ok(v) => {
+                                            // Later steps run user code; the
+                                            // Vec is invisible to the GC.
+                                            self.gc_root_value(&v);
+                                            rest.push(v);
+                                        }
+                                        Err(e) => {
+                                            done = true;
+                                            return Completion::Throw(e);
+                                        }
+                                    },
+                                    Ok(None) => {
                                         done = true;
-                                        error = Some(e);
                                         break;
                                     }
-                                },
-                                Ok(None) => {
-                                    done = true;
-                                    break;
-                                }
-                                Err(e) => {
-                                    done = true;
-                                    error = Some(e);
-                                    break;
+                                    Err(e) => {
+                                        done = true;
+                                        return Completion::Throw(e);
+                                    }
                                 }
                             }
                         }
-                    }
-                    if error.is_none() {
+
                         let arr = self.create_array(rest);
+                        // ToPropertyKey and the write itself can run user code.
+                        self.gc_root_value(&arr);
                         match precomp {
                             Some(DestructLRef::Member(base, raw_key)) => {
                                 match self.to_property_key(&raw_key) {
@@ -4379,37 +4406,46 @@ impl Interpreter {
                                         if let Err(e) =
                                             self.set_object_with_key(base, &key, arr, strict)
                                         {
-                                            error = Some(e);
+                                            return Completion::Throw(e);
                                         }
                                     }
                                     Err(e) => {
-                                        error = Some(e);
+                                        return Completion::Throw(e);
                                     }
                                 }
                             }
                             Some(DestructLRef::Private(base, ref name)) => {
                                 if let Err(e) = self.set_private_field(&base, name, arr, env) {
-                                    error = Some(e);
+                                    return Completion::Throw(e);
                                 }
                             }
                             Some(DestructLRef::Super(base_id, ref key, ref this_val, strict)) => {
                                 if let Completion::Throw(e) =
                                     self.super_set_property(base_id, key, arr, this_val, strict)
                                 {
-                                    error = Some(e)
+                                    return Completion::Throw(e);
                                 }
                             }
                             None => match self.put_value_to_target(inner, arr, env) {
                                 Completion::Normal(_) | Completion::Empty => {}
                                 Completion::Throw(e) => {
-                                    error = Some(e);
+                                    return Completion::Throw(e);
                                 }
                                 Completion::Yield(v) => {
-                                    yield_val = Some(v);
+                                    return Completion::Yield(v);
                                 }
                                 _ => {}
                             },
                         }
+                        Completion::Empty
+                    })();
+                    self.gc_unroot_frame(gc_frame);
+
+                    match result {
+                        Completion::Normal(_) | Completion::Empty => {}
+                        Completion::Throw(e) => error = Some(e),
+                        Completion::Yield(v) => yield_val = Some(v),
+                        other => return other,
                     }
                     break;
                 }
@@ -4435,102 +4471,110 @@ impl Interpreter {
                         }
                     };
 
-                    let item = if done {
-                        JsValue::UNDEFINED
-                    } else {
-                        match self.iterator_step(&iterator) {
-                            Ok(Some(result)) => match self.iterator_value(&result) {
-                                Ok(v) => v,
+                    // The target was evaluated before iterator/default user
+                    // code; its lRef must survive until PutValue.
+                    let gc_frame = self.gc_root_frame();
+                    if let Some(lref) = &precomp {
+                        self.gc_root_destruct_lref(lref);
+                    }
+
+                    let result = (|| {
+                        let item = if done {
+                            JsValue::UNDEFINED
+                        } else {
+                            match self.iterator_step(&iterator) {
+                                Ok(Some(result)) => match self.iterator_value(&result) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        done = true;
+                                        return Completion::Throw(e);
+                                    }
+                                },
+                                Ok(None) => {
+                                    done = true;
+                                    JsValue::UNDEFINED
+                                }
                                 Err(e) => {
                                     done = true;
-                                    error = Some(e);
-                                    break;
+                                    return Completion::Throw(e);
                                 }
-                            },
-                            Ok(None) => {
-                                done = true;
-                                JsValue::UNDEFINED
                             }
-                            Err(e) => {
-                                done = true;
-                                error = Some(e);
-                                break;
-                            }
-                        }
-                    };
+                        };
 
-                    let val = if item.is_undefined() {
-                        if let Some(default) = default_expr {
-                            match self.eval_expr(default, env) {
-                                Completion::Normal(v) => {
-                                    if let Expression::Identifier(name) = target
-                                        && default.is_anonymous_function_definition()
-                                    {
-                                        self.set_function_name(&v, name);
+                        let val = if item.is_undefined() {
+                            if let Some(default) = default_expr {
+                                match self.eval_expr(default, env) {
+                                    Completion::Normal(v) => {
+                                        if let Expression::Identifier(name) = target
+                                            && default.is_anonymous_function_definition()
+                                        {
+                                            self.set_function_name(&v, name);
+                                        }
+                                        v
                                     }
-                                    v
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    Completion::Yield(v) => return Completion::Yield(v),
+                                    other => return other,
                                 }
-                                Completion::Throw(e) => {
-                                    error = Some(e);
-                                    break;
-                                }
-                                Completion::Yield(v) => {
-                                    yield_val = Some(v);
-                                    break;
-                                }
-                                other => return other,
+                            } else {
+                                item
                             }
                         } else {
                             item
-                        }
-                    } else {
-                        item
-                    };
+                        };
 
-                    match precomp {
-                        Some(DestructLRef::Member(base, raw_key)) => {
-                            match self.to_property_key(&raw_key) {
-                                Ok(key) => {
-                                    let strict = env.borrow().strict;
-                                    if let Err(e) =
-                                        self.set_object_with_key(base, &key, val, strict)
-                                    {
-                                        error = Some(e);
-                                        break;
+                        // ToPropertyKey and the write itself can run user code.
+                        self.gc_root_value(&val);
+                        match precomp {
+                            Some(DestructLRef::Member(base, raw_key)) => {
+                                match self.to_property_key(&raw_key) {
+                                    Ok(key) => {
+                                        let strict = env.borrow().strict;
+                                        if let Err(e) =
+                                            self.set_object_with_key(base, &key, val, strict)
+                                        {
+                                            return Completion::Throw(e);
+                                        }
+                                    }
+                                    Err(e) => {
+                                        return Completion::Throw(e);
                                     }
                                 }
-                                Err(e) => {
-                                    error = Some(e);
-                                    break;
+                            }
+                            Some(DestructLRef::Private(base, ref name)) => {
+                                if let Err(e) = self.set_private_field(&base, name, val, env) {
+                                    return Completion::Throw(e);
                                 }
                             }
+                            Some(DestructLRef::Super(base_id, ref key, ref this_val, strict)) => {
+                                if let Completion::Throw(e) =
+                                    self.super_set_property(base_id, key, val, this_val, strict)
+                                {
+                                    return Completion::Throw(e);
+                                }
+                            }
+                            None => match self.put_value_to_target(target, val, env) {
+                                Completion::Normal(_) | Completion::Empty => {}
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                Completion::Yield(v) => return Completion::Yield(v),
+                                _ => {}
+                            },
                         }
-                        Some(DestructLRef::Private(base, ref name)) => {
-                            if let Err(e) = self.set_private_field(&base, name, val, env) {
-                                error = Some(e);
-                                break;
-                            }
+                        Completion::Empty
+                    })();
+                    self.gc_unroot_frame(gc_frame);
+
+                    match result {
+                        Completion::Normal(_) | Completion::Empty => {}
+                        Completion::Throw(e) => {
+                            error = Some(e);
+                            break;
                         }
-                        Some(DestructLRef::Super(base_id, ref key, ref this_val, strict)) => {
-                            if let Completion::Throw(e) =
-                                self.super_set_property(base_id, key, val, this_val, strict)
-                            {
-                                error = Some(e);
-                                break;
-                            }
+                        Completion::Yield(v) => {
+                            yield_val = Some(v);
+                            break;
                         }
-                        None => match self.put_value_to_target(target, val, env) {
-                            Completion::Normal(_) | Completion::Empty => {}
-                            Completion::Throw(e) => {
-                                error = Some(e);
-                                break;
-                            }
-                            Completion::Yield(v) => {
-                                yield_val = Some(v);
-                                break;
-                            }
-                            _ => {}
-                        },
+                        other => return other,
                     }
                 }
             }
@@ -4671,76 +4715,96 @@ impl Interpreter {
                         Err(e) => return Completion::Throw(e),
                     };
 
-                    // Get property via get_object_property (invokes getters/Proxy)
-                    let val = if let Some(o) = obj_val
-                        .as_object_id()
-                        .map(|id| crate::types::JsObject { id })
-                    {
-                        match self.get_object_property(o.id, &key, &obj_val) {
-                            Completion::Normal(v) => v,
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            Completion::Yield(v) => return Completion::Yield(v),
-                            _ => JsValue::UNDEFINED,
-                        }
-                    } else {
-                        JsValue::UNDEFINED
-                    };
+                    // GetV and an initializer can run user code after the
+                    // target is evaluated, so retain the whole lRef.
+                    let gc_frame = self.gc_root_frame();
+                    if let Some(lref) = &pre_ref {
+                        self.gc_root_destruct_lref(lref);
+                    }
 
-                    let val = if val.is_undefined() {
-                        if let Some(default) = default_expr {
-                            match self.eval_expr(default, env) {
-                                Completion::Normal(v) => {
-                                    if let Expression::Identifier(name) = target
-                                        && default.is_anonymous_function_definition()
-                                    {
-                                        self.set_function_name(&v, name);
-                                    }
-                                    v
-                                }
+                    let result = (|| {
+                        // Get property via get_object_property (invokes getters/Proxy)
+                        let val = if let Some(o) = obj_val
+                            .as_object_id()
+                            .map(|id| crate::types::JsObject { id })
+                        {
+                            match self.get_object_property(o.id, &key, &obj_val) {
+                                Completion::Normal(v) => v,
                                 Completion::Throw(e) => return Completion::Throw(e),
                                 Completion::Yield(v) => return Completion::Yield(v),
-                                other => return other,
+                                _ => JsValue::UNDEFINED,
+                            }
+                        } else {
+                            JsValue::UNDEFINED
+                        };
+
+                        let val = if val.is_undefined() {
+                            if let Some(default) = default_expr {
+                                match self.eval_expr(default, env) {
+                                    Completion::Normal(v) => {
+                                        if let Expression::Identifier(name) = target
+                                            && default.is_anonymous_function_definition()
+                                        {
+                                            self.set_function_name(&v, name);
+                                        }
+                                        v
+                                    }
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    Completion::Yield(v) => return Completion::Yield(v),
+                                    other => return other,
+                                }
+                            } else {
+                                val
                             }
                         } else {
                             val
-                        }
-                    } else {
-                        val
-                    };
+                        };
 
-                    if let Some(lref) = pre_ref {
-                        match lref {
-                            DestructLRef::Member(base_val, raw_key) => {
-                                match self.to_property_key(&raw_key) {
-                                    Ok(key) => {
-                                        let strict = env.borrow().strict;
-                                        if let Err(e) =
-                                            self.set_object_with_key(base_val, &key, val, strict)
-                                        {
-                                            return Completion::Throw(e);
+                        // ToPropertyKey and the write itself can run user code.
+                        self.gc_root_value(&val);
+                        if let Some(lref) = pre_ref {
+                            match lref {
+                                DestructLRef::Member(base_val, raw_key) => {
+                                    match self.to_property_key(&raw_key) {
+                                        Ok(key) => {
+                                            let strict = env.borrow().strict;
+                                            if let Err(e) = self
+                                                .set_object_with_key(base_val, &key, val, strict)
+                                            {
+                                                return Completion::Throw(e);
+                                            }
                                         }
+                                        Err(e) => return Completion::Throw(e),
                                     }
-                                    Err(e) => return Completion::Throw(e),
+                                }
+                                DestructLRef::Private(base_val, ref name) => {
+                                    if let Err(e) =
+                                        self.set_private_field(&base_val, name, val, env)
+                                    {
+                                        return Completion::Throw(e);
+                                    }
+                                }
+                                DestructLRef::Super(base_id, ref key, ref this_val, strict) => {
+                                    if let Completion::Throw(e) =
+                                        self.super_set_property(base_id, key, val, this_val, strict)
+                                    {
+                                        return Completion::Throw(e);
+                                    }
                                 }
                             }
-                            DestructLRef::Private(base_val, ref name) => {
-                                if let Err(e) = self.set_private_field(&base_val, name, val, env) {
-                                    return Completion::Throw(e);
-                                }
-                            }
-                            DestructLRef::Super(base_id, ref key, ref this_val, strict) => {
-                                if let Completion::Throw(e) =
-                                    self.super_set_property(base_id, key, val, this_val, strict)
-                                {
-                                    return Completion::Throw(e);
-                                }
+                        } else {
+                            match self.put_value_to_target(target, val, env) {
+                                Completion::Normal(_) | Completion::Empty => {}
+                                other => return other,
                             }
                         }
-                    } else {
-                        match self.put_value_to_target(target, val, env) {
-                            Completion::Normal(_) | Completion::Empty => {}
-                            other => return other,
-                        }
+                        Completion::Empty
+                    })();
+                    self.gc_unroot_frame(gc_frame);
+
+                    match result {
+                        Completion::Normal(_) | Completion::Empty => {}
+                        other => return other,
                     }
                 }
                 _ => continue,
