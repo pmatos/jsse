@@ -4639,178 +4639,187 @@ impl Interpreter {
             _ => unreachable!(),
         };
 
-        let mut excluded_keys: Vec<JsPropertyKey> = Vec::new();
+        // Computed keys, getters, initializers, rest copying, and target writes
+        // can all run user code while the ToObject result lives only here.
+        let gc_frame = self.gc_root_frame();
+        self.gc_root_value(&obj_val);
 
-        for prop in props {
-            // Handle rest: {...rest} = obj
-            if let Expression::Spread(inner) = &prop.value {
-                let rest_obj_id = self.create_object_id();
-                if let Some(o) = obj_val
-                    .as_object_id()
-                    .map(|id| crate::types::JsObject { id })
-                {
-                    let pairs = match self.copy_data_properties(o.id, &obj_val, &excluded_keys) {
-                        Ok(p) => p,
-                        Err(e) => return Completion::Throw(e),
-                    };
-                    for (k, v) in pairs {
-                        self.get_object_cell_expect(rest_obj_id)
-                            .borrow_mut()
-                            .insert_value(k, v);
-                    }
-                }
-                let rest_id = rest_obj_id;
-                let rest_val = JsValue::object(rest_id);
-                match self.put_value_to_target(inner, rest_val, env) {
-                    Completion::Normal(_) | Completion::Empty => {}
-                    other => return other,
-                }
-                continue;
-            }
+        let result = (|| {
+            let mut excluded_keys: Vec<JsPropertyKey> = Vec::new();
 
-            match &prop.kind {
-                PropertyKind::Init => {
-                    let key = match &prop.key {
-                        PropertyKey::Identifier(s) => JsPropertyKey::from(s.clone()),
-                        PropertyKey::String(s) => {
-                            JsPropertyKey::from_js_string(&JsString::from_vec(s.clone()))
-                        }
-                        PropertyKey::Number(n) => {
-                            JsPropertyKey::from(to_js_string(&JsValue::number(*n)))
-                        }
-                        PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
-                            Completion::Normal(v) => match self.to_property_key(&v) {
-                                Ok(k) => k,
-                                Err(e) => return Completion::Throw(e),
-                            },
-                            Completion::Throw(e) => return Completion::Throw(e),
-                            Completion::Yield(v) => return Completion::Yield(v),
-                            other => return other,
-                        },
-                        PropertyKey::Private(_) => {
-                            return Completion::Throw(self.create_type_error(
-                                "Private names are not valid in object patterns",
-                            ));
-                        }
-                    };
-                    excluded_keys.push(key.clone());
-
-                    // Per spec §13.15.5.6: extract target BEFORE GetV and evaluate lref first.
-                    let (target, default_expr) = if let Expression::Assign(
-                        AssignOp::Assign,
-                        target,
-                        default,
-                    ) = &prop.value
+            for prop in props {
+                // Handle rest: {...rest} = obj
+                if let Expression::Spread(inner) = &prop.value {
+                    let rest_obj_id = self.create_object_id();
+                    if let Some(o) = obj_val
+                        .as_object_id()
+                        .map(|id| crate::types::JsObject { id })
                     {
-                        (target.as_ref(), Some(default.as_ref()))
-                    } else {
-                        (&prop.value, None)
-                    };
-
-                    // §13.15.5.6 step 1: evaluate lref (base + key expression)
-                    // before GetV. ToPropertyKey is deferred to PutValue time.
-                    let pre_ref = match self.eval_member_lhs_ref(target, env) {
-                        Ok(MemberLhsRef::Ref(r)) => r,
-                        Ok(MemberLhsRef::Suspended(v)) => return Completion::Yield(v),
-                        Err(e) => return Completion::Throw(e),
-                    };
-
-                    // GetV and an initializer can run user code after the
-                    // target is evaluated, so retain the whole lRef.
-                    let gc_frame = self.gc_root_frame();
-                    if let Some(lref) = &pre_ref {
-                        self.gc_root_destruct_lref(lref);
-                    }
-
-                    let result = (|| {
-                        // Get property via get_object_property (invokes getters/Proxy)
-                        let val = if let Some(o) = obj_val
-                            .as_object_id()
-                            .map(|id| crate::types::JsObject { id })
+                        let pairs = match self.copy_data_properties(o.id, &obj_val, &excluded_keys)
                         {
-                            match self.get_object_property(o.id, &key, &obj_val) {
-                                Completion::Normal(v) => v,
-                                Completion::Throw(e) => return Completion::Throw(e),
-                                Completion::Yield(v) => return Completion::Yield(v),
-                                _ => JsValue::UNDEFINED,
-                            }
-                        } else {
-                            JsValue::UNDEFINED
+                            Ok(p) => p,
+                            Err(e) => return Completion::Throw(e),
                         };
-
-                        let val = if val.is_undefined() {
-                            if let Some(default) = default_expr {
-                                match self.eval_expr(default, env) {
-                                    Completion::Normal(v) => {
-                                        if let Expression::Identifier(name) = target
-                                            && default.is_anonymous_function_definition()
-                                        {
-                                            self.set_function_name(&v, name);
-                                        }
-                                        v
-                                    }
-                                    Completion::Throw(e) => return Completion::Throw(e),
-                                    Completion::Yield(v) => return Completion::Yield(v),
-                                    other => return other,
-                                }
-                            } else {
-                                val
-                            }
-                        } else {
-                            val
-                        };
-
-                        // ToPropertyKey and the write itself can run user code.
-                        self.gc_root_value(&val);
-                        if let Some(lref) = pre_ref {
-                            match lref {
-                                DestructLRef::Member(base_val, raw_key) => {
-                                    match self.to_property_key(&raw_key) {
-                                        Ok(key) => {
-                                            let strict = env.borrow().strict;
-                                            if let Err(e) = self
-                                                .set_object_with_key(base_val, &key, val, strict)
-                                            {
-                                                return Completion::Throw(e);
-                                            }
-                                        }
-                                        Err(e) => return Completion::Throw(e),
-                                    }
-                                }
-                                DestructLRef::Private(base_val, ref name) => {
-                                    if let Err(e) =
-                                        self.set_private_field(&base_val, name, val, env)
-                                    {
-                                        return Completion::Throw(e);
-                                    }
-                                }
-                                DestructLRef::Super(base_id, ref key, ref this_val, strict) => {
-                                    if let Completion::Throw(e) =
-                                        self.super_set_property(base_id, key, val, this_val, strict)
-                                    {
-                                        return Completion::Throw(e);
-                                    }
-                                }
-                            }
-                        } else {
-                            match self.put_value_to_target(target, val, env) {
-                                Completion::Normal(_) | Completion::Empty => {}
-                                other => return other,
-                            }
+                        for (k, v) in pairs {
+                            self.get_object_cell_expect(rest_obj_id)
+                                .borrow_mut()
+                                .insert_value(k, v);
                         }
-                        Completion::Empty
-                    })();
-                    self.gc_unroot_frame(gc_frame);
-
-                    match result {
+                    }
+                    let rest_id = rest_obj_id;
+                    let rest_val = JsValue::object(rest_id);
+                    match self.put_value_to_target(inner, rest_val, env) {
                         Completion::Normal(_) | Completion::Empty => {}
                         other => return other,
                     }
+                    continue;
                 }
-                _ => continue,
+
+                match &prop.kind {
+                    PropertyKind::Init => {
+                        let key = match &prop.key {
+                            PropertyKey::Identifier(s) => JsPropertyKey::from(s.clone()),
+                            PropertyKey::String(s) => {
+                                JsPropertyKey::from_js_string(&JsString::from_vec(s.clone()))
+                            }
+                            PropertyKey::Number(n) => {
+                                JsPropertyKey::from(to_js_string(&JsValue::number(*n)))
+                            }
+                            PropertyKey::Computed(expr) => match self.eval_expr(expr, env) {
+                                Completion::Normal(v) => match self.to_property_key(&v) {
+                                    Ok(k) => k,
+                                    Err(e) => return Completion::Throw(e),
+                                },
+                                Completion::Throw(e) => return Completion::Throw(e),
+                                Completion::Yield(v) => return Completion::Yield(v),
+                                other => return other,
+                            },
+                            PropertyKey::Private(_) => {
+                                return Completion::Throw(self.create_type_error(
+                                    "Private names are not valid in object patterns",
+                                ));
+                            }
+                        };
+                        excluded_keys.push(key.clone());
+
+                        // Per spec §13.15.5.6: extract target BEFORE GetV and evaluate lref first.
+                        let (target, default_expr) =
+                            if let Expression::Assign(AssignOp::Assign, target, default) =
+                                &prop.value
+                            {
+                                (target.as_ref(), Some(default.as_ref()))
+                            } else {
+                                (&prop.value, None)
+                            };
+
+                        // §13.15.5.6 step 1: evaluate lref (base + key expression)
+                        // before GetV. ToPropertyKey is deferred to PutValue time.
+                        let pre_ref = match self.eval_member_lhs_ref(target, env) {
+                            Ok(MemberLhsRef::Ref(r)) => r,
+                            Ok(MemberLhsRef::Suspended(v)) => return Completion::Yield(v),
+                            Err(e) => return Completion::Throw(e),
+                        };
+
+                        // GetV and an initializer can run user code after the
+                        // target is evaluated, so retain the whole lRef.
+                        let gc_frame = self.gc_root_frame();
+                        if let Some(lref) = &pre_ref {
+                            self.gc_root_destruct_lref(lref);
+                        }
+
+                        let result = (|| {
+                            // Get property via get_object_property (invokes getters/Proxy)
+                            let val = if let Some(o) = obj_val
+                                .as_object_id()
+                                .map(|id| crate::types::JsObject { id })
+                            {
+                                match self.get_object_property(o.id, &key, &obj_val) {
+                                    Completion::Normal(v) => v,
+                                    Completion::Throw(e) => return Completion::Throw(e),
+                                    Completion::Yield(v) => return Completion::Yield(v),
+                                    _ => JsValue::UNDEFINED,
+                                }
+                            } else {
+                                JsValue::UNDEFINED
+                            };
+
+                            let val = if val.is_undefined() {
+                                if let Some(default) = default_expr {
+                                    match self.eval_expr(default, env) {
+                                        Completion::Normal(v) => {
+                                            if let Expression::Identifier(name) = target
+                                                && default.is_anonymous_function_definition()
+                                            {
+                                                self.set_function_name(&v, name);
+                                            }
+                                            v
+                                        }
+                                        Completion::Throw(e) => return Completion::Throw(e),
+                                        Completion::Yield(v) => return Completion::Yield(v),
+                                        other => return other,
+                                    }
+                                } else {
+                                    val
+                                }
+                            } else {
+                                val
+                            };
+
+                            // ToPropertyKey and the write itself can run user code.
+                            self.gc_root_value(&val);
+                            if let Some(lref) = pre_ref {
+                                match lref {
+                                    DestructLRef::Member(base_val, raw_key) => {
+                                        match self.to_property_key(&raw_key) {
+                                            Ok(key) => {
+                                                let strict = env.borrow().strict;
+                                                if let Err(e) = self.set_object_with_key(
+                                                    base_val, &key, val, strict,
+                                                ) {
+                                                    return Completion::Throw(e);
+                                                }
+                                            }
+                                            Err(e) => return Completion::Throw(e),
+                                        }
+                                    }
+                                    DestructLRef::Private(base_val, ref name) => {
+                                        if let Err(e) =
+                                            self.set_private_field(&base_val, name, val, env)
+                                        {
+                                            return Completion::Throw(e);
+                                        }
+                                    }
+                                    DestructLRef::Super(base_id, ref key, ref this_val, strict) => {
+                                        if let Completion::Throw(e) = self
+                                            .super_set_property(base_id, key, val, this_val, strict)
+                                        {
+                                            return Completion::Throw(e);
+                                        }
+                                    }
+                                }
+                            } else {
+                                match self.put_value_to_target(target, val, env) {
+                                    Completion::Normal(_) | Completion::Empty => {}
+                                    other => return other,
+                                }
+                            }
+                            Completion::Empty
+                        })();
+                        self.gc_unroot_frame(gc_frame);
+
+                        match result {
+                            Completion::Normal(_) | Completion::Empty => {}
+                            other => return other,
+                        }
+                    }
+                    _ => continue,
+                }
             }
-        }
-        Completion::Normal(JsValue::UNDEFINED)
+            Completion::Normal(JsValue::UNDEFINED)
+        })();
+
+        self.gc_unroot_frame(gc_frame);
+        result
     }
 
     fn eval_call(
