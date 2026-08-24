@@ -359,6 +359,115 @@ eq(
 (function () {
   var cases = [
     [
+      "Error",
+      function () {
+        return new Error("m");
+      },
+      "{}",
+      "[Error: null prototype]: m",
+    ],
+    [
+      "Date",
+      function () {
+        return new Date(0);
+      },
+      "{}",
+      "[Date: null prototype] 1970-01-01T00:00:00.000Z",
+    ],
+    [
+      "Number",
+      function () {
+        return new Number(3);
+      },
+      "{}",
+      "[Number (null prototype): 3]",
+    ],
+    [
+      "String",
+      function () {
+        return new String("x");
+      },
+      "{ '0': 'x' }",
+      "[String (null prototype): 'x']",
+    ],
+    [
+      "Boolean",
+      function () {
+        return new Boolean(true);
+      },
+      "{}",
+      "[Boolean (null prototype): true]",
+    ],
+    [
+      "BigInt",
+      function () {
+        return Object(3n);
+      },
+      "{}",
+      "[BigInt (null prototype): 3n]",
+    ],
+    [
+      "Symbol",
+      function () {
+        return Object(Symbol("x"));
+      },
+      "{}",
+      "[Symbol (null prototype): Symbol(x)]",
+    ],
+  ];
+
+  for (var i = 0; i < cases.length; i++) {
+    var item = cases[i];
+    var ordinary = item[1]();
+    Object.setPrototypeOf(ordinary, {});
+    eq(
+      util.inspect(ordinary),
+      item[2],
+      "inspect renders an ordinary-reparented " + item[0] + " generically"
+    );
+
+    var nullPrototype = item[1]();
+    Object.setPrototypeOf(nullPrototype, null);
+    var nullOutput = util.inspect(nullPrototype);
+    truthy(
+      item[0] === "Error" && !hasNodeHost
+        ? nullOutput.indexOf("[Error: null prototype]") === 0
+        : nullOutput === item[3],
+      "inspect renders a null-prototype " + item[0] + " explicitly"
+    );
+  }
+
+  var prototypeTrapCalls = 0;
+  var proxyPrototype = new Proxy(
+    {},
+    {
+      getPrototypeOf: function () {
+        prototypeTrapCalls++;
+        throw new Error("reparented wrapper prototype trap called");
+      },
+    }
+  );
+  var proxiedPrototypeNumber = new Number(3);
+  Object.setPrototypeOf(proxiedPrototypeNumber, proxyPrototype);
+  var proxiedPrototypeOutput;
+  var proxiedPrototypeError;
+  try {
+    proxiedPrototypeOutput = util.inspect(proxiedPrototypeNumber);
+  } catch (e) {
+    proxiedPrototypeError = e;
+  }
+  truthy(
+    hasNodeHost
+      ? proxiedPrototypeError === undefined &&
+          proxiedPrototypeOutput === "{}" &&
+          prototypeTrapCalls === 0
+      : proxiedPrototypeError instanceof Error,
+    "inspect classifies a reparented wrapper without prototype traps"
+  );
+})();
+(function () {
+  var cases = [
+    [
       Date,
       function () {
         return new Date(0);

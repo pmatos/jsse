@@ -60,20 +60,26 @@ name and the instance's data-valued message still produce a readable
 safe primitive stringification, preserving the fallback for `0`, `-0`, `0n`,
 `false`, and `NaN`. `null` remains a safely stringifiable primitive for `name`
 and `message`, despite JavaScript's historical `typeof null === "object"` result.
+Error presentation is gated by the same trap-free prototype classification as
+the other built-ins: reparenting a genuine Error to an ordinary object selects
+generic rendering, while a direct null prototype receives the explicit
+`[Error: null prototype]` marker.
 
 Constructor and function names are read from data descriptors. Prototype
 metadata traversal unwraps a Proxy at every hop before inspecting it. Primitive
 Symbol formatting uses the captured intrinsic rather than a mutable prototype
 method.
 
-RegExp rendering first probes the captured intrinsic `source` getter to verify
-the internal slot, then classifies the prototype chain without `instanceof` or
-ordinary property reads. An ordinary-object-reparented RegExp stays on the
-generic descriptor path, while a null-prototype RegExp receives Node's explicit
-`[RegExp: null prototype]` marker. Ordinary and cross-realm RegExps are formatted
-from the captured `source` and individual flag accessors; using the captured
-`RegExp.prototype.toString` would still perform ordinary `source` and `flags`
-gets and could invoke replacement accessors.
+Built-in presentation combines an internal-slot probe with a trap-free
+prototype-chain classifier. Reparenting a genuine Date, RegExp, or boxed
+primitive to an ordinary object selects the generic descriptor path; a direct
+null prototype receives Node's family-specific marker. Slot-bearing prototype
+objects retain cross-realm recognition where the built-in exposes such a slot.
+RegExps are formatted from the captured `source` and individual flag accessors;
+using the captured `RegExp.prototype.toString` would still perform ordinary
+`source` and `flags` gets and could invoke replacement accessors. Normal boxed
+BigInt/Symbol chains retain their existing `@@hasInstance`-sensitive shape after
+the trap-free presentation classification succeeds.
 
 `util.format`'s `%s` classification walk (`hasBuiltInToString`) decides whether
 a value carries a user-defined coercion hook or routes to `inspect`. It unwraps
@@ -100,7 +106,9 @@ The cross-engine node-shim self-test covers array-target Proxies, throwing
 nested Proxies, a Proxy in the prototype chain rather than as the inspected
 value, Error accessors, sparse arrays with inherited accessors, reparented
 RegExps with throwing `source`/`flags` getters, and replacement accessors on
-`RegExp.prototype`.
+`RegExp.prototype`. Ordinary- and null-prototype cases cover Error, Date,
+RegExp, and every boxed primitive; a proxied replacement prototype verifies the
+classifier itself dispatches no handler trap.
 Trap/getter counters prove the JSSE shim invokes none of them **for those
 cases**; the counters are evidence for the enumerated shapes, not a blanket
 proof, and the `%s` `toString`/`@@toPrimitive` presence reads noted above remain

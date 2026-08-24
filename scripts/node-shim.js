@@ -101,9 +101,12 @@
   var objectIs = objectConstructor.is;
   var objectKeys = objectConstructor.keys;
   var objectPrototype = objectConstructor.prototype;
+  var bigintPrototype = bigintConstructor.prototype;
+  var booleanPrototype = booleanConstructor.prototype;
+  var datePrototype = dateConstructor.prototype;
   var numberPrototype = numberConstructor.prototype;
   var stringPrototype = stringConstructor.prototype;
-  var booleanPrototype = booleanConstructor.prototype;
+  var symbolPrototype = symbolConstructor.prototype;
   var numberIsNaN = numberConstructor.isNaN;
   var dateGetTime = functionCall.bind(dateConstructor.prototype.getTime);
   var dateToISOString = functionCall.bind(
@@ -183,22 +186,21 @@
     return "/" + source + "/" + flags;
   }
 
-  // Classify a RegExp's presentation from trap-free prototype metadata. A
-  // genuine RegExp can be reparented to an ordinary object while retaining its
-  // internal slot; Node renders that as an ordinary object, not by performing
-  // `source`/`flags` gets through the replacement prototype. A RegExp object in
-  // the chain also recognizes a foreign realm's %RegExp.prototype% without an
-  // `instanceof` or @@hasInstance call.
-  function regexpPrototypeKind(value) {
+  // Classify a built-in's presentation from trap-free prototype metadata. A
+  // genuine built-in can be reparented while retaining its internal slot, but
+  // Node renders it generically unless its prototype chain still identifies
+  // that built-in family. Slot-bearing prototype objects also recognize the
+  // corresponding chain from another realm without invoking @@hasInstance.
+  function builtinPrototypeKind(value, intrinsicPrototype, prototypeProbe) {
     try {
       var current = unwrapProxy(objectGetPrototypeOf(value));
       if (current === null) return "null";
-      while (current !== null) {
+      while (current !== null && current !== objectPrototype) {
         if (
-          current === regexpPrototype ||
-          tryApplyIntrinsic(regexpGetSource, current)
+          current === intrinsicPrototype ||
+          (prototypeProbe && tryApplyIntrinsic(prototypeProbe, current))
         ) {
-          return "regexp";
+          return "builtin";
         }
         current = unwrapProxy(objectGetPrototypeOf(current));
       }
@@ -280,28 +282,6 @@
     return type === "symbol" ? symbolToString(value) : stringConstructor(value);
   }
 
-  // Node's isError is `isNativeError(e) || e instanceof Error`, so a plain
-  // object that merely inherits Error.prototype still renders as an error. The
-  // `instanceof` half is OrdinaryHasInstance, which would dispatch to a
-  // getPrototypeOf trap for a Proxy anywhere in the chain — unwrap at every
-  // step instead so no handler ever runs. %Object.prototype% terminates the
-  // walk: nothing below it can reach Error.prototype, so the common plain
-  // object costs a single trap-free [[GetPrototypeOf]].
-  function inheritsErrorPrototype(v) {
-    try {
-      // `unwrapProxy` is already fully recursive and maps a revoked Proxy to
-      // null, which the loop condition treats as the end of the chain.
-      var current = unwrapProxy(objectGetPrototypeOf(v));
-      while (current !== null && current !== objectPrototype) {
-        if (current === errorPrototype) return true;
-        current = unwrapProxy(objectGetPrototypeOf(current));
-      }
-    } catch (e) {
-      // The no-host fallback cannot unwrap an exotic chain; leave it opaque.
-    }
-    return false;
-  }
-
   function inspect(value, opts) {
     opts = opts || {};
     var maxDepth = typeof opts.depth === "number" ? opts.depth : 2;
@@ -335,7 +315,11 @@
 
       // Objects.
       if (arrayIndexOf(seen, v) !== -1) return "[Circular *1]";
-      if (errorIsError(v) || inheritsErrorPrototype(v)) return renderError(v);
+      var errorKind = builtinPrototypeKind(v, errorPrototype, null);
+      if (errorKind === "builtin") return renderError(v);
+      if (errorKind === "null" && errorIsError(v)) {
+        return renderNullPrototypeError(v);
+      }
       var boxed;
       // `get RegExp.prototype.source` uniquely does NOT throw for
       // %RegExp.prototype% (it answers "(?:)"), so the slot probe alone would
@@ -348,38 +332,102 @@
           ? null
           : tryApplyIntrinsic(regexpGetSource, v);
       if (boxed) {
-        var regexpKind = regexpPrototypeKind(v);
-        if (regexpKind === "regexp") return formatRegExp(v, boxed.value);
+        var regexpKind = builtinPrototypeKind(
+          v,
+          regexpPrototype,
+          regexpGetSource
+        );
+        if (regexpKind === "builtin") return formatRegExp(v, boxed.value);
         if (regexpKind === "null") {
           return "[RegExp: null prototype] " + formatRegExp(v, boxed.value);
         }
       }
       boxed = tryApplyIntrinsic(dateGetTime, v);
       if (boxed) {
-        return numberIsNaN(boxed.value) ? "Invalid Date" : dateToISOString(v);
+        var dateText = numberIsNaN(boxed.value)
+          ? "Invalid Date"
+          : dateToISOString(v);
+        var dateKind = builtinPrototypeKind(v, datePrototype, dateGetTime);
+        if (dateKind === "builtin") return dateText;
+        if (dateKind === "null") {
+          return "[Date: null prototype] " + dateText;
+        }
       }
-      // These three intrinsic prototypes carry the same internal slots as
-      // their boxed instances, but Node deliberately presents the prototype
-      // singletons as ordinary objects. Exact identity guards keep genuine
-      // wrappers (including cross-realm/reparented ones) on the slot path.
-      var legacyWrapperPrototype = isLegacyWrapperPrototype(v);
-      boxed = legacyWrapperPrototype ? null : tryApplyIntrinsic(numberValueOf, v);
-      if (boxed) return "[Number: " + render(boxed.value, depth) + "]";
-      boxed = legacyWrapperPrototype ? null : tryApplyIntrinsic(stringValueOf, v);
-      if (boxed) return "[String: " + render(boxed.value, depth) + "]";
-      boxed = legacyWrapperPrototype ? null : tryApplyIntrinsic(booleanValueOf, v);
-      if (boxed) return "[Boolean: " + render(boxed.value, depth) + "]";
+      boxed = tryApplyIntrinsic(numberValueOf, v);
+      if (boxed) {
+        var numberText = render(boxed.value, depth);
+        var numberKind = builtinPrototypeKind(
+          v,
+          numberPrototype,
+          numberValueOf
+        );
+        if (numberKind === "builtin") return "[Number: " + numberText + "]";
+        if (numberKind === "null") {
+          return "[Number (null prototype): " + numberText + "]";
+        }
+      }
+      boxed = tryApplyIntrinsic(stringValueOf, v);
+      if (boxed) {
+        var stringText = render(boxed.value, depth);
+        var stringKind = builtinPrototypeKind(
+          v,
+          stringPrototype,
+          stringValueOf
+        );
+        if (stringKind === "builtin") return "[String: " + stringText + "]";
+        if (stringKind === "null") {
+          return "[String (null prototype): " + stringText + "]";
+        }
+      }
+      boxed = tryApplyIntrinsic(booleanValueOf, v);
+      if (boxed) {
+        var booleanText = render(boxed.value, depth);
+        var booleanKind = builtinPrototypeKind(
+          v,
+          booleanPrototype,
+          booleanValueOf
+        );
+        if (booleanKind === "builtin") {
+          return "[Boolean: " + booleanText + "]";
+        }
+        if (booleanKind === "null") {
+          return "[Boolean (null prototype): " + booleanText + "]";
+        }
+      }
       boxed = tryApplyIntrinsic(bigintValueOf, v);
+      if (boxed) {
+        var bigintText = render(boxed.value, depth);
+        var bigintKind = builtinPrototypeKind(
+          v,
+          bigintPrototype,
+          bigintValueOf
+        );
+        if (bigintKind === "null") {
+          return "[BigInt (null prototype): " + bigintText + "]";
+        }
+        if (bigintKind !== "builtin") boxed = null;
+      }
       if (boxed) {
         // Unlike the older wrappers above, Node's boxed BigInt/Symbol
         // rendering intentionally observes a constructor's current
         // @@hasInstance result. A false or throwing hook selects its generic
         // object shape, but must not intercept the internal-slot probe.
         return tryInstanceOf(v, bigintConstructor)
-          ? "[BigInt: " + render(boxed.value, depth) + "]"
+          ? "[BigInt: " + bigintText + "]"
           : "Object [BigInt] {}";
       }
       boxed = tryApplyIntrinsic(symbolToString, v);
+      if (boxed) {
+        var symbolKind = builtinPrototypeKind(
+          v,
+          symbolPrototype,
+          symbolToString
+        );
+        if (symbolKind === "null") {
+          return "[Symbol (null prototype): " + boxed.value + "]";
+        }
+        if (symbolKind !== "builtin") boxed = null;
+      }
       if (boxed) {
         return tryInstanceOf(v, symbolConstructor)
           ? "[Symbol: " + boxed.value + "]"
@@ -484,6 +532,14 @@
       var message = errorField(v, "message", "");
       var text = !name ? message : !message ? name : name + ": " + message;
       return "[" + text + "]";
+    }
+
+    function renderNullPrototypeError(v) {
+      var name = errorField(v, "name", "Error") || "Error";
+      var message = errorField(v, "message", "");
+      return (
+        "[" + name + ": null prototype]" + (message ? ": " + message : "")
+      );
     }
 
     // Derive the "ClassName " prefix without a plain `v.constructor` get, which
