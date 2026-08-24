@@ -110,6 +110,54 @@ fn import_module_type(attrs: &[(String, String)]) -> Option<ImportModuleType> {
     validated_import_module_type(attrs).ok().flatten()
 }
 
+/// One module item's request for *another* module: everything the graph and
+/// pre-load passes need in order to act on it. `None` for items that name no
+/// module (a local declaration, `export { x }` with no `from`, a statement).
+///
+/// `is_source_phase` is reported as data rather than acted on here, because
+/// callers disagree about it: the pre-load passes skip source-phase imports
+/// (see `is_source_phase_import`), while `graph_dependency_request` does not.
+struct ModuleItemRequest<'a> {
+    specifier: &'a str,
+    attributes: &'a [(String, String)],
+    is_deferred: bool,
+    is_source_phase: bool,
+}
+
+impl ModuleItemRequest<'_> {
+    fn import_type(&self) -> Option<ImportModuleType> {
+        import_module_type(self.attributes)
+    }
+}
+
+fn module_item_request(item: &ModuleItem) -> Option<ModuleItemRequest<'_>> {
+    match item {
+        ModuleItem::ImportDeclaration(import) => Some(ModuleItemRequest {
+            specifier: import.source.as_str(),
+            attributes: &import.attributes,
+            is_deferred: import
+                .specifiers
+                .iter()
+                .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_))),
+            is_source_phase: Interpreter::is_source_phase_import(import),
+        }),
+        ModuleItem::ExportDeclaration(ExportDeclaration::All {
+            source, attributes, ..
+        })
+        | ModuleItem::ExportDeclaration(ExportDeclaration::Named {
+            source: Some(source),
+            attributes,
+            ..
+        }) => Some(ModuleItemRequest {
+            specifier: source.as_str(),
+            attributes,
+            is_deferred: false,
+            is_source_phase: false,
+        }),
+        _ => None,
+    }
+}
+
 pub(crate) struct Interpreter {
     pub(crate) realms: Vec<Realm>,
     pub(crate) current_realm_id: usize,
@@ -1100,20 +1148,10 @@ impl Interpreter {
 
     fn validate_static_import_attributes(&mut self, program: &Program) -> Result<(), JsValue> {
         for item in &program.module_items {
-            let attrs = match item {
-                ModuleItem::ImportDeclaration(import) => Some(import.attributes.as_slice()),
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { attributes, .. })
-                | ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(_),
-                    attributes,
-                    ..
-                }) => Some(attributes.as_slice()),
-                _ => None,
-            };
-            let Some(attrs) = attrs else {
+            let Some(req) = module_item_request(item) else {
                 continue;
             };
-            if let Err(error) = validated_import_module_type(attrs) {
+            if let Err(error) = validated_import_module_type(req.attributes) {
                 let message = error.message();
                 return Err(match error {
                     // InnerModuleLoading turns a failed
@@ -2195,58 +2233,36 @@ impl Interpreter {
         // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6)
         // For deferred imports, load without evaluation.
         for item in &program.module_items {
-            let (specifier, is_deferred, import_type) = match item {
-                // Source-phase imports load only the requested module's source
-                // representation (shallow) — never its dependency graph.
-                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
-                    (None, false, None)
-                }
-                ModuleItem::ImportDeclaration(import) => {
-                    let is_defer = import
-                        .specifiers
-                        .iter()
-                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    (
-                        Some(import.source.as_str()),
-                        is_defer,
-                        import_module_type(&import.attributes),
-                    )
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::All {
-                    source,
-                    attributes,
-                    ..
-                }) => (Some(source.as_str()), false, import_module_type(attributes)),
-                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(source),
-                    attributes,
-                    ..
-                }) => (Some(source.as_str()), false, import_module_type(attributes)),
-                _ => (None, false, None),
+            // Source-phase imports load only the requested module's source
+            // representation (shallow) — never its dependency graph.
+            let Some(req) = module_item_request(item).filter(|r| !r.is_source_phase) else {
+                continue;
             };
-            if let Some(spec) = specifier {
-                let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
-                    match import_type {
-                        Some(itype) => {
-                            if let Err(e) = self.load_typed_module(&resolved, itype) {
-                                self.current_module_path = prev_module_path;
-                                return Completion::Throw(e);
-                            }
+            let import_type = req.import_type();
+            let is_deferred = req.is_deferred;
+            let module_path = self.current_module_path.clone();
+            if let Ok(resolved) =
+                self.resolve_module_specifier(req.specifier, module_path.as_deref())
+            {
+                match import_type {
+                    Some(itype) => {
+                        if let Err(e) = self.load_typed_module(&resolved, itype) {
+                            self.current_module_path = prev_module_path;
+                            return Completion::Throw(e);
                         }
-                        None if is_deferred => {
-                            if let Err(e) = self.load_module_no_eval(&resolved) {
-                                Self::cache_module_error(&loaded_module, &e);
-                                self.current_module_path = prev_module_path;
-                                return Completion::Throw(e);
-                            }
+                    }
+                    None if is_deferred => {
+                        if let Err(e) = self.load_module_no_eval(&resolved) {
+                            Self::cache_module_error(&loaded_module, &e);
+                            self.current_module_path = prev_module_path;
+                            return Completion::Throw(e);
                         }
-                        None => {
-                            if let Err(e) = self.load_module(&resolved) {
-                                Self::cache_module_error(&loaded_module, &e);
-                                self.current_module_path = prev_module_path;
-                                return Completion::Throw(e);
-                            }
+                    }
+                    None => {
+                        if let Err(e) = self.load_module(&resolved) {
+                            Self::cache_module_error(&loaded_module, &e);
+                            self.current_module_path = prev_module_path;
+                            return Completion::Throw(e);
                         }
                     }
                 }
@@ -2954,51 +2970,29 @@ impl Interpreter {
         // For deferred imports, load without evaluation.
         // For non-deferred, load normally (which includes evaluation).
         for item in &program.module_items {
-            let (specifier, is_deferred, itype) = match item {
-                // Source-phase imports load only the requested module's source
-                // representation (shallow) — never its dependency graph.
-                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
-                    (None, false, None)
-                }
-                ModuleItem::ImportDeclaration(import) => {
-                    let is_defer = import
-                        .specifiers
-                        .iter()
-                        .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                    (
-                        Some(import.source.as_str()),
-                        is_defer,
-                        import_module_type(&import.attributes),
-                    )
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::All {
-                    source,
-                    attributes,
-                    ..
-                }) => (Some(source.as_str()), false, import_module_type(attributes)),
-                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(source),
-                    attributes,
-                    ..
-                }) => (Some(source.as_str()), false, import_module_type(attributes)),
-                _ => (None, false, None),
+            // Source-phase imports load only the requested module's source
+            // representation (shallow) — never its dependency graph.
+            let Some(req) = module_item_request(item).filter(|r| !r.is_source_phase) else {
+                continue;
             };
-            if let Some(spec) = specifier {
-                let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
-                    match itype {
-                        Some(itype) => {
-                            self.load_typed_module(&resolved, itype)?;
-                        }
-                        None if is_deferred => {
-                            self.load_module_no_eval(&resolved)?;
-                        }
-                        None => {
-                            if let Err(e) = self.load_module(&resolved) {
-                                Self::cache_module_error(&loaded_module, &e);
-                                self.current_module_path = prev_path;
-                                return Err(e);
-                            }
+            let itype = req.import_type();
+            let is_deferred = req.is_deferred;
+            let module_path = self.current_module_path.clone();
+            if let Ok(resolved) =
+                self.resolve_module_specifier(req.specifier, module_path.as_deref())
+            {
+                match itype {
+                    Some(itype) => {
+                        self.load_typed_module(&resolved, itype)?;
+                    }
+                    None if is_deferred => {
+                        self.load_module_no_eval(&resolved)?;
+                    }
+                    None => {
+                        if let Err(e) = self.load_module(&resolved) {
+                            Self::cache_module_error(&loaded_module, &e);
+                            self.current_module_path = prev_path;
+                            return Err(e);
                         }
                     }
                 }
@@ -3201,41 +3195,25 @@ impl Interpreter {
 
         // Pre-load pass: load sub-dependencies
         for item in &program.module_items {
-            let (specifier, itype) = match item {
-                // Source-phase imports load only the requested module's source
-                // representation (shallow) — never its dependency graph.
-                ModuleItem::ImportDeclaration(import) if Self::is_source_phase_import(import) => {
-                    (None, None)
-                }
-                ModuleItem::ImportDeclaration(import) => (
-                    Some(import.source.as_str()),
-                    import_module_type(&import.attributes),
-                ),
-                ModuleItem::ExportDeclaration(ExportDeclaration::All {
-                    source,
-                    attributes,
-                    ..
-                }) => (Some(source.as_str()), import_module_type(attributes)),
-                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(source),
-                    attributes,
-                    ..
-                }) => (Some(source.as_str()), import_module_type(attributes)),
-                _ => (None, None),
+            // Source-phase imports load only the requested module's source
+            // representation (shallow) — never its dependency graph.
+            let Some(req) = module_item_request(item).filter(|r| !r.is_source_phase) else {
+                continue;
             };
-            if let Some(spec) = specifier {
-                let module_path = self.current_module_path.clone();
-                if let Ok(resolved) = self.resolve_module_specifier(spec, module_path.as_deref()) {
-                    let result = match itype {
-                        Some(itype) => self.load_typed_module(&resolved, itype),
-                        None => self.load_module_no_eval(&resolved),
-                    };
-                    if let Err(e) = result {
-                        Self::cache_module_error(&loaded_module, &e);
-                        self.current_module_path = prev_path;
-                        self.loading_deferred = prev_loading_deferred;
-                        return Err(e);
-                    }
+            let itype = req.import_type();
+            let module_path = self.current_module_path.clone();
+            if let Ok(resolved) =
+                self.resolve_module_specifier(req.specifier, module_path.as_deref())
+            {
+                let result = match itype {
+                    Some(itype) => self.load_typed_module(&resolved, itype),
+                    None => self.load_module_no_eval(&resolved),
+                };
+                if let Err(e) = result {
+                    Self::cache_module_error(&loaded_module, &e);
+                    self.current_module_path = prev_path;
+                    self.loading_deferred = prev_loading_deferred;
+                    return Err(e);
                 }
             }
         }
@@ -3776,33 +3754,13 @@ impl Interpreter {
     /// The specifier a module item contributes to the module *graph*, plus
     /// whether the request is deferred. Typed (json/text/bytes) requests are
     /// served by the synthetic registry and are never DFS dependencies.
+    ///
+    /// Unlike the pre-load passes, this deliberately does *not* skip
+    /// source-phase imports.
     fn graph_dependency_request(item: &ModuleItem) -> Option<(&str, bool)> {
-        match item {
-            ModuleItem::ImportDeclaration(import) => {
-                if import_module_type(&import.attributes).is_some() {
-                    return None;
-                }
-                let is_deferred = import
-                    .specifiers
-                    .iter()
-                    .any(|s| matches!(s, ImportSpecifier::DeferredNamespace(_)));
-                Some((import.source.as_str(), is_deferred))
-            }
-            ModuleItem::ExportDeclaration(ExportDeclaration::All {
-                source, attributes, ..
-            })
-            | ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                source: Some(source),
-                attributes,
-                ..
-            }) => {
-                if import_module_type(attributes).is_some() {
-                    return None;
-                }
-                Some((source.as_str(), false))
-            }
-            _ => None,
-        }
+        module_item_request(item)
+            .filter(|req| req.import_type().is_none())
+            .map(|req| (req.specifier, req.is_deferred))
     }
 
     fn get_module_dep_paths(&self, canon_path: &Path) -> Vec<(PathBuf, bool)> {
