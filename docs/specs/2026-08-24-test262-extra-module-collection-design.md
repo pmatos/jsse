@@ -33,7 +33,8 @@ Record is host-defined and does not depend on a prescribed filename extension.
 
 Collection errors are reported on stderr with exit status 2 before any tests
 run. The message lists every offending `.mjs` path and directs authors to use a
-`.js` module test or `_FIXTURE.mjs` dependency.
+`.js` module test or a `_FIXTURE.js`/`_FIXTURE.mjs` dependency (the fixture
+predicate accepts either spelling).
 
 ## Validation
 
