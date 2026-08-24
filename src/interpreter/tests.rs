@@ -3371,12 +3371,13 @@ mod node_host_tests {
               typeof globalThis.__host_exit,
               typeof __host_hrtime,
               typeof __host_random_bytes,
+              typeof __host_proxy_target,
             ].join(",");
             "#,
         );
         assert_eq!(
             global_string(&interp, "r"),
-            "undefined,undefined,undefined,undefined"
+            "undefined,undefined,undefined,undefined,undefined"
         );
     }
 
@@ -3384,7 +3385,7 @@ mod node_host_tests {
     fn host_globals_are_non_enumerable_functions() {
         assert_node_ok(
             r#"
-            for (const name of ["__host_write","__host_exit","__host_hrtime","__host_random_bytes"]) {
+            for (const name of ["__host_write","__host_exit","__host_hrtime","__host_random_bytes","__host_proxy_target"]) {
               const d = Object.getOwnPropertyDescriptor(globalThis, name);
               if (!d) throw new Error(name + " missing");
               if (d.enumerable) throw new Error(name + " is enumerable");
@@ -3449,6 +3450,35 @@ mod node_host_tests {
             threw = false;
             try { __host_random_bytes(2 ** 31); } catch (e) { threw = e instanceof RangeError; }
             if (!threw) throw new Error("oversize not rejected");
+            "#,
+        );
+    }
+
+    #[test]
+    fn host_proxy_target_bypasses_handler_traps() {
+        assert_node_ok(
+            r#"
+            let calls = 0;
+            const target = { value: 1 };
+            const proxy = new Proxy(target, {
+              get() { calls++; throw new Error("get trap"); },
+              getPrototypeOf() { calls++; throw new Error("getPrototypeOf trap"); },
+              ownKeys() { calls++; throw new Error("ownKeys trap"); },
+              getOwnPropertyDescriptor() {
+                calls++;
+                throw new Error("getOwnPropertyDescriptor trap");
+              },
+            });
+            if (__host_proxy_target(proxy) !== target) throw new Error("wrong target");
+            if (__host_proxy_target(target) !== undefined) throw new Error("ordinary object");
+            if (__host_proxy_target(1) !== undefined) throw new Error("primitive");
+            if (calls !== 0) throw new Error("handler trap invoked");
+
+            const revocable = Proxy.revocable({}, {});
+            revocable.revoke();
+            if (__host_proxy_target(revocable.proxy) !== null) {
+              throw new Error("revoked Proxy marker");
+            }
             "#,
         );
     }

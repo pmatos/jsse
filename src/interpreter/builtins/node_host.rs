@@ -1,12 +1,12 @@
 //! Node host-compat "syscall floor" (issue #229).
 //!
 //! The genuinely-cannot-be-pure-JS primitives — byte I/O, OS entropy, a
-//! monotonic high-resolution clock, and the process-exit path — exposed to the
-//! Node prelude only and gated behind the `--node` CLI flag. When the gate is
-//! off (the default, and always the case under test262) none of these globals
-//! are installed and every host-floor check elsewhere in the interpreter is
-//! inert, so the default global environment is byte-identical to a build
-//! without this feature.
+//! monotonic high-resolution clock, the process-exit path, and trap-free Proxy
+//! metadata — exposed to the Node prelude only and gated behind the `--node`
+//! CLI flag. When the gate is off (the default, and always the case under
+//! test262) none of these globals are installed and every host-floor check
+//! elsewhere in the interpreter is inert, so the default global environment is
+//! byte-identical to a build without this feature.
 //!
 //! The primitives are installed as **non-enumerable** properties named
 //! `__host_*` on the global object. They are internal plumbing: the higher-level
@@ -160,5 +160,39 @@ impl Interpreter {
             },
         ));
         self.install_host_global("__host_random_bytes", random_fn);
+
+        // __host_proxy_target(value) -> target | null | undefined
+        //
+        // Trap-free Proxy metadata for the JS-only util.inspect shim. Ordinary
+        // ECMAScript reflection must dispatch through Proxy handler traps, so
+        // it cannot reproduce Node's internal getProxyDetails-based inspection
+        // without this narrow host seam. Return the target for an active Proxy,
+        // null for a revoked Proxy, and undefined for every non-Proxy value.
+        let proxy_target_fn = self.create_function(JsFunction::native(
+            "__host_proxy_target".to_string(),
+            1,
+            |interp, _this, args| {
+                let Some(obj_id) = args.first().and_then(JsValue::as_object_id) else {
+                    return Completion::Normal(JsValue::UNDEFINED);
+                };
+                let Some(obj) = interp.get_object_cell(obj_id) else {
+                    return Completion::Normal(JsValue::UNDEFINED);
+                };
+                let obj = obj.borrow();
+                let Some(proxy) = obj.proxy() else {
+                    return Completion::Normal(JsValue::UNDEFINED);
+                };
+                if proxy.revoked {
+                    return Completion::Normal(JsValue::NULL);
+                }
+                Completion::Normal(
+                    proxy
+                        .target_id
+                        .map(JsValue::object)
+                        .unwrap_or(JsValue::NULL),
+                )
+            },
+        ));
+        self.install_host_global("__host_proxy_target", proxy_target_fn);
     }
 }

@@ -7,10 +7,11 @@
 //
 // The readable-output layer (process, the full console method set, and the
 // util.format / util.inspect core they share) is built on top of the flag-gated
-// Rust "syscall floor" (issue #229): __host_write (byte-accurate fd I/O),
-// __host_hrtime (monotonic clock), and __host_exit (real process exit). The
-// harness runs jsse with `--node` so those primitives exist; when they are
-// absent (jsse without --node) each surface degrades to a pure-JS fallback.
+// Rust host floor (issue #229): __host_write (byte-accurate fd I/O),
+// __host_hrtime (monotonic clock), __host_exit (real process exit), and
+// __host_proxy_target (trap-free Proxy metadata). The harness runs jsse with
+// `--node` so those primitives exist; when they are absent (jsse without
+// --node) each surface degrades to a pure-JS fallback.
 //
 // Everything below is skipped on real Node, where `process`, the full
 // `console`, and `require('util')` already exist. That inertness is what lets
@@ -30,6 +31,8 @@
   var hostWrite = typeof __host_write !== "undefined" ? __host_write : null;
   var hostHrtime = typeof __host_hrtime !== "undefined" ? __host_hrtime : null;
   var hostExit = typeof __host_exit !== "undefined" ? __host_exit : null;
+  var hostProxyTarget =
+    typeof __host_proxy_target !== "undefined" ? __host_proxy_target : null;
   var fallbackConsoleLog = console.log;
 
   var NS_PER_SEC = 1000000000;
@@ -73,9 +76,6 @@
   var regexpConstructor = RegExp;
   var stringConstructor = String;
   var symbolConstructor = Symbol;
-  var functionHasInstance = functionCall.bind(
-    Function.prototype[symbolConstructor.hasInstance]
-  );
   var arrayIndexOf = functionCall.bind(arrayConstructor.prototype.indexOf);
   var arrayIsArray = arrayConstructor.isArray;
   var arrayJoin = functionCall.bind(arrayConstructor.prototype.join);
@@ -84,13 +84,12 @@
   var objectGetPrototypeOf = objectConstructor.getPrototypeOf;
   var objectIs = objectConstructor.is;
   var objectKeys = objectConstructor.keys;
-  var objectToString = functionCall.bind(objectConstructor.prototype.toString);
   var numberIsNaN = numberConstructor.isNaN;
   var dateGetTime = functionCall.bind(dateConstructor.prototype.getTime);
   var dateToISOString = functionCall.bind(
     dateConstructor.prototype.toISOString
   );
-  var errorToString = functionCall.bind(errorConstructor.prototype.toString);
+  var errorIsError = errorConstructor.isError;
   var regexpGetSource = functionCall.bind(
     objectGetOwnPropertyDescriptor(regexpConstructor.prototype, "source").get
   );
@@ -113,8 +112,8 @@
     try {
       return { value: intrinsic(value) };
     } catch (e) {
-      // `instanceof` also accepts objects that merely inherit a built-in
-      // prototype. Only a genuine instance has the corresponding internal slot.
+      // An object can inherit a built-in prototype without carrying the
+      // corresponding internal slot. The intrinsic slot probe rejects it.
       return null;
     }
   }
@@ -140,70 +139,61 @@
       if (t === "number") return objectIs(v, -0) ? "-0" : stringConstructor(v);
       if (t === "bigint") return stringConstructor(v) + "n";
       if (t === "boolean") return stringConstructor(v);
-      if (t === "symbol") return v.toString();
+      if (t === "symbol") return symbolToString(v);
+
+      // Node's native inspector can read [[ProxyTarget]] without dispatching
+      // through the handler. The --node host floor exposes that one piece of
+      // metadata so the JS shim can do the same before any instanceof,
+      // reflection, property access, or enumeration. Nested Proxies are
+      // unwrapped recursively; a revoked Proxy is an opaque terminal value.
+      if (t === "object" || t === "function") {
+        v = unwrapProxy(v);
+        if (v === null) return "<Revoked Proxy>";
+        t = typeof v;
+      }
+
       if (t === "function") {
-        return "[Function" + (v.name ? ": " + v.name : " (anonymous)") + "]";
+        var name = dataDescriptorValue(
+          objectGetOwnPropertyDescriptor(v, "name")
+        );
+        return (
+          "[Function" +
+          (typeof name === "string" && name ? ": " + name : " (anonymous)") +
+          "]"
+        );
       }
 
       // Objects.
       if (arrayIndexOf(seen, v) !== -1) return "[Circular *1]";
-      if (functionHasInstance(errorConstructor, v)) {
-        var stack;
-        try {
-          stack = v.stack;
-        } catch (e) {
-          // Node ignores a throwing stack getter and renders the intrinsic
-          // Error string as a stackless error.
-        }
-        if (stack) return stringConstructor(stack);
-        try {
-          return "[" + errorToString(v) + "]";
-        } catch (e) {
-          return objectToString(v);
-        }
-      }
+      if (errorIsError(v)) return renderError(v);
       var boxed;
-      if (functionHasInstance(regexpConstructor, v)) {
-        boxed = tryApplyIntrinsic(regexpGetSource, v);
-        if (boxed) return regexpToString(v);
+      boxed = tryApplyIntrinsic(regexpGetSource, v);
+      if (boxed) return regexpToString(v);
+      boxed = tryApplyIntrinsic(dateGetTime, v);
+      if (boxed) {
+        return numberIsNaN(boxed.value) ? "Invalid Date" : dateToISOString(v);
       }
-      if (functionHasInstance(dateConstructor, v)) {
-        boxed = tryApplyIntrinsic(dateGetTime, v);
-        if (boxed) {
-          return numberIsNaN(boxed.value) ? "Invalid Date" : dateToISOString(v);
-        }
+      boxed = tryApplyIntrinsic(numberValueOf, v);
+      if (boxed) return "[Number: " + render(boxed.value, depth) + "]";
+      boxed = tryApplyIntrinsic(stringValueOf, v);
+      if (boxed) return "[String: " + render(boxed.value, depth) + "]";
+      boxed = tryApplyIntrinsic(booleanValueOf, v);
+      if (boxed) return "[Boolean: " + render(boxed.value, depth) + "]";
+      boxed = tryApplyIntrinsic(bigintValueOf, v);
+      if (boxed) {
+        // Unlike the older wrappers above, Node's boxed BigInt/Symbol
+        // rendering intentionally observes a constructor's current
+        // @@hasInstance result. A false or throwing hook selects its generic
+        // object shape, but must not intercept the internal-slot probe.
+        return tryInstanceOf(v, bigintConstructor)
+          ? "[BigInt: " + render(boxed.value, depth) + "]"
+          : "Object [BigInt] {}";
       }
-      if (functionHasInstance(numberConstructor, v)) {
-        boxed = tryApplyIntrinsic(numberValueOf, v);
-        if (boxed) return "[Number: " + render(boxed.value, depth) + "]";
-      }
-      if (functionHasInstance(stringConstructor, v)) {
-        boxed = tryApplyIntrinsic(stringValueOf, v);
-        if (boxed) return "[String: " + render(boxed.value, depth) + "]";
-      }
-      if (functionHasInstance(booleanConstructor, v)) {
-        boxed = tryApplyIntrinsic(booleanValueOf, v);
-        if (boxed) return "[Boolean: " + render(boxed.value, depth) + "]";
-      }
-      if (functionHasInstance(bigintConstructor, v)) {
-        boxed = tryApplyIntrinsic(bigintValueOf, v);
-        if (boxed) {
-          // Unlike the older wrappers above, Node's boxed BigInt/Symbol
-          // rendering intentionally observes a constructor's current
-          // @@hasInstance result. A false or throwing hook selects its generic
-          // object shape, but must not intercept the internal-slot probe.
-          return tryInstanceOf(v, bigintConstructor)
-            ? "[BigInt: " + render(boxed.value, depth) + "]"
-            : "Object [BigInt] {}";
-        }
-      }
-      if (functionHasInstance(symbolConstructor, v)) {
-        boxed = tryApplyIntrinsic(symbolToString, v);
-        if (boxed) {
-          return tryInstanceOf(v, symbolConstructor)
-            ? "[Symbol: " + boxed.value + "]"
-            : "Object [Symbol] {}";
-        }
+      boxed = tryApplyIntrinsic(symbolToString, v);
+      if (boxed) {
+        return tryInstanceOf(v, symbolConstructor)
+          ? "[Symbol: " + boxed.value + "]"
+          : "Object [Symbol] {}";
       }
 
       if (depth < 0) return arrayIsArray(v) ? "[Array]" : "[Object]";
@@ -212,9 +202,7 @@
       var out;
       try {
         if (arrayIsArray(v)) {
-          var items = [];
-          for (var i = 0; i < v.length; i++) items.push(renderMember(v, i, depth));
-          out = items.length ? "[ " + arrayJoin(items, ", ") + " ]" : "[]";
+          out = renderArray(v, depth);
         } else {
           var keys = objectKeys(v);
           var parts = [];
@@ -234,6 +222,46 @@
       return out;
     }
 
+    function unwrapProxy(v) {
+      if (!hostProxyTarget) return v;
+      while (true) {
+        var target = hostProxyTarget(v);
+        if (target === undefined) return v;
+        if (target === null) return null;
+        v = target;
+      }
+    }
+
+    function descriptorField(desc, key) {
+      if (!desc) return undefined;
+      var field = objectGetOwnPropertyDescriptor(desc, key);
+      return field ? field.value : undefined;
+    }
+
+    function dataDescriptorValue(desc) {
+      if (!desc) return undefined;
+      if (
+        descriptorField(desc, "get") !== undefined ||
+        descriptorField(desc, "set") !== undefined
+      ) {
+        return undefined;
+      }
+      return descriptorField(desc, "value");
+    }
+
+    function renderDescriptor(desc, depth) {
+      var getter = descriptorField(desc, "get");
+      var setter = descriptorField(desc, "set");
+      if (getter !== undefined || setter !== undefined) {
+        return getter
+          ? setter
+            ? "[Getter/Setter]"
+            : "[Getter]"
+          : "[Setter]";
+      }
+      return render(descriptorField(desc, "value"), depth - 1);
+    }
+
     // Render one own property/element WITHOUT invoking accessors — Node's
     // util.inspect shows [Getter]/[Setter] rather than calling the getter, so a
     // throwing or side-effecting accessor (object property or array element)
@@ -241,10 +269,87 @@
     // under Node.
     function renderMember(container, key, depth) {
       var desc = objectGetOwnPropertyDescriptor(container, key);
-      if (desc && (desc.get || desc.set)) {
-        return desc.get ? (desc.set ? "[Getter/Setter]" : "[Getter]") : "[Setter]";
+      return desc ? renderDescriptor(desc, depth) : "undefined";
+    }
+
+    // Array length and elements are read from own descriptors on the unwrapped
+    // target. A missing descriptor is a hole, never an invitation to read
+    // through Array.prototype (which could invoke an inherited getter).
+    function renderArray(v, depth) {
+      var length = dataDescriptorValue(
+        objectGetOwnPropertyDescriptor(v, "length")
+      );
+      if (typeof length !== "number" || length <= 0) return "[]";
+
+      var body = "";
+      var hasPart = false;
+      var holes = 0;
+
+      function append(part) {
+        if (hasPart) body += ", ";
+        body += part;
+        hasPart = true;
       }
-      return render(desc ? desc.value : container[key], depth - 1);
+
+      function flushHoles() {
+        if (!holes) return;
+        append("<" + holes + " empty item" + (holes === 1 ? "" : "s") + ">");
+        holes = 0;
+      }
+
+      for (var i = 0; i < length; i++) {
+        var desc = objectGetOwnPropertyDescriptor(v, i);
+        if (!desc) {
+          holes++;
+        } else {
+          flushHoles();
+          append(renderDescriptor(desc, depth));
+        }
+      }
+      flushHoles();
+      return hasPart ? "[ " + body + " ]" : "[]";
+    }
+
+    function findPropertyDescriptor(v, key) {
+      try {
+        var current = v;
+        while (current !== null) {
+          current = unwrapProxy(current);
+          if (current === null) return null;
+          var desc = objectGetOwnPropertyDescriptor(current, key);
+          if (desc) return desc;
+          current = objectGetPrototypeOf(current);
+        }
+      } catch (e) {
+        // The pure-JS no-host fallback cannot unwrap exotic objects. A failed
+        // metadata walk degrades to the caller's default instead of escaping.
+      }
+      return null;
+    }
+
+    function primitiveString(value, fallback) {
+      var type = typeof value;
+      if (type === "object" || type === "function" || type === "undefined") {
+        return fallback;
+      }
+      return type === "symbol" ? symbolToString(value) : stringConstructor(value);
+    }
+
+    function renderError(v) {
+      var stackDesc = findPropertyDescriptor(v, "stack");
+      var stack = primitiveString(dataDescriptorValue(stackDesc), "");
+      if (stack) return stack;
+
+      var name = primitiveString(
+        dataDescriptorValue(findPropertyDescriptor(v, "name")),
+        "Error"
+      );
+      var message = primitiveString(
+        dataDescriptorValue(findPropertyDescriptor(v, "message")),
+        ""
+      );
+      var text = !name ? message : !message ? name : name + ": " + message;
+      return "[" + text + "]";
     }
 
     // Derive the "ClassName " prefix without a plain `v.constructor` get, which
@@ -256,15 +361,21 @@
         var ctor;
         var own = objectGetOwnPropertyDescriptor(v, "constructor");
         if (own) {
-          if (!own.get && !own.set) ctor = own.value;
+          ctor = dataDescriptorValue(own);
         } else {
           var proto = objectGetPrototypeOf(v);
+          proto = proto === null ? null : unwrapProxy(proto);
           var pd = proto
             ? objectGetOwnPropertyDescriptor(proto, "constructor")
             : null;
-          if (pd && !pd.get && !pd.set) ctor = pd.value;
+          if (pd) ctor = dataDescriptorValue(pd);
         }
-        return ctor && ctor.name && ctor.name !== "Object" ? ctor.name + " " : "";
+        if (typeof ctor !== "object" && typeof ctor !== "function") return "";
+        ctor = unwrapProxy(ctor);
+        var name = ctor
+          ? dataDescriptorValue(objectGetOwnPropertyDescriptor(ctor, "name"))
+          : undefined;
+        return typeof name === "string" && name !== "Object" ? name + " " : "";
       } catch (e) {
         return "";
       }

@@ -405,7 +405,10 @@ eq(
       "[Error: throwing stack sentinel]",
       "%s Error ignores throwing stack and patched toString"
     );
-    eq(stackReads, 1, "%s Error reads a stack getter once");
+    truthy(
+      typeof __host_proxy_target === "undefined" || stackReads === 0,
+      "%s shim does not read an Error stack getter"
+    );
   } finally {
     Error.prototype.toString = originalToString;
   }
@@ -888,6 +891,118 @@ eq(util.format(1, 2, 3), "1 2 3", "non-string first arg");
     inspectedProxy === "{ a: 1 }" || inspectedProxy === "Proxy({ a: 1 })",
     "inspect does not trip a Proxy constructor trap"
   );
+
+  // The --node shim can unwrap Proxy targets through host metadata, just as
+  // Node's native inspector does. No handler trap may run, including the array
+  // length get and the reflection traps used by ordinary object rendering.
+  var proxyCalls = 0;
+  var proxyHandler = {
+    get: function () {
+      proxyCalls++;
+      throw new Error("Proxy get trap called");
+    },
+    getPrototypeOf: function () {
+      proxyCalls++;
+      throw new Error("Proxy getPrototypeOf trap called");
+    },
+    ownKeys: function () {
+      proxyCalls++;
+      throw new Error("Proxy ownKeys trap called");
+    },
+    getOwnPropertyDescriptor: function () {
+      proxyCalls++;
+      throw new Error("Proxy getOwnPropertyDescriptor trap called");
+    },
+  };
+  var arrayProxy = new Proxy([1, , 3], proxyHandler);
+  var inspectedArrayProxy = util.inspect(arrayProxy);
+  truthy(
+    inspectedArrayProxy.indexOf("1") !== -1 &&
+      inspectedArrayProxy.indexOf("3") !== -1 &&
+      inspectedArrayProxy.indexOf("empty item") !== -1,
+    "inspect renders an array-target Proxy without traps"
+  );
+  eq(proxyCalls, 0, "inspect invokes no array-target Proxy traps");
+
+  var objectProxy = new Proxy({ a: 1 }, proxyHandler);
+  var inspectedObjectProxy = util.inspect(objectProxy);
+  truthy(
+    inspectedObjectProxy.indexOf("a: 1") !== -1,
+    "inspect renders an object-target Proxy without traps"
+  );
+  eq(proxyCalls, 0, "inspect invokes no object-target Proxy traps");
+
+  var nestedProxy = new Proxy(objectProxy, proxyHandler);
+  truthy(
+    util.inspect(nestedProxy).indexOf("a: 1") !== -1,
+    "inspect safely unwraps nested Proxies"
+  );
+  eq(proxyCalls, 0, "inspect invokes no nested Proxy traps");
+
+  var revocable = Proxy.revocable({ a: 1 }, proxyHandler);
+  revocable.revoke();
+  eq(util.inspect(revocable.proxy), "<Revoked Proxy>", "inspect renders a revoked Proxy");
+  eq(proxyCalls, 0, "inspect invokes no revoked Proxy traps");
+
+  // Error metadata must be read from descriptors. Throwing accessors shadow
+  // inherited defaults but are never called by the JSSE shim. Node's native
+  // output differs across releases, so only the structural string is shared;
+  // the host marker narrows the no-read assertion to the shim under test.
+  var errorReads = 0;
+  var accessorError = new Error("accessor sentinel");
+  Object.defineProperty(accessorError, "stack", {
+    configurable: true,
+    get: function () {
+      errorReads++;
+      throw new Error("stack getter called");
+    },
+  });
+  Object.defineProperty(accessorError, "name", {
+    configurable: true,
+    enumerable: true,
+    get: function () {
+      errorReads++;
+      throw new Error("name getter called");
+    },
+  });
+  Object.defineProperty(accessorError, "message", {
+    configurable: true,
+    enumerable: true,
+    get: function () {
+      errorReads++;
+      throw new Error("message getter called");
+    },
+  });
+  truthy(
+    typeof util.inspect(accessorError) === "string",
+    "inspect handles Error stack/name/message accessors"
+  );
+  truthy(
+    typeof __host_proxy_target === "undefined" || errorReads === 0,
+    "inspect invokes no Error stack/name/message getters"
+  );
+
+  // A hole has no own descriptor. Inspection must preserve it rather than
+  // falling through to an inherited indexed getter.
+  var inheritedReads = 0;
+  var sparsePrototype = Object.create(Array.prototype);
+  Object.defineProperty(sparsePrototype, "1", {
+    configurable: true,
+    get: function () {
+      inheritedReads++;
+      throw new Error("inherited array getter called");
+    },
+  });
+  var sparse = new Array(3);
+  sparse[2] = 3;
+  Object.setPrototypeOf(sparse, sparsePrototype);
+  eq(
+    util.inspect(sparse),
+    "[ <2 empty items>, 3 ]",
+    "inspect preserves sparse-array holes"
+  );
+  eq(inheritedReads, 0, "inspect does not read inherited array elements");
+
   // A normal named class still gets its "ClassName " prefix.
   function Widget() {
     this.a = 1;
