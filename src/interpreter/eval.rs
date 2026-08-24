@@ -8330,7 +8330,9 @@ impl Interpreter {
         sent_value: JsValue,
         is_error: bool,
     ) -> Completion {
-        use crate::interpreter::generator_transform::{SentValueBindingKind, StateTerminator};
+        use crate::interpreter::generator_transform::{
+            LoopControlTarget, SentValueBindingKind, StateTerminator,
+        };
 
         let Some(state) = self.scheduler.remove_async_function_state(async_id) else {
             return Completion::Normal(JsValue::UNDEFINED);
@@ -8819,9 +8821,17 @@ impl Interpreter {
                     }
                 }
                 Completion::Continue(label, _) => {
-                    // Jump to head_state for the innermost matching for-of loop
+                    // An inline statement can surface continue directly rather
+                    // than through a LoopControl terminator. Route it through
+                    // intervening finalizers before returning to the loop head.
                     if let Some(pos) = for_of_stack.iter().rposition(|_| label.is_none()) {
-                        current_id = for_of_stack[pos].head_state;
+                        let loop_state = &for_of_stack[pos];
+                        let target = LoopControlTarget {
+                            target_state: loop_state.head_state,
+                            try_depth: loop_state.try_depth,
+                            for_of_depth: pos + 1,
+                        };
+                        route_loop_control!(target);
                         continue;
                     }
                 }

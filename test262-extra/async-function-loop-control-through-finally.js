@@ -120,6 +120,25 @@ async function labeledContinueThroughFinally() {
   return log;
 }
 
+async function continueFromNestedTryRunsFinally() {
+  var log = [];
+  for (const value of [1, 2]) {
+    try {
+      await null;
+      // This nested non-suspending statement executes inline and surfaces its
+      // continue completion to the async state-machine driver.
+      try {
+        continue;
+      } finally {
+      }
+    } finally {
+      log.push('finally ' + value);
+    }
+  }
+  log.push('after continue');
+  return log;
+}
+
 breakThroughAwaitedFinally()
   .then(function (log) {
     assert.compareArray(
@@ -164,6 +183,14 @@ breakThroughAwaitedFinally()
         'after labeled continue'
       ],
       'labeled continue runs finally and closes nested iterators while retaining its target loop'
+    );
+    return continueFromNestedTryRunsFinally();
+  })
+  .then(function (log) {
+    assert.compareArray(
+      log,
+      ['finally 1', 'finally 2', 'after continue'],
+      'an inline continue completion runs the enclosing finally before reaching the loop head'
     );
   })
   .then($DONE, $DONE);
