@@ -2,7 +2,8 @@
 description: >
   A return that leaves one or more async for-of loops closes every active
   iterator, inner to outer, interleaved with the finally blocks it unwinds
-  through.
+  through, while retaining a lexical iteration binding until an awaited
+  finally completes.
 esid: sec-runtime-semantics-forin-div-ofbodyevaluation-lhs-stmt-iterator-lhskind-labelset
 info: |
   ForIn/OfBodyEvaluation step 7.m: if the loop body produces an abrupt
@@ -13,6 +14,11 @@ info: |
   A try statement lexically inside the loop completes abruptly before the
   for-of statement does, so its finally runs before that loop's IteratorClose;
   a try statement enclosing the loop runs its finally afterwards.
+
+  For a lexical loop head, ForIn/OfBodyEvaluation evaluates the statement with
+  the iteration environment active and restores oldEnv only after that
+  evaluation completes. Await in a finally that is handling a pending return
+  must therefore resume with the iteration binding still available.
 flags: [async]
 includes: [compareArray.js]
 features: [async-functions]
@@ -88,6 +94,22 @@ async function returnThroughInnerFinally() {
   return -1;
 }
 
+// Keep the active iteration environment while a return is pending through an
+// awaited finally. The conditional keeps the return in the transformed body
+// rather than making it the state's direct terminator.
+async function returnRetainsBindingThroughAwaitedFinally(shouldReturn) {
+  for (const value of trackedIterable('awaitedFinally', [7, 8])) {
+    try {
+      log.push('before:' + value);
+      if (shouldReturn) return value;
+    } finally {
+      await null;
+      log.push('after:' + value);
+    }
+  }
+  return -1;
+}
+
 returnAcrossNestedLoops()
   .then(function (value) {
     assert.sameValue(value, 2, 'nested return resolves with the awaited value');
@@ -121,6 +143,16 @@ returnAcrossNestedLoops()
       log,
       ['finally', 'close:innerFinally'],
       'a finally inside the loop runs before the iterator closes'
+    );
+    log.length = 0;
+    return returnRetainsBindingThroughAwaitedFinally(true);
+  })
+  .then(function (value) {
+    assert.sameValue(value, 7, 'the pending return keeps its original value');
+    assert.compareArray(
+      log,
+      ['before:7', 'after:7', 'close:awaitedFinally'],
+      'the loop binding remains available after await and before IteratorClose'
     );
   })
   .then($DONE, $DONE);
