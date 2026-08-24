@@ -77,7 +77,7 @@ enum ImportAttributeError {
 impl ImportAttributeError {
     /// The message text, written once. The *constructor* still varies per
     /// import form (see `dynamic_import_module_type` and
-    /// `validate_static_import_attributes`), the wording does not.
+    /// `static_import_module_type`), the wording does not.
     fn message(&self) -> String {
         match self {
             Self::UnsupportedKey(key) => format!("Unsupported import attribute '{key}'"),
@@ -89,27 +89,30 @@ impl ImportAttributeError {
 fn validated_import_module_type(
     attrs: &[(String, String)],
 ) -> Result<Option<ImportModuleType>, ImportAttributeError> {
-    let mut import_type = None;
-    // These arms *are* HostGetSupportedImportAttributes: a key cannot be
-    // listed as supported without also being honored here.
-    for (key, value) in attrs {
-        match key.as_str() {
-            "type" => {
-                let Some(parsed) = ImportModuleType::from_attr_value(value) else {
-                    return Err(ImportAttributeError::UnsupportedType(value.clone()));
-                };
-                import_type = Some(parsed);
-            }
-            _ => return Err(ImportAttributeError::UnsupportedKey(key.clone())),
+    // AllImportAttributesSupported checks the complete key list before the
+    // host sees any values. Keep this as a separate pass so an earlier invalid
+    // `type` value cannot hide a later unsupported key.
+    for (key, _) in attrs {
+        if key != "type" {
+            return Err(ImportAttributeError::UnsupportedKey(key.clone()));
         }
     }
-    Ok(import_type)
+
+    attrs
+        .iter()
+        .find(|(key, _)| key == "type")
+        .map(|(_, value)| {
+            ImportModuleType::from_attr_value(value)
+                .ok_or_else(|| ImportAttributeError::UnsupportedType(value.clone()))
+        })
+        .transpose()
 }
 
 /// The module type selected by *already-validated* attributes.
 ///
-/// Every static path reaches this only after `validate_static_import_attributes`
-/// has run for the enclosing program, so the error case is unreachable.
+/// Every static path reaches this only after the enclosing program's
+/// `validate_and_resolve_static_module_request` pass, so the error case is
+/// unreachable.
 /// Called out of that order it would silently downgrade an unsupported key or
 /// unknown `type` to "ordinary source module" — which is exactly the bug
 /// jsse#475 was about — so the ordering is asserted rather than remembered.
@@ -126,9 +129,9 @@ fn prevalidated_import_module_type(attrs: &[(String, String)]) -> Option<ImportM
 /// pre-load passes need in order to act on it. `None` for items that name no
 /// module (a local declaration, `export { x }` with no `from`, a statement).
 ///
-/// `is_source_phase` is reported as data rather than acted on here, because
-/// callers disagree about it: the pre-load passes skip source-phase imports
-/// (see `is_source_phase_import`), while `graph_dependency_request` does not.
+/// `is_source_phase` is reported as data rather than acted on here because the
+/// loading seam resolves those requests shallowly, while graph traversal still
+/// needs to recognize the request itself.
 struct ModuleItemRequest<'a> {
     specifier: &'a str,
     attributes: &'a [(String, String)],
@@ -1158,23 +1161,66 @@ impl Interpreter {
             .map_err(|error| self.create_type_error(&error.message()))
     }
 
-    fn validate_static_import_attributes(&mut self, program: &Program) -> Result<(), JsValue> {
-        for item in &program.module_items {
-            let Some(req) = module_item_request(item) else {
-                continue;
-            };
-            if let Err(error) = validated_import_module_type(req.attributes) {
-                let message = error.message();
-                return Err(match error {
-                    // InnerModuleLoading turns a failed
-                    // AllImportAttributesSupported check into SyntaxError.
-                    ImportAttributeError::UnsupportedKey(_) => {
-                        self.create_error("SyntaxError", &message)
-                    }
-                    // The `type` key is supported, so an unsupported value is a
-                    // host-loading failure rather than the key-list check.
-                    ImportAttributeError::UnsupportedType(_) => self.create_type_error(&message),
-                });
+    fn static_import_module_type(
+        &mut self,
+        attrs: &[(String, String)],
+    ) -> Result<Option<ImportModuleType>, JsValue> {
+        validated_import_module_type(attrs).map_err(|error| {
+            let message = error.message();
+            match error {
+                // InnerModuleLoading turns a failed
+                // AllImportAttributesSupported check into SyntaxError.
+                ImportAttributeError::UnsupportedKey(_) => {
+                    self.create_error("SyntaxError", &message)
+                }
+                // The `type` key is supported, so an unsupported value is a
+                // host-loading failure rather than the key-list check.
+                ImportAttributeError::UnsupportedType(_) => self.create_type_error(&message),
+            }
+        })
+    }
+
+    /// Apply AllImportAttributesSupported and host resolution to one static
+    /// ModuleRequest. Callers do this in source order before linking any loaded
+    /// dependency, because jsse's `load_module` also links/evaluates and could
+    /// otherwise expose an earlier dependency's link error before a later
+    /// sibling's host-resolution error.
+    fn validate_and_resolve_static_module_request(
+        &mut self,
+        req: ModuleItemRequest<'_>,
+        referrer: Option<&Path>,
+    ) -> Result<(), JsValue> {
+        self.static_import_module_type(req.attributes)?;
+        self.resolve_module_specifier(req.specifier, referrer)?;
+        Ok(())
+    }
+
+    /// Load one static ModuleRequest after the source-order validation and
+    /// resolution pass. Source-phase requests load shallowly; all other
+    /// requests load the representation selected by their attributes.
+    fn load_prevalidated_static_module_request(
+        &mut self,
+        req: ModuleItemRequest<'_>,
+        referrer: Option<&Path>,
+        defer_all_untyped: bool,
+    ) -> Result<(), JsValue> {
+        let import_type = prevalidated_import_module_type(req.attributes);
+
+        if req.is_source_phase {
+            self.resolve_source_phase_target(req.specifier, referrer, import_type)?;
+            return Ok(());
+        }
+
+        let resolved = self.resolve_module_specifier(req.specifier, referrer)?;
+        match import_type {
+            Some(itype) => {
+                self.load_typed_module(&resolved, itype)?;
+            }
+            None if defer_all_untyped || req.is_deferred => {
+                self.load_module_no_eval(&resolved)?;
+            }
+            None => {
+                self.load_module(&resolved)?;
             }
         }
         Ok(())
@@ -2151,11 +2197,6 @@ impl Interpreter {
         let prev_module_path = self.current_module_path.take();
         self.current_module_path = module_path.clone();
 
-        if let Err(error) = self.validate_static_import_attributes(program) {
-            self.current_module_path = prev_module_path;
-            return Completion::Throw(error);
-        }
-
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
         {
@@ -2242,42 +2283,35 @@ impl Interpreter {
             }
         }
 
-        // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6)
-        // For deferred imports, load without evaluation.
+        // Validate and host-resolve every request in source order before
+        // `load_module` can expose a dependency's link-phase error.
         for item in &program.module_items {
-            // Source-phase imports load only the requested module's source
-            // representation (shallow) — never its dependency graph.
-            let Some(req) = module_item_request(item).filter(|r| !r.is_source_phase) else {
+            let Some(req) = module_item_request(item) else {
                 continue;
             };
-            let import_type = req.import_type();
-            let is_deferred = req.is_deferred;
             let module_path = self.current_module_path.clone();
-            if let Ok(resolved) =
-                self.resolve_module_specifier(req.specifier, module_path.as_deref())
+            if let Err(e) =
+                self.validate_and_resolve_static_module_request(req, module_path.as_deref())
             {
-                match import_type {
-                    Some(itype) => {
-                        if let Err(e) = self.load_typed_module(&resolved, itype) {
-                            self.current_module_path = prev_module_path;
-                            return Completion::Throw(e);
-                        }
-                    }
-                    None if is_deferred => {
-                        if let Err(e) = self.load_module_no_eval(&resolved) {
-                            Self::cache_module_error(&loaded_module, &e);
-                            self.current_module_path = prev_module_path;
-                            return Completion::Throw(e);
-                        }
-                    }
-                    None => {
-                        if let Err(e) = self.load_module(&resolved) {
-                            Self::cache_module_error(&loaded_module, &e);
-                            self.current_module_path = prev_module_path;
-                            return Completion::Throw(e);
-                        }
-                    }
-                }
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_module_path;
+                return Completion::Throw(e);
+            }
+        }
+
+        // Pre-load pass: load ALL referenced modules in source order (§16.2.1.6.2 step 6).
+        // For deferred imports, load without evaluation.
+        for item in &program.module_items {
+            let Some(req) = module_item_request(item) else {
+                continue;
+            };
+            let module_path = self.current_module_path.clone();
+            if let Err(e) =
+                self.load_prevalidated_static_module_request(req, module_path.as_deref(), false)
+            {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_module_path;
+                return Completion::Throw(e);
             }
         }
 
@@ -2860,8 +2894,6 @@ impl Interpreter {
             }
         };
 
-        self.validate_static_import_attributes(&program)?;
-
         // Create module environment
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
@@ -2952,25 +2984,13 @@ impl Interpreter {
             }
         }
 
-        // Host-resolve pre-pass (spec LoadRequestedModules): surface unresolvable
-        // specifier errors before any transitive Link-phase SyntaxError fires.
+        // Validate and host-resolve every request in source order before
+        // `load_module` can expose a dependency's link-phase error.
         for item in &program.module_items {
-            let specifier = match item {
-                ModuleItem::ImportDeclaration(import) => Some(import.source.as_str()),
-                ModuleItem::ExportDeclaration(ExportDeclaration::All { source, .. }) => {
-                    Some(source.as_str())
-                }
-                ModuleItem::ExportDeclaration(ExportDeclaration::Named {
-                    source: Some(s), ..
-                }) => Some(s.as_str()),
-                _ => None,
+            let Some(req) = module_item_request(item) else {
+                continue;
             };
-            // `resolve_module_specifier` handles the host `<module source>`
-            // specifier itself; every other specifier — including source-phase
-            // targets like `<do not resolve>` — must surface unresolvable
-            // specifier errors here.
-            if let Some(spec) = specifier
-                && let Err(e) = self.resolve_module_specifier(spec, Some(&canon_path))
+            if let Err(e) = self.validate_and_resolve_static_module_request(req, Some(&canon_path))
             {
                 Self::cache_module_error(&loaded_module, &e);
                 self.current_module_path = prev_path;
@@ -2982,32 +3002,16 @@ impl Interpreter {
         // For deferred imports, load without evaluation.
         // For non-deferred, load normally (which includes evaluation).
         for item in &program.module_items {
-            // Source-phase imports load only the requested module's source
-            // representation (shallow) — never its dependency graph.
-            let Some(req) = module_item_request(item).filter(|r| !r.is_source_phase) else {
+            let Some(req) = module_item_request(item) else {
                 continue;
             };
-            let itype = req.import_type();
-            let is_deferred = req.is_deferred;
             let module_path = self.current_module_path.clone();
-            if let Ok(resolved) =
-                self.resolve_module_specifier(req.specifier, module_path.as_deref())
+            if let Err(e) =
+                self.load_prevalidated_static_module_request(req, module_path.as_deref(), false)
             {
-                match itype {
-                    Some(itype) => {
-                        self.load_typed_module(&resolved, itype)?;
-                    }
-                    None if is_deferred => {
-                        self.load_module_no_eval(&resolved)?;
-                    }
-                    None => {
-                        if let Err(e) = self.load_module(&resolved) {
-                            Self::cache_module_error(&loaded_module, &e);
-                            self.current_module_path = prev_path;
-                            return Err(e);
-                        }
-                    }
-                }
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
+                return Err(e);
             }
         }
 
@@ -3117,8 +3121,6 @@ impl Interpreter {
             }
         };
 
-        self.validate_static_import_attributes(&program)?;
-
         let module_env = Environment::new_function_scope(Some(self.realm().global_env.clone()));
         module_env.borrow_mut().strict = true;
         module_env.borrow_mut().module_path = Some(canon_path.clone());
@@ -3205,28 +3207,34 @@ impl Interpreter {
         let prev_loading_deferred = self.loading_deferred;
         self.loading_deferred = true;
 
-        // Pre-load pass: load sub-dependencies
+        // Validate and host-resolve every request in source order before
+        // `load_module_no_eval` can expose a transitive failure.
         for item in &program.module_items {
-            // Source-phase imports load only the requested module's source
-            // representation (shallow) — never its dependency graph.
-            let Some(req) = module_item_request(item).filter(|r| !r.is_source_phase) else {
+            let Some(req) = module_item_request(item) else {
                 continue;
             };
-            let itype = req.import_type();
-            let module_path = self.current_module_path.clone();
-            if let Ok(resolved) =
-                self.resolve_module_specifier(req.specifier, module_path.as_deref())
+            if let Err(e) = self.validate_and_resolve_static_module_request(req, Some(&canon_path))
             {
-                let result = match itype {
-                    Some(itype) => self.load_typed_module(&resolved, itype),
-                    None => self.load_module_no_eval(&resolved),
-                };
-                if let Err(e) = result {
-                    Self::cache_module_error(&loaded_module, &e);
-                    self.current_module_path = prev_path;
-                    self.loading_deferred = prev_loading_deferred;
-                    return Err(e);
-                }
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
+                self.loading_deferred = prev_loading_deferred;
+                return Err(e);
+            }
+        }
+
+        // Pre-load pass: load sub-dependencies
+        for item in &program.module_items {
+            let Some(req) = module_item_request(item) else {
+                continue;
+            };
+            let module_path = self.current_module_path.clone();
+            if let Err(e) =
+                self.load_prevalidated_static_module_request(req, module_path.as_deref(), true)
+            {
+                Self::cache_module_error(&loaded_module, &e);
+                self.current_module_path = prev_path;
+                self.loading_deferred = prev_loading_deferred;
+                return Err(e);
             }
         }
 

@@ -15,12 +15,18 @@ permits hosts to serve JSON modules without a `type: "json"` attribute.
 
 `ImportModuleType` is the host's normalized module-type selector and gains a
 `Json` variant alongside `Text` and `Bytes`. A single validation seam checks
-attribute keys and values before host loading:
+attribute keys and values before host loading. Static requests pass through
+that seam individually during their source-order host-resolution pass, before
+the separate linking/loading pass, matching `InnerModuleLoading` rather than
+pre-scanning only attributes for the whole module:
 
 - Dynamic imports reject unsupported keys and values with `TypeError`.
 - Static module requests reject unsupported keys with the resolution-phase
   `SyntaxError` required by `AllImportAttributesSupported`; unsupported values
   reach the host selector and throw `TypeError`.
+- Key support is checked over the complete attribute list before any supported
+  `type` value is interpreted, so the error kind is independent of attribute
+  source order.
 
 Typed resources are loaded through one loader. JSON uses the existing JSON
 parser and the existing default-export synthetic-module representation, and is
@@ -66,6 +72,9 @@ Custom module tests cover:
 - JavaScript source requested as JSON rejects with the JSON parse error.
 - Valid JSON with a non-`.json` extension loads and exports its parsed value.
 - Unknown keys and type values reject.
+- An unsupported key takes precedence over an unsupported `type` value in the
+  same request, while an earlier request's resolution error takes precedence
+  over a later request's attribute error.
 - `<module source>` rejects a JSON request.
 - A typed re-export resolves through a namespace built during loading, and does
   not alias a same-named local declaration.
