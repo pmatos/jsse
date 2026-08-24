@@ -1,3 +1,11 @@
+/*---
+description: >
+  Re-exported source-phase bindings resolve through named, namespace, and
+  unambiguous star exports.
+features: [source-phase-imports, source-phase-imports-module-source]
+flags: [module]
+---*/
+
 // Source-phase imports: re-exporting a source-phase binding
 // (`import source x from '...'; export { x };`) reclassifies the export to an
 // indirect ExportEntry whose [[ImportName]] is ~source~. Resolving it yields a
@@ -13,16 +21,15 @@
 // Spec:
 //   - ResolveExport ~source~ (sec-resolveexport)
 //   - Module Namespace [[Get]] ~source~ (sec-module-namespace-...-get)
-// flags: [module]
 
 // A named import of a re-exported source-phase binding binds to the
 // underlying [[ModuleSource]].
-import { x } from './source-phase-reexport-dep.mjs';
+import { x } from './source-phase-reexport_FIXTURE.mjs';
 // A namespace import observes the same [[ModuleSource]] via [[Get]].
-import * as ns from './source-phase-reexport-dep.mjs';
+import * as ns from './source-phase-reexport_FIXTURE.mjs';
 // Re-exporting the same `<module source>` binding from two modules through
 // `export *` is unambiguous: both resolve to the same [[Module]] + ~source~.
-import { mod } from './source-phase-reexport-star-dep.mjs';
+import { mod } from './source-phase-reexport-star_FIXTURE.mjs';
 
 if (!(x instanceof $262.AbstractModuleSource)) {
   throw new Error('named re-exported source binding should be a %AbstractModuleSource% instance');

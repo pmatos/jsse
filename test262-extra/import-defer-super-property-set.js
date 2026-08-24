@@ -1,3 +1,11 @@
+/*---
+description: >
+  Setting super properties on a deferred module namespace triggers evaluation
+  and then rejects the namespace object's [[Set]].
+features: [import-defer]
+flags: [module]
+---*/
+
 // Tests that super[key] = value on a deferred module namespace receiver
 // triggers synchronous evaluation per the import-defer proposal, while still
 // rejecting the [[Set]] per §10.4.6 of the spec.
@@ -16,7 +24,7 @@
 
 globalThis.evaluations = [];
 
-import defer * as ns from "./import-defer-super-property-set-dep.mjs";
+import defer * as ns from "./import-defer-super-property-set_FIXTURE.mjs";
 
 if (globalThis.evaluations.length !== 0) {
   throw new Test262Error("import defer should not pre-evaluate");

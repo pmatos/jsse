@@ -1,3 +1,11 @@
+/*---
+description: >
+  Static and dynamic source-phase imports expose the host module source, while
+  importing the source of an ordinary Source Text Module rejects.
+features: [source-phase-imports, source-phase-imports-module-source, dynamic-import, top-level-await]
+flags: [module]
+---*/
+
 // Source-phase imports (https://github.com/tc39/proposal-source-phase-imports):
 // the `<module source>` host specifier resolves to a module whose
 // [[ModuleSource]] is an %AbstractModuleSource% instance, and both the static
@@ -12,7 +20,6 @@
 //   - InitializeEnvironment step 7.d.v / 7.e (import source X binding)
 //   - GetModuleSource: a Source Text Module has an empty [[ModuleSource]]
 //   - %AbstractModuleSource% (§28.1.1)
-// flags: [module]
 
 // --- static `import source X from '<module source>'` ---
 import source staticSource from '<module source>';
@@ -40,7 +47,7 @@ if (dynamicSource !== staticSource) {
 // A Source Text Module has an empty [[ModuleSource]]; GetModuleSource throws.
 let rejection = null;
 try {
-  await import.source('./source-phase-import-module-source-plain-dep.mjs');
+  await import.source('./source-phase-import-module-source-plain_FIXTURE.mjs');
 } catch (e) {
   rejection = e;
 }

@@ -19,7 +19,7 @@ features: [error-stack-accessor, iterator-helpers, Symbol.toStringTag]
 flags: [module]
 ---*/
 
-import * as ns from "./SetterThatIgnoresPrototypeProperties-module-namespace-set-dep.mjs";
+import * as ns from "./SetterThatIgnoresPrototypeProperties-module-namespace-set_FIXTURE.mjs";
 
 var errorStackSetter = Object.getOwnPropertyDescriptor(Error.prototype, "stack").set;
 var iteratorConstructorSetter = Object.getOwnPropertyDescriptor(

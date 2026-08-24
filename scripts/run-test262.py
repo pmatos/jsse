@@ -647,11 +647,40 @@ def _is_fixture(p: Path) -> bool:
     return name.endswith("_FIXTURE.js") or name.endswith("_FIXTURE.mjs")
 
 
+class TestCollectionError(Exception):
+    """Raised when a selected path contains a test the runner would omit."""
+
+
+def _uncollected_mjs(path: Path) -> list[Path]:
+    if path.is_file():
+        if path.suffix == ".mjs" and not _is_fixture(path):
+            return [path]
+        return []
+    if path.is_dir():
+        return sorted(f for f in path.rglob("*.mjs") if not _is_fixture(f))
+    return []
+
+
+def _raise_for_uncollected_mjs(paths: list[Path]) -> None:
+    uncollected = sorted({f for path in paths for f in _uncollected_mjs(path)})
+    if not uncollected:
+        return
+
+    formatted = "\n  ".join(str(path) for path in uncollected)
+    raise TestCollectionError(
+        "non-fixture .mjs files would not be collected:\n"
+        f"  {formatted}\n"
+        "Rename executable module tests to .js and add flags: [module], or "
+        "name imported dependencies *_FIXTURE.mjs."
+    )
+
+
 def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
     if paths:
+        selected = [Path(p) for p in paths]
+        _raise_for_uncollected_mjs(selected)
         tests = []
-        for p in paths:
-            path = Path(p)
+        for path in selected:
             if path.is_file() and path.suffix == ".js":
                 tests.append(path)
             elif path.is_dir():
@@ -662,10 +691,13 @@ def find_tests(test262_dir: Path, paths: list[str] | None) -> list[Path]:
 
     test_dir = test262_dir / "test"
     tests = []
+    default_dirs = []
     for subdir in ("language", "built-ins", "annexB", "intl402"):
         d = test_dir / subdir
         if d.is_dir():
+            default_dirs.append(d)
             tests.extend(f for f in d.rglob("*.js") if not _is_fixture(f))
+    _raise_for_uncollected_mjs(default_dirs)
     return sorted(tests)
 
 
@@ -728,7 +760,11 @@ def main():
         sys.exit(2)
 
     selected_paths = args.paths if args.paths else None
-    tests = find_tests(test262, selected_paths)
+    try:
+        tests = find_tests(test262, selected_paths)
+    except TestCollectionError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        sys.exit(2)
 
     is_sample_run = args.sample is not None
     if is_sample_run:
