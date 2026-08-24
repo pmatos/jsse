@@ -43,8 +43,6 @@ mod scheduler;
 #[cfg(test)]
 mod tests;
 
-const SUPPORTED_IMPORT_ATTRIBUTE_KEYS: &[&str] = &["type"];
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum ImportModuleType {
     Json,
@@ -76,19 +74,33 @@ enum ImportAttributeError {
     UnsupportedType(String),
 }
 
+impl ImportAttributeError {
+    /// The message text, written once. The *constructor* still varies per
+    /// import form (see `dynamic_import_module_type` and
+    /// `validate_static_import_attributes`), the wording does not.
+    fn message(&self) -> String {
+        match self {
+            Self::UnsupportedKey(key) => format!("Unsupported import attribute '{key}'"),
+            Self::UnsupportedType(value) => format!("Unsupported module type '{value}'"),
+        }
+    }
+}
+
 fn validated_import_module_type(
     attrs: &[(String, String)],
 ) -> Result<Option<ImportModuleType>, ImportAttributeError> {
     let mut import_type = None;
+    // These arms *are* HostGetSupportedImportAttributes: a key cannot be
+    // listed as supported without also being honored here.
     for (key, value) in attrs {
-        if !SUPPORTED_IMPORT_ATTRIBUTE_KEYS.contains(&key.as_str()) {
-            return Err(ImportAttributeError::UnsupportedKey(key.clone()));
-        }
-        if key == "type" {
-            let Some(parsed) = ImportModuleType::from_attr_value(value) else {
-                return Err(ImportAttributeError::UnsupportedType(value.clone()));
-            };
-            import_type = Some(parsed);
+        match key.as_str() {
+            "type" => {
+                let Some(parsed) = ImportModuleType::from_attr_value(value) else {
+                    return Err(ImportAttributeError::UnsupportedType(value.clone()));
+                };
+                import_type = Some(parsed);
+            }
+            _ => return Err(ImportAttributeError::UnsupportedKey(key.clone())),
         }
     }
     Ok(import_type)
@@ -349,7 +361,20 @@ pub(crate) struct LoadedModule {
     pub path: PathBuf,
     pub env: EnvRef,
     pub exports: HashMap<String, JsValue>,
-    pub export_bindings: HashMap<String, String>, // export_name -> binding_name
+    /// export_name -> binding_name. Binding names use several encodings, which
+    /// differ in how a consumer turns one back into a value:
+    ///
+    /// - a plain local name, or `*default*` — resolved by env lookup.
+    /// - `*ns:{specifier}` and `*reexport:{specifier}:{name}` — *re-parsed* to
+    ///   recover the specifier and walk to the source module (see
+    ///   `eval/modules.rs` and `resolve_export_binding`).
+    /// - `*synthetic-ns:{name}*` and `*synthetic-reexport:{name}*` — opaque:
+    ///   materialized eagerly for typed (json/text/bytes) requests and resolved
+    ///   by plain env lookup, because re-resolving the specifier would reload
+    ///   the resource without the request's type.
+    /// - `*ambiguous*` — a sentinel for a name exported by two `export *`
+    ///   sources; not resolvable, and never overwritten once set.
+    pub export_bindings: HashMap<String, String>,
     pub cached_namespace: Option<JsValue>, // cached namespace object (same identity on re-import)
     pub cached_deferred_namespace: Option<JsValue>, // cached deferred namespace (separate from eager)
     pub cached_import_meta: Option<JsValue>,        // cached import.meta object per §16.2.1.5.2
@@ -1069,14 +1094,8 @@ impl Interpreter {
         &mut self,
         attrs: &[(String, String)],
     ) -> Result<Option<ImportModuleType>, JsValue> {
-        validated_import_module_type(attrs).map_err(|error| match error {
-            ImportAttributeError::UnsupportedKey(key) => {
-                self.create_type_error(&format!("Unsupported import attribute '{key}'"))
-            }
-            ImportAttributeError::UnsupportedType(value) => {
-                self.create_type_error(&format!("Unsupported module type '{value}'"))
-            }
-        })
+        validated_import_module_type(attrs)
+            .map_err(|error| self.create_type_error(&error.message()))
     }
 
     fn validate_static_import_attributes(&mut self, program: &Program) -> Result<(), JsValue> {
@@ -1095,18 +1114,16 @@ impl Interpreter {
                 continue;
             };
             if let Err(error) = validated_import_module_type(attrs) {
+                let message = error.message();
                 return Err(match error {
                     // InnerModuleLoading turns a failed
                     // AllImportAttributesSupported check into SyntaxError.
-                    ImportAttributeError::UnsupportedKey(key) => self.create_error(
-                        "SyntaxError",
-                        &format!("Unsupported import attribute '{key}'"),
-                    ),
+                    ImportAttributeError::UnsupportedKey(_) => {
+                        self.create_error("SyntaxError", &message)
+                    }
                     // The `type` key is supported, so an unsupported value is a
                     // host-loading failure rather than the key-list check.
-                    ImportAttributeError::UnsupportedType(value) => {
-                        self.create_type_error(&format!("Unsupported module type '{value}'"))
-                    }
+                    ImportAttributeError::UnsupportedType(_) => self.create_type_error(&message),
                 });
             }
         }
@@ -2257,9 +2274,7 @@ impl Interpreter {
             }
         }
 
-        // Validate named re-exports (export { x } from './mod') — before imports,
-        // so a namespace built while processing them (a self-import, or this
-        // module's own namespace) already sees materialized re-export bindings.
+        // Named re-exports run before imports; see validate_named_reexports.
         if let Some(ref canon_path) = module_path {
             for item in &program.module_items {
                 if let ModuleItem::ExportDeclaration(ExportDeclaration::Named {
@@ -2339,22 +2354,12 @@ impl Interpreter {
 
         let itype = import_module_type(&import.attributes);
 
-        // Typed imports use the synthetic module registry.
+        // Typed imports are served by the synthetic module registry, which
+        // `load_typed_module` owns and memoizes.
         if let Some(it) = itype {
-            let canon = Self::canonicalize_module_path(&resolved);
-            let key = (self.current_realm_id, canon, it);
-            let loaded = self
-                .synthetic_module_registry
-                .get(&key)
-                .cloned()
-                .ok_or_else(|| {
-                    JsValue::string(JsString::from_str(&format!(
-                        "Synthetic module not found for '{}'",
-                        import.source
-                    )))
-                })?;
+            let loaded = self.load_typed_module(&resolved, it)?;
             for spec in &import.specifiers {
-                match spec {
+                let (local, value) = match spec {
                     ImportSpecifier::Default(local) => {
                         let val = loaded
                             .borrow()
@@ -2362,13 +2367,10 @@ impl Interpreter {
                             .get("default")
                             .cloned()
                             .unwrap_or(JsValue::UNDEFINED);
-                        env.borrow_mut().declare(local, BindingKind::Const);
-                        env.borrow_mut().initialize_binding(local, val);
+                        (local, val)
                     }
                     ImportSpecifier::Namespace(local) => {
-                        let ns = self.create_module_namespace(&loaded);
-                        env.borrow_mut().declare(local, BindingKind::Const);
-                        env.borrow_mut().initialize_binding(local, ns);
+                        (local, self.create_module_namespace(&loaded))
                     }
                     ImportSpecifier::Named { imported, local } => {
                         let Some(val) = loaded.borrow().exports.get(imported).cloned() else {
@@ -2381,13 +2383,10 @@ impl Interpreter {
                                 ),
                             ));
                         };
-                        env.borrow_mut().declare(local, BindingKind::Const);
-                        env.borrow_mut().initialize_binding(local, val);
+                        (local, val)
                     }
                     ImportSpecifier::DeferredNamespace(local) => {
-                        let ns = self.create_deferred_module_namespace(&loaded);
-                        env.borrow_mut().declare(local, BindingKind::Const);
-                        env.borrow_mut().initialize_binding(local, ns);
+                        (local, self.create_deferred_module_namespace(&loaded))
                     }
                     // A source-phase ImportDeclaration is handled above; reaching
                     // here means the declaration mixes phases, which has no
@@ -2398,7 +2397,9 @@ impl Interpreter {
                             "Source phase imports cannot request a module type",
                         ));
                     }
-                }
+                };
+                env.borrow_mut().declare(local, BindingKind::Const);
+                env.borrow_mut().initialize_binding(local, value);
             }
             return Ok(());
         }
@@ -2812,13 +2813,7 @@ impl Interpreter {
         }
 
         // Read and parse the module
-        let source = std::fs::read_to_string(path).map_err(|e| {
-            JsValue::string(JsString::from_str(&format!(
-                "Cannot read module '{}': {}",
-                path.display(),
-                e
-            )))
-        })?;
+        let source = Self::read_module_text(path)?;
 
         let mut parser = match parser::Parser::new(&source) {
             Ok(p) => p,
@@ -3031,9 +3026,7 @@ impl Interpreter {
             }
         }
 
-        // Validate named re-exports (export { x } from './mod') — before imports,
-        // so a namespace built while processing them (a self-import) already sees
-        // materialized re-export bindings.
+        // Named re-exports run before imports; see validate_named_reexports.
         {
             let canon = canon_path.clone();
             for item in &program.module_items {
@@ -3099,13 +3092,7 @@ impl Interpreter {
             return self.load_module(path);
         }
 
-        let source = std::fs::read_to_string(path).map_err(|e| {
-            JsValue::string(JsString::from_str(&format!(
-                "Cannot read module '{}': {}",
-                path.display(),
-                e
-            )))
-        })?;
+        let source = Self::read_module_text(path)?;
 
         let mut parser = match parser::Parser::new(&source) {
             Ok(p) => p,
@@ -3274,9 +3261,7 @@ impl Interpreter {
             }
         }
 
-        // Validate named re-exports — before imports, so a namespace built while
-        // processing them (a self-import) already sees materialized re-export
-        // bindings.
+        // Named re-exports run before imports; see validate_named_reexports.
         {
             let canon = canon_path.clone();
             for item in &program.module_items {
@@ -3383,7 +3368,7 @@ impl Interpreter {
         }
         let value = match import_type {
             ImportModuleType::Json => {
-                let source = self.read_module_text(path)?;
+                let source = Self::read_module_text(path)?;
                 match crate::interpreter::helpers::json_parse_value(self, &source) {
                     Completion::Normal(value) => value,
                     Completion::Throw(error) => return Err(error),
@@ -3396,7 +3381,7 @@ impl Interpreter {
                 }
             }
             ImportModuleType::Text => {
-                let source = self.read_module_text(path)?;
+                let source = Self::read_module_text(path)?;
                 JsValue::string(JsString::from_str(&source))
             }
             ImportModuleType::Bytes => {
@@ -3409,7 +3394,7 @@ impl Interpreter {
         Ok(module)
     }
 
-    fn read_module_text(&mut self, path: &Path) -> Result<String, JsValue> {
+    fn read_module_text(path: &Path) -> Result<String, JsValue> {
         std::fs::read_to_string(path).map_err(|e| Self::module_read_error(path, &e))
     }
 
@@ -4239,6 +4224,15 @@ impl Interpreter {
         true
     }
 
+    /// Validate `export { x } from './mod'` re-exports, and — for typed
+    /// (json/text/bytes) requests — materialize them as bindings on the current
+    /// module.
+    ///
+    /// Callers run this *before* processing imports, so that a namespace built
+    /// while processing them (a self-import, or this module's own namespace)
+    /// already sees materialized re-export bindings. That ordering is
+    /// load-bearing: the typed branch below writes `exports`/`export_bindings`,
+    /// it does not merely check them.
     fn validate_named_reexports(
         &mut self,
         current_module: &Path,
@@ -4250,6 +4244,7 @@ impl Interpreter {
 
         if let Some(itype) = import_module_type(attributes) {
             let loaded = self.load_typed_module(&resolved, itype)?;
+            let canon_current = Self::canonicalize_module_path(current_module);
             for spec in specifiers {
                 let Some(value) = loaded.borrow().exports.get(&spec.local).cloned() else {
                     return Err(self.create_error(
@@ -4266,7 +4261,6 @@ impl Interpreter {
                 // Materialize the indirect re-export as an internal binding so
                 // later ResolveExport walks do not lose this request's type and
                 // reload the resource as ordinary source text.
-                let canon_current = Self::canonicalize_module_path(current_module);
                 let Some(current) = self.module_registry_get(&canon_current) else {
                     return Err(self.create_error(
                         "SyntaxError",
