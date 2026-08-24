@@ -336,13 +336,16 @@ pub(crate) struct AsyncFunctionState {
 #[derive(Clone)]
 pub(crate) struct ForOfLoopState {
     pub(crate) iter_var: String,
+    /// The labels attached to this iteration statement. `LoopContinues` uses
+    /// this set to decide whether a labelled continue begins its next iteration.
+    pub(crate) label_set: Vec<String>,
     pub(crate) head_state: usize,
     pub(crate) after_state: usize,
     /// Depth of the driver's try stack when the loop began, so an abrupt
     /// completion can tell a `finally` lexically inside the loop (which runs
     /// before IteratorClose) from one outside it (which runs after).
-    /// Only the async-function driver's unwinder reads this; the generator
-    /// drivers record it but do not yet consult it.
+    /// The async-function and generator drivers use the same boundary while
+    /// unwinding their saved loop state.
     pub(crate) try_depth: usize,
     /// The LexicalEnvironment active when ForIn/OfBodyEvaluation began.
     pub(crate) outer_env: EnvRef,
@@ -353,6 +356,10 @@ pub(crate) struct ForOfLoopState {
 impl ForOfLoopState {
     pub(crate) fn effective_env(&self) -> &EnvRef {
         self.iteration_env.as_ref().unwrap_or(&self.outer_env)
+    }
+
+    pub(crate) fn matches_continue_target(&self, target: Option<&str>) -> bool {
+        target.is_none_or(|target| self.label_set.iter().any(|label| label == target))
     }
 }
 

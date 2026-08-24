@@ -1643,6 +1643,7 @@ impl Interpreter {
                 StateTerminator::ForOfInit {
                     iterable,
                     iter_var,
+                    label_set,
                     next_var: _,
                     left,
                     head_state,
@@ -1729,6 +1730,7 @@ impl Interpreter {
                     );
                     for_of_stack.push(ForOfLoopState {
                         iter_var: iter_var.clone(),
+                        label_set: label_set.clone(),
                         head_state: *head_state,
                         after_state: *forinit_after,
                         try_depth: current_try_stack.len(),
@@ -1756,6 +1758,7 @@ impl Interpreter {
                             debug_assert!(false, "for-of head without an active loop state");
                             for_of_stack.push(ForOfLoopState {
                                 iter_var: iter_var.clone(),
+                                label_set: vec![],
                                 head_state: current_id,
                                 after_state: *after_state,
                                 try_depth: current_try_stack.len(),
@@ -5877,6 +5880,7 @@ impl Interpreter {
                 StateTerminator::ForOfInit {
                     iterable,
                     iter_var,
+                    label_set,
                     next_var: _,
                     left,
                     head_state,
@@ -6009,6 +6013,7 @@ impl Interpreter {
                     );
                     for_of_stack.push(ForOfLoopState {
                         iter_var: iter_var.clone(),
+                        label_set: label_set.clone(),
                         head_state: *head_state,
                         after_state: *forinit_after,
                         try_depth: current_try_stack.len(),
@@ -6036,6 +6041,7 @@ impl Interpreter {
                             debug_assert!(false, "for-of head without an active loop state");
                             for_of_stack.push(ForOfLoopState {
                                 iter_var: iter_var.clone(),
+                                label_set: vec![],
                                 head_state: current_id,
                                 after_state: *after_state,
                                 try_depth: current_try_stack.len(),

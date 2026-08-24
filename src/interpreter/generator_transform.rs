@@ -63,6 +63,7 @@ pub(crate) enum StateTerminator {
     ForOfInit {
         iterable: Expression,
         iter_var: String,
+        label_set: Vec<String>,
         #[allow(dead_code)]
         next_var: String,
         #[allow(dead_code)]
@@ -1963,6 +1964,7 @@ fn transform_for_of_statement(
     ctx.finalize_current_state(StateTerminator::ForOfInit {
         iterable: iterable_expr,
         iter_var: iter_var.clone(),
+        label_set: iteration_labels.clone(),
         next_var: next_var.clone(),
         left: for_of_stmt.left.clone(),
         head_state,

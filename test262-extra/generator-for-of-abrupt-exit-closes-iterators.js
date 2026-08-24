@@ -174,6 +174,43 @@ assert.sameValue(
   'an uncaught IteratorClose failure completes rather than wedges the generator'
 );
 
+// A labelled continue closes only loops exited by the completion. The target
+// loop remains active and advances to its next iteration.
+var continueEvents = [];
+function trackedContinueIterable(name, values) {
+  var index = 0;
+  return {
+    [Symbol.iterator]: function () {
+      return this;
+    },
+    next: function () {
+      return index < values.length
+        ? { value: values[index++], done: false }
+        : { value: undefined, done: true };
+    },
+    return: function () {
+      continueEvents.push('close ' + name);
+      return { value: undefined, done: true };
+    },
+  };
+}
+
+function* labeledContinueKeepsTargetLoop() {
+  outer: for (const outerValue of trackedContinueIterable('outer', [1, 2])) {
+    for (const innerValue of trackedContinueIterable('inner ' + outerValue, [3])) {
+      yield outerValue + innerValue;
+      continue outer;
+    }
+  }
+  yield continueEvents.join(',');
+}
+
+assert.compareArray(
+  [...labeledContinueKeepsTargetLoop()],
+  [4, 5, 'close inner 1,close inner 2'],
+  'labelled continue closes nested iterators but retains its target iterator'
+);
+
 // A return injected at a suspended yield first completes the loop body. An
 // inner finally therefore runs before per-iteration disposal and IteratorClose,
 // while a finally surrounding the loop runs afterwards.
