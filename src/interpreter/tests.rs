@@ -1518,6 +1518,24 @@ fn private_destructuring_releases_temp_roots_after_abrupt_completion() {
 }
 
 #[test]
+fn computed_member_destructuring_releases_temp_roots_after_abrupt_key_evaluation() {
+    // The member base is rooted while its computed key is evaluated. An abrupt
+    // key completion must release that scoped root before propagating the throw.
+    let interp = run_script(
+        r#"
+        function fail() { throw new Error("computed key"); }
+        try { [Object.create({})[fail()]] = [1]; } catch (e) {}
+        try { ({ item: Object.create({})[fail()] } = { item: 1 }); } catch (e) {}
+        "#,
+    );
+
+    assert!(
+        interp.gc_temp_roots.is_empty(),
+        "computed member target roots must be released after key evaluation throws"
+    );
+}
+
+#[test]
 fn private_method_call_with_non_iterable_spread_throws() {
     // A spread argument that is not iterable must throw a TypeError, even when the
     // callee is a private method reached through `this.#m(...)`. The private-call

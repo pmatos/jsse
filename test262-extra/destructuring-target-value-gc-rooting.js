@@ -6,6 +6,11 @@ description: >
 esid: sec-runtime-semantics-destructuringassignmentevaluation
 features: [Symbol.iterator]
 info: |
+  13.3.3.2 EvaluatePropertyAccessWithExpressionKey
+
+  The computed Expression is evaluated after baseValue is obtained, and the
+  resulting Reference Record retains baseValue in its [[Base]] field.
+
   13.15.5.5 Runtime Semantics: IteratorDestructuringAssignmentEvaluation
 
   AssignmentElement : DestructuringAssignmentTarget Initializer?
@@ -95,6 +100,47 @@ var propertyProto = {
 ({ p: Object.create(propertyProto).y } = { get p() { $262.gc(); return "property"; } });
 assert.sameValue(propertyWrites.length, 1, "the object property base setter runs");
 assert.sameValue(propertyWrites[0], "property", "the object property setter receives the value");
+
+// EvaluatePropertyAccessWithExpressionKey retains the base value while the
+// computed key expression runs user code and constructs the Reference Record.
+var computedElementWrites = [];
+var computedElementProto = {
+  set x(value) {
+    computedElementWrites.push(value);
+  },
+};
+
+[Object.create(computedElementProto)[gcThenValue("x")()]] = ["computed element"];
+assert.sameValue(
+  computedElementWrites.length,
+  1,
+  "the computed array element base survives key evaluation"
+);
+assert.sameValue(
+  computedElementWrites[0],
+  "computed element",
+  "the computed array element setter receives the value"
+);
+
+var computedPropertyWrites = [];
+var computedPropertyProto = {
+  set y(value) {
+    computedPropertyWrites.push(value);
+  },
+};
+var computedPropertySource = { p: "computed property" };
+
+({ p: Object.create(computedPropertyProto)[gcThenValue("y")()] } = computedPropertySource);
+assert.sameValue(
+  computedPropertyWrites.length,
+  1,
+  "the computed object property base survives key evaluation"
+);
+assert.sameValue(
+  computedPropertyWrites[0],
+  "computed property",
+  "the computed object property setter receives the value"
+);
 
 // The un-coerced key and the assigned value both outlive the user code that
 // runs before and during ToPropertyKey.

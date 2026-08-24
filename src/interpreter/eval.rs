@@ -4293,7 +4293,16 @@ impl Interpreter {
                 JsValue::string(JsString::from_str(name)),
             )))),
             MemberProperty::Computed(key_expr) => {
-                let raw_key = match self.eval_expr(key_expr, env) {
+                // The base becomes the Reference Record's [[Base]], so it must
+                // survive arbitrary user code while the computed key is
+                // evaluated. Callers cannot root it until this function has
+                // finished constructing the reference.
+                let gc_frame = self.gc_root_frame();
+                self.gc_root_value(&base);
+                let key_result = self.eval_expr(key_expr, env);
+                self.gc_unroot_frame(gc_frame);
+
+                let raw_key = match key_result {
                     Completion::Normal(v) => v,
                     Completion::Throw(e) => return Err(e),
                     Completion::Yield(v) => return Ok(MemberLhsRef::Suspended(v)),
